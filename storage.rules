@@ -1,0 +1,46 @@
+rules_version = '2';
+service firebase.storage {
+  match /b/{bucket}/o {
+    
+    function signedIn() {
+      return request.auth != null;
+    }
+    
+    function uid() {
+      return request.auth.uid;
+    }
+    
+    // Project owner check (owner-only MVP) - same as Firestore rules
+    // IMPORTANT: In Storage rules, use firestore.exists() and firestore.get()
+    function projectOwner(projectId) {
+      return signedIn()
+        && firestore.exists(/databases/(default)/documents/projects/$(projectId))
+        && firestore.get(/databases/(default)/documents/projects/$(projectId)).data.ownerId == uid();
+    }
+    
+    // Unified attachments model: projects/{projectId}/attachments/{attachmentId}/{filename}
+    // All attachments (for tasks, expenses, phases) are stored here with metadata in Firestore
+    match /projects/{projectId}/attachments/{attachmentId}/{filename} {
+      // Allow read if user is project owner
+      allow read: if projectOwner(projectId);
+      
+      // Allow write (upload/delete) if user is project owner
+      allow write: if projectOwner(projectId)
+        && request.resource.size < 50 * 1024 * 1024; // Max 50MB per file
+    }
+    
+    // DEPRECATED: Task attachments nested path (kept for backward compatibility)
+    // This path is no longer used - all attachments go to projects/{projectId}/attachments
+    match /projects/{projectId}/tasks/{taskId}/attachments/{attachmentId}/{filename} {
+      allow read: if projectOwner(projectId);
+      
+      allow write: if projectOwner(projectId)
+        && request.resource.size < 50 * 1024 * 1024;
+    }
+    
+    // Deny all other paths
+    match /{allPaths=**} {
+      allow read, write: if false;
+    }
+  }
+}

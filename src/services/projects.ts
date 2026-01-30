@@ -1,0 +1,249 @@
+import { collection, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, serverTimestamp } from "firebase/firestore";
+import { db, auth } from "../firebase";
+import { paths } from "../lib/firestorePaths";
+
+const COLLECTION = "projects";
+
+export type ProjectDoc = {
+  id: string;
+  name: string;
+  projectType?: "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE"; // Support both old and new types
+  templateId?: string;
+  addressText?: string; // Project address for navigation
+};
+
+export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
+
+function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ProjectDoc {
+  const d = docSnap.data();
+  return {
+    id: docSnap.id,
+    name: (d.name as string) ?? "",
+    addressText: (d.addressText as string) || undefined,
+    projectType: d.projectType as "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE" | undefined,
+    templateId: d.templateId as string | undefined,
+  };
+}
+
+export async function createProject(ownerId: string, name: string): Promise<ProjectDoc> {
+  // CRITICAL FIX: Always use auth.currentUser.uid, never trust ownerId from params
+  // Use the exported auth instance from firebase.ts (not getAuth())
+  const currentUser = auth.currentUser;
+  
+  console.log(`[projects] DEBUG: auth.currentUser:`, currentUser);
+  console.log(`[projects] DEBUG: params.ownerId:`, ownerId);
+  
+  if (!currentUser || !currentUser.uid) {
+    console.error(`[projects] ERROR: auth.currentUser is null or uid is missing!`);
+    throw new Error('Musíte byť prihlásený na vytvorenie projektu. auth.currentUser je null.');
+  }
+  
+  const actualOwnerId = currentUser.uid; // Always use auth.currentUser.uid
+  
+  // Debug: Verify ownerId matches auth.currentUser.uid
+  if (ownerId && ownerId !== actualOwnerId) {
+    console.warn(`[projects] WARNING: params.ownerId (${ownerId}) differs from auth.currentUser.uid (${actualOwnerId}). Using auth.currentUser.uid.`);
+  }
+  
+  console.log(`[projects] Creating project: name="${name}", ownerId="${actualOwnerId}" (from auth.currentUser.uid)`);
+  
+  const now = new Date().toISOString();
+  const ref = await addDoc(collection(db, COLLECTION), {
+    ownerId: actualOwnerId, // Always auth.currentUser.uid
+    name: name.trim(),
+    createdAt: now,
+    updatedAt: now,
+  });
+  return { id: ref.id, name: name.trim() };
+}
+
+export async function listProjectPhases(projectId: string): Promise<ProjectPhaseDoc[]> {
+  console.log(`[projects] listProjectPhases called for projectId: ${projectId}`);
+  
+  // DEBUG: Check auth state
+  const currentUser = auth.currentUser;
+  const currentUserUid = currentUser?.uid;
+  console.log(`[projects] listProjectPhases: auth.currentUser?.uid = "${currentUserUid}"`);
+  
+  if (!currentUserUid) {
+    console.error(`[projects] listProjectPhases: auth.currentUser is null`);
+    throw new Error('Musíte byť prihlásený na načítanie fáz.');
+  }
+  
+  try {
+    const c = collection(db, paths.projectPhases(projectId));
+    const q = query(c, orderBy("order", "asc"));
+    console.log(`[projects] listProjectPhases: querying phases collection...`);
+    const snap = await getDocs(q);
+    console.log(`[projects] Found ${snap.docs.length} phases in Firestore`);
+    
+    const phases = snap.docs.map((d) => {
+      const x = d.data();
+      const phase = {
+        id: d.id,
+        name: (x.name as string) ?? "",
+        description: x.description as string | undefined,
+        order: (x.order as number) ?? 0,
+      };
+      console.log(`[projects] Phase: id=${phase.id}, name="${phase.name}", order=${phase.order}`);
+      return phase;
+    });
+    return phases;
+  } catch (error: any) {
+    console.error(`[projects] listProjectPhases error:`, error);
+    const errorCode = error.code || '';
+    const errorMessage = error.message || 'Unknown error';
+    
+    if (errorCode === 'permission-denied') {
+      console.error(`[projects] listProjectPhases: PERMISSION DENIED for project ${projectId}`);
+      console.error(`[projects] listProjectPhases: auth.currentUser.uid = "${currentUserUid}"`);
+      console.error(`[projects] listProjectPhases: Firestore rule: projectOwner(${projectId})`);
+      console.error(`[projects] listProjectPhases: Rule check: get(projects/${projectId}).data.ownerId == ${currentUserUid}`);
+      console.error(`[projects] listProjectPhases: Returning empty array instead of throwing error`);
+      // Return empty array instead of throwing - allows app to continue
+      return [];
+    }
+    
+    throw error;
+  }
+}
+
+export async function getProject(projectId: string): Promise<ProjectDoc | null> {
+  console.log(`[projects] getProject: fetching project ${projectId}`);
+  
+  // DEBUG: Check auth state
+  const currentUser = auth.currentUser;
+  const currentUserUid = currentUser?.uid;
+  console.log(`[projects] getProject: auth.currentUser?.uid = "${currentUserUid}"`);
+  
+  if (!currentUserUid) {
+    console.error(`[projects] getProject: auth.currentUser is null`);
+    throw new Error('Musíte byť prihlásený na načítanie projektu.');
+  }
+  
+  try {
+    const docRef = doc(db, COLLECTION, projectId);
+    const docSnap = await getDoc(docRef);
+    
+    if (!docSnap.exists()) {
+      console.warn(`[projects] getProject: project ${projectId} does not exist`);
+      return null;
+    }
+    
+    const projectData = docSnap.data();
+    const projectOwnerId = projectData.ownerId;
+    console.log(`[projects] getProject: project ${projectId} exists`);
+    console.log(`[projects] getProject: project.ownerId = "${projectOwnerId}"`);
+    console.log(`[projects] getProject: currentUser.uid = "${currentUserUid}"`);
+    console.log(`[projects] getProject: owner match = ${projectOwnerId === currentUserUid ? 'YES ✅' : 'NO ❌'}`);
+    
+    // Note: Firestore rules will block access if ownerId doesn't match
+    // So if we get here, the project is accessible (rules passed)
+    // But we still log for debugging
+    if (projectOwnerId !== currentUserUid) {
+      console.warn(`[projects] getProject: WARNING - ownerId mismatch (but rules allowed access)`);
+      console.warn(`[projects] getProject: project.ownerId="${projectOwnerId}" vs currentUser.uid="${currentUserUid}"`);
+      // Don't throw - Firestore rules already handled permission check
+      // If rules allowed access, we can return the project
+    }
+    
+    return toDoc({ id: docSnap.id, data: docSnap.data.bind(docSnap) });
+  } catch (error: any) {
+    console.error(`[projects] getProject error:`, error);
+    const errorCode = error.code || '';
+    const errorMessage = error.message || 'Unknown error';
+    
+    if (errorCode === 'permission-denied') {
+      console.error(`[projects] getProject: PERMISSION DENIED for project ${projectId}`);
+      console.error(`[projects] getProject: auth.currentUser.uid = "${currentUserUid}"`);
+      console.error(`[projects] getProject: Firestore rule: resource.data.ownerId == uid()`);
+      throw new Error(`Nemáte oprávnenie zobraziť projekt ${projectId}. Skontrolujte Firestore rules.`);
+    }
+    
+    throw error;
+  }
+}
+
+export async function listMyProjects(ownerId: string): Promise<ProjectDoc[]> {
+  // CRITICAL FIX: Always use auth.currentUser.uid, never trust ownerId from params
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    console.warn('[projects] listMyProjects: auth.currentUser is null, returning empty array');
+    return [];
+  }
+  
+  const actualOwnerId = currentUser.uid; // Always use auth.currentUser.uid
+  
+  // Guard: ownerId must be defined
+  if (!ownerId) {
+    console.warn('[projects] listMyProjects called with undefined ownerId, using auth.currentUser.uid');
+  } else if (ownerId !== actualOwnerId) {
+    console.warn(`[projects] listMyProjects: ownerId param (${ownerId}) differs from auth.currentUser.uid (${actualOwnerId}). Using auth.currentUser.uid.`);
+  }
+  
+  console.log(`[projects] listMyProjects: querying with ownerId="${actualOwnerId}" (from auth.currentUser.uid)`);
+  console.log(`[projects] Query: collection('projects'), where('ownerId', '==', '${actualOwnerId}')`);
+  
+  try {
+    // CRITICAL: Query MUST use where('ownerId', '==', auth.currentUser.uid)
+    // This ensures Firestore rules can check resource.data.ownerId == uid()
+    const q = query(collection(db, COLLECTION), where("ownerId", "==", actualOwnerId));
+    const snap = await getDocs(q);
+    console.log(`[projects] listMyProjects: found ${snap.docs.length} projects`);
+    
+    // Debug: Check ownerId in each project
+    snap.docs.forEach((doc) => {
+      const data = doc.data();
+      const docOwnerId = data.ownerId;
+      console.log(`[projects] Project ${doc.id}: ownerId="${docOwnerId}", match? ${docOwnerId === actualOwnerId ? 'YES ✅' : 'NO ❌'}`);
+    });
+    
+    return snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) })) as ProjectDoc[];
+  } catch (error: any) {
+    console.error(`[projects] listMyProjects error:`, error);
+    const errorCode = error.code || '';
+    const errorMessage = error.message || 'Unknown error';
+    
+    if (errorCode === 'permission-denied') {
+      console.error(`[projects] PERMISSION DENIED:`);
+      console.error(`  - auth.currentUser.uid="${actualOwnerId}"`);
+      console.error(`  - Query: where('ownerId', '==', '${actualOwnerId}')`);
+      console.error(`  - Firestore rule: resource.data.ownerId == uid()`);
+      console.error(`  - Check: Are projects in DB using ownerId="${actualOwnerId}"?`);
+      console.error(`[projects] Returning empty array instead of throwing error`);
+      // Return empty array instead of throwing - this allows app to continue
+      // User might not have any projects yet, or projects have different ownerId
+      return [];
+    }
+    
+    // For other errors, still throw
+    throw error;
+  }
+}
+
+export async function updateProject(_ownerId: string, projectId: string, name: string): Promise<void> {
+  // CRITICAL FIX: Always use auth.currentUser.uid for verification
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error('Musíte byť prihlásený na úpravu projektu.');
+  }
+  
+  const ref = doc(db, COLLECTION, projectId);
+  await updateDoc(ref, { 
+    name: name.trim(), 
+    updatedAt: serverTimestamp() // Use serverTimestamp()
+  });
+  console.log(`[projects] Updated project ${projectId}: name="${name.trim()}"`);
+}
+
+export async function deleteProject(_ownerId: string, projectId: string): Promise<void> {
+  // CRITICAL FIX: Always use auth.currentUser.uid for verification
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error('Musíte byť prihlásený na vymazanie projektu.');
+  }
+  
+  const ref = doc(db, COLLECTION, projectId);
+  await deleteDoc(ref);
+  console.log(`[projects] Deleted project ${projectId}`);
+}

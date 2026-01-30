@@ -1,0 +1,68 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    function signedIn() { return request.auth != null; }
+    function uid() { return request.auth.uid; }
+
+    function projectOwner(projectId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/projects/$(projectId))
+        && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
+    }
+
+    // Users (každý len svoj)
+    match /users/{userId} {
+      allow read, write: if signedIn() && uid() == userId;
+    }
+
+    // Catalog templates (read-only)
+    match /catalogTemplates/{templateId} {
+      allow read: if signedIn();
+      allow write: if false;
+
+      match /{doc=**} {
+        allow read: if signedIn();
+        allow write: if false;
+      }
+    }
+
+    // Projects
+    match /projects/{projectId} {
+
+      // create projektu: ownerId musí byť aktuálny user
+      allow create: if signedIn()
+        && request.resource.data.ownerId == uid();
+
+      // read/delete: len owner
+      allow read, delete: if signedIn()
+        && resource.data.ownerId == uid();
+
+      // update: len owner + ownerId sa nesmie meniť
+      allow update: if signedIn()
+        && resource.data.ownerId == uid()
+        && request.resource.data.ownerId == resource.data.ownerId;
+
+      // subkolekcie (phases/tasks/expenses/attachments...)
+      match /{subcol}/{docId} {
+        allow read, write: if signedIn()
+          && exists(/databases/$(database)/documents/projects/$(projectId))
+          && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
+      }
+
+      // hlbšie subkolekcie (napr. tasks/{id}/attachments/{fileId})
+      match /{subcol}/{docId}/{subsub=**} {
+        allow read, write: if signedIn()
+          && exists(/databases/$(database)/documents/projects/$(projectId))
+          && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
+      }
+
+      // members – MVP: zatiaľ len owner
+      match /members/{memberId} {
+        allow read, write: if signedIn()
+          && exists(/databases/$(database)/documents/projects/$(projectId))
+          && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
+      }
+    }
+  }
+}

@@ -1,0 +1,16 @@
+=== Ako spustiť aplikáciu (v termináli) ===
+
+Ak "cd mobile" zlyhá, ste v zlom priečinku. Použite plnú cestu:
+
+  cd "C:\Users\Marek\Staveto_Cursor\staveto-app_v2\mobile"
+
+Potom:
+
+  node scripts/ensure-logo.js
+  npm start
+
+=== Alternatíva (jedným krokom z ľubovoľného miesta) ===
+
+  cd /d "C:\Users\Marek\Staveto_Cursor\staveto-app_v2\mobile" && node scripts/ensure-logo.js && npm start
+
+(Pozn.: v PowerShell môže byť treba & namiesto &&)

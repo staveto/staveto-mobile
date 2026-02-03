@@ -361,7 +361,7 @@ const styles = StyleSheet.create({
     flex: 1,
     justifyContent: 'center',
     alignItems: 'center',
-    padding: spacing.xl,
+    padding: spacing.lg + spacing.md, // 24 + 16 = 40 (similar to xl)
   },
   emptyText: {
     fontSize: 18,

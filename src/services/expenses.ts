@@ -11,21 +11,31 @@ import {
   serverTimestamp,
   Timestamp,
 } from "firebase/firestore";
-import { db } from "../firebase";
+import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
+import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
+import { createNotification } from "./notifications";
 import type { ProjectExpense } from "../lib/types";
+
+export type ExpenseSource = 'MANUAL' | 'DOCUMENT';
+export type ExpenseStatus = 'PROCESSING' | 'READY' | 'FAILED';
+export type ExpenseCategory = 'MATERIAL' | 'WORK' | 'OTHER';
 
 export type ExpenseDoc = {
   id: string;
   projectId: string;
   title: string;
-  amount: number;
+  amount: number | null; // null when status is PROCESSING
   currency: string;
   date: string; // ISO string
   note?: string;
   taskId?: string | null;
   phaseId?: string | null;
   attachmentId?: string | null;
+  source: ExpenseSource;
+  status: ExpenseStatus;
+  category?: ExpenseCategory;
+  supplierName?: string;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -51,13 +61,17 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Ex
     id: docSnap.id,
     projectId: (d.projectId as string) ?? "",
     title: (d.title as string) ?? "",
-    amount: (d.amount as number) ?? 0,
+    amount: (d.amount as number | null) ?? null,
     currency: (d.currency as string) ?? "EUR",
     date: convertTimestamp(d.date) ?? new Date().toISOString(),
     note: (d.note as string) ?? undefined,
     taskId: (d.taskId as string | null) ?? undefined,
     phaseId: (d.phaseId as string | null) ?? undefined,
     attachmentId: (d.attachmentId as string | null) ?? undefined,
+    source: (d.source as ExpenseSource) ?? 'MANUAL',
+    status: (d.status as ExpenseStatus) ?? 'READY',
+    category: (d.category as ExpenseCategory) ?? undefined,
+    supplierName: (d.supplierName as string) ?? undefined,
     createdAt: convertTimestamp(d.createdAt),
     updatedAt: convertTimestamp(d.updatedAt),
   };
@@ -71,15 +85,61 @@ export async function createExpense(
   projectId: string,
   data: {
     title: string;
-    amount: number;
+    amount: number | null;
     currency?: string;
     date?: Date;
     note?: string;
     taskId?: string | null;
     phaseId?: string | null;
     attachmentId?: string | null;
+    source?: ExpenseSource;
+    status?: ExpenseStatus;
+    category?: ExpenseCategory;
+    supplierName?: string;
   }
 ): Promise<ExpenseDoc> {
+  const currentUser = auth.currentUser;
+  // Check subscription limit before creating expense
+  if (currentUser?.uid) {
+    try {
+      // Count expenses for current month across all projects
+      const now = new Date();
+      const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
+      
+      // Get all projects for this user
+      const { listMyProjects } = await import("./projects");
+      const projects = await listMyProjects(currentUser.uid);
+      
+      let monthlyExpenseCount = 0;
+      for (const project of projects) {
+        try {
+          const expenses = await listExpensesByProject(project.id);
+          const monthlyExpenses = expenses.filter((exp) => {
+            if (!exp.date || exp.status !== "READY") return false;
+            const expenseDate = new Date(exp.date);
+            return expenseDate >= firstDayOfMonth;
+          });
+          monthlyExpenseCount += monthlyExpenses.length;
+        } catch (error) {
+          // Skip projects with expense loading errors
+        }
+      }
+      
+      const limitCheck = await checkLimit(currentUser.uid, "expenses", monthlyExpenseCount);
+      
+      if (!limitCheck.allowed) {
+        throw new Error(limitCheck.message || `Dosiahli ste limit výdavkov pre váš plán (${limitCheck.limit} mesačne). Zvážte upgrade na vyšší tier.`);
+      }
+    } catch (error: any) {
+      // If limit check fails, throw error (don't create expense)
+      if (error.message && error.message.includes("limit")) {
+        throw error;
+      }
+      // If it's a different error, log but allow creation (server will enforce)
+      console.warn("[expenses] Subscription limit check failed, allowing creation (server will enforce):", error);
+    }
+  }
+  
   const c = collection(db, paths.projectExpenses(projectId));
   const ref = await addDoc(c, {
     ownerId,
@@ -92,9 +152,31 @@ export async function createExpense(
     taskId: data.taskId ?? null,
     phaseId: data.phaseId ?? null,
     attachmentId: data.attachmentId ?? null,
+    source: data.source ?? 'MANUAL',
+    status: data.status ?? 'READY',
+    category: data.category ?? null,
+    supplierName: data.supplierName?.trim() ?? null,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+
+  if (currentUser?.uid) {
+    try {
+      await createNotification({
+        userId: ownerId,
+        projectId,
+        entityType: "expense",
+        entityId: ref.id,
+        eventType: "expense_added",
+        title: "Nový výdavok",
+        message: `Výdavok "${data.title.trim()}" bol pridaný.`,
+        actorId: currentUser.uid,
+        actorName: currentUser.displayName ?? currentUser.email ?? undefined,
+      });
+    } catch (error) {
+      console.warn("[expenses] Failed to create notification:", error);
+    }
+  }
   
   console.log(`[expenses] Created expense ${ref.id} in project ${projectId}`);
   
@@ -109,6 +191,10 @@ export async function createExpense(
     taskId: data.taskId,
     phaseId: data.phaseId,
     attachmentId: data.attachmentId,
+    source: data.source ?? 'MANUAL',
+    status: data.status ?? 'READY',
+    category: data.category,
+    supplierName: data.supplierName,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -133,13 +219,16 @@ export async function updateExpense(
   expenseId: string,
   data: {
     title?: string;
-    amount?: number;
+    amount?: number | null;
     currency?: string;
     date?: Date;
     note?: string;
     taskId?: string | null;
     phaseId?: string | null;
     attachmentId?: string | null;
+    status?: ExpenseStatus;
+    category?: ExpenseCategory;
+    supplierName?: string;
   }
 ): Promise<void> {
   const ref = doc(db, paths.projectExpense(projectId, expenseId));
@@ -155,6 +244,9 @@ export async function updateExpense(
   if (data.taskId !== undefined) updateData.taskId = data.taskId ?? null;
   if (data.phaseId !== undefined) updateData.phaseId = data.phaseId ?? null;
   if (data.attachmentId !== undefined) updateData.attachmentId = data.attachmentId ?? null;
+  if (data.status !== undefined) updateData.status = data.status;
+  if (data.category !== undefined) updateData.category = data.category ?? null;
+  if (data.supplierName !== undefined) updateData.supplierName = data.supplierName?.trim() ?? null;
   
   await updateDoc(ref, updateData);
   console.log(`[expenses] Updated expense ${expenseId} in project ${projectId}`);

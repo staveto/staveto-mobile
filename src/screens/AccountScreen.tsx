@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useEffect, useState } from "react";
 import {
   View,
   Text,
@@ -10,6 +10,10 @@ import {
   Share,
   Modal,
   Pressable,
+  Linking,
+  Image,
+  TextInput,
+  ActivityIndicator,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
@@ -17,6 +21,12 @@ import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { getBaseURL, api } from "../api/client";
 import { colors, radius, spacing } from "../theme";
+import { PRIVACY_URL, SUPPORT_EMAIL, TERMS_URL } from "../constants/consent";
+import { requestAccountDeletion } from "../services/account";
+import { db, storage } from "../firebase";
+import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
+import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import * as ImagePicker from "expo-image-picker";
 
 function Row({
   icon,
@@ -24,7 +34,7 @@ function Row({
   onPress,
   right,
 }: {
-  icon: keyof React.ComponentProps<typeof Ionicons>["name"];
+  icon: React.ComponentProps<typeof Ionicons>["name"];
   label: string;
   onPress?: () => void;
   right?: React.ReactNode;
@@ -62,7 +72,7 @@ function SectionTitle({ title }: { title: string }) {
   return <Text style={styles.sectionTitle}>{title}</Text>;
 }
 
-const LOCALES = ["sk", "en", "de", "cs"] as const;
+const LOCALES = ["sk", "en", "de", "cs", "es", "it", "pl"] as const;
 type Locale = (typeof LOCALES)[number];
 
 export function AccountScreen() {
@@ -74,6 +84,12 @@ export function AccountScreen() {
   const [showLanguageModal, setShowLanguageModal] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [debugMessage, setDebugMessage] = useState("");
+  const [profileProfession, setProfileProfession] = useState("");
+  const [profilePhotoURL, setProfilePhotoURL] = useState<string | null>(null);
+  const [loadingProfile, setLoadingProfile] = useState(true);
+  const [showProfileModal, setShowProfileModal] = useState(false);
+  const [savingProfile, setSavingProfile] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   const nav = navigation as { navigate: (name: string) => void };
   const displayName = user?.name ?? user?.email ?? "—";
@@ -83,6 +99,25 @@ export function AccountScreen() {
     const email = user?.email ?? "";
     if (email) Share.share({ message: email, title: t("account.email") });
   };
+
+  const openUrl = useCallback(async (url: string) => {
+    const supported = await Linking.canOpenURL(url);
+    if (supported) {
+      await Linking.openURL(url);
+    } else {
+      Alert.alert(t("common.error"), t("account.linkOpenFailed"));
+    }
+  }, [t]);
+
+  const openSupportEmail = useCallback(
+    async (subject: string, body?: string) => {
+      const mailto = `mailto:${SUPPORT_EMAIL}?subject=${encodeURIComponent(subject)}${
+        body ? `&body=${encodeURIComponent(body)}` : ""
+      }`;
+      await openUrl(mailto);
+    },
+    [openUrl]
+  );
 
   const runTest = async (name: string, fn: () => Promise<unknown>) => {
     setDebugMessage(`… ${name}`);
@@ -96,21 +131,140 @@ export function AccountScreen() {
 
   const appVersion = "1.0.0"; // could use Constants.expoConfig?.version
 
+  const loadProfile = useCallback(async () => {
+    if (!user?.id) {
+      setLoadingProfile(false);
+      return;
+    }
+    try {
+      const snap = await getDoc(doc(db, "users", user.id));
+      if (snap.exists()) {
+        const data = snap.data() as { profession?: string; photoURL?: string | null };
+        setProfileProfession(data.profession ?? "");
+        setProfilePhotoURL(data.photoURL ?? null);
+      }
+    } catch (error) {
+      console.warn("[account] Failed to load profile data:", error);
+    } finally {
+      setLoadingProfile(false);
+    }
+  }, [user?.id]);
+
+  useEffect(() => {
+    loadProfile();
+  }, [loadProfile]);
+
+  const saveProfile = useCallback(async () => {
+    if (!user?.id) return;
+    setSavingProfile(true);
+    try {
+      await updateDoc(doc(db, "users", user.id), {
+        profession: profileProfession.trim() || null,
+        photoURL: profilePhotoURL ?? null,
+        updatedAt: serverTimestamp(),
+      });
+      setShowProfileModal(false);
+    } catch (error) {
+      console.error("[account] Failed to save profile:", error);
+      Alert.alert("Chyba", "Profil sa nepodarilo uložiť.");
+    } finally {
+      setSavingProfile(false);
+    }
+  }, [user?.id, profileProfession, profilePhotoURL]);
+
+  const pickProfilePhoto = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Oprávnenie", "Potrebujeme prístup k galérii.");
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+      if (result.canceled || !result.assets[0]) return;
+
+      setUploadingPhoto(true);
+      const asset = result.assets[0];
+      const response = await fetch(asset.uri);
+      const blob = await response.blob();
+      const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
+      const storageRef = ref(storage, `users/${user.id}/profile/${fileName}`);
+      await uploadBytes(storageRef, blob);
+      const url = await getDownloadURL(storageRef);
+      setProfilePhotoURL(url);
+    } catch (error) {
+      console.error("[account] Failed to pick profile photo:", error);
+      Alert.alert("Chyba", "Nepodarilo sa nahrať fotku.");
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }, [user?.id]);
+
+  const takeProfilePhoto = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert("Oprávnenie", "Potrebujeme prístup ku kamere.");
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+      if (result.canceled || !result.assets[0]) return;
+
+      setUploadingPhoto(true);
+      const asset = result.assets[0];
+      const response = await fetch(asset.uri);
+      const blob = await response.blob();
+      const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
+      const storageRef = ref(storage, `users/${user.id}/profile/${fileName}`);
+      await uploadBytes(storageRef, blob);
+      const url = await getDownloadURL(storageRef);
+      setProfilePhotoURL(url);
+    } catch (error) {
+      console.error("[account] Failed to take profile photo:", error);
+      Alert.alert("Chyba", "Nepodarilo sa odfotiť fotku.");
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }, [user?.id]);
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       {/* Profil: avatar + meno + rola/department + email */}
       <View style={styles.profileCard}>
-        <View style={styles.avatar}>
-          <Text style={styles.avatarText}>{initials}</Text>
-        </View>
+        <TouchableOpacity style={styles.avatar} onPress={() => setShowProfileModal(true)} activeOpacity={0.7}>
+          {profilePhotoURL ? (
+            <Image source={{ uri: profilePhotoURL }} style={styles.avatarImage} />
+          ) : (
+            <Text style={styles.avatarText}>{initials}</Text>
+          )}
+        </TouchableOpacity>
         <Text style={styles.profileName}>{displayName}</Text>
-        <Text style={styles.profileHint}>{t("account.addRoleDepartment")}</Text>
+        {loadingProfile ? (
+          <Text style={styles.profileHint}>Načítavam…</Text>
+        ) : (
+          <Text style={styles.profileHint}>
+            {profileProfession.trim() ? profileProfession : "Pridajte svoju profesiu"}
+          </Text>
+        )}
         <View style={styles.emailRow}>
           <Text style={styles.emailText} numberOfLines={1}>{user?.email ?? "—"}</Text>
           <TouchableOpacity onPress={shareEmail} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
             <Ionicons name="copy-outline" size={20} color={colors.textMuted} />
           </TouchableOpacity>
         </View>
+        <TouchableOpacity style={styles.editProfileButton} onPress={() => setShowProfileModal(true)}>
+          <Ionicons name="create-outline" size={16} color={colors.primary} />
+          <Text style={styles.editProfileText}>Upraviť profil</Text>
+        </TouchableOpacity>
       </View>
 
       {/* Rýchle akcie: Show away, Send message, View tasks */}
@@ -149,16 +303,11 @@ export function AccountScreen() {
       {/* Plán */}
       <SectionTitle title={t("account.plan")} />
       <View style={styles.card}>
-        <View style={styles.planRow}>
-          <Ionicons name="calendar-outline" size={22} color={colors.textMuted} style={{ marginRight: spacing.md }} />
-          <View style={{ flex: 1 }}>
-            <Text style={rowStyles.label}>{t("account.planInfo")}</Text>
-            <Text style={styles.planSub}>{t("account.comingSoon")}</Text>
-          </View>
-          <TouchableOpacity onPress={() => Alert.alert(t("account.comingSoon"))}>
-            <Text style={styles.getInfoText}>{t("account.getInfo")}</Text>
-          </TouchableOpacity>
-        </View>
+        <Row
+          icon="card-outline"
+          label="Predplatné"
+          onPress={() => nav.navigate("Subscription")}
+        />
       </View>
 
       {/* Notifikácie */}
@@ -187,7 +336,53 @@ export function AccountScreen() {
       <SectionTitle title={t("account.support")} />
       <View style={styles.card}>
         <Row icon="information-circle-outline" label={t("account.androidGuide")} onPress={() => Alert.alert(t("account.comingSoon"))} />
-        <Row icon="help-circle-outline" label={t("account.contactSupport")} onPress={() => Alert.alert(t("account.comingSoon"))} />
+        <Row
+          icon="help-circle-outline"
+          label={t("account.contactSupport")}
+          onPress={() =>
+            openSupportEmail(
+              t("account.contactSupportSubject"),
+              `Používateľ: ${user?.email ?? "—"}\n\nPopis problému:\n`
+            )
+          }
+        />
+        <Row
+          icon="download-outline"
+          label={t("account.requestDataExport")}
+          onPress={() =>
+            openSupportEmail(
+              t("account.requestDataExportSubject"),
+              `Žiadosť o export údajov.\nPoužívateľ: ${user?.email ?? "—"}\n\nProsím o spracovanie žiadosti.`
+            )
+          }
+        />
+        <Row
+          icon="trash-outline"
+          label={t("account.deleteAccount")}
+          onPress={() =>
+            Alert.alert(
+              t("account.deleteAccountConfirmTitle"),
+              t("account.deleteAccountConfirmBody"),
+              [
+                { text: t("common.cancel"), style: "cancel" },
+                {
+                  text: t("common.continue"),
+                  style: "destructive",
+                  onPress: async () => {
+                    try {
+                      await requestAccountDeletion("user_initiated");
+                      Alert.alert(t("common.success"), t("account.deleteAccountSuccess"));
+                      await logout();
+                    } catch (error) {
+                      console.error("[account] Failed to request deletion:", error);
+                      Alert.alert(t("common.error"), t("account.deleteAccountFailed"));
+                    }
+                  },
+                },
+              ]
+            )
+          }
+        />
       </View>
 
       {/* App */}
@@ -200,8 +395,34 @@ export function AccountScreen() {
           onPress={() => setShowLanguageModal(true)}
           right={<Text style={styles.localeBadge}>{localeNames[locale]}</Text>}
         />
-        <Row icon="eye-outline" label={t("account.privacyPolicy")} onPress={() => Alert.alert(t("account.comingSoon"))} />
-        <Row icon="document-text-outline" label={t("account.termsOfService")} onPress={() => Alert.alert(t("account.comingSoon"))} />
+        <Row icon="eye-outline" label={t("account.privacyPolicy")} onPress={() => openUrl(PRIVACY_URL)} />
+        <Row icon="document-text-outline" label={t("account.termsOfService")} onPress={() => openUrl(TERMS_URL)} />
+        <Row
+          icon="people-outline"
+          label="Subprocesori"
+          onPress={async () => {
+            const url = "https://staveto.sk/subprocessors";
+            const supported = await Linking.canOpenURL(url);
+            if (supported) {
+              await Linking.openURL(url);
+            } else {
+              Alert.alert('Chyba', 'Nepodarilo sa otvoriť odkaz.');
+            }
+          }}
+        />
+        <Row
+          icon="document-outline"
+          label="Privacy statement"
+          onPress={async () => {
+            const url = "https://staveto.sk/privacy-statement";
+            const supported = await Linking.canOpenURL(url);
+            if (supported) {
+              await Linking.openURL(url);
+            } else {
+              Alert.alert('Chyba', 'Nepodarilo sa otvoriť odkaz.');
+            }
+          }}
+        />
         <Row icon="list-outline" label={t("account.licenses")} onPress={() => Alert.alert(t("account.comingSoon"))} />
         <View style={[rowStyles.row, { borderBottomWidth: 0 }]}>
           <Ionicons name="phone-portrait-outline" size={22} color={colors.textMuted} style={rowStyles.icon} />
@@ -245,6 +466,65 @@ export function AccountScreen() {
       <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
         <Text style={styles.logoutBtnText}>{t("account.logout")}</Text>
       </TouchableOpacity>
+
+      <Modal visible={showProfileModal} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowProfileModal(false)} />
+          <View style={styles.profileModal}>
+            <Text style={styles.profileModalTitle}>Profil</Text>
+            <View style={styles.profilePhotoRow}>
+              <View style={styles.profilePhotoPreview}>
+                {profilePhotoURL ? (
+                  <Image source={{ uri: profilePhotoURL }} style={styles.profilePhotoImage} />
+                ) : (
+                  <Text style={styles.avatarText}>{initials}</Text>
+                )}
+              </View>
+              <View style={styles.profilePhotoActions}>
+                <TouchableOpacity style={styles.profilePhotoButton} onPress={takeProfilePhoto}>
+                  <Ionicons name="camera-outline" size={18} color={colors.primary} />
+                  <Text style={styles.profilePhotoButtonText}>Odfotiť</Text>
+                </TouchableOpacity>
+                <TouchableOpacity style={styles.profilePhotoButton} onPress={pickProfilePhoto}>
+                  <Ionicons name="image-outline" size={18} color={colors.primary} />
+                  <Text style={styles.profilePhotoButtonText}>Z galérie</Text>
+                </TouchableOpacity>
+                {profilePhotoURL ? (
+                  <TouchableOpacity
+                    style={styles.profilePhotoRemove}
+                    onPress={() => setProfilePhotoURL(null)}
+                  >
+                    <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
+                    <Text style={styles.profilePhotoRemoveText}>Odstrániť</Text>
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+            </View>
+            {uploadingPhoto && (
+              <View style={styles.profileUploadingRow}>
+                <ActivityIndicator size="small" color={colors.primary} />
+                <Text style={styles.profileUploadingText}>Nahrávam fotku…</Text>
+              </View>
+            )}
+            <Text style={styles.profileFieldLabel}>Primárna profesia</Text>
+            <TextInput
+              style={styles.profileInput}
+              placeholder="Napr. Elektrikár, Tesár, Stavbyvedúci"
+              placeholderTextColor={colors.textMuted}
+              value={profileProfession}
+              onChangeText={setProfileProfession}
+            />
+            <View style={styles.profileModalActions}>
+              <TouchableOpacity style={styles.profileCancel} onPress={() => setShowProfileModal(false)}>
+                <Text style={styles.profileCancelText}>Zrušiť</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.profileSave} onPress={saveProfile} disabled={savingProfile}>
+                <Text style={styles.profileSaveText}>{savingProfile ? "Ukladám…" : "Uložiť"}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
 
       <Modal visible={showLanguageModal} transparent animationType="fade">
         <View style={styles.modalBackdrop}>
@@ -306,6 +586,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     marginBottom: spacing.md,
   },
+  avatarImage: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+  },
   avatarText: { fontSize: 22, fontWeight: "700", color: "#fff" },
   profileName: { fontSize: 20, fontWeight: "700", color: colors.text, marginBottom: 4 },
   profileHint: { fontSize: 13, color: colors.textMuted, marginBottom: spacing.sm },
@@ -315,6 +600,13 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   emailText: { fontSize: 14, color: colors.textMuted, flex: 1 },
+  editProfileButton: {
+    marginTop: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  editProfileText: { color: colors.primary, fontSize: 12, fontWeight: "600" },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius,
@@ -369,6 +661,85 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: spacing.lg,
   },
+  profileModal: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  profileModalTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: colors.text,
+    textAlign: "center",
+    marginBottom: spacing.md,
+  },
+  profilePhotoRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  profilePhotoPreview: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+    backgroundColor: colors.background,
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  profilePhotoImage: {
+    width: 64,
+    height: 64,
+    borderRadius: 32,
+  },
+  profilePhotoActions: { flex: 1 },
+  profilePhotoButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingVertical: spacing.xs,
+  },
+  profilePhotoButtonText: { color: colors.text, fontSize: 14 },
+  profilePhotoRemove: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingVertical: spacing.xs,
+  },
+  profilePhotoRemoveText: { color: colors.textMuted, fontSize: 13 },
+  profileUploadingRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  profileUploadingText: { color: colors.textMuted, fontSize: 12 },
+  profileFieldLabel: { color: colors.text, fontSize: 14, marginBottom: spacing.xs },
+  profileInput: {
+    backgroundColor: colors.background,
+    borderRadius: radius,
+    padding: spacing.md,
+    color: colors.text,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.md,
+  },
+  profileModalActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: spacing.md,
+  },
+  profileCancel: { padding: spacing.sm },
+  profileCancelText: { color: colors.textMuted, fontSize: 14 },
+  profileSave: {
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius,
+  },
+  profileSaveText: { color: "#fff", fontWeight: "600" },
   languageModal: {
     backgroundColor: colors.card,
     borderRadius: radius,

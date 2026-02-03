@@ -1,6 +1,7 @@
-import { collection, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, serverTimestamp } from "firebase/firestore";
+import { collection, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, setDoc, serverTimestamp, limit } from "firebase/firestore";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
+import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 
 const COLLECTION = "projects";
 
@@ -10,6 +11,7 @@ export type ProjectDoc = {
   projectType?: "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE"; // Support both old and new types
   templateId?: string;
   addressText?: string; // Project address for navigation
+  ownerId?: string; // Read-only: included from existing DB field, no schema change
 };
 
 export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
@@ -22,6 +24,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     addressText: (d.addressText as string) || undefined,
     projectType: d.projectType as "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE" | undefined,
     templateId: d.templateId as string | undefined,
+    ownerId: (d.ownerId as string) || undefined, // Read-only: read from existing DB field
   };
 }
 
@@ -43,6 +46,24 @@ export async function createProject(ownerId: string, name: string): Promise<Proj
   // Debug: Verify ownerId matches auth.currentUser.uid
   if (ownerId && ownerId !== actualOwnerId) {
     console.warn(`[projects] WARNING: params.ownerId (${ownerId}) differs from auth.currentUser.uid (${actualOwnerId}). Using auth.currentUser.uid.`);
+  }
+  
+  // Check subscription limit before creating project
+  try {
+    const existingProjects = await listMyProjects(actualOwnerId);
+    const limitCheck = await checkLimit(actualOwnerId, "projects", existingProjects.length);
+    
+    if (!limitCheck.allowed) {
+      throw new Error(limitCheck.message || `Dosiahli ste limit projektov pre váš plán (${limitCheck.limit}). Zvážte upgrade na vyšší tier.`);
+    }
+  } catch (error: any) {
+    // If limit check fails, throw error (don't create project)
+    if (error.message && error.message.includes("limit")) {
+      throw error;
+    }
+    // If it's a different error (e.g., subscription service unavailable), log but allow creation
+    // Server-side rules will enforce limits as backup
+    console.warn("[projects] Subscription limit check failed, allowing creation (server will enforce):", error);
   }
   
   console.log(`[projects] Creating project: name="${name}", ownerId="${actualOwnerId}" (from auth.currentUser.uid)`);
@@ -246,4 +267,81 @@ export async function deleteProject(_ownerId: string, projectId: string): Promis
   const ref = doc(db, COLLECTION, projectId);
   await deleteDoc(ref);
   console.log(`[projects] Deleted project ${projectId}`);
+}
+
+export async function createPhase(projectId: string, name: string): Promise<ProjectPhaseDoc> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error('Musíte byť prihlásený na vytvorenie fázy.');
+  }
+  
+  // Verify project exists and user is owner
+  const projectRef = doc(db, paths.project(projectId));
+  const projectSnap = await getDoc(projectRef);
+  
+  if (!projectSnap.exists()) {
+    throw new Error(`Projekt ${projectId} neexistuje.`);
+  }
+  
+  const projectData = projectSnap.data();
+  if (projectData.ownerId !== currentUser.uid) {
+    throw new Error('Nemáte oprávnenie vytvárať fázy v tomto projekte.');
+  }
+  
+  // Calculate order (get max order + 1)
+  const phasesRef = collection(db, paths.projectPhases(projectId));
+  const phasesQuery = query(phasesRef, orderBy("order", "desc"), limit(1));
+  const phasesSnapshot = await getDocs(phasesQuery);
+  
+  let order = 0;
+  if (!phasesSnapshot.empty) {
+    const maxOrder = phasesSnapshot.docs[0].data().order ?? 0;
+    order = maxOrder + 1;
+  }
+  
+  // Create phase
+  const phaseRef = doc(collection(db, paths.projectPhases(projectId)));
+  const phaseData = {
+    projectId,
+    ownerId: currentUser.uid,
+    name: name.trim(),
+    order,
+    status: 'ACTIVE',
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  
+  await setDoc(phaseRef, phaseData);
+  console.log(`[projects] Created phase ${phaseRef.id} in project ${projectId}: name="${name.trim()}"`);
+  
+  return {
+    id: phaseRef.id,
+    name: name.trim(),
+    order,
+  };
+}
+
+export async function updatePhase(projectId: string, phaseId: string, name: string): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error('Musíte byť prihlásený na úpravu fázy.');
+  }
+  
+  const ref = doc(db, paths.projectPhase(projectId, phaseId));
+  await updateDoc(ref, {
+    name: name.trim(),
+    updatedAt: serverTimestamp(),
+  });
+  console.log(`[projects] Updated phase ${phaseId} in project ${projectId}: name="${name.trim()}"`);
+}
+
+export async function deletePhase(projectId: string, phaseId: string): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error('Musíte byť prihlásený na vymazanie fázy.');
+  }
+  
+  const ref = doc(db, paths.projectPhase(projectId, phaseId));
+  await deleteDoc(ref);
+  console.log(`[projects] Deleted phase ${phaseId} from project ${projectId}`);
 }

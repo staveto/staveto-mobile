@@ -4,7 +4,7 @@
 
 import { Timestamp } from 'firebase/firestore';
 
-export type ProjectType = 'BUILD' | 'MAINTENANCE' | 'TRADE' | 'RESIDENTIAL';
+export type ProjectType = 'BUILD' | 'MAINTENANCE' | 'TRADE' | 'RESIDENTIAL' | 'MANAGEMENT';
 
 export type TaskStatus = 'OPEN' | 'DONE' | 'IN_PROGRESS' | 'BLOCKED';
 

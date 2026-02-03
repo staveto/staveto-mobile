@@ -42,5 +42,12 @@ service firebase.storage {
     match /{allPaths=**} {
       allow read, write: if false;
     }
+
+    // User profile photos
+    match /users/{userId}/profile/{fileName} {
+      allow read: if signedIn() && uid() == userId;
+      allow write: if signedIn() && uid() == userId
+        && request.resource.size < 10 * 1024 * 1024; // Max 10MB
+    }
   }
 }

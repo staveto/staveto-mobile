@@ -4,6 +4,7 @@ service cloud.firestore {
 
     function signedIn() { return request.auth != null; }
     function uid() { return request.auth.uid; }
+    function hasPhone() { return request.auth.token.phone_number != null; }
 
     function projectOwner(projectId) {
       return signedIn()
@@ -13,7 +14,49 @@ service cloud.firestore {
 
     // Users (každý len svoj)
     match /users/{userId} {
-      allow read, write: if signedIn() && uid() == userId;
+      // Users can read their own document
+      allow read: if signedIn() && uid() == userId;
+      
+      // Users can create their own document (registration)
+      allow create: if signedIn() && uid() == userId
+        && (
+          !("phoneVerified" in request.resource.data)
+          || request.resource.data.phoneVerified == false
+          || (request.resource.data.phoneVerified == true && hasPhone())
+        );
+      
+      // Users can update their own document EXCEPT subscription field
+      // Subscription field can ONLY be written by server (Cloud Functions)
+      // Allow initial subscription write during registration (if subscription doesn't exist and is FREE)
+      allow update: if signedIn() && uid() == userId
+        && (
+          !("phoneVerified" in request.resource.data)
+          || request.resource.data.phoneVerified == resource.data.phoneVerified
+          || (request.resource.data.phoneVerified == true && hasPhone())
+        )
+        && (
+          // If subscription field is not being changed, allow update
+          (!('subscription' in request.resource.data) || !('subscription' in resource.data) || request.resource.data.subscription == resource.data.subscription)
+          ||
+          // Allow initial FREE subscription creation (during registration)
+          (!('subscription' in resource.data) && request.resource.data.subscription.tier == "FREE" && request.resource.data.subscription.status == "active")
+        );
+      
+      // Notifications (user-specific)
+      match /notifications/{notificationId} {
+        allow read: if signedIn() && uid() == userId;
+        allow create: if signedIn() && uid() == userId;
+        allow update: if signedIn()
+          && uid() == userId
+          && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readAt"]);
+        allow delete: if false;
+      }
+    }
+    
+    // Billing events (read-only for users, write-only for server)
+    match /billingEvents/{eventId} {
+      allow read: if signedIn() && resource.data.firebaseUID == uid();
+      allow write: if false; // Only Cloud Functions can write
     }
 
     // Catalog templates (read-only)
@@ -63,6 +106,16 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/projects/$(projectId))
           && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
       }
+    }
+
+    // Notifications (inbox)
+    match /notifications/{notificationId} {
+      allow read: if signedIn() && request.auth.uid == resource.data.userId;
+      allow create: if signedIn() && request.auth.uid == request.resource.data.userId;
+      allow update: if signedIn()
+        && request.auth.uid == resource.data.userId
+        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readAt"]);
+      allow delete: if false;
     }
   }
 }

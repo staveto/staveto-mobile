@@ -5,7 +5,7 @@
  * Metadata links attachments to entities via optional fields: taskId, phaseId, expenseId
  */
 
-export type AttachmentKind = 'image' | 'document' | 'pdf' | 'audio' | 'other';
+export type AttachmentKind = 'image' | 'document' | 'pdf' | 'audio' | 'invoice' | 'other';
 
 export interface AttachmentMetadata {
   id: string;

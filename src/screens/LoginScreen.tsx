@@ -10,6 +10,7 @@ import {
   Platform,
   Image,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
@@ -22,6 +23,7 @@ export function LoginScreen() {
   const { login } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
@@ -44,9 +46,8 @@ export function LoginScreen() {
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
-      <Image source={require("../../assets/icon.png")} style={styles.logo} resizeMode="contain" accessibilityLabel="Staveto logo" />
+      <Image source={require("../../assets/logo.png")} style={styles.logo} resizeMode="contain" accessibilityLabel="Staveto logo" />
       <Text style={styles.title}>{t("login.title")}</Text>
-      <Text style={styles.apiStatus}>Firebase</Text>
       <TextInput
         style={styles.input}
         value={email}
@@ -63,7 +64,9 @@ export function LoginScreen() {
         onChangeText={setPassword}
         placeholder={t("register.placeholderPassword")}
         placeholderTextColor={colors.textMuted}
-        secureTextEntry
+        secureTextEntry={true}
+        autoCapitalize="none"
+        autoCorrect={false}
       />
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <TouchableOpacity style={styles.button} onPress={onLogin} disabled={submitting}>
@@ -90,16 +93,10 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   title: {
-    fontSize: 28,
+    fontSize: 36,
     fontWeight: "700",
-    color: colors.text,
-    marginBottom: 8,
-    textAlign: "center",
-  },
-  apiStatus: {
-    fontSize: 14,
-    color: colors.textMuted,
-    marginBottom: spacing.xs,
+    color: "#FFFFFF",
+    marginBottom: spacing.md,
     textAlign: "center",
   },
   input: {
@@ -110,6 +107,25 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     fontSize: 16,
     color: colors.text,
+  },
+  passwordContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius,
+    marginTop: spacing.sm,
+  },
+  passwordInput: {
+    flex: 1,
+    padding: spacing.md,
+    fontSize: 16,
+    color: colors.text,
+  },
+  passwordToggle: {
+    padding: spacing.md,
+    paddingLeft: spacing.sm,
   },
   error: {
     color: colors.accent,

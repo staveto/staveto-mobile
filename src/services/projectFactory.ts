@@ -123,7 +123,7 @@ export async function instantiateTemplate(
   console.log(`[projectFactory]   - Match: ${projectData.ownerId === currentUser.uid ? '✅ YES' : '❌ NO'}`);
   console.log(`[projectFactory]   - Type check: ${typeof projectData.ownerId} === ${typeof currentUser.uid} ? ${typeof projectData.ownerId === typeof currentUser.uid ? '✅' : '❌'}`);
   console.log(`[projectFactory]   - Length: ${projectData.ownerId.length} === ${currentUser.uid.length} ? ${projectData.ownerId.length === currentUser.uid.length ? '✅' : '❌'}`);
-  console.log(`[projectFactory]   - Character-by-character match: ${projectData.ownerId.split('').every((c, i) => c === currentUser.uid[i]) ? '✅' : '❌'}`);
+  console.log(`[projectFactory]   - Character-by-character match: ${projectData.ownerId.split('').every((c: string, i: number) => c === currentUser.uid[i]) ? '✅' : '❌'}`);
   
   if (projectData.ownerId !== currentUser.uid) {
     console.error(`[projectFactory] CRITICAL: ownerId mismatch detected!`);

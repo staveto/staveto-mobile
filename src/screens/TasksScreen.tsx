@@ -46,7 +46,17 @@ export function TasksScreen() {
         tasksService.listMyTasks(orgId),
         projectsService.listMyProjects(orgId),
       ]);
-      setTasks(tasksList as Task[]);
+      
+      // Sort tasks by dueDate (ascending - earliest first)
+      // Tasks without dueDate go to the end
+      const sortedTasks = [...(tasksList as Task[])].sort((a, b) => {
+        if (!a.dueDate && !b.dueDate) return 0;
+        if (!a.dueDate) return 1; // Tasks without date go to end
+        if (!b.dueDate) return -1; // Tasks without date go to end
+        return a.dueDate.localeCompare(b.dueDate); // Sort by date ascending
+      });
+      
+      setTasks(sortedTasks);
       setProjects(projectsList);
     } catch (e: unknown) {
       setTasks([]);

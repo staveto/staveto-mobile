@@ -43,4 +43,8 @@ export const paths = {
   projectDocuments: (projectId: string) => `projects/${projectId}/documents`,
   projectDocument: (projectId: string, documentId: string) =>
     `projects/${projectId}/documents/${documentId}`,
+  // Notifications (user-specific)
+  userNotifications: (userId: string) => `users/${userId}/notifications`,
+  userNotification: (userId: string, notificationId: string) =>
+    `users/${userId}/notifications/${notificationId}`,
 };

@@ -74,7 +74,7 @@ export async function addPhasesToProject(
     }
     
     const taskRef = doc(db, paths.projectTask(projectId, task.id));
-    batch.set(taskRef, {
+    const taskData: any = {
       projectId,
       ownerId,
       phaseId: task.phaseId || '',
@@ -89,7 +89,20 @@ export async function addPhasesToProject(
       updatedAt: serverTimestamp(),
       doneAt: null,
       createdAt: serverTimestamp(),
+      // MVP additions - consistent with projectFactory
+      origin: 'TEMPLATE', // Task comes from template
+      templateTaskId: task.id, // Reference to template task ID
+      isActive: true, // New tasks are active by default
+    };
+    
+    // Remove undefined values
+    Object.keys(taskData).forEach(key => {
+      if (taskData[key] === undefined) {
+        delete taskData[key];
+      }
     });
+    
+    batch.set(taskRef, taskData);
   });
   
   // Commit batch

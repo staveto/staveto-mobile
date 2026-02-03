@@ -67,11 +67,14 @@ export async function getTemplatesByType(projectType: string): Promise<CatalogTe
   // For now, we'll fetch all and filter client-side, or you can add the index
   const templatesRef = collection(db, 'catalogTemplates');
   const snapshot = await getDocs(templatesRef);
-  
-  return snapshot.docs
-    .map(doc => ({
-      id: doc.id,
-      ...doc.data(),
-    }))
-    .filter(template => template.projectType === projectType) as CatalogTemplate[];
+
+  const templates: CatalogTemplate[] = snapshot.docs.map((docSnap) => {
+    const data = docSnap.data() as CatalogTemplate;
+    return {
+      ...data,
+      id: docSnap.id,
+    };
+  });
+
+  return templates.filter((template) => template.projectType === projectType);
 }

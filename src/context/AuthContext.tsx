@@ -1,7 +1,8 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { onAuthStateChanged } from "firebase/auth";
+// CRITICAL: Import firebase.ts FIRST to ensure Firebase Auth is registered
 import { auth } from "../firebase";
+import { onAuthStateChanged } from "firebase/auth";
 import * as authService from "../services/auth";
 
 const ONBOARDING_KEY = "staveto_onboarding_done";
@@ -14,11 +15,17 @@ type AuthState = {
   orgId: string | null;
   loading: boolean;
   onboardingDone: boolean;
+  onboardingLoaded: boolean;
 };
 
 type AuthContextValue = AuthState & {
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, displayName?: string) => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    displayName?: string,
+    options?: authService.RegisterOptions
+  ) => Promise<void>;
   logout: () => Promise<void>;
   loadFromStorage: () => Promise<void>;
   finishOnboarding: () => Promise<void>;
@@ -36,15 +43,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     user: null,
     orgId: null,
     loading: true,
-    onboardingDone: true,
+    onboardingDone: false,
+    onboardingLoaded: false,
   });
 
   const loadOnboarding = async () => {
     try {
       const ob = await AsyncStorage.getItem(ONBOARDING_KEY);
-      setState((s) => ({ ...s, onboardingDone: ob === "1" }));
+      setState((s) => ({ ...s, onboardingDone: ob === "1", onboardingLoaded: true }));
     } catch {
-      setState((s) => ({ ...s, onboardingDone: true }));
+      setState((s) => ({ ...s, onboardingDone: true, onboardingLoaded: true }));
     }
   };
 
@@ -81,7 +89,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   const finishOnboarding = async () => {
     await AsyncStorage.setItem(ONBOARDING_KEY, "1");
-    setState((s) => ({ ...s, onboardingDone: true }));
+    setState((s) => ({ ...s, onboardingDone: true, onboardingLoaded: true }));
   };
 
   const login = async (email: string, password: string) => {
@@ -95,8 +103,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }));
   };
 
-  const register = async (email: string, password: string, displayName?: string) => {
-    const { user, token } = await authService.register(email, password, displayName);
+  const register = async (
+    email: string,
+    password: string,
+    displayName?: string,
+    options?: authService.RegisterOptions
+  ) => {
+    const { user, token } = await authService.register(email, password, displayName, options);
     setState((s) => ({
       ...s,
       token,

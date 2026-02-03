@@ -33,16 +33,6 @@
       ]
     },
     {
-      "collectionGroup": "phases",
-      "queryScope": "COLLECTION",
-      "fields": [
-        {
-          "fieldPath": "order",
-          "order": "ASCENDING"
-        }
-      ]
-    },
-    {
       "collectionGroup": "tasks",
       "queryScope": "COLLECTION",
       "fields": [
@@ -71,12 +61,16 @@
       ]
     },
     {
-      "collectionGroup": "members",
+      "collectionGroup": "notifications",
       "queryScope": "COLLECTION",
       "fields": [
         {
           "fieldPath": "userId",
           "order": "ASCENDING"
+        },
+        {
+          "fieldPath": "createdAt",
+          "order": "DESCENDING"
         }
       ]
     }

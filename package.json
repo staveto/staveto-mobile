@@ -7,25 +7,25 @@
     "postinstall": "node scripts/ensure-logo.js",
     "start": "npm run ensure-logo && expo start",
     "android": "npm run ensure-logo && expo start --android",
-    "ios": "expo start --ios",
+    "ios": "expo run:ios",
     "web": "expo start --web",
     "build:android": "eas build --platform android --profile production"
   },
   "dependencies": {
     "@react-native-async-storage/async-storage": "2.2.0",
+    "@react-native-community/datetimepicker": "^8.2.0",
     "@react-navigation/bottom-tabs": "^7.2.0",
     "@react-navigation/native": "^7.0.14",
     "@react-navigation/native-stack": "^7.2.0",
     "babel-preset-expo": "~54.0.10",
     "expo": "~54.0.32",
-    "expo-dev-client": "~6.0.20",
-    "@react-native-community/datetimepicker": "^8.2.0",
     "expo-av": "~16.0.8",
     "expo-document-picker": "~14.0.8",
+    "expo-firebase-recaptcha": "^2.3.1",
     "expo-image-picker": "~17.0.10",
     "expo-localization": "~17.0.3",
     "expo-status-bar": "~3.0.9",
-    "firebase": "^11.0.2",
+    "firebase": "^10.14.1",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",
@@ -34,10 +34,12 @@
     "react-native-safe-area-context": "~5.6.0",
     "react-native-screens": "~4.16.0",
     "react-native-web": "^0.21.0",
+    "react-native-webview": "^13.16.0",
     "react-native-worklets": "0.5.1"
   },
   "devDependencies": {
     "@types/react": "~19.1.0",
+    "babel-preset-expo": "~54.0.10",
     "typescript": "~5.9.2"
   },
   "private": true

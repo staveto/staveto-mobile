@@ -21,16 +21,17 @@ import * as projectFactory from "../services/projectFactory";
 import * as templateService from "../services/templateService";
 import type { PhaseCustomization, PhaseStatus } from "../services/projectFactory";
 import type { CatalogPhase } from "../lib/types";
+import type { ProjectDoc } from "../services/projects";
 import { colors, radius, spacing } from "../theme";
 import { openInMaps } from "../lib/maps";
 
-type Project = { id: string; name: string; projectType?: "MANAGEMENT" | "RESIDENTIAL" | "TRADE" };
+type Project = ProjectDoc;
 
 function showError(msg: string) {
   Alert.alert("", msg);
 }
 
-type ProjectType = "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE"; // Vedenie výstavby, Údržba domu, Remeselník
+type ProjectCreationType = NonNullable<ProjectDoc["projectType"]>;
 
 export function ProjectsScreen() {
   const route = useRoute();
@@ -42,7 +43,8 @@ export function ProjectsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [showNew, setShowNew] = useState(false);
   const [newStep, setNewStep] = useState<1 | 2 | 3>(1);
-  const [selectedType, setSelectedType] = useState<ProjectType | null>(null);
+  const [selectedType, setSelectedType] = useState<ProjectCreationType | null>(null);
+  const [useTemplate, setUseTemplate] = useState<boolean | null>(null); // null = not chosen, true = with template, false = from scratch
   const [newName, setNewName] = useState("");
   const [newAddress, setNewAddress] = useState("");
   const [templateId, setTemplateId] = useState<string>("");
@@ -111,6 +113,7 @@ export function ProjectsScreen() {
     setShowNew(false);
     setNewStep(1);
     setSelectedType(null);
+    setUseTemplate(null);
     setNewName("");
     setNewAddress("");
     setTemplateId("");
@@ -121,17 +124,60 @@ export function ProjectsScreen() {
 
   const onNext = async () => {
     if (newStep === 1) {
-      // Krok 1 → Krok 2: Len kontrola typu, potom načítať fázy zo šablóny
+      // Krok 1 → Krok 2: Kontrola typu a výber šablóny (len pre MANAGEMENT)
       if (!selectedType) {
         setError('Vyberte typ projektu');
         return;
       }
 
-      // Determine template ID - BUILD and MANAGEMENT use template
-      const determinedTemplateId = (selectedType === 'MANAGEMENT' || selectedType === 'BUILD') ? 'eu-construction-v1' : '';
-      setTemplateId(determinedTemplateId);
-
-      if (determinedTemplateId) {
+      // Pre MANAGEMENT projekty: spýtať sa na výber medzi šablónou a "od nuly"
+      if (selectedType === 'MANAGEMENT') {
+        if (useTemplate === null) {
+          setError('Vyberte, či chcete použiť šablónu Staveto alebo vytvoriť projekt od nuly');
+          return;
+        }
+        
+        if (useTemplate) {
+          // Použiť šablónu
+          const determinedTemplateId = 'eu-construction-v1';
+          setTemplateId(determinedTemplateId);
+          
+          // Load template phases
+          setLoadingPhases(true);
+          setError(null);
+          try {
+            const phases = await templateService.getTemplatePhases(determinedTemplateId);
+            setTemplatePhases(phases);
+            
+            // Initialize all phases as enabled with 'active' status
+            const customizations = new Map<string, PhaseCustomization>();
+            phases.forEach(phase => {
+              customizations.set(phase.id, {
+                phaseId: phase.id,
+                enabled: true,
+                status: 'active',
+              });
+            });
+            setPhaseCustomizations(customizations);
+          } catch (e: any) {
+            console.error('[ProjectsScreen] Error loading template phases:', e);
+            setError(`Chyba pri načítaní šablóny: ${e.message || 'Neznáma chyba'}`);
+            setLoadingPhases(false);
+            return;
+          } finally {
+            setLoadingPhases(false);
+          }
+        } else {
+          // Vytvoriť od nuly - bez šablóny
+          setTemplateId("");
+          setTemplatePhases([]);
+          setPhaseCustomizations(new Map());
+        }
+      } else if (selectedType === 'BUILD') {
+        // BUILD projekty vždy používajú šablónu
+        const determinedTemplateId = 'eu-construction-v1';
+        setTemplateId(determinedTemplateId);
+        
         // Load template phases
         setLoadingPhases(true);
         setError(null);
@@ -157,6 +203,11 @@ export function ProjectsScreen() {
         } finally {
           setLoadingPhases(false);
         }
+      } else {
+        // RESIDENTIAL, TRADE, MAINTENANCE - bez šablóny
+        setTemplateId("");
+        setTemplatePhases([]);
+        setPhaseCustomizations(new Map());
       }
 
       setError(null);
@@ -467,6 +518,11 @@ export function ProjectsScreen() {
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>{t("projects.modalTitle")}</Text>
             
+            <ScrollView 
+              style={styles.modalContent} 
+              showsVerticalScrollIndicator={true}
+              keyboardShouldPersistTaps="handled"
+            >
             {newStep === 1 ? (
               <>
                 {/* Krok 1: Základ - Typ projektu */}
@@ -476,6 +532,7 @@ export function ProjectsScreen() {
                     style={[styles.typeCard, selectedType === "MANAGEMENT" && styles.typeCardActive]}
                     onPress={() => {
                       setSelectedType("MANAGEMENT");
+                      setUseTemplate(null);
                       setError(null);
                     }}
                   >
@@ -506,6 +563,7 @@ export function ProjectsScreen() {
                     style={[styles.typeCard, selectedType === "TRADE" && styles.typeCardActive]}
                     onPress={() => {
                       setSelectedType("TRADE");
+                      setUseTemplate(null);
                       setError(null);
                     }}
                   >
@@ -517,7 +575,7 @@ export function ProjectsScreen() {
                     </Text>
                   </TouchableOpacity>
 
-                  {(selectedType === "BUILD" || selectedType === "MANAGEMENT") && (
+                  {selectedType === "BUILD" && (
                     <View style={styles.templateInfo}>
                       <Ionicons name="information-circle-outline" size={16} color={colors.textMuted} />
                       <Text style={styles.templateInfoText}>Šablóna: eu-construction-v1</Text>
@@ -525,29 +583,73 @@ export function ProjectsScreen() {
                   )}
                 </View>
                 
+                {/* Výber medzi šablónou a "od nuly" - len pre MANAGEMENT */}
+                {selectedType === "MANAGEMENT" && (
+                  <>
+                    <Text style={[styles.modalLabel, { marginTop: spacing.lg }]}>Ako chcete vytvoriť projekt?</Text>
+                    {__DEV__ && console.log('[ProjectsScreen] Rendering template choice for MANAGEMENT, useTemplate:', useTemplate)}
+                    <View style={styles.templateChoiceRow}>
+                      <TouchableOpacity
+                        style={[
+                          styles.templateChoiceCard,
+                          useTemplate === true && styles.templateChoiceCardActive
+                        ]}
+                        onPress={() => {
+                          setUseTemplate(true);
+                          setError(null);
+                        }}
+                      >
+                        <Ionicons 
+                          name="document-text-outline" 
+                          size={24} 
+                          color={useTemplate === true ? colors.primary : colors.textMuted} 
+                        />
+                        <Text style={[
+                          styles.templateChoiceText,
+                          useTemplate === true && styles.templateChoiceTextActive
+                        ]}>
+                          So šablónou Staveto
+                        </Text>
+                        <Text style={styles.templateChoiceSubtext}>
+                          Použije sa šablóna s fázami a úlohami
+                        </Text>
+                      </TouchableOpacity>
+                      
+                      <TouchableOpacity
+                        style={[
+                          styles.templateChoiceCard,
+                          useTemplate === false && styles.templateChoiceCardActive
+                        ]}
+                        onPress={() => {
+                          setUseTemplate(false);
+                          setError(null);
+                        }}
+                      >
+                        <Ionicons 
+                          name="create-outline" 
+                          size={24} 
+                          color={useTemplate === false ? colors.primary : colors.textMuted} 
+                        />
+                        <Text style={[
+                          styles.templateChoiceText,
+                          useTemplate === false && styles.templateChoiceTextActive
+                        ]}>
+                          Od nuly
+                        </Text>
+                        <Text style={styles.templateChoiceSubtext}>
+                          Vytvoríte si vlastné fázy a úlohy
+                        </Text>
+                      </TouchableOpacity>
+                    </View>
+                  </>
+                )}
+                
                 {/* Error message */}
                 {error && (
                   <View style={styles.errorContainer}>
                     <Text style={styles.errorText}>{error}</Text>
                   </View>
                 )}
-                
-                {/* Tlačidlá */}
-                <View style={styles.modalButtons}>
-                  <TouchableOpacity 
-                    style={styles.modalCancel} 
-                    onPress={closeNewModal}
-                  >
-                    <Text style={styles.modalCancelText}>{t("projects.cancel")}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.modalOk, !selectedType && styles.modalOkDisabled]}
-                    onPress={onNext}
-                    disabled={!selectedType}
-                  >
-                    <Text style={styles.modalOkText}>{t("projects.next")}</Text>
-                  </TouchableOpacity>
-                </View>
               </>
             ) : newStep === 2 ? (
               <>
@@ -654,24 +756,6 @@ export function ProjectsScreen() {
                     <Text style={styles.errorText}>{error}</Text>
                   </View>
                 )}
-                
-                {/* Tlačidlá */}
-                <View style={styles.modalButtons}>
-                  <TouchableOpacity 
-                    style={styles.modalCancel} 
-                    onPress={onBack}
-                    disabled={submitting || loadingPhases}
-                  >
-                    <Text style={styles.modalCancelText}>{t("projects.back")}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.modalOk, (!newName.trim() || submitting || loadingPhases) && styles.modalOkDisabled]}
-                    onPress={onNext}
-                    disabled={!newName.trim() || submitting || loadingPhases}
-                  >
-                    <Text style={styles.modalOkText}>{t("projects.next")}</Text>
-                  </TouchableOpacity>
-                </View>
               </>
             ) : (
               <>
@@ -696,18 +780,28 @@ export function ProjectsScreen() {
                       <Text style={styles.summaryValue}>{newAddress.trim()}</Text>
                     </View>
                   )}
+                  {selectedType === 'MANAGEMENT' && (
+                    <View style={styles.summaryRow}>
+                      <Text style={styles.summaryLabel}>Spôsob vytvorenia:</Text>
+                      <Text style={styles.summaryValue}>
+                        {useTemplate ? "So šablónou Staveto" : "Od nuly"}
+                      </Text>
+                    </View>
+                  )}
                   {templateId && (selectedType === 'MANAGEMENT' || selectedType === 'BUILD') && (
                     <>
                       <View style={styles.summaryRow}>
                         <Text style={styles.summaryLabel}>Šablóna:</Text>
                         <Text style={styles.summaryValue}>{templateId}</Text>
                       </View>
-                      <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Fázy:</Text>
-                        <Text style={styles.summaryValue}>
-                          {Array.from(phaseCustomizations.values()).filter(c => c.enabled).length} z {templatePhases.length}
-                        </Text>
-                      </View>
+                      {templatePhases.length > 0 && (
+                        <View style={styles.summaryRow}>
+                          <Text style={styles.summaryLabel}>Fázy:</Text>
+                          <Text style={styles.summaryValue}>
+                            {Array.from(phaseCustomizations.values()).filter(c => c.enabled).length} z {templatePhases.length}
+                          </Text>
+                        </View>
+                      )}
                     </>
                   )}
                 </View>
@@ -718,29 +812,68 @@ export function ProjectsScreen() {
                     <Text style={styles.errorText}>{error}</Text>
                   </View>
                 )}
-                
-                {/* Tlačidlá */}
-                <View style={styles.modalButtons}>
-                  <TouchableOpacity 
-                    style={styles.modalCancel} 
-                    onPress={onBack}
-                    disabled={submitting}
-                  >
-                    <Text style={styles.modalCancelText}>{t("projects.back")}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.modalOk, submitting && styles.modalOkDisabled]}
-                    onPress={onCreate}
-                    disabled={submitting}
-                  >
-                    {submitting ? (
-                      <ActivityIndicator size="small" color="#fff" />
-                    ) : (
-                      <Text style={styles.modalOkText}>Vygenerovať projekt</Text>
-                    )}
-                  </TouchableOpacity>
-                </View>
               </>
+            )}
+            </ScrollView>
+            
+            {/* Tlačidlá - vždy viditeľné mimo ScrollView */}
+            {newStep === 1 ? (
+              <View style={styles.modalButtons}>
+                <TouchableOpacity 
+                  style={styles.modalCancel} 
+                  onPress={closeNewModal}
+                >
+                  <Text style={styles.modalCancelText}>{t("projects.cancel")}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.modalOk, 
+                    (!selectedType || (selectedType === "MANAGEMENT" && useTemplate === null)) && styles.modalOkDisabled
+                  ]}
+                  onPress={onNext}
+                  disabled={!selectedType || (selectedType === "MANAGEMENT" && useTemplate === null)}
+                >
+                  <Text style={styles.modalOkText}>{t("projects.next")}</Text>
+                </TouchableOpacity>
+              </View>
+            ) : newStep === 2 ? (
+              <View style={styles.modalButtons}>
+                <TouchableOpacity 
+                  style={styles.modalCancel} 
+                  onPress={onBack}
+                  disabled={submitting || loadingPhases}
+                >
+                  <Text style={styles.modalCancelText}>{t("projects.back")}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalOk, (!newName.trim() || submitting || loadingPhases) && styles.modalOkDisabled]}
+                  onPress={onNext}
+                  disabled={!newName.trim() || submitting || loadingPhases}
+                >
+                  <Text style={styles.modalOkText}>{t("projects.next")}</Text>
+                </TouchableOpacity>
+              </View>
+            ) : (
+              <View style={styles.modalButtons}>
+                <TouchableOpacity 
+                  style={styles.modalCancel} 
+                  onPress={onBack}
+                  disabled={submitting}
+                >
+                  <Text style={styles.modalCancelText}>{t("projects.back")}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalOk, submitting && styles.modalOkDisabled]}
+                  onPress={onCreate}
+                  disabled={submitting}
+                >
+                  {submitting ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.modalOkText}>Vygenerovať projekt</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
             )}
           </View>
         </View>
@@ -823,7 +956,8 @@ const styles = StyleSheet.create({
   },
   fabText: { color: "#fff", fontWeight: "600" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },
-  modal: { backgroundColor: colors.card, borderRadius: radius, padding: spacing.lg, borderWidth: 1, borderColor: colors.border },
+  modal: { backgroundColor: colors.card, borderRadius: radius, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, maxHeight: "90%", flexDirection: "column" },
+  modalContent: { flex: 1, maxHeight: "70%" },
   modalTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.md },
   modalLabel: { fontSize: 14, color: colors.textMuted, marginBottom: spacing.sm },
   typeRow: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg },
@@ -955,6 +1089,43 @@ const styles = StyleSheet.create({
   templateInfoText: {
     fontSize: 12,
     color: colors.textMuted,
+  },
+  templateChoiceRow: {
+    flexDirection: "row",
+    gap: spacing.md,
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  templateChoiceCard: {
+    flex: 1,
+    padding: spacing.md,
+    borderRadius: radius,
+    borderWidth: 2,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    minHeight: 120,
+    justifyContent: "center",
+  },
+  templateChoiceCardActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary + "10",
+  },
+  templateChoiceText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.text,
+    marginTop: spacing.sm,
+    textAlign: "center",
+  },
+  templateChoiceTextActive: {
+    color: colors.primary,
+  },
+  templateChoiceSubtext: {
+    fontSize: 11,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
+    textAlign: "center",
   },
   phasesList: {
     maxHeight: 300,

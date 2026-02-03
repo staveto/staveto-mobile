@@ -39,19 +39,20 @@ try {
 } catch (e) {
   console.warn('@react-native-community/datetimepicker not installed. Date picker features will be disabled.');
 }
-import { useRoute, useNavigation } from "@react-navigation/native";
+import { useRoute, useNavigation, NavigationProp } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
+import { updatePhase, deletePhase, createPhase } from "../services/projects";
 import * as tasksService from "../services/tasks";
 import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
 import * as constructionDiaryService from "../services/constructionDiary";
 import * as projectDocumentsService from "../services/projectDocuments";
 import { updateTaskStatus } from "../services/taskService";
-import { archiveTask, reorderTask } from "../services/tasks";
+import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
 import { addPhasesToProject } from "../services/addPhasesToProject";
 import type { TaskDoc } from "../services/tasks";
 import type { ProjectPhaseDoc } from "../services/projects";
@@ -79,12 +80,20 @@ export function ProjectOverviewScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [expandedPhases, setExpandedPhases] = useState<Map<string, boolean>>(new Map());
+  const expandedPhasesRef = React.useRef<Map<string, boolean>>(new Map());
   const [expandedExpenses, setExpandedExpenses] = useState(false);
   const [expandedDiary, setExpandedDiary] = useState(false);
   const [expandedDocuments, setExpandedDocuments] = useState(false);
   const [showNewTask, setShowNewTask] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [selectedPhaseId, setSelectedPhaseId] = useState<string | null>(null); // Phase for new task
+  const [showNewPhaseModal, setShowNewPhaseModal] = useState(false);
+  const [newPhaseName, setNewPhaseName] = useState("");
+  const [editingPhase, setEditingPhase] = useState<ProjectPhaseDoc | null>(null);
+  const [editPhaseName, setEditPhaseName] = useState("");
+  const [showEditPhaseModal, setShowEditPhaseModal] = useState(false);
+  const [movingTask, setMovingTask] = useState<TaskDoc | null>(null);
+  const [showMoveTaskModal, setShowMoveTaskModal] = useState(false);
   const [showVoiceRecord, setShowVoiceRecord] = useState(false);
   const [isRecording, setIsRecording] = useState(false);
   const [recordingUri, setRecordingUri] = useState<string | null>(null);
@@ -328,7 +337,7 @@ export function ProjectOverviewScreen() {
       }
       // Initialize all phases as collapsed (zrolované) by default
       const expanded = new Map<string, boolean>();
-      ph.forEach((p) => expanded.set(p.id, false));
+      ph.forEach((p: { id: string }) => expanded.set(p.id, false));
       setExpandedPhases(expanded);
     } catch (error: any) {
       console.error('[ProjectOverview] Error loading data:', error);
@@ -374,7 +383,7 @@ export function ProjectOverviewScreen() {
     
     // For TRADE/MAINTENANCE: require either text or voice recording
     if (isTradeOrMaintenance && !newTitle.trim() && !recordingUri) {
-      Alert.alert("Chyba", "Zadajte popis úlohy alebo nahrajte hlasovú nahrávku.");
+      Alert.alert(t("common.error"), t("projectOverview.enterTaskDescription"));
       return;
     }
     
@@ -415,7 +424,7 @@ export function ProjectOverviewScreen() {
           console.log(`[ProjectOverview] Voice recording uploaded successfully for task ${taskDoc.id}`);
         } catch (attachmentError) {
           console.error(`[ProjectOverview] Error uploading voice recording:`, attachmentError);
-          Alert.alert('Upozornenie', 'Úloha bola vytvorená, ale hlasová nahrávka sa nepodarila nahrať. Môžete ju pridať neskôr.');
+          Alert.alert(t("common.warning"), t("projectOverview.taskCreatedVoiceFailed"));
           // Don't fail task creation if attachment upload fails
         }
       }
@@ -443,7 +452,25 @@ export function ProjectOverviewScreen() {
   };
 
   const openTaskDetail = (task: TaskDoc) => {
-    (navigation.getParent() as { getParent: () => { navigate: (n: string, p: object) => void } } | undefined)?.getParent()?.navigate("TaskDetail", { task });
+    console.log(`[ProjectOverview] Opening task detail for task ${task.id}`);
+    try {
+      // ProjectOverviewScreen is already in the root Stack navigator, so we can navigate directly
+      (navigation as any).navigate("TaskDetail", { task });
+    } catch (error) {
+      console.error(`[ProjectOverview] Error navigating to TaskDetail:`, error);
+      // Fallback: try with getParent (in case we're nested)
+      try {
+        const parent = navigation.getParent();
+        if (parent) {
+          (parent as any).navigate("TaskDetail", { task });
+        } else {
+          Alert.alert(t("common.error"), t("projectOverview.failedToOpenTask"));
+        }
+      } catch (fallbackError) {
+        console.error(`[ProjectOverview] Fallback navigation also failed:`, fallbackError);
+        Alert.alert(t("common.error"), t("projectOverview.failedToOpenTask"));
+      }
+    }
   };
 
   const toggleTaskStatus = async (task: TaskDoc) => {
@@ -482,7 +509,7 @@ export function ProjectOverviewScreen() {
               console.log(`[ProjectOverview] Task archived successfully`);
             } catch (error: any) {
               console.error(`[ProjectOverview] Error archiving task:`, error);
-              Alert.alert('Chyba', error.message || 'Nepodarilo sa archivovať úlohu.');
+              Alert.alert(t("common.error"), error.message || t("projectOverview.failedToArchive"));
             }
           },
         },
@@ -561,7 +588,7 @@ export function ProjectOverviewScreen() {
       console.log(`[ProjectOverview] Task reordered successfully`);
     } catch (error: any) {
       console.error(`[ProjectOverview] Error reordering task:`, error);
-      Alert.alert('Chyba', error.message || 'Nepodarilo sa zmeniť poradie úlohy.');
+      Alert.alert(t("common.error"), error.message || t("projectOverview.failedToChangeOrder"));
     }
   };
 
@@ -611,7 +638,7 @@ export function ProjectOverviewScreen() {
       // Reload project data
       await load(true);
       // Update route params if needed
-      Alert.alert('Úspech', 'Projekt bol upravený.');
+      Alert.alert(t("common.success"), t("projectOverview.projectUpdated"));
     } catch (error: any) {
       console.error(`[ProjectOverview] Error updating project:`, error);
       const c = (error as { code?: string }).code;
@@ -652,13 +679,129 @@ export function ProjectOverviewScreen() {
     );
   };
 
+  const handleMoveTask = (task: TaskDoc) => {
+    setMovingTask(task);
+    setShowMoveTaskModal(true);
+  };
+
+  const handleMoveTaskToPhase = async (targetPhaseId: string | null) => {
+    if (!projectId || !movingTask) return;
+    
+    try {
+      await moveTaskToPhase(projectId, movingTask.id, targetPhaseId);
+      
+      // Reload data
+      await load(true);
+      
+      setShowMoveTaskModal(false);
+      setMovingTask(null);
+    } catch (error: any) {
+      console.error(`[ProjectOverview] Error moving task:`, error);
+      Alert.alert(t("common.error"), t("projectOverview.failedToMoveTask"));
+    }
+  };
+
+  const handleEditPhase = (phase: ProjectPhaseDoc) => {
+    setEditingPhase(phase);
+    setEditPhaseName(phase.name);
+    setShowEditPhaseModal(true);
+  };
+
+  const handleCreatePhase = async () => {
+    if (!projectId || !newPhaseName.trim()) return;
+    
+    setSubmitting(true);
+    try {
+      const newPhase = await createPhase(projectId, newPhaseName.trim());
+      
+      // Update local state
+      setPhases(prevPhases => [...prevPhases, newPhase].sort((a, b) => a.order - b.order));
+      
+      setShowNewPhaseModal(false);
+      setNewPhaseName("");
+    } catch (error: any) {
+      console.error(`[ProjectOverview] Error creating phase:`, error);
+      Alert.alert('Chyba', error.message || 'Nepodarilo sa vytvoriť fázu.');
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleUpdatePhase = async () => {
+    if (!projectId || !editingPhase || !editPhaseName.trim()) return;
+    
+    setSubmitting(true);
+    try {
+      await updatePhase(projectId, editingPhase.id, editPhaseName.trim());
+      
+      // Update local state
+      setPhases(prevPhases => 
+        prevPhases.map(p => 
+          p.id === editingPhase.id 
+            ? { ...p, name: editPhaseName.trim() }
+            : p
+        )
+      );
+      
+      setShowEditPhaseModal(false);
+      setEditingPhase(null);
+      setEditPhaseName("");
+    } catch (error: any) {
+      console.error(`[ProjectOverview] Error updating phase:`, error);
+      Alert.alert(t("common.error"), error.message || t("projectOverview.failedToEditPhase"));
+    }
+  };
+
+  const handleDeletePhase = async (phase: ProjectPhaseDoc) => {
+    if (!projectId) return;
+    
+    // Check if phase has tasks
+    const phaseTasks = tasks.filter(t => t.phaseId === phase.id);
+    if (phaseTasks.length > 0) {
+      Alert.alert(
+        'Nemožno vymazať fázu',
+        `Táto fáza obsahuje ${phaseTasks.length} úloh. Najprv vymažte alebo presuňte úlohy.`
+      );
+      return;
+    }
+    
+    Alert.alert(
+      'Vymazať fázu?',
+      `Naozaj chcete vymazať fázu "${phase.name}"?`,
+      [
+        { text: 'Zrušiť', style: 'cancel' },
+        {
+          text: 'Vymazať',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await deletePhase(projectId, phase.id);
+              
+              // Update local state
+              setPhases(prevPhases => prevPhases.filter(p => p.id !== phase.id));
+              
+              // Remove from expanded phases
+              const updated = new Map(expandedPhases);
+              updated.delete(phase.id);
+              expandedPhasesRef.current = updated;
+              setExpandedPhases(updated);
+            } catch (error: any) {
+              console.error(`[ProjectOverview] Error deleting phase:`, error);
+              Alert.alert(t("common.error"), t("projectOverview.failedToDeletePhase"));
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const onAssigneePress = (task: TaskDoc) => {
     if (!orgId || !user || !projectId) return;
     const name = user.name ?? user.email ?? "Me";
     if (task.assigneeId === user.id) {
-      tasksService.updateTaskAssignee(orgId, projectId, task.id, null, null).then(load).catch(() => {});
+      tasksService.updateTaskAssignee(orgId, projectId, task.id, null, null).then(() => load()).catch(() => {});
     } else {
-      tasksService.updateTaskAssignee(orgId, projectId, task.id, user.id, name).then(load).catch(() => {});
+      tasksService.updateTaskAssignee(orgId, projectId, task.id, user.id, name).then(() => load()).catch(() => {});
     }
   };
 
@@ -667,7 +810,7 @@ export function ProjectOverviewScreen() {
     if (expense) {
       setEditingExpense(expense);
       setExpenseTitle(expense.title);
-      setExpenseAmount(expense.amount.toString());
+      setExpenseAmount(expense.amount?.toString() || "");
       setExpenseDate(expense.date ? expense.date.split('T')[0] : new Date().toISOString().split('T')[0]);
       setExpenseNote(expense.note || "");
       setExpensePhaseId(expense.phaseId || null);
@@ -690,11 +833,52 @@ export function ProjectOverviewScreen() {
       return;
     }
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
+      // Show action sheet to choose between camera and gallery
+      if (Platform.OS === 'ios') {
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            options: ['Zrušiť', 'Odfotiť faktúru', 'Vybrať z galérie'],
+            cancelButtonIndex: 0,
+          },
+          async (buttonIndex) => {
+            if (buttonIndex === 1) {
+              await launchCameraForExpense();
+            } else if (buttonIndex === 2) {
+              await launchGalleryForExpense();
+            }
+          }
+        );
+      } else {
+        Alert.alert(
+          'Vyberte zdroj',
+          'Odkiaľ chcete pridať faktúru?',
+          [
+            { text: 'Zrušiť', style: 'cancel' },
+            { text: 'Odfotiť faktúru', onPress: launchCameraForExpense },
+            { text: 'Vybrať z galérie', onPress: launchGalleryForExpense },
+          ]
+        );
+      }
+    } catch (error: any) {
+      console.error(`[ProjectOverview] Error picking expense image:`, error);
+      Alert.alert('Chyba', 'Nepodarilo sa vybrať obrázok.');
+    }
+  };
+
+  const launchCameraForExpense = async () => {
+    if (!ImagePicker) return;
+    
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Oprávnenie', 'Potrebujeme prístup ku kamere na fotografovanie faktúr.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         quality: 0.8,
-        copyToCacheDirectory: true,
       });
 
       if (!result.canceled && result.assets[0]) {
@@ -707,7 +891,38 @@ export function ProjectOverviewScreen() {
         });
       }
     } catch (error: any) {
-      console.error(`[ProjectOverview] Error picking expense image:`, error);
+      console.error(`[ProjectOverview] Error launching camera for expense:`, error);
+      Alert.alert('Chyba', 'Nepodarilo sa otvoriť kameru.');
+    }
+  };
+
+  const launchGalleryForExpense = async () => {
+    if (!ImagePicker) return;
+    
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Oprávnenie', 'Potrebujeme prístup k galérii na výber faktúr.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        setExpenseAttachment({
+          uri: asset.uri,
+          fileName: asset.fileName || `faktura_${Date.now()}.jpg`,
+          mimeType: asset.mimeType || 'image/jpeg',
+          kind: 'image',
+        });
+      }
+    } catch (error: any) {
+      console.error(`[ProjectOverview] Error picking expense from gallery:`, error);
       Alert.alert('Chyba', 'Nepodarilo sa vybrať obrázok.');
     }
   };
@@ -718,11 +933,52 @@ export function ProjectOverviewScreen() {
       return;
     }
     try {
-      const result = await ImagePicker.launchImageLibraryAsync({
+      // Show action sheet to choose between camera and gallery
+      if (Platform.OS === 'ios') {
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            options: ['Zrušiť', 'Odfotiť', 'Vybrať z galérie'],
+            cancelButtonIndex: 0,
+          },
+          async (buttonIndex) => {
+            if (buttonIndex === 1) {
+              await launchCameraForDiary();
+            } else if (buttonIndex === 2) {
+              await launchGalleryForDiary();
+            }
+          }
+        );
+      } else {
+        Alert.alert(
+          'Vyberte zdroj',
+          'Odkiaľ chcete pridať fotku?',
+          [
+            { text: 'Zrušiť', style: 'cancel' },
+            { text: 'Odfotiť', onPress: launchCameraForDiary },
+            { text: 'Vybrať z galérie', onPress: launchGalleryForDiary },
+          ]
+        );
+      }
+    } catch (error: any) {
+      console.error(`[ProjectOverview] Error picking diary image:`, error);
+      Alert.alert('Chyba', 'Nepodarilo sa vybrať fotku.');
+    }
+  };
+
+  const launchCameraForDiary = async () => {
+    if (!ImagePicker) return;
+    
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Oprávnenie', 'Potrebujeme prístup ku kamere na fotografovanie.');
+        return;
+      }
+
+      const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: true,
         quality: 0.8,
-        copyToCacheDirectory: true,
       });
 
       if (!result.canceled && result.assets[0]) {
@@ -735,8 +991,39 @@ export function ProjectOverviewScreen() {
         });
       }
     } catch (error: any) {
-      console.error(`[ProjectOverview] Error picking diary image:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa vybrať obrázok.');
+      console.error(`[ProjectOverview] Error launching camera for diary:`, error);
+      Alert.alert('Chyba', 'Nepodarilo sa otvoriť kameru.');
+    }
+  };
+
+  const launchGalleryForDiary = async () => {
+    if (!ImagePicker) return;
+    
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Oprávnenie', 'Potrebujeme prístup k galérii na výber fotiek.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        setDiaryAttachment({
+          uri: asset.uri,
+          fileName: asset.fileName || `dennik_${Date.now()}.jpg`,
+          mimeType: asset.mimeType || 'image/jpeg',
+          kind: 'image',
+        });
+      }
+    } catch (error: any) {
+      console.error(`[ProjectOverview] Error picking diary image from gallery:`, error);
+      Alert.alert('Chyba', 'Nepodarilo sa vybrať fotku.');
     }
   };
 
@@ -748,7 +1035,6 @@ export function ProjectOverviewScreen() {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: ['application/pdf', 'image/*'],
-        copyToCacheDirectory: true,
       });
 
       if (!result.canceled && result.assets[0]) {
@@ -770,6 +1056,7 @@ export function ProjectOverviewScreen() {
 
   const handleSaveExpense = async () => {
     if (!expenseTitle.trim() || !expenseAmount.trim() || !projectId || !orgId) return;
+    
     const amount = parseFloat(expenseAmount);
     if (isNaN(amount) || amount <= 0) {
       Alert.alert('Chyba', 'Zadajte platnú sumu.');
@@ -793,7 +1080,7 @@ export function ProjectOverviewScreen() {
               localUri: expenseAttachment.uri,
               fileName: expenseAttachment.fileName,
               mimeType: expenseAttachment.mimeType,
-              kind: expenseAttachment.kind,
+              kind: expenseAttachment.kind === 'pdf' ? 'pdf' : expenseAttachment.kind === 'image' ? 'image' : 'document',
             });
             attachmentId = attachment.id;
             console.log(`[ProjectOverview] Uploaded expense attachment: ${attachmentId}`);
@@ -834,7 +1121,7 @@ export function ProjectOverviewScreen() {
               localUri: expenseAttachment.uri,
               fileName: expenseAttachment.fileName,
               mimeType: expenseAttachment.mimeType,
-              kind: expenseAttachment.kind,
+              kind: expenseAttachment.kind === 'pdf' ? 'pdf' : expenseAttachment.kind === 'image' ? 'image' : 'document',
             });
             attachmentId = attachment.id;
             
@@ -994,7 +1281,6 @@ export function ProjectOverviewScreen() {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: ['application/pdf', 'image/*'],
-        copyToCacheDirectory: true,
       });
 
       if (!result.canceled && result.assets[0]) {
@@ -1103,7 +1389,10 @@ export function ProjectOverviewScreen() {
     }
   };
 
-  const formatAmount = (amount: number, currency: string = 'EUR') => {
+  const formatAmount = (amount: number | null, currency: string = 'EUR') => {
+    if (amount === null || amount === undefined) {
+      return `0.00 ${currency}`;
+    }
     return `${amount.toFixed(2)} ${currency}`;
   };
 
@@ -1151,14 +1440,57 @@ export function ProjectOverviewScreen() {
       return;
     }
     try {
-      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      // Show action sheet to choose between camera and gallery
+      if (Platform.OS === 'ios') {
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            options: ['Zrušiť', 'Odfotiť', 'Vybrať z galérie', 'Vybrať video'],
+            cancelButtonIndex: 0,
+          },
+          async (buttonIndex) => {
+            if (buttonIndex === 1) {
+              // Camera
+              await launchCameraForAttachment();
+            } else if (buttonIndex === 2) {
+              // Gallery (images)
+              await launchGalleryForAttachment();
+            } else if (buttonIndex === 3) {
+              // Video
+              await launchVideoPicker();
+            }
+          }
+        );
+      } else {
+        // Android - show Alert with options
+        Alert.alert(
+          'Vyberte zdroj',
+          'Odkiaľ chcete pridať prílohu?',
+          [
+            { text: 'Zrušiť', style: 'cancel' },
+            { text: 'Odfotiť', onPress: launchCameraForAttachment },
+            { text: 'Vybrať z galérie', onPress: launchGalleryForAttachment },
+            { text: 'Vybrať video', onPress: launchVideoPicker },
+          ]
+        );
+      }
+    } catch (error: any) {
+      console.error(`[ProjectOverview] Error picking image:`, error);
+      Alert.alert('Chyba', 'Nepodarilo sa vybrať prílohu.');
+    }
+  };
+
+  const launchCameraForAttachment = async () => {
+    if (!ImagePicker) return;
+    
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Oprávnenie', 'Potrebujeme prístup k galérii.');
+        Alert.alert('Oprávnenie', 'Potrebujeme prístup ku kamere na fotografovanie.');
         return;
       }
 
-      const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker!.MediaTypeOptions.Images,
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
         allowsEditing: false,
         quality: 0.8,
       });
@@ -1167,8 +1499,64 @@ export function ProjectOverviewScreen() {
         await uploadAttachmentFile(result.assets[0].uri, result.assets[0].fileName || 'image.jpg', 'image');
       }
     } catch (error: any) {
-      console.error(`[ProjectOverview] Error picking image:`, error);
+      console.error(`[ProjectOverview] Error launching camera:`, error);
+      Alert.alert('Chyba', 'Nepodarilo sa otvoriť kameru.');
+    }
+  };
+
+  const launchGalleryForAttachment = async () => {
+    if (!ImagePicker) return;
+    
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Oprávnenie', 'Potrebujeme prístup k galérii.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: false,
+        quality: 0.8,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        await uploadAttachmentFile(result.assets[0].uri, result.assets[0].fileName || 'image.jpg', 'image');
+      }
+    } catch (error: any) {
+      console.error(`[ProjectOverview] Error picking from gallery:`, error);
       Alert.alert('Chyba', 'Nepodarilo sa vybrať obrázok.');
+    }
+  };
+
+  const launchVideoPicker = async () => {
+    if (!ImagePicker) return;
+    
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== 'granted') {
+        Alert.alert('Oprávnenie', 'Potrebujeme prístup k galérii na výber videa.');
+        return;
+      }
+
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+        allowsEditing: false,
+        quality: 1.0,
+      });
+
+      if (!result.canceled && result.assets[0]) {
+        const asset = result.assets[0];
+        await uploadAttachmentFile(
+          asset.uri, 
+          asset.fileName || `video_${Date.now()}.mp4`, 
+          'document',
+          asset.mimeType || 'video/mp4'
+        );
+      }
+    } catch (error: any) {
+      console.error(`[ProjectOverview] Error picking video:`, error);
+      Alert.alert('Chyba', 'Nepodarilo sa vybrať video.');
     }
   };
 
@@ -1180,7 +1568,6 @@ export function ProjectOverviewScreen() {
     try {
       const result = await DocumentPicker.getDocumentAsync({
         type: '*/*',
-        copyToCacheDirectory: true,
       });
 
       if (!result.canceled && result.assets[0]) {
@@ -1398,11 +1785,12 @@ export function ProjectOverviewScreen() {
   if (isBuildProject) {
     // For BUILD: group tasks by phaseId
     tasks.forEach((tk) => {
-      // Only include tasks with phaseId (skip tasks without phaseId for BUILD projects)
+      // Include tasks with phaseId
       if (tk.phaseId) {
         if (!tasksByPhase.has(tk.phaseId)) tasksByPhase.set(tk.phaseId, []);
         tasksByPhase.get(tk.phaseId)!.push(tk);
       }
+      // Tasks without phaseId will be shown in a separate section
     });
     // Set phase order from loaded phases
     phaseOrder.push(...(phases.map((p) => p.id)));
@@ -1410,6 +1798,9 @@ export function ProjectOverviewScreen() {
     // For TRADE/MAINTENANCE: tasks don't have phases, just keep them in a flat list
     // We'll render them directly without phase grouping
   }
+  
+  // Get tasks without phaseId for BUILD projects
+  const tasksWithoutPhase = isBuildProject ? tasks.filter(t => !t.phaseId) : [];
   
   console.log(`[ProjectOverview] Render: projectType="${projectType}", isBuildProject=${isBuildProject}, phases.length=${phases.length}, tasks.length=${tasks.length}, phaseOrder.length=${phaseOrder.length}`);
   if (phases.length > 0) {
@@ -1632,148 +2023,282 @@ export function ProjectOverviewScreen() {
             <Text style={styles.empty}>{t("projectOverview.noPhases") || "Projekt nemá žiadne fázy."}</Text>
             <Text style={styles.emptySubtext}>{t("projectOverview.addPhaseHint") || "Môžeš pridať fázy neskôr."}</Text>
             {projectType === 'MANAGEMENT' && !templateId && (
-              <TouchableOpacity
-                style={styles.addTemplateButton}
-                onPress={async () => {
-                  if (!projectId) return;
-                  setAddingPhases(true);
-                  try {
-                    console.log(`[ProjectOverview] Adding phases to project ${projectId}...`);
-                    await addPhasesToProject(projectId, 'eu-construction-v1');
-                    console.log(`[ProjectOverview] Phases added successfully, reloading data...`);
-                    // Wait a bit for Firestore to sync
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    // Force reload twice to ensure data is fetched
-                    await load(true);
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    await load(true);
-                    console.log(`[ProjectOverview] Data reloaded. Current phases: ${phases.length}, tasks: ${tasks.length}`);
-                  } catch (error: any) {
-                    console.error(`[ProjectOverview] Error adding phases:`, error);
-                    Alert.alert('Chyba', error.message || 'Nepodarilo sa pridať fázy.');
-                  } finally {
-                    setAddingPhases(false);
-                  }
-                }}
-                disabled={addingPhases}
-              >
-                {addingPhases ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <>
-                    <Ionicons name="add-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
-                    <Text style={styles.addTemplateButtonText}>Pridať fázy zo šablóny</Text>
-                  </>
-                )}
-              </TouchableOpacity>
+              <>
+                <TouchableOpacity
+                  style={styles.addTemplateButton}
+                  onPress={() => setShowNewPhaseModal(true)}
+                >
+                  <Ionicons name="add-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
+                  <Text style={styles.addTemplateButtonText}>Vytvoriť fázu</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.addTemplateButton, { marginTop: spacing.sm, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border }]}
+                  onPress={async () => {
+                    if (!projectId) return;
+                    setAddingPhases(true);
+                    try {
+                      console.log(`[ProjectOverview] Adding phases to project ${projectId}...`);
+                      await addPhasesToProject(projectId, 'eu-construction-v1');
+                      console.log(`[ProjectOverview] Phases added successfully, reloading data...`);
+                      // Wait a bit for Firestore to sync
+                      await new Promise(resolve => setTimeout(resolve, 1000));
+                      // Force reload twice to ensure data is fetched
+                      await load(true);
+                      await new Promise(resolve => setTimeout(resolve, 500));
+                      await load(true);
+                      console.log(`[ProjectOverview] Data reloaded. Current phases: ${phases.length}, tasks: ${tasks.length}`);
+                    } catch (error: any) {
+                      console.error(`[ProjectOverview] Error adding phases:`, error);
+                      Alert.alert('Chyba', error.message || 'Nepodarilo sa pridať fázy.');
+                    } finally {
+                      setAddingPhases(false);
+                    }
+                  }}
+                  disabled={addingPhases}
+                >
+                  {addingPhases ? (
+                    <ActivityIndicator color={colors.primary} size="small" />
+                  ) : (
+                    <>
+                      <Ionicons name="document-text-outline" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+                      <Text style={[styles.addTemplateButtonText, { color: colors.primary }]}>Pridať fázy zo šablóny</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </>
             )}
           </View>
         ) : (
-          // For BUILD projects: show phases with tasks
-          phaseOrder.map((phaseKey) => {
-            const phaseTasks = tasksByPhase.get(phaseKey) ?? [];
-            const phase = phases.find((p) => p.id === phaseKey);
+          <>
+            {/* Add phase button - for MANAGEMENT projects created from scratch */}
+            {projectType === 'MANAGEMENT' && !templateId && (
+              <TouchableOpacity
+                style={styles.addPhaseButton}
+                onPress={() => setShowNewPhaseModal(true)}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="add-circle-outline" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+                <Text style={styles.addPhaseButtonText}>Pridať fázu</Text>
+              </TouchableOpacity>
+            )}
             
-            // Show phase (even if it has no tasks - make it clickable)
-            if (phase) {
-              const expanded = expandedPhases.get(phaseKey) ?? false; // Default collapsed
-              return (
-                <View key={phaseKey} style={styles.phaseBlock}>
-                  <TouchableOpacity
-                    style={styles.phaseHeader}
-                    onPress={() => {
-                      const newExpanded = new Map(expandedPhases);
-                      newExpanded.set(phaseKey, !expanded);
-                      setExpandedPhases(newExpanded);
-                    }}
-                    activeOpacity={0.7}
-                  >
-                    <Ionicons 
-                      name={expanded ? "chevron-down" : "chevron-forward"} 
-                      size={18} 
-                      color={colors.primary} 
-                      style={{ marginRight: 8 }}
-                    />
-                    <Text style={styles.phaseTitle}>{phase.name}</Text>
-                    {phaseTasks.length > 0 && (
-                      <Text style={styles.phaseTaskCount}>({phaseTasks.length})</Text>
-                    )}
-                  </TouchableOpacity>
-                  {expanded && (
-                    <>
-                      {/* Add task button for this phase */}
-                      <TouchableOpacity 
-                        style={styles.addTaskToPhaseButton}
-                        onPress={() => openNewTaskModal(phaseKey)}
+            {/* For BUILD projects: show phases with tasks */}
+            {phaseOrder.map((phaseKey) => {
+              const phaseTasks = tasksByPhase.get(phaseKey) ?? [];
+              const phase = phases.find((p) => p.id === phaseKey);
+              
+              // Show phase (even if it has no tasks - make it clickable)
+              if (phase) {
+                const expanded = expandedPhases.get(phaseKey) ?? false; // Default collapsed
+                return (
+                  <View key={phaseKey} style={styles.phaseBlock}>
+                    <View style={styles.phaseHeaderContainer}>
+                      <TouchableOpacity
+                        style={styles.phaseHeader}
+                        onPress={() => {
+                          const newExpanded = new Map(expandedPhases);
+                          newExpanded.set(phaseKey, !expanded);
+                          setExpandedPhases(newExpanded);
+                        }}
                         activeOpacity={0.7}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                       >
-                        <Ionicons name="add-circle-outline" size={18} color={colors.primary} style={{ marginRight: 6 }} />
-                        <Text style={styles.addTaskToPhaseText}>{t("projectOverview.addTaskToPhase") || "Pridať úlohu"}</Text>
+                        <Ionicons 
+                          name={expanded ? "chevron-down" : "chevron-forward"} 
+                          size={18} 
+                          color={colors.primary} 
+                          style={{ marginRight: 8 }}
+                        />
+                        <Text style={styles.phaseTitle}>{phase.name}</Text>
+                        {phaseTasks.length > 0 && (
+                          <Text style={styles.phaseTaskCount}>({phaseTasks.length})</Text>
+                        )}
                       </TouchableOpacity>
-                      
-                      {phaseTasks.length === 0 ? (
-                        <Text style={styles.emptyPhase}>{t("projectOverview.noTasksInPhase")}</Text>
-                      ) : (
-                        phaseTasks.map((task) => (
-                          <View key={task.id} style={styles.taskRow}>
-                            <View style={styles.taskNameCell}>
-                              <TouchableOpacity 
-                                onPress={() => toggleTaskStatus(task)} 
-                                activeOpacity={0.7}
-                                style={styles.statusToggle}
+                      <View style={styles.phaseActions}>
+                        <TouchableOpacity
+                          style={styles.phaseActionButton}
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            handleEditPhase(phase);
+                          }}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          <Ionicons name="create-outline" size={18} color={colors.textMuted} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.phaseActionButton}
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            handleDeletePhase(phase);
+                          }}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                    {expanded && (
+                      <>
+                        {/* Add task button for this phase */}
+                        <TouchableOpacity 
+                          style={styles.addTaskToPhaseButton}
+                          onPress={() => openNewTaskModal(phaseKey)}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="add-circle-outline" size={18} color={colors.primary} style={{ marginRight: 6 }} />
+                          <Text style={styles.addTaskToPhaseText}>{t("projectOverview.addTaskToPhase") || "Pridať úlohu"}</Text>
+                        </TouchableOpacity>
+                        
+                        {phaseTasks.length === 0 ? (
+                          <Text style={styles.emptyPhase}>{t("projectOverview.noTasksInPhase")}</Text>
+                        ) : (
+                          phaseTasks.map((task) => (
+                            <View key={task.id} style={styles.taskRow}>
+                              <View style={styles.taskNameCell}>
+                                <TouchableOpacity 
+                                  onPress={() => toggleTaskStatus(task)} 
+                                  activeOpacity={0.7}
+                                  style={styles.statusToggle}
+                                >
+                                  <Ionicons 
+                                    name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"} 
+                                    size={24} 
+                                    color={task.status === "DONE" ? colors.primary : colors.textMuted} 
+                                  />
+                                </TouchableOpacity>
+                                <TouchableOpacity 
+                                  style={styles.taskTitleContainer} 
+                                  onPress={() => openTaskDetail(task)} 
+                                  activeOpacity={0.7}
+                                >
+                                  <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={2}>
+                                    {task.title || t("tasks.noTitle")}
+                                  </Text>
+                                  {task.dueDate && (
+                                    <Text style={styles.taskDueDate}>
+                                      <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
+                                    </Text>
+                                  )}
+                                </TouchableOpacity>
+                              </View>
+                              <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
+                                <Ionicons name="person-outline" size={18} color={colors.textMuted} />
+                                <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.attachmentButton}
+                                onPress={() => openAttachmentModal('task', task.id)}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                               >
                                 <Ionicons 
-                                  name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"} 
-                                  size={24} 
-                                  color={task.status === "DONE" ? colors.primary : colors.textMuted} 
+                                  name="attach-outline" 
+                                  size={20} 
+                                  color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
                                 />
                               </TouchableOpacity>
-                              <TouchableOpacity 
-                                style={styles.taskTitleContainer} 
-                                onPress={() => openTaskDetail(task)} 
-                                activeOpacity={0.7}
+                              <TouchableOpacity
+                                style={styles.taskMoveButton}
+                                onPress={() => handleMoveTask(task)}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                               >
-                                <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={2}>
-                                  {task.title || t("tasks.noTitle")}
-                                </Text>
-                                {task.dueDate && (
-                                  <Text style={styles.taskDueDate}>
-                                    <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
-                                  </Text>
-                                )}
+                                <Ionicons 
+                                  name="swap-horizontal-outline" 
+                                  size={20} 
+                                  color="#000000" 
+                                />
                               </TouchableOpacity>
                             </View>
-                            <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
-                              <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                              <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
-                            </TouchableOpacity>
-                            <TouchableOpacity
-                              style={styles.attachmentButton}
-                              onPress={() => openAttachmentModal('task', task.id)}
-                              hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                            >
-                              <Ionicons 
-                                name="attach-outline" 
-                                size={20} 
-                                color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
-                              />
-                            </TouchableOpacity>
-                          </View>
-                        ))
-                      )}
-                    </>
-                  )}
-                </View>
-              );
-            }
+                          ))
+                        )}
+                      </>
+                    )}
+                  </View>
+                );
+              }
+              
+              // This shouldn't happen for BUILD projects - all tasks should have phaseId
+              // But handle it gracefully just in case
+              return null;
+            })}
             
-            // This shouldn't happen for BUILD projects - all tasks should have phaseId
-            // But handle it gracefully just in case
-            return null;
-          })
+            {/* Show tasks without phaseId for BUILD projects */}
+            {tasksWithoutPhase.length > 0 && (
+              <View style={styles.phaseBlock}>
+                <View style={styles.phaseHeader}>
+                  <Ionicons 
+                    name="chevron-down" 
+                    size={18} 
+                    color={colors.primary} 
+                    style={{ marginRight: 8 }}
+                  />
+                  <Text style={styles.phaseTitle}>Úlohy bez fázy</Text>
+                  <Text style={styles.phaseTaskCount}>({tasksWithoutPhase.length})</Text>
+                </View>
+                <View style={styles.phaseContent}>
+                  {tasksWithoutPhase.map((task) => (
+                    <View key={task.id} style={styles.taskRow}>
+                      <View style={styles.taskNameCell}>
+                        <TouchableOpacity 
+                          onPress={() => toggleTaskStatus(task)} 
+                          activeOpacity={0.7}
+                          style={styles.statusToggle}
+                        >
+                          <Ionicons 
+                            name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"} 
+                            size={24} 
+                            color={task.status === "DONE" ? colors.primary : colors.textMuted} 
+                          />
+                        </TouchableOpacity>
+                        <TouchableOpacity 
+                          style={styles.taskTitleContainer} 
+                          onPress={() => openTaskDetail(task)} 
+                          activeOpacity={0.7}
+                        >
+                          <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={2}>
+                            {task.title || t("tasks.noTitle")}
+                          </Text>
+                          {task.dueDate && (
+                            <Text style={styles.taskDueDate}>
+                              <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
+                            </Text>
+                          )}
+                        </TouchableOpacity>
+                      </View>
+                      <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
+                        <Ionicons name="person-outline" size={18} color={colors.textMuted} />
+                        <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.attachmentButton}
+                        onPress={() => openAttachmentModal('task', task.id)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      >
+                        <Ionicons 
+                          name="attach-outline" 
+                          size={20} 
+                          color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
+                        />
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.taskMoveButton}
+                        onPress={() => handleMoveTask(task)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      >
+                        <Ionicons 
+                          name="swap-horizontal-outline" 
+                          size={20} 
+                          color="#000000" 
+                        />
+                      </TouchableOpacity>
+                    </View>
+                  ))}
+                </View>
+              </View>
             )}
-            </ScrollView>
-          </View>
+          </>
+        )}
+          </ScrollView>
+        </View>
         )}
 
         {/* Expenses Section */}
@@ -2256,9 +2781,9 @@ export function ProjectOverviewScreen() {
                 <Text style={styles.modalCancelText}>{t("tasks.cancel")}</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={styles.modalOk} 
+                style={[styles.modalOk, (!expenseTitle.trim() || (submitting)) && styles.modalOkDisabled]} 
                 onPress={handleSaveExpense} 
-                disabled={!expenseTitle.trim() || !expenseAmount.trim() || submitting}
+                disabled={!expenseTitle.trim() || submitting}
               >
                 <Text style={styles.modalOkText}>
                   {submitting ? 'Ukladá sa...' : (editingExpense ? 'Uložiť' : 'Pridať')}
@@ -2430,7 +2955,7 @@ export function ProjectOverviewScreen() {
               value={editTaskTitle}
               onChangeText={setEditTaskTitle}
               placeholder="Názov úlohy"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor="#000000"
               autoFocus
             />
             <Text style={styles.modalLabel}>Plánovaný termín ukončenia (voliteľné)</Text>
@@ -2489,7 +3014,7 @@ export function ProjectOverviewScreen() {
                           value={datePickerDate}
                           mode="date"
                           display="spinner"
-                          onChange={(event, selectedDate) => {
+                          onChange={(_event: unknown, selectedDate?: Date) => {
                             if (selectedDate) {
                               setDatePickerDate(selectedDate);
                             }
@@ -2531,7 +3056,7 @@ export function ProjectOverviewScreen() {
                 value={datePickerDate}
                 mode="date"
                 display="default"
-                onChange={(event, selectedDate) => {
+                onChange={(_event: unknown, selectedDate?: Date) => {
                   setShowDatePicker(false);
                   if (selectedDate) {
                     const dateStr = selectedDate.toISOString().split('T')[0];
@@ -2718,7 +3243,7 @@ export function ProjectOverviewScreen() {
                 value={newTitle}
                 onChangeText={setNewTitle}
                 placeholder={isTradeOrMaintenance ? "Popis úlohy..." : t("tasks.taskPlaceholder")}
-                placeholderTextColor={colors.textMuted}
+                placeholderTextColor="#000000"
                 multiline={isTradeOrMaintenance}
                 numberOfLines={isTradeOrMaintenance ? 4 : 1}
                 textAlignVertical={isTradeOrMaintenance ? "top" : "center"}
@@ -3064,6 +3589,126 @@ export function ProjectOverviewScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Modal for creating new phase */}
+      <Modal visible={showNewPhaseModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <Text style={styles.modalTitle}>Vytvoriť fázu</Text>
+            <TextInput
+              style={styles.input}
+              value={newPhaseName}
+              onChangeText={setNewPhaseName}
+              placeholder="Názov fázy"
+              placeholderTextColor="rgba(0, 0, 0, 0.5)"
+              autoFocus
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalCancel}
+                onPress={() => {
+                  setShowNewPhaseModal(false);
+                  setNewPhaseName("");
+                }}
+              >
+                <Text style={styles.modalCancelText}>Zrušiť</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalOk, (!newPhaseName.trim() || submitting) && styles.modalOkDisabled]}
+                onPress={handleCreatePhase}
+                disabled={!newPhaseName.trim() || submitting}
+              >
+                {submitting ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.modalOkText}>Vytvoriť</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal for editing phase */}
+      <Modal visible={showEditPhaseModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <Text style={styles.modalTitle}>Upraviť fázu</Text>
+            <TextInput
+              style={styles.input}
+              value={editPhaseName}
+              onChangeText={setEditPhaseName}
+              placeholder="Názov fázy"
+              placeholderTextColor="rgba(0, 0, 0, 0.5)"
+              autoFocus
+            />
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalCancel}
+                onPress={() => {
+                  setShowEditPhaseModal(false);
+                  setEditingPhase(null);
+                  setEditPhaseName("");
+                }}
+              >
+                <Text style={styles.modalCancelText}>Zrušiť</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.modalOk, (!editPhaseName.trim() || submitting) && styles.modalOkDisabled]}
+                onPress={handleUpdatePhase}
+                disabled={!editPhaseName.trim() || submitting}
+              >
+                {submitting ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.modalOkText}>Uložiť</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* Modal for moving task to another phase */}
+      <Modal visible={showMoveTaskModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <Text style={styles.modalTitle}>Presunúť úlohu</Text>
+            {movingTask && (
+              <Text style={styles.modalSubtitle}>"{movingTask.title}"</Text>
+            )}
+            <Text style={styles.modalLabel}>Vyberte fázu:</Text>
+            <ScrollView style={styles.phaseList}>
+              <TouchableOpacity
+                style={styles.phaseOption}
+                onPress={() => handleMoveTaskToPhase(null)}
+              >
+                <Text style={styles.phaseOptionText}>Bez fázy</Text>
+              </TouchableOpacity>
+              {phases.map((phase) => (
+                <TouchableOpacity
+                  key={phase.id}
+                  style={styles.phaseOption}
+                  onPress={() => handleMoveTaskToPhase(phase.id)}
+                >
+                  <Text style={styles.phaseOptionText}>{phase.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalCancel}
+                onPress={() => {
+                  setShowMoveTaskModal(false);
+                  setMovingTask(null);
+                }}
+              >
+                <Text style={styles.modalCancelText}>Zrušiť</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -3173,14 +3818,32 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.lg,
   },
   phaseBlock: { marginBottom: spacing.md },
+  phaseHeaderContainer: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  phaseContent: {
+    paddingLeft: spacing.md,
+  },
   phaseHeader: { 
     flexDirection: "row", 
     alignItems: "center", 
-    marginBottom: spacing.sm,
+    flex: 1,
     paddingVertical: spacing.xs,
+    minWidth: 0,
   },
   phaseTitle: { fontSize: 13, fontWeight: "600", color: colors.primary, flex: 1 },
   phaseTaskCount: { fontSize: 12, color: colors.textMuted, marginLeft: spacing.xs },
+  phaseActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  phaseActionButton: {
+    padding: spacing.xs,
+  },
   tableHeader: {
     flexDirection: "row",
     borderBottomWidth: 1,
@@ -3209,6 +3872,24 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontSize: 14,
   },
+  addPhaseButton: {
+    marginTop: spacing.md,
+    marginBottom: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius,
+    justifyContent: "center",
+  },
+  addPhaseButtonText: {
+    color: colors.primary,
+    fontWeight: "600",
+    fontSize: 14,
+  },
   addTaskToPhaseButton: {
     flexDirection: "row",
     alignItems: "center",
@@ -3228,6 +3909,31 @@ const styles = StyleSheet.create({
   },
   phaseSelector: {
     marginBottom: spacing.md,
+  },
+  phaseSelectorScroll: {
+    marginBottom: spacing.sm,
+  },
+  phaseChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginRight: spacing.xs,
+  },
+  phaseChipSelected: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  phaseChipText: {
+    fontSize: 14,
+    color: colors.text,
+    fontWeight: "500",
+  },
+  phaseChipTextSelected: {
+    color: "#fff",
+    fontWeight: "600",
   },
   phaseSelectorLabel: {
     fontSize: 14,
@@ -3287,6 +3993,7 @@ const styles = StyleSheet.create({
     marginTop: 4,
     flexDirection: "row",
     alignItems: "center",
+
   },
   assigneeCell: { flexDirection: "row", alignItems: "flex-start", justifyContent: "flex-end", gap: 4, paddingTop: 2 },
   assigneeText: { fontSize: 13, color: colors.textMuted, maxWidth: 70 },
@@ -3488,6 +4195,7 @@ const styles = StyleSheet.create({
   modalCancel: { padding: spacing.sm },
   modalCancelText: { color: colors.textMuted },
   modalOk: { backgroundColor: colors.primary, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radius },
+  modalOkDisabled: { backgroundColor: colors.textMuted, opacity: 0.5 },
   modalOkText: { color: "#fff", fontWeight: "600" },
 
   // Expenses styles
@@ -3664,6 +4372,32 @@ const styles = StyleSheet.create({
     padding: spacing.xs,
     marginLeft: spacing.xs,
   },
+  taskMoveButton: {
+    padding: spacing.xs,
+    marginLeft: spacing.xs,
+  },
+  phaseList: {
+    maxHeight: 300,
+    marginVertical: spacing.md,
+  },
+  phaseOption: {
+    padding: spacing.md,
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  phaseOptionText: {
+    fontSize: 16,
+    color: colors.text,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: colors.textMuted,
+    marginBottom: spacing.md,
+    fontStyle: 'italic',
+  },
   modalHeader: {
     flexDirection: 'row',
     alignItems: 'center',
@@ -3789,5 +4523,40 @@ const styles = StyleSheet.create({
     aspectRatio: 1,
     maxWidth: '100%',
     maxHeight: '100%',
+  },
+  documentTypeSelector: {
+    marginBottom: spacing.md,
+  },
+  documentTypeLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  documentTypeButtons: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+  },
+  documentTypeButton: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  documentTypeButtonSelected: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  documentTypeButtonText: {
+    fontSize: 14,
+    color: colors.text,
+    fontWeight: "500",
+  },
+  documentTypeButtonTextSelected: {
+    color: "#fff",
+    fontWeight: "600",
   },
 });

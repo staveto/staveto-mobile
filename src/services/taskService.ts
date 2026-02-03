@@ -7,6 +7,9 @@ import {
 import { db } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 import type { TaskStatus, ProjectTask } from '../lib/types';
+import { auth } from '../firebase';
+import { getStatusLabel } from '../helpers/taskStatusMapping';
+import { createNotification } from './notifications';
 
 /**
  * Update task status with proper doneAt handling
@@ -29,6 +32,7 @@ export async function updateTaskStatus(
   
   const currentTask = taskSnap.data() as ProjectTask;
   const currentStatus = currentTask.status;
+  const taskTitle = currentTask.title ?? "";
   
   const updateData: any = {
     status: newStatus,
@@ -38,12 +42,33 @@ export async function updateTaskStatus(
   // Handle doneAt based on status transition
   if (newStatus === 'DONE') {
     updateData.doneAt = serverTimestamp();
-  } else if (currentStatus === 'DONE' && newStatus !== 'DONE') {
+  } else if (currentStatus === 'DONE') {
     // Reverting from DONE to another status
     updateData.doneAt = null;
   }
   
   await updateDoc(taskRef, updateData);
+
+  const currentUser = auth.currentUser;
+  if (currentUser?.uid) {
+    const label = getStatusLabel(newStatus);
+    const titleText = taskTitle ? `Úloha "${taskTitle}"` : "Úloha";
+    try {
+      await createNotification({
+        userId: currentUser.uid,
+        projectId,
+        entityType: "task",
+        entityId: taskId,
+        eventType: "status_changed",
+        title: "Zmena stavu úlohy",
+        message: `${titleText} bola označená ako ${label}.`,
+        actorId: currentUser.uid,
+        actorName: currentUser.displayName ?? currentUser.email ?? undefined,
+      });
+    } catch (error) {
+      console.warn("[taskService] Failed to create notification:", error);
+    }
+  }
 }
 
 /**

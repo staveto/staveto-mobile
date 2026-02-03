@@ -4,9 +4,9 @@ import { getStorage, FirebaseStorage } from "firebase/storage";
 import {
   getAuth,
   initializeAuth,
-  getReactNativePersistence,
   Auth,
 } from "firebase/auth";
+import { getReactNativePersistence } from "firebase/auth/react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 
 if (!process.env.EXPO_PUBLIC_FIREBASE_API_KEY?.trim()) {

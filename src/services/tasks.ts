@@ -17,6 +17,9 @@ import {
 } from "firebase/firestore";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
+import { getStatusLabel } from "../helpers/taskStatusMapping";
+import { createNotification } from "./notifications";
+import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 
 export type TaskDoc = {
   id: string;
@@ -94,6 +97,27 @@ export async function createTask(
   title: string,
   opts?: { phaseId?: string | null; order?: number; trade?: string; dueDate?: string }
 ): Promise<TaskDoc> {
+  // Check subscription limit before creating task
+  const currentUser = auth.currentUser;
+  if (currentUser?.uid) {
+    try {
+      const existingTasks = await listTasksByProject(projectId);
+      const activeTasksCount = existingTasks.filter(t => t.isActive !== false).length;
+      const limitCheck = await checkLimit(currentUser.uid, "tasks", activeTasksCount);
+      
+      if (!limitCheck.allowed) {
+        throw new Error(limitCheck.message || `Dosiahli ste limit úloh pre váš plán (${limitCheck.limit}). Zvážte upgrade na vyšší tier.`);
+      }
+    } catch (error: any) {
+      // If limit check fails, throw error (don't create task)
+      if (error.message && error.message.includes("limit")) {
+        throw error;
+      }
+      // If it's a different error, log but allow creation (server will enforce)
+      console.warn("[tasks] Subscription limit check failed, allowing creation (server will enforce):", error);
+    }
+  }
+  
   // If order is not provided, calculate it automatically
   let order = opts?.order;
   
@@ -273,25 +297,39 @@ export async function listTasksByProject(projectId: string): Promise<TaskDoc[]> 
   }
 }
 
-/** List all tasks for the owner across projects (uses collection group). */
+/** List all tasks for the owner across projects (loads via projects to avoid collectionGroup permission issues). */
 export async function listMyTasks(ownerId: string): Promise<TaskDoc[]> {
-  const cg = collectionGroup(db, "tasks");
-  const q = query(cg, where("ownerId", "==", ownerId));
-  const snap = await getDocs(q);
-  const list: TaskDoc[] = [];
-  snap.docs.forEach((d) => {
-    const path = d.ref.path;
-    const match = /^projects\/([^/]+)\/tasks\//.exec(path);
-    const projectId = match ? match[1] : "";
-    list.push(toDoc({ id: d.id, data: d.data.bind(d) }, projectId));
+  // Import projectsService here to avoid circular dependency
+  const { listMyProjects } = await import("./projects");
+  
+  // Load all projects first
+  const projects = await listMyProjects(ownerId);
+  
+  // Load all tasks from all projects in parallel
+  const allTasksPromises = projects.map(async (project) => {
+    try {
+      const tasks = await listTasksByProject(project.id);
+      return tasks.map(task => ({ ...task, projectId: project.id }));
+    } catch (error: any) {
+      console.warn(`[tasks] Error loading tasks for project ${project.id}:`, error);
+      return [];
+    }
   });
-  list.sort((a, b) => {
-    // Compare createdAt as strings (ISO format)
+  
+  const allTasksArrays = await Promise.all(allTasksPromises);
+  const allTasks = allTasksArrays.flat();
+  
+  // Filter out archived tasks (isActive === false)
+  const activeTasks = allTasks.filter(task => task.isActive !== false);
+  
+  // Sort by createdAt descending (most recent first)
+  activeTasks.sort((a, b) => {
     const createdAtA = a.createdAt ?? "";
     const createdAtB = b.createdAt ?? "";
     return createdAtB.localeCompare(createdAtA);
   });
-  return list;
+  
+  return activeTasks;
 }
 
 export async function updateTaskStatus(
@@ -300,11 +338,59 @@ export async function updateTaskStatus(
   taskId: string,
   status: string
 ): Promise<void> {
+  const currentUser = auth.currentUser;
+  const taskRef = doc(db, paths.projectTask(projectId, taskId));
+  let taskTitle = "";
+  try {
+    const taskSnap = await getDoc(taskRef);
+    if (taskSnap.exists()) {
+      const d = taskSnap.data();
+      taskTitle = (d.title as string) ?? "";
+    }
+  } catch {
+    // ignore title fetch errors
+  }
+
   const ref = doc(db, paths.projectTask(projectId, taskId));
   await updateDoc(ref, {
     status,
     updatedAt: new Date().toISOString(),
   });
+
+  if (currentUser?.uid) {
+    const label = getStatusLabel(status);
+    const titleText = taskTitle ? `Úloha "${taskTitle}"` : "Úloha";
+    try {
+      await createNotification({
+        userId: currentUser.uid,
+        projectId,
+        entityType: "task",
+        entityId: taskId,
+        eventType: "status_changed",
+        title: "Zmena stavu úlohy",
+        message: `${titleText} bola označená ako ${label}.`,
+        actorId: currentUser.uid,
+        actorName: currentUser.displayName ?? currentUser.email ?? undefined,
+      });
+    } catch (error) {
+      console.warn("[tasks] Failed to create notification:", error);
+    }
+  }
+}
+
+/**
+ * Get a single task by projectId + taskId
+ */
+export async function getTaskById(projectId: string, taskId: string): Promise<TaskDoc | null> {
+  try {
+    const ref = doc(db, paths.projectTask(projectId, taskId));
+    const snap = await getDoc(ref);
+    if (!snap.exists()) return null;
+    return toDoc({ id: snap.id, data: snap.data.bind(snap) }, projectId);
+  } catch (error) {
+    console.error(`[tasks] Error loading task ${taskId} from project ${projectId}:`, error);
+    return null;
+  }
 }
 
 export async function updateTaskAssignee(
@@ -415,6 +501,61 @@ export async function reorderTask(
   
   await batch.commit();
   console.log(`[tasks] Reordered task ${taskId} ${direction} in phase ${currentPhaseId} (order ${currentOrder} ↔ ${neighborOrder})`);
+}
+
+/**
+ * Move a task to a different phase
+ */
+export async function moveTaskToPhase(
+  projectId: string,
+  taskId: string,
+  newPhaseId: string | null
+): Promise<void> {
+  const taskRef = doc(db, paths.projectTask(projectId, taskId));
+  const taskSnap = await getDoc(taskRef);
+  
+  if (!taskSnap.exists()) {
+    throw new Error(`Task ${taskId} not found`);
+  }
+  
+  // Calculate new order in the target phase
+  let newOrder = 0;
+  try {
+    const targetPhaseQuery = query(
+      collection(db, paths.projectTasks(projectId)),
+      where('phaseId', '==', newPhaseId),
+      orderBy('order', 'desc'),
+      limit(1)
+    );
+    const targetPhaseSnap = await getDocs(targetPhaseQuery);
+    const activeTasks = targetPhaseSnap.docs
+      .map(d => d.data())
+      .filter(t => t.isActive !== false);
+    
+    if (activeTasks.length > 0) {
+      newOrder = (activeTasks[0].order as number ?? 0) + 1;
+    } else {
+      newOrder = 0;
+    }
+  } catch (error: any) {
+    // Fallback: load all tasks and calculate in memory
+    console.warn(`[tasks] Index error for phase order, using fallback:`, error);
+    const allTasks = await listTasksByProject(projectId);
+    const phaseTasks = allTasks.filter(t => t.phaseId === newPhaseId);
+    const maxOrder = phaseTasks.length > 0 
+      ? Math.max(...phaseTasks.map(t => t.order ?? 0))
+      : -1;
+    newOrder = maxOrder + 1;
+  }
+  
+  // Update task with new phaseId and order
+  await updateDoc(taskRef, {
+    phaseId: newPhaseId,
+    order: newOrder,
+    updatedAt: serverTimestamp(),
+  });
+  
+  console.log(`[tasks] Moved task ${taskId} to phase ${newPhaseId || 'null'} with order ${newOrder}`);
 }
 
 /**

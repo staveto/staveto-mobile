@@ -7,17 +7,13 @@ import { instantiateTemplate } from './projectFactory';
 import { updateTaskStatus, assignTask } from './taskService';
 import { getProjectOverview } from './projectOverviewService';
 import { getMyProjects } from './projectOverviewService';
-import type { ProjectType } from '../lib/types';
 
 /**
  * Example: Create a new project from template
  */
 export async function exampleCreateProject() {
-  const userId = 'user123'; // Get from auth.currentUser.uid
-  
   try {
     const projectId = await instantiateTemplate({
-      ownerId: userId,
       projectType: 'BUILD',
       templateId: 'eu-construction-v1',
       name: 'Môj nový projekt',
@@ -119,7 +115,6 @@ export async function exampleCompleteFlow() {
   
   // 1. Create project from template
   const projectId = await instantiateTemplate({
-    ownerId: userId,
     projectType: 'BUILD',
     templateId: 'eu-construction-v1',
     name: 'Test Project',

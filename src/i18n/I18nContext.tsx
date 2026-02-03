@@ -7,6 +7,9 @@ const STORAGE_KEY = "staveto_locale";
 
 function resolveLocale(code: string | undefined): Locale {
   const c = (code ?? "").toLowerCase().slice(0, 2);
+  if (c === "es") return "es";
+  if (c === "it") return "it";
+  if (c === "pl") return "pl";
   if (c === "sk") return "sk";
   if (c === "cs") return "cs";
   if (c === "de") return "de";
@@ -26,6 +29,7 @@ type I18nContextValue = {
   setLocale: (l: Locale) => void;
   t: (key: string, params?: Record<string, string>) => string;
   localeNames: Record<Locale, string>;
+  loaded: boolean;
 };
 
 const ctx = createContext<I18nContextValue | null>(null);
@@ -36,7 +40,9 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then((s) => {
-      if (s && (s === "en" || s === "de" || s === "sk" || s === "cs")) setLocaleState(s);
+      if (s && (s === "en" || s === "de" || s === "sk" || s === "cs" || s === "es" || s === "it" || s === "pl")) {
+        setLocaleState(s);
+      }
       setLoaded(true);
     });
   }, []);
@@ -56,8 +62,8 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   );
 
   const value = useMemo<I18nContextValue>(
-    () => ({ locale, setLocale, t, localeNames: LOCALE_NAMES }),
-    [locale, setLocale, t]
+    () => ({ locale, setLocale, t, localeNames: LOCALE_NAMES, loaded }),
+    [locale, setLocale, t, loaded]
   );
 
   return <ctx.Provider value={value}>{children}</ctx.Provider>;

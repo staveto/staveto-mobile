@@ -3,9 +3,8 @@ import { View, Text, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator 
 import { useAuth } from "../context/AuthContext";
 import { colors, radius, spacing } from "../theme";
 // CRITICAL: Import firebase.ts FIRST to ensure Firebase Auth is registered
-import { db, auth } from "../firebase";
+import { db } from "../firebase";
 import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
-import { updateProfile } from "firebase/auth";
 
 type Props = {
   onFinished: () => void;
@@ -40,9 +39,7 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
         onboardingCompletedAt: serverTimestamp(),
         updatedAt: serverTimestamp(),
       });
-      if (auth.currentUser) {
-        await updateProfile(auth.currentUser, { displayName: displayName.trim() });
-      }
+      // no-op in Expo Go
       onFinished();
     } catch (e) {
       setError("Nepodarilo sa uložiť onboarding.");

@@ -7,7 +7,7 @@ import {
 import { db } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 import type { TaskStatus, ProjectTask } from '../lib/types';
-import { auth } from '../firebase';
+import { DEV_EXPO_GO_UID } from '../constants/devUid';
 import { getStatusLabel } from '../helpers/taskStatusMapping';
 import { createNotification } from './notifications';
 
@@ -49,21 +49,21 @@ export async function updateTaskStatus(
   
   await updateDoc(taskRef, updateData);
 
-  const currentUser = auth.currentUser;
-  if (currentUser?.uid) {
+  const uid = DEV_EXPO_GO_UID;
+  if (uid) {
     const label = getStatusLabel(newStatus);
     const titleText = taskTitle ? `Úloha "${taskTitle}"` : "Úloha";
     try {
       await createNotification({
-        userId: currentUser.uid,
+        userId: uid,
         projectId,
         entityType: "task",
         entityId: taskId,
         eventType: "status_changed",
         title: "Zmena stavu úlohy",
         message: `${titleText} bola označená ako ${label}.`,
-        actorId: currentUser.uid,
-        actorName: currentUser.displayName ?? currentUser.email ?? undefined,
+        actorId: uid,
+        actorName: "Expo Go User",
       });
     } catch (error) {
       console.warn("[taskService] Failed to create notification:", error);

@@ -1,4 +1,4 @@
-import { auth } from "../firebase";
+import { DEV_EXPO_GO_UID } from "../constants/devUid";
 import * as projectsService from "./projects";
 import * as tasksService from "./tasks";
 import * as expensesService from "./expenses";
@@ -22,13 +22,11 @@ export type DashboardViewModel = {
  * Load dashboard data for a user
  */
 export async function loadDashboardData(ownerId: string): Promise<DashboardViewModel> {
-  const currentUser = auth.currentUser;
-  if (!currentUser || !currentUser.uid) {
-    throw new Error('Musíte byť prihlásený na načítanie dashboard dát.');
-  }
+  const uid = DEV_EXPO_GO_UID;
+  const actualOwnerId = uid;
 
   // Load projects
-  const projects = await projectsService.listMyProjects(ownerId);
+  const projects = await projectsService.listMyProjects(actualOwnerId);
 
   // Load all tasks from all projects in parallel
   const allTasksPromises = projects.map(async (project) => {

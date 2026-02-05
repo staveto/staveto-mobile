@@ -1,8 +1,5 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { onAuthStateChanged } from "firebase/auth";
-import { auth } from "../firebase";
-import * as authService from "../services/auth";
 
 const ONBOARDING_KEY = "staveto_onboarding_done";
 
@@ -25,10 +22,6 @@ type AuthContextValue = AuthState & {
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
-
-function userToState(u: { id: string; email: string; name?: string }) {
-  return { id: u.id, email: u.email, name: u.name };
-}
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>({
@@ -53,26 +46,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (fbUser) => {
-      if (!fbUser) {
-        setState((s) => ({ ...s, token: null, user: null, orgId: null, loading: false }));
-        return;
-      }
-      const token = await fbUser.getIdToken();
-      const user = userToState({
-        id: fbUser.uid,
-        email: fbUser.email ?? "",
-        name: fbUser.displayName ?? undefined,
-      });
-      setState((s) => ({
-        ...s,
-        token,
-        user,
-        orgId: fbUser.uid,
-        loading: false,
-      }));
-    });
-    return () => unsub();
+    setState((s) => ({ ...s, token: null, user: null, orgId: null, loading: false }));
   }, []);
 
   const loadFromStorage = async () => {
@@ -85,30 +59,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const login = async (email: string, password: string) => {
-    const { user, token } = await authService.login(email, password);
-    setState((s) => ({
-      ...s,
-      token,
-      user: userToState(user),
-      orgId: user.id,
-      loading: false,
-    }));
+    throw new Error("Auth disabled in Expo Go. Use dev build to enable.");
   };
 
   const register = async (email: string, password: string, displayName?: string) => {
-    const { user, token } = await authService.register(email, password, displayName);
-    setState((s) => ({
-      ...s,
-      token,
-      user: userToState(user),
-      orgId: user.id,
-      loading: false,
-    }));
+    throw new Error("Auth disabled in Expo Go. Use dev build to enable.");
   };
 
   const logout = async () => {
-    await authService.logout();
-    setState((s) => ({ ...s, token: null, user: null, orgId: null, loading: false }));
+    throw new Error("Auth disabled in Expo Go. Use dev build to enable.");
   };
 
   return (

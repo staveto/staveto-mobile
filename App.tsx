@@ -3,7 +3,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
 import { I18nProvider, useI18n } from "./src/i18n/I18nContext";
 import { AuthProvider } from "./src/context/AuthContext";
-import { RootNavigator } from "./src/navigation/RootNavigator";
+import RootNavigator from "./src/navigation/RootNavigator";
 import { View, ActivityIndicator, StyleSheet } from "react-native";
 import { colors, spacing } from "./src/theme";
 

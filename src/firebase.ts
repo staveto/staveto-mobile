@@ -1,8 +1,8 @@
 // src/firebase.ts
 import { initializeApp, getApps } from "firebase/app";
-import { getAuth } from "firebase/auth";
 import { getFirestore } from "firebase/firestore";
 import { getStorage } from "firebase/storage";
+import { getFunctions } from "firebase/functions";
 
 const firebaseConfig = {
   apiKey: process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
@@ -13,11 +13,14 @@ const firebaseConfig = {
   appId: process.env.EXPO_PUBLIC_FIREBASE_APP_ID,
 };
 
-if (!firebaseConfig.apiKey?.trim()) {
-  throw new Error("Missing EXPO_PUBLIC_FIREBASE_API_KEY");
-}
-
 export const app = getApps().length ? getApps()[0] : initializeApp(firebaseConfig);
-export const auth = getAuth(app);
+
 export const db = getFirestore(app);
 export const storage = getStorage(app);
+export const functions = getFunctions(app);
+
+// Lazy auth: ONLY load when needed (not in Expo Go startup)
+export async function getAuthLazy() {
+  const { getAuth } = await import("firebase/auth");
+  return getAuth(app);
+}

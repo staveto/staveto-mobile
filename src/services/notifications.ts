@@ -12,7 +12,8 @@ import {
   limit,
   writeBatch,
 } from "firebase/firestore";
-import { db, auth } from "../firebase";
+import { db } from "../firebase";
+import { DEV_EXPO_GO_UID } from "../constants/devUid";
 
 export type NotificationEntityType = "task" | "project" | "expense" | "document";
 export type NotificationEventType =
@@ -79,15 +80,7 @@ export async function listNotifications(
   userId: string,
   opts?: { limitCount?: number; unreadOnly?: boolean }
 ): Promise<NotificationDoc[]> {
-  const currentUser = auth.currentUser;
-  if (!currentUser || !currentUser.uid) {
-    throw new Error('Musíte byť prihlásený na načítanie notifikácií.');
-  }
-  
-  // Ensure user can only access their own notifications
-  if (currentUser.uid !== userId) {
-    throw new Error('Nemáte oprávnenie na načítanie týchto notifikácií.');
-  }
+  const uid = DEV_EXPO_GO_UID;
   
   try {
     const c = collection(db, "notifications");
@@ -144,15 +137,7 @@ export async function listNotifications(
  * Mark a notification as read
  */
 export async function markNotificationAsRead(userId: string, notificationId: string): Promise<void> {
-  const currentUser = auth.currentUser;
-  if (!currentUser || !currentUser.uid) {
-    throw new Error('Musíte byť prihlásený na označenie notifikácie ako prečítanej.');
-  }
-  
-  // Ensure user can only update their own notifications
-  if (currentUser.uid !== userId) {
-    throw new Error('Nemáte oprávnenie na úpravu tejto notifikácie.');
-  }
+  const uid = DEV_EXPO_GO_UID;
   
   const ref = doc(db, "notifications", notificationId);
   await updateDoc(ref, {
@@ -179,10 +164,7 @@ export async function createNotification(
     deepLink?: { screen: string; params?: Record<string, unknown> };
   }
 ): Promise<NotificationDoc> {
-  const currentUser = auth.currentUser;
-  if (!currentUser || !currentUser.uid) {
-    throw new Error('Musíte byť prihlásený na vytvorenie notifikácie.');
-  }
+  const uid = DEV_EXPO_GO_UID;
 
   const c = collection(db, "notifications");
   const ref = doc(c);
@@ -219,13 +201,7 @@ export async function createNotification(
 }
 
 export async function markAllAsRead(userId: string, maxCount: number = 100): Promise<void> {
-  const currentUser = auth.currentUser;
-  if (!currentUser || !currentUser.uid) {
-    throw new Error('Musíte byť prihlásený na označenie notifikácií.');
-  }
-  if (currentUser.uid !== userId) {
-    throw new Error('Nemáte oprávnenie na úpravu týchto notifikácií.');
-  }
+  const uid = DEV_EXPO_GO_UID;
 
   const c = collection(db, "notifications");
   const q = query(
@@ -248,28 +224,24 @@ export async function markAllAsRead(userId: string, maxCount: number = 100): Pro
  * Logs clear success/failure and surfaces Firestore errors.
  */
 export async function runNotificationsSelfCheck(): Promise<void> {
-  const currentUser = auth.currentUser;
-  if (!currentUser?.uid) {
-    console.error("[notifications:self-check] No authenticated user.");
-    return;
-  }
+  const uid = DEV_EXPO_GO_UID;
 
   try {
     console.log("[notifications:self-check] Writing test notification...");
     const created = await createNotification({
-      userId: currentUser.uid,
+      userId: uid,
       entityType: "project",
       entityId: "self-check",
       eventType: "comment_added",
       title: "Test notifikácia",
       message: "Self-check test: read/write permissions.",
-      actorId: currentUser.uid,
-      actorName: currentUser.displayName ?? currentUser.email ?? undefined,
+      actorId: uid,
+      actorName: "Expo Go User",
     });
 
     console.log("[notifications:self-check] Created:", created.id);
     console.log("[notifications:self-check] Reading notifications...");
-    const list = await listNotifications(currentUser.uid, { limitCount: 5 });
+    const list = await listNotifications(uid, { limitCount: 5 });
     const found = list.some((n) => n.id === created.id);
     console.log(`[notifications:self-check] Read OK: ${found ? "FOUND" : "NOT FOUND"}`);
   } catch (error: any) {

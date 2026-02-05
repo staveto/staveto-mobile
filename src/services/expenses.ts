@@ -11,7 +11,8 @@ import {
   serverTimestamp,
   Timestamp,
 } from "firebase/firestore";
-import { db, auth } from "../firebase";
+import { db } from "../firebase";
+import { DEV_EXPO_GO_UID } from "../constants/devUid";
 import { paths } from "../lib/firestorePaths";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 import { createNotification } from "./notifications";
@@ -98,9 +99,9 @@ export async function createExpense(
     supplierName?: string;
   }
 ): Promise<ExpenseDoc> {
-  const currentUser = auth.currentUser;
+  const uid = DEV_EXPO_GO_UID;
   // Check subscription limit before creating expense
-  if (currentUser?.uid) {
+  if (false) {
     try {
       // Count expenses for current month across all projects
       const now = new Date();
@@ -108,7 +109,7 @@ export async function createExpense(
       
       // Get all projects for this user
       const { listMyProjects } = await import("./projects");
-      const projects = await listMyProjects(currentUser.uid);
+      const projects = await listMyProjects(uid);
       
       let monthlyExpenseCount = 0;
       for (const project of projects) {
@@ -125,7 +126,7 @@ export async function createExpense(
         }
       }
       
-      const limitCheck = await checkLimit(currentUser.uid, "expenses", monthlyExpenseCount);
+      const limitCheck = await checkLimit(uid, "expenses", monthlyExpenseCount);
       
       if (!limitCheck.allowed) {
         throw new Error(limitCheck.message || `Dosiahli ste limit výdavkov pre váš plán (${limitCheck.limit} mesačne). Zvážte upgrade na vyšší tier.`);
@@ -160,7 +161,7 @@ export async function createExpense(
     updatedAt: serverTimestamp(),
   });
 
-  if (currentUser?.uid) {
+  if (uid) {
     try {
       await createNotification({
         userId: ownerId,
@@ -170,8 +171,8 @@ export async function createExpense(
         eventType: "expense_added",
         title: "Nový výdavok",
         message: `Výdavok "${data.title.trim()}" bol pridaný.`,
-        actorId: currentUser.uid,
-        actorName: currentUser.displayName ?? currentUser.email ?? undefined,
+        actorId: uid,
+        actorName: "Expo Go User",
       });
     } catch (error) {
       console.warn("[expenses] Failed to create notification:", error);

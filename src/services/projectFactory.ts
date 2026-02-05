@@ -5,7 +5,8 @@ import {
   writeBatch,
   serverTimestamp
 } from 'firebase/firestore';
-import { db, auth } from '../firebase';
+import { db } from '../firebase';
+import { DEV_EXPO_GO_UID } from '../constants/devUid';
 import { paths } from '../lib/firestorePaths';
 import { getTemplatePhases, getTemplateTasks } from './templateService';
 import type { ProjectType } from '../lib/types';
@@ -19,7 +20,7 @@ export interface PhaseCustomization {
 }
 
 export interface CreateProjectFromTemplateParams {
-  // ownerId removed - always uses auth.currentUser.uid internally
+  // ownerId removed - uses DEV_EXPO_GO_UID in Expo Go
   projectType: ProjectType;
   templateId: string;
   name: string;
@@ -38,55 +39,8 @@ export async function instantiateTemplate(
   params: CreateProjectFromTemplateParams
 ): Promise<string> {
   const { projectType, templateId, name } = params;
-  
-  // CRITICAL FIX: Always use auth.currentUser.uid, never trust ownerId from params
-  // Use the exported auth instance from firebase.ts (not getAuth())
-  // Wait a bit for auth state to be ready (React Native Firebase sometimes needs a moment)
-  let currentUser = auth.currentUser;
-  
-  // If currentUser is null, wait a bit and check again (max 3 attempts, 100ms each)
-  if (!currentUser) {
-    console.warn(`[projectFactory] WARNING: auth.currentUser is null, waiting for auth state...`);
-    for (let i = 0; i < 3; i++) {
-      await new Promise(resolve => setTimeout(resolve, 100));
-      currentUser = auth.currentUser;
-      if (currentUser) {
-        console.log(`[projectFactory] Auth state ready after ${i + 1} attempt(s)`);
-        break;
-      }
-    }
-  }
-  
-  console.log(`[projectFactory] DEBUG: auth object:`, auth);
-  console.log(`[projectFactory] DEBUG: auth.currentUser:`, currentUser);
-  console.log(`[projectFactory] DEBUG: auth.currentUser?.uid:`, currentUser?.uid);
-  
-  if (!currentUser || !currentUser.uid) {
-    console.error(`[projectFactory] ERROR: auth.currentUser is null or uid is missing after waiting!`);
-    console.error(`[projectFactory] ERROR: auth.currentUser =`, currentUser);
-    console.error(`[projectFactory] ERROR: auth object =`, auth);
-    throw new Error('Musíte byť prihlásený na vytvorenie projektu. auth.currentUser je null.');
-  }
-  
-  // CRITICAL: Use the exact UID from auth.currentUser.uid (no modifications)
-  const ownerId = currentUser.uid; // Always use auth.currentUser.uid directly
-  
-  // CRITICAL: Double-check that ownerId matches auth.currentUser.uid
-  if (ownerId !== currentUser.uid) {
-    console.error(`[projectFactory] CRITICAL ERROR: ownerId (${ownerId}) !== currentUser.uid (${currentUser.uid})`);
-    throw new Error(`Interná chyba: ownerId sa nezhoduje s auth.currentUser.uid`);
-  }
-  
-  // Verify UID format (should be 28 characters for Firebase Auth UID)
-  if (ownerId.length < 20 || ownerId.length > 128) {
-    console.error(`[projectFactory] CRITICAL ERROR: Invalid UID length: ${ownerId.length}`);
-    throw new Error(`Interná chyba: Neplatná dĺžka UID`);
-  }
-  
-  console.log(`[projectFactory] DEBUG: Using ownerId = "${ownerId}" (from auth.currentUser.uid)`);
-  console.log(`[projectFactory] DEBUG: Verifying ownerId is valid Firebase Auth UID format: ${ownerId.length > 20 ? '✅ Looks valid' : '⚠️ Suspicious length'}`);
-  console.log(`[projectFactory] DEBUG: ownerId type: ${typeof ownerId}, length: ${ownerId.length}`);
-  console.log(`[projectFactory] DEBUG: ownerId exact value: "${ownerId}"`);
+  // Expo Go: Use dev UID instead of Firebase Auth
+  const ownerId = DEV_EXPO_GO_UID;
   
   // Validate inputs
   if (!name || !name.trim()) {
@@ -94,16 +48,15 @@ export async function instantiateTemplate(
   }
   
   console.log(`[projectFactory] Creating project: name="${name}", type="${projectType}", template="${templateId}"`);
-  console.log(`[projectFactory] Using ownerId from auth.currentUser.uid: "${ownerId}"`);
+  console.log(`[projectFactory] Using ownerId: "${ownerId}"`);
   
   // 1. Create project document
   const projectRef = doc(collection(db, 'projects'));
   const projectId = projectRef.id;
   
-  // CRITICAL: Use ownerId directly from currentUser.uid (no string manipulation, no conversion)
-  // This ensures exact match with what Firestore rules expect
+  // Use ownerId directly (no string manipulation)
   const projectData: any = {
-    ownerId: ownerId, // Direct assignment from currentUser.uid (no modifications)
+    ownerId: ownerId, // Direct assignment (no modifications)
     projectType,
     templateId,
     name,
@@ -119,18 +72,6 @@ export async function instantiateTemplate(
   // Final verification before write
   console.log(`[projectFactory] Final verification before Firestore write:`);
   console.log(`[projectFactory]   - projectData.ownerId: "${projectData.ownerId}"`);
-  console.log(`[projectFactory]   - currentUser.uid: "${currentUser.uid}"`);
-  console.log(`[projectFactory]   - Match: ${projectData.ownerId === currentUser.uid ? '✅ YES' : '❌ NO'}`);
-  console.log(`[projectFactory]   - Type check: ${typeof projectData.ownerId} === ${typeof currentUser.uid} ? ${typeof projectData.ownerId === typeof currentUser.uid ? '✅' : '❌'}`);
-  console.log(`[projectFactory]   - Length: ${projectData.ownerId.length} === ${currentUser.uid.length} ? ${projectData.ownerId.length === currentUser.uid.length ? '✅' : '❌'}`);
-  console.log(`[projectFactory]   - Character-by-character match: ${projectData.ownerId.split('').every((c: string, i: number) => c === currentUser.uid[i]) ? '✅' : '❌'}`);
-  
-  if (projectData.ownerId !== currentUser.uid) {
-    console.error(`[projectFactory] CRITICAL: ownerId mismatch detected!`);
-    console.error(`  - projectData.ownerId: "${projectData.ownerId}" (length: ${projectData.ownerId.length})`);
-    console.error(`  - currentUser.uid: "${currentUser.uid}" (length: ${currentUser.uid.length})`);
-    throw new Error(`Interná chyba: ownerId sa nezhoduje s auth.currentUser.uid pred zápisom do Firestore`);
-  }
   
   // 2. Load template phases and tasks BEFORE creating project
   // This way we can validate template exists and user has permission to read it

@@ -44,6 +44,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
+import { DEV_EXPO_GO_UID } from "../constants/devUid";
 import * as projectsService from "../services/projects";
 import { updatePhase, deletePhase, createPhase } from "../services/projects";
 import * as tasksService from "../services/tasks";
@@ -170,15 +171,10 @@ export function ProjectOverviewScreen() {
     }
     
     try {
-      // DEBUG: Check auth state first
-      const { auth: authInstance } = await import('../firebase');
-      const currentUserUid = authInstance.currentUser?.uid;
-      console.log(`[ProjectOverview] DEBUG: auth.currentUser?.uid = "${currentUserUid}"`);
+      // Expo Go: Use dev UID
+      const currentUserUid = DEV_EXPO_GO_UID;
+      console.log(`[ProjectOverview] DEBUG: dev uid = "${currentUserUid}"`);
       console.log(`[ProjectOverview] DEBUG: projectId = "${projectId}"`);
-      
-      if (!currentUserUid) {
-        throw new Error('Musíte byť prihlásený na načítanie projektu.');
-      }
       
       // Load project data to get projectType and templateId
       console.log(`[ProjectOverview] Loading project ${projectId}...`);

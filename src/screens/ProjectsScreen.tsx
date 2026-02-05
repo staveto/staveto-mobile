@@ -288,7 +288,7 @@ export function ProjectsScreen() {
       
       console.log(`[ProjectsScreen] Phase customizations:`, customizationsArray);
       
-      // Vytvor projekt - ownerId sa automaticky použije z auth.currentUser.uid v projectFactory
+      // Vytvor projekt - ownerId sa použije z DEV_EXPO_GO_UID v projectFactory
       await projectFactory.createProjectFromTemplate({
         projectType: selectedType,
         templateId: templateId,

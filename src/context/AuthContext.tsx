@@ -1,5 +1,6 @@
 import React, { createContext, useContext, useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
+import { DEV_EXPO_GO_UID } from "../constants/devUid";
 
 const ONBOARDING_KEY = "staveto_onboarding_done";
 
@@ -24,11 +25,12 @@ type AuthContextValue = AuthState & {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const devUser: User = { id: DEV_EXPO_GO_UID, email: "", name: "Expo Go User" };
   const [state, setState] = useState<AuthState>({
     token: null,
-    user: null,
-    orgId: null,
-    loading: true,
+    user: devUser,
+    orgId: DEV_EXPO_GO_UID,
+    loading: false,
     onboardingDone: true,
   });
 
@@ -46,7 +48,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    setState((s) => ({ ...s, token: null, user: null, orgId: null, loading: false }));
+    setState((s) => ({
+      ...s,
+      token: null,
+      user: devUser,
+      orgId: DEV_EXPO_GO_UID,
+      loading: false,
+    }));
   }, []);
 
   const loadFromStorage = async () => {

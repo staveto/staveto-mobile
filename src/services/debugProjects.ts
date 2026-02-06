@@ -3,7 +3,7 @@
  * Useful for troubleshooting missing projects
  */
 
-import { collection, getDocs, query, orderBy, limit } from 'firebase/firestore';
+import { collection, getDocs, query, orderBy, limit } from '../lib/rnFirestore';
 import { db, auth } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 

@@ -14,7 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
-import { getAuthErrorMessage } from "../services/auth";
+import { getAuthErrorMessage, loginWithGoogle } from "../services/auth";
 import { colors, radius, spacing } from "../theme";
 
 export function LoginScreen() {
@@ -36,6 +36,19 @@ export function LoginScreen() {
     setError("");
     try {
       await login(email.trim(), password);
+    } catch (e: unknown) {
+      const code = (e as { code?: string })?.code;
+      setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("login.failed")));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onGoogleLogin = async () => {
+    setSubmitting(true);
+    setError("");
+    try {
+      await loginWithGoogle();
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code;
       setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("login.failed")));
@@ -71,6 +84,9 @@ export function LoginScreen() {
       {error ? <Text style={styles.error}>{error}</Text> : null}
       <TouchableOpacity style={styles.button} onPress={onLogin} disabled={submitting}>
         {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("login.button")}</Text>}
+      </TouchableOpacity>
+      <TouchableOpacity style={styles.googleBtn} onPress={onGoogleLogin} disabled={submitting}>
+        <Text style={styles.googleBtnText}>{t("register.google")}</Text>
       </TouchableOpacity>
       <TouchableOpacity style={styles.link} onPress={() => (navigation as { navigate: (n: string) => void }).navigate("Register")}>
         <Text style={styles.linkText}>{t("login.noAccount")}</Text>
@@ -144,6 +160,15 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
   },
+  googleBtn: {
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+  },
+  googleBtnText: { color: colors.text },
   link: { marginTop: spacing.lg, alignItems: "center" },
   linkText: { color: colors.primary, fontSize: 14 },
 });

@@ -1,23 +1,27 @@
 import React, { useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, Linking, ActivityIndicator } from "react-native";
-import { useAuth } from "../context/AuthContext";
+import AsyncStorage from "@react-native-async-storage/async-storage";
+import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
-import { db } from "../firebase";
-import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
-import { CONSENT_PRIVACY_VERSION, CONSENT_TERMS_VERSION, PRIVACY_URL, TERMS_URL } from "../constants/consent";
+import {
+  CONSENT_PRIVACY_VERSION,
+  CONSENT_TERMS_VERSION,
+  PENDING_CONSENT_KEY,
+  PRIVACY_URL,
+  TERMS_URL,
+} from "../constants/consent";
 
 type Props = {
   onAccepted: () => void;
 };
 
 export function ConsentRequiredScreen({ onAccepted }: Props) {
-  const { user } = useAuth();
+  const { locale } = useI18n();
   const [checked, setChecked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   const accept = async () => {
-    if (!user?.id) return;
     if (!checked) {
       setError("Pre pokračovanie je potrebné súhlasiť.");
       return;
@@ -25,16 +29,30 @@ export function ConsentRequiredScreen({ onAccepted }: Props) {
     setSubmitting(true);
     setError("");
     try {
-      await updateDoc(doc(db, "users", user.id), {
-        termsAcceptedAt: serverTimestamp(),
-        privacyAcceptedAt: serverTimestamp(),
+      console.log("CONSENT start");
+      const payload = {
+        termsAccepted: true,
+        privacyAccepted: true,
+        acceptedAt: new Date().toISOString(),
         termsVersion: CONSENT_TERMS_VERSION,
         privacyVersion: CONSENT_PRIVACY_VERSION,
-        consentSource: "gate",
-        updatedAt: serverTimestamp(),
-      });
+        locale,
+      };
+      const savePromise = AsyncStorage.setItem(PENDING_CONSENT_KEY, JSON.stringify(payload));
+      const timeoutPromise = new Promise<"timeout">((resolve) =>
+        setTimeout(() => resolve("timeout"), 1000)
+      );
+      const result = await Promise.race([savePromise.then(() => "saved" as const), timeoutPromise]);
+      if (result === "saved") {
+        console.log("CONSENT saved");
+      } else {
+        console.warn("CONSENT save timeout");
+        savePromise.then(() => console.log("CONSENT saved"));
+      }
       onAccepted();
+      console.log("CONSENT navigated");
     } catch (e) {
+      console.error("CONSENT error", e);
       setError("Nepodarilo sa uložiť súhlas. Skúste znova.");
     } finally {
       setSubmitting(false);
@@ -74,7 +92,11 @@ export function ConsentRequiredScreen({ onAccepted }: Props) {
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      <TouchableOpacity style={styles.button} onPress={accept} disabled={submitting}>
+      <TouchableOpacity
+        style={[styles.button, (!checked || submitting) && styles.buttonDisabled]}
+        onPress={accept}
+        disabled={!checked || submitting}
+      >
         {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Pokračovať</Text>}
       </TouchableOpacity>
     </View>
@@ -146,6 +168,9 @@ const styles = StyleSheet.create({
     borderRadius: radius,
     alignItems: "center",
     marginTop: spacing.sm,
+  },
+  buttonDisabled: {
+    opacity: 0.6,
   },
   buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
 });

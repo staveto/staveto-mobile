@@ -5,7 +5,7 @@ import {
   orderBy,
   where,
   collectionGroup 
-} from 'firebase/firestore';
+} from '../lib/rnFirestore';
 import { db } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 import type { ProjectPhase, ProjectTask, PhaseStats, ProjectStats } from '../lib/types';

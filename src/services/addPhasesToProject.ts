@@ -3,7 +3,7 @@
  * Useful for projects that were created without a template
  */
 
-import { doc, getDoc, writeBatch, updateDoc, serverTimestamp } from 'firebase/firestore';
+import { doc, getDoc, writeBatch, updateDoc, serverTimestamp } from '../lib/rnFirestore';
 import { db, auth } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 import { getTemplatePhases, getTemplateTasks } from './templateService';

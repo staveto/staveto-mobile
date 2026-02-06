@@ -1,13 +1,15 @@
-import React, { useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput } from "react-native";
+import React, { useState, useEffect } from "react";
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, ActivityIndicator } from "react-native";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
-
-type MemberRow = { id: string; name: string; email: string; type: "user" };
+import * as projectMembersService from "../services/projectMembers";
+import * as projectsService from "../services/projects";
+import type { ProjectMemberDoc } from "../services/projectMembers";
+import type { ProjectPhaseDoc } from "../services/projects";
 
 export function ProjectMembersScreen() {
   const route = useRoute();
@@ -18,18 +20,175 @@ export function ProjectMembersScreen() {
   const { projectId, projectName } = (route.params as { projectId?: string; projectName?: string }) ?? {};
 
   const [showAddMember, setShowAddMember] = useState(false);
-  const [addMemberQuery, setAddMemberQuery] = useState("");
-
-  const members: MemberRow[] = user
-    ? [{ id: user.id, name: user.name ?? user.email ?? "—", email: user.email, type: "user" }]
-    : [];
+  const [addMemberEmail, setAddMemberEmail] = useState("");
+  const [addMemberName, setAddMemberName] = useState("");
+  const [members, setMembers] = useState<ProjectMemberDoc[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [projectOwnerId, setProjectOwnerId] = useState<string | null>(null);
+  const [phases, setPhases] = useState<ProjectPhaseDoc[]>([]);
+  
+  // Permission level: 'viewer' = read-only, 'editor' = read-write
+  const [permissionLevel, setPermissionLevel] = useState<'viewer' | 'editor'>('editor');
+  
+  // Sharing options
+  const [shareTasks, setShareTasks] = useState(true);
+  const [sharePhases, setSharePhases] = useState(true);
+  const [shareExpenses, setShareExpenses] = useState(false);
+  const [shareDiary, setShareDiary] = useState(false);
+  const [shareDocuments, setShareDocuments] = useState(false);
+  const [selectedPhaseIds, setSelectedPhaseIds] = useState<string[]>([]);
 
   const goBack = () => navigation.goBack();
 
-  const onAddMember = () => setShowAddMember(true);
+  const loadMembers = async () => {
+    if (!projectId) return;
+    
+    setLoading(true);
+    try {
+      // Load project to get owner
+      const project = await projectsService.getProject(projectId);
+      if (project) {
+        setProjectOwnerId(project.ownerId || null);
+      }
+
+      // Load phases (for sharing selection)
+      try {
+        const phasesList = await projectsService.listProjectPhases(projectId);
+        setPhases(phasesList);
+      } catch (error: any) {
+        console.warn('[ProjectMembersScreen] Could not load phases:', error);
+        setPhases([]);
+      }
+
+      // Load members
+      const membersList = await projectMembersService.listProjectMembers(projectId);
+      setMembers(membersList);
+    } catch (error: any) {
+      console.error('[ProjectMembersScreen] Error loading members:', error);
+      Alert.alert('Chyba', error.message || 'Nepodarilo sa načítať členov projektu.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadMembers();
+  }, [projectId]);
+
+  const onAddMember = () => {
+    // Reset sharing options to defaults
+    setPermissionLevel('editor');
+    setShareTasks(true);
+    setSharePhases(true);
+    setShareExpenses(false);
+    setShareDiary(false);
+    setShareDocuments(false);
+    setSelectedPhaseIds([]);
+    setShowAddMember(true);
+  };
+  
   const closeAddMember = () => {
     setShowAddMember(false);
-    setAddMemberQuery("");
+    setAddMemberEmail("");
+    setAddMemberName("");
+    setPermissionLevel('editor');
+    setShareTasks(true);
+    setSharePhases(true);
+    setShareExpenses(false);
+    setShareDiary(false);
+    setShareDocuments(false);
+    setSelectedPhaseIds([]);
+  };
+
+  const handleInviteMember = async () => {
+    if (!projectId || !addMemberEmail.trim()) {
+      Alert.alert(
+        t('common.error') || 'Chyba',
+        t('projectMembers.emailRequired') || 'Prosím zadajte emailovú adresu.'
+      );
+      return;
+    }
+
+    if (!addMemberEmail.includes('@')) {
+      Alert.alert(
+        t('common.error') || 'Chyba',
+        t('projectMembers.invalidEmail') || 'Prosím zadajte platnú emailovú adresu.'
+      );
+      return;
+    }
+
+    setSubmitting(true);
+    try {
+      await projectMembersService.inviteMemberByEmail(
+        projectId,
+        addMemberEmail.trim(),
+        addMemberName.trim() || undefined,
+        permissionLevel,
+        {
+          tasks: shareTasks,
+          phases: sharePhases,
+          expenses: shareExpenses,
+          diary: shareDiary,
+          documents: shareDocuments,
+        },
+        sharePhases ? selectedPhaseIds : []
+      );
+      
+      Alert.alert(
+        t('common.success') || 'Úspech',
+        t('projectMembers.inviteSuccess', { email: addMemberEmail.trim() }) || `Pozvánka bola vytvorená pre ${addMemberEmail.trim()}. ${t('projectMembers.emailNote') || 'Poznámka: Email sa automaticky neodosiela. Používateľ musí vedieť, že má prístup k projektu.'}`,
+        [
+          {
+            text: 'OK',
+            onPress: () => {
+              closeAddMember();
+              loadMembers();
+            },
+          },
+        ]
+      );
+    } catch (error: any) {
+      console.error('[ProjectMembersScreen] Error inviting member:', error);
+      Alert.alert(
+        t('common.error') || 'Chyba',
+        error.message || (t('projectMembers.inviteError') || 'Nepodarilo sa pozvať člena.')
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const handleRemoveMember = (member: ProjectMemberDoc) => {
+    if (!projectId) return;
+    
+    Alert.alert(
+      t('projectMembers.removeConfirm') || 'Odstrániť člena?',
+      t('projectMembers.removeConfirmMessage', { name: member.name || member.email || '' }) || `Naozaj chceš odstrániť ${member.name || member.email} z projektu?`,
+      [
+        { text: t('common.cancel') || 'Zrušiť', style: 'cancel' },
+        {
+          text: t('projectMembers.remove') || 'Odstrániť',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await projectMembersService.removeMember(projectId, member.id);
+              Alert.alert(
+                t('common.success') || 'Úspech',
+                t('projectMembers.removeSuccess') || 'Člen bol odstránený z projektu.'
+              );
+              loadMembers();
+            } catch (error: any) {
+              console.error('[ProjectMembersScreen] Error removing member:', error);
+              Alert.alert(
+                t('common.error') || 'Chyba',
+                error.message || (t('projectMembers.removeError') || 'Nepodarilo sa odstrániť člena.')
+              );
+            }
+          },
+        },
+      ]
+    );
   };
 
   return (
@@ -42,27 +201,156 @@ export function ProjectMembersScreen() {
         <View style={styles.headerRight} />
       </View>
 
-      <ScrollView style={styles.content} contentContainerStyle={styles.contentInner}>
-        {members.map((m) => (
-          <View key={m.id} style={styles.memberRow}>
-            <View style={styles.memberAvatar}>
-              <Text style={styles.memberAvatarText}>
-                {(m.name ?? "?")
-                  .split(/\s/)
-                  .map((s) => s[0])
-                  .filter(Boolean)
-                  .slice(0, 2)
-                  .join("")
-                  .toUpperCase() || "?"}
-              </Text>
+      {loading ? (
+        <View style={styles.loadingContainer}>
+          <ActivityIndicator size="large" color={colors.primary} />
+        </View>
+      ) : (
+        <ScrollView style={styles.content} contentContainerStyle={styles.contentInner}>
+          {/* Project Owner */}
+          {user && projectOwnerId === user.id && (
+            <View style={styles.memberRow}>
+              <View style={styles.memberAvatar}>
+                <Text style={styles.memberAvatarText}>
+                  {(user.name ?? user.email ?? "?")
+                    .split(/\s/)
+                    .map((s) => s[0])
+                    .filter(Boolean)
+                    .slice(0, 2)
+                    .join("")
+                    .toUpperCase() || "?"}
+                </Text>
+              </View>
+              <View style={styles.memberInfo}>
+                  <View style={styles.memberNameRow}>
+                    <Text style={styles.memberName}>{user.name || user.email || "—"}</Text>
+                    <Text style={styles.memberRole}>({t('projectMembers.owner') || 'Vlastník'})</Text>
+                  </View>
+                <Text style={styles.memberEmail}>{user.email}</Text>
+              </View>
             </View>
-            <View style={styles.memberInfo}>
-              <Text style={styles.memberName}>{m.name}</Text>
-              <Text style={styles.memberEmail}>{m.email}</Text>
-            </View>
-          </View>
-        ))}
-      </ScrollView>
+          )}
+          
+          {/* Other Members */}
+          {members
+            .filter(m => m.userId && m.userId !== projectOwnerId)
+            .map((m) => (
+              <View key={m.id} style={styles.memberRow}>
+                <View style={styles.memberAvatar}>
+                  <Text style={styles.memberAvatarText}>
+                    {(m.name ?? m.email ?? "?")
+                      .split(/\s/)
+                      .map((s) => s[0])
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .join("")
+                      .toUpperCase() || "?"}
+                  </Text>
+                </View>
+                <View style={styles.memberInfo}>
+                  <Text style={styles.memberName}>{m.name || m.email || "—"}</Text>
+                  <Text style={styles.memberEmail}>{m.email || (t('projectMembers.waitingForLogin') || 'Čaká na prihlásenie')}</Text>
+                  {m.permissionLevel && (
+                    <Text style={styles.memberPermission}>
+                      {m.permissionLevel === 'viewer' 
+                        ? (t('projectMembers.viewer') || 'Len čítanie')
+                        : (t('projectMembers.editor') || 'Úprava')}
+                    </Text>
+                  )}
+                  {m.sharedItems && (
+                    <View style={styles.sharedItemsContainer}>
+                      {m.sharedItems.tasks && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareTasks') || 'Úlohy'}</Text>
+                      )}
+                      {m.sharedItems.phases && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.sharePhases') || 'Fázy'}</Text>
+                      )}
+                      {m.sharedItems.expenses && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareExpenses') || 'Výdavky'}</Text>
+                      )}
+                      {m.sharedItems.diary && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareDiary') || 'Denník'}</Text>
+                      )}
+                      {m.sharedItems.documents && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareDocuments') || 'Dokumenty'}</Text>
+                      )}
+                    </View>
+                  )}
+                </View>
+                {projectOwnerId === user?.id && (
+                  <TouchableOpacity
+                    style={styles.removeMemberButton}
+                    onPress={() => handleRemoveMember(m)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="close-circle" size={24} color={colors.textMuted} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            ))}
+          
+          {/* Invited members (without userId) */}
+          {members
+            .filter(m => !m.userId || m.userId === '')
+            .map((m) => (
+              <View key={m.id} style={[styles.memberRow, styles.invitedMemberRow]}>
+                <View style={styles.memberAvatar}>
+                  <Text style={styles.memberAvatarText}>
+                    {(m.name ?? m.email ?? "?")
+                      .split(/\s/)
+                      .map((s) => s[0])
+                      .filter(Boolean)
+                      .slice(0, 2)
+                      .join("")
+                      .toUpperCase() || "?"}
+                  </Text>
+                </View>
+                <View style={styles.memberInfo}>
+                  <View style={styles.memberNameRow}>
+                    <Text style={styles.memberName}>{m.name || m.email || "—"}</Text>
+                    <Text style={styles.memberRole}>({t('projectMembers.invited') || 'Pozvaný'})</Text>
+                  </View>
+                  <Text style={styles.memberEmail}>{m.email || (t('projectMembers.waitingForLogin') || 'Čaká na prihlásenie')}</Text>
+                  {m.permissionLevel && (
+                    <Text style={styles.memberPermission}>
+                      {m.permissionLevel === 'viewer' 
+                        ? (t('projectMembers.viewer') || 'Len čítanie')
+                        : (t('projectMembers.editor') || 'Úprava')}
+                    </Text>
+                  )}
+                  {m.sharedItems && (
+                    <View style={styles.sharedItemsContainer}>
+                      {m.sharedItems.tasks && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareTasks') || 'Úlohy'}</Text>
+                      )}
+                      {m.sharedItems.phases && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.sharePhases') || 'Fázy'}</Text>
+                      )}
+                      {m.sharedItems.expenses && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareExpenses') || 'Výdavky'}</Text>
+                      )}
+                      {m.sharedItems.diary && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareDiary') || 'Denník'}</Text>
+                      )}
+                      {m.sharedItems.documents && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareDocuments') || 'Dokumenty'}</Text>
+                      )}
+                    </View>
+                  )}
+                </View>
+                {projectOwnerId === user?.id && (
+                  <TouchableOpacity
+                    style={styles.removeMemberButton}
+                    onPress={() => handleRemoveMember(m)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="close-circle" size={24} color={colors.textMuted} />
+                  </TouchableOpacity>
+                )}
+              </View>
+            ))}
+        </ScrollView>
+      )}
 
       <TouchableOpacity style={styles.addMemberBtn} onPress={onAddMember}>
         <Ionicons name="person-add" size={22} color="#fff" style={{ marginRight: 8 }} />
@@ -79,23 +367,203 @@ export function ProjectMembersScreen() {
               <Text style={styles.addMemberTitle}>{t("addMember.title")}</Text>
               <View style={styles.addMemberHeaderRight} />
             </View>
-            <View style={styles.addMemberSearchWrap}>
-              <Ionicons name="search" size={20} color={colors.textMuted} style={styles.addMemberSearchIcon} />
-              <TextInput
-                style={styles.addMemberSearchInput}
-                value={addMemberQuery}
-                onChangeText={setAddMemberQuery}
-                placeholder={t("addMember.searchPlaceholder")}
-                placeholderTextColor={colors.textMuted}
-                autoCapitalize="none"
-                autoCorrect={false}
-              />
+            <Text style={styles.addMemberLabel}>{t('projectMembers.emailLabel') || 'Email *'}</Text>
+            <TextInput
+              style={styles.addMemberInput}
+              value={addMemberEmail}
+              onChangeText={setAddMemberEmail}
+              placeholder={t('projectMembers.emailPlaceholder') || 'email@priklad.sk'}
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="none"
+              autoCorrect={false}
+              keyboardType="email-address"
+            />
+            
+            <Text style={styles.addMemberLabel}>{t('projectMembers.nameLabel') || 'Meno (voliteľné)'}</Text>
+            <TextInput
+              style={styles.addMemberInput}
+              value={addMemberName}
+              onChangeText={setAddMemberName}
+              placeholder={t('projectMembers.namePlaceholder') || 'Meno priezvisko'}
+              placeholderTextColor={colors.textMuted}
+              autoCapitalize="words"
+            />
+            
+            <Text style={styles.addMemberSectionTitle}>
+              {t('projectMembers.permissionLevel') || 'Úroveň oprávnení'}
+            </Text>
+            
+            {/* Permission level selector */}
+            <View style={styles.permissionLevelContainer}>
+              <TouchableOpacity
+                style={[styles.permissionOption, permissionLevel === 'viewer' && styles.permissionOptionActive]}
+                onPress={() => setPermissionLevel('viewer')}
+                activeOpacity={0.7}
+              >
+                <Ionicons 
+                  name={permissionLevel === 'viewer' ? 'radio-button-on' : 'radio-button-off'} 
+                  size={20} 
+                  color={permissionLevel === 'viewer' ? colors.primary : colors.textMuted} 
+                />
+                <View style={styles.permissionOptionContent}>
+                  <Text style={[styles.permissionOptionLabel, permissionLevel === 'viewer' && styles.permissionOptionLabelActive]}>
+                    {t('projectMembers.viewer') || 'Len čítanie'}
+                  </Text>
+                  <Text style={styles.permissionOptionDescription}>
+                    {t('projectMembers.viewerDescription') || 'Môže len zobrazovať obsah, nemôže upravovať'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.permissionOption, permissionLevel === 'editor' && styles.permissionOptionActive]}
+                onPress={() => setPermissionLevel('editor')}
+                activeOpacity={0.7}
+              >
+                <Ionicons 
+                  name={permissionLevel === 'editor' ? 'radio-button-on' : 'radio-button-off'} 
+                  size={20} 
+                  color={permissionLevel === 'editor' ? colors.primary : colors.textMuted} 
+                />
+                <View style={styles.permissionOptionContent}>
+                  <Text style={[styles.permissionOptionLabel, permissionLevel === 'editor' && styles.permissionOptionLabelActive]}>
+                    {t('projectMembers.editor') || 'Úprava'}
+                  </Text>
+                  <Text style={styles.permissionOptionDescription}>
+                    {t('projectMembers.editorDescription') || 'Môže zobrazovať aj upravovať obsah'}
+                  </Text>
+                </View>
+              </TouchableOpacity>
             </View>
-            <Text style={styles.addMemberHint}>{t("addMember.hint")}</Text>
-            <View style={styles.addMemberResults} />
-            <TouchableOpacity style={styles.addMemberDone} onPress={closeAddMember}>
-              <Text style={styles.addMemberDoneText}>{t("addMember.done")}</Text>
-            </TouchableOpacity>
+
+            <Text style={styles.addMemberSectionTitle}>
+              {t('projectMembers.shareWhat') || 'Čo chceš zdieľať?'}
+            </Text>
+            
+            {/* Sharing checkboxes */}
+            <View style={styles.shareOptionsContainer}>
+              <TouchableOpacity
+                style={styles.shareOption}
+                onPress={() => setShareTasks(!shareTasks)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, shareTasks && styles.checkboxChecked]}>
+                  {shareTasks && <Ionicons name="checkmark" size={16} color="#fff" />}
+                </View>
+                <Text style={styles.shareOptionLabel}>
+                  {t('projectMembers.shareTasks') || 'Úlohy'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.shareOption}
+                onPress={() => setSharePhases(!sharePhases)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, sharePhases && styles.checkboxChecked]}>
+                  {sharePhases && <Ionicons name="checkmark" size={16} color="#fff" />}
+                </View>
+                <Text style={styles.shareOptionLabel}>
+                  {t('projectMembers.sharePhases') || 'Fázy'}
+                </Text>
+              </TouchableOpacity>
+
+              {sharePhases && phases.length > 0 && (
+                <View style={styles.phaseSelectionContainer}>
+                  <Text style={styles.phaseSelectionLabel}>
+                    {t('projectMembers.selectPhases') || 'Vyber konkrétne fázy (voliteľné):'}
+                  </Text>
+                  <ScrollView style={styles.phaseSelectionList} nestedScrollEnabled>
+                    {phases.map((phase) => {
+                      const isSelected = selectedPhaseIds.includes(phase.id);
+                      return (
+                        <TouchableOpacity
+                          key={phase.id}
+                          style={styles.phaseOption}
+                          onPress={() => {
+                            if (isSelected) {
+                              setSelectedPhaseIds(selectedPhaseIds.filter(id => id !== phase.id));
+                            } else {
+                              setSelectedPhaseIds([...selectedPhaseIds, phase.id]);
+                            }
+                          }}
+                          activeOpacity={0.7}
+                        >
+                          <View style={[styles.checkbox, styles.checkboxSmall, isSelected && styles.checkboxChecked]}>
+                            {isSelected && <Ionicons name="checkmark" size={14} color="#fff" />}
+                          </View>
+                          <Text style={styles.phaseOptionLabel}>{phase.name}</Text>
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              )}
+
+              <TouchableOpacity
+                style={styles.shareOption}
+                onPress={() => setShareExpenses(!shareExpenses)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, shareExpenses && styles.checkboxChecked]}>
+                  {shareExpenses && <Ionicons name="checkmark" size={16} color="#fff" />}
+                </View>
+                <Text style={styles.shareOptionLabel}>
+                  {t('projectMembers.shareExpenses') || 'Výdavky'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.shareOption}
+                onPress={() => setShareDiary(!shareDiary)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, shareDiary && styles.checkboxChecked]}>
+                  {shareDiary && <Ionicons name="checkmark" size={16} color="#fff" />}
+                </View>
+                <Text style={styles.shareOptionLabel}>
+                  {t('projectMembers.shareDiary') || 'Denník stavby'}
+                </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.shareOption}
+                onPress={() => setShareDocuments(!shareDocuments)}
+                activeOpacity={0.7}
+              >
+                <View style={[styles.checkbox, shareDocuments && styles.checkboxChecked]}>
+                  {shareDocuments && <Ionicons name="checkmark" size={16} color="#fff" />}
+                </View>
+                <Text style={styles.shareOptionLabel}>
+                  {t('projectMembers.shareDocuments') || 'Dokumenty'}
+                </Text>
+              </TouchableOpacity>
+            </View>
+            
+            <Text style={styles.addMemberHint}>
+              {t('projectMembers.inviteHint') || 'Pozvaný používateľ bude môcť pristúpiť k vybraným častiam projektu po prihlásení do aplikácie s týmto emailom.'}
+            </Text>
+            
+            <View style={styles.addMemberButtons}>
+              <TouchableOpacity 
+                style={styles.addMemberCancel} 
+                onPress={closeAddMember}
+                disabled={submitting}
+              >
+                <Text style={styles.addMemberCancelText}>{t('common.cancel') || 'Zrušiť'}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity 
+                style={[styles.addMemberInvite, submitting && styles.addMemberInviteDisabled]} 
+                onPress={handleInviteMember}
+                disabled={submitting || !addMemberEmail.trim()}
+              >
+                {submitting ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.addMemberInviteText}>{t('account.invite') || 'Pozvať'}</Text>
+                )}
+              </TouchableOpacity>
+            </View>
           </View>
         </View>
       </Modal>
@@ -177,30 +645,202 @@ const styles = StyleSheet.create({
   addMemberClose: { padding: spacing.xs },
   addMemberTitle: { flex: 1, fontSize: 20, fontWeight: "700", color: colors.textOnDark, textAlign: "center" },
   addMemberHeaderRight: { width: 34 },
-  addMemberSearchWrap: {
-    flexDirection: "row",
+  loadingContainer: {
+    flex: 1,
+    justifyContent: "center",
     alignItems: "center",
+  },
+  addMemberLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: spacing.xs,
+    marginTop: spacing.md,
+  },
+  addMemberInput: {
     backgroundColor: colors.card,
     borderRadius: radius,
     borderWidth: 1,
     borderColor: colors.border,
-    marginBottom: spacing.sm,
-  },
-  addMemberSearchIcon: { marginLeft: spacing.md, marginRight: spacing.sm },
-  addMemberSearchInput: {
-    flex: 1,
     paddingVertical: spacing.md,
-    paddingRight: spacing.md,
+    paddingHorizontal: spacing.md,
     fontSize: 16,
     color: colors.text,
+    marginBottom: spacing.sm,
   },
-  addMemberHint: { fontSize: 14, color: colors.textMuted, marginBottom: spacing.lg },
-  addMemberResults: { minHeight: 120, marginBottom: spacing.lg },
-  addMemberDone: {
+  addMemberSectionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.text,
+    marginTop: spacing.lg,
+    marginBottom: spacing.md,
+  },
+  shareOptionsContainer: {
+    marginBottom: spacing.md,
+  },
+  shareOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
+  },
+  checkbox: {
+    width: 24,
+    height: 24,
+    borderRadius: 4,
+    borderWidth: 2,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.md,
+  },
+  checkboxChecked: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  checkboxSmall: {
+    width: 20,
+    height: 20,
+  },
+  shareOptionLabel: {
+    fontSize: 15,
+    color: colors.text,
+    flex: 1,
+  },
+  phaseSelectionContainer: {
+    marginLeft: spacing.xl,
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  phaseSelectionLabel: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginBottom: spacing.xs,
+  },
+  phaseSelectionList: {
+    maxHeight: 120,
+  },
+  phaseOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.xs,
+  },
+  phaseOptionLabel: {
+    fontSize: 14,
+    color: colors.text,
+    flex: 1,
+  },
+  addMemberHint: { 
+    fontSize: 13, 
+    color: colors.textMuted, 
+    marginTop: spacing.sm,
+    marginBottom: spacing.lg,
+    lineHeight: 18,
+  },
+  addMemberButtons: {
+    flexDirection: "row",
+    gap: spacing.md,
+  },
+  addMemberCancel: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: radius,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  addMemberCancelText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  addMemberInvite: {
+    flex: 1,
     backgroundColor: colors.primary,
     paddingVertical: spacing.md,
     borderRadius: radius,
     alignItems: "center",
   },
-  addMemberDoneText: { fontSize: 16, fontWeight: "600", color: "#fff" },
+  addMemberInviteDisabled: {
+    opacity: 0.5,
+  },
+  addMemberInviteText: { 
+    fontSize: 16, 
+    fontWeight: "600", 
+    color: "#fff" 
+  },
+  memberNameRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  memberRole: {
+    fontSize: 12,
+    color: colors.textMuted,
+    fontStyle: "italic",
+  },
+  invitedMemberRow: {
+    opacity: 0.7,
+  },
+  removeMemberButton: {
+    padding: spacing.xs,
+  },
+  sharedItemsContainer: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginTop: spacing.xs,
+    gap: spacing.xs,
+  },
+  sharedItemTag: {
+    fontSize: 11,
+    color: colors.primary,
+    backgroundColor: colors.primary + "15",
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  permissionLevelContainer: {
+    marginBottom: spacing.lg,
+  },
+  permissionOption: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+    borderWidth: 2,
+    borderColor: colors.border,
+    marginBottom: spacing.sm,
+    backgroundColor: colors.card,
+  },
+  permissionOptionActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary + "10",
+  },
+  permissionOptionContent: {
+    flex: 1,
+    marginLeft: spacing.sm,
+  },
+  permissionOptionLabel: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: spacing.xs,
+  },
+  permissionOptionLabelActive: {
+    color: colors.primary,
+  },
+  permissionOptionDescription: {
+    fontSize: 13,
+    color: colors.textMuted,
+    lineHeight: 18,
+  },
+  memberPermission: {
+    fontSize: 12,
+    color: colors.primary,
+    fontWeight: "500",
+    marginTop: spacing.xs,
+  },
 });

@@ -7,8 +7,7 @@
  * DB SAFETY: No breaking changes - subscription is ADDED to existing user documents.
  */
 
-import { doc, getDoc, onSnapshot, Unsubscribe } from "firebase/firestore";
-import { httpsCallable } from "firebase/functions";
+import { doc, getDoc, onSnapshot, Unsubscribe } from "../lib/rnFirestore";
 import { db, functions } from "../firebase";
 
 export type SubscriptionTier = "FREE" | "BASIC" | "PRO" | "ENTERPRISE";
@@ -112,11 +111,7 @@ export function subscribeToSubscription(
  * Returns checkout URL that should be opened in browser/webview.
  */
 export async function createCheckoutSession(priceId: string): Promise<{ url: string; sessionId: string }> {
-  const createCheckoutSessionFn = httpsCallable<{ priceId: string }, { url: string; sessionId: string }>(
-    functions,
-    "createCheckoutSession"
-  );
-  
+  const createCheckoutSessionFn = functions().httpsCallable("createCheckoutSession");
   const result = await createCheckoutSessionFn({ priceId });
   return result.data;
 }
@@ -127,11 +122,7 @@ export async function createCheckoutSession(priceId: string): Promise<{ url: str
  * Returns billing portal URL for managing subscription.
  */
 export async function createBillingPortalSession(): Promise<{ url: string }> {
-  const createBillingPortalSessionFn = httpsCallable<void, { url: string }>(
-    functions,
-    "createBillingPortalSession"
-  );
-  
+  const createBillingPortalSessionFn = functions().httpsCallable("createBillingPortalSession");
   const result = await createBillingPortalSessionFn();
   return result.data;
 }

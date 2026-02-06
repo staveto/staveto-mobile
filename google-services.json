@@ -1,0 +1,39 @@
+{
+  "project_info": {
+    "project_number": "255961550157",
+    "project_id": "staveto-mvp-5f251",
+    "storage_bucket": "staveto-mvp-5f251.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:255961550157:android:53f53ea5b273384229bb04",
+        "android_client_info": {
+          "package_name": "com.staveto.app"
+        }
+      },
+      "oauth_client": [
+        {
+          "client_id": "255961550157-gaueraial600f02qa3qadki41fhvabit.apps.googleusercontent.com",
+          "client_type": 3
+        }
+      ],
+      "api_key": [
+        {
+          "current_key": "AIzaSyAmvsgGQRE3x9W4vaREZo3rcbRO_Qy0eYI"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": [
+            {
+              "client_id": "255961550157-gaueraial600f02qa3qadki41fhvabit.apps.googleusercontent.com",
+              "client_type": 3
+            }
+          ]
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useState } from "react";
 import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { LoginScreen } from "../screens/LoginScreen";
@@ -16,11 +17,12 @@ import { TaskDetailScreen } from "../screens/TaskDetailScreen";
 import { ProjectOverviewScreen } from "../screens/ProjectOverviewScreen";
 import { ProjectMembersScreen } from "../screens/ProjectMembersScreen";
 import { SubscriptionScreen } from "../screens/SubscriptionScreen";
+import { ExpenseReviewScreen } from "../screens/ExpenseReviewScreen";
 import { AppTabs } from "./AppTabs";
 import { colors, spacing } from "../theme";
 import { db } from "../firebase";
-import { doc, getDoc } from "firebase/firestore";
-import { CONSENT_PRIVACY_VERSION, CONSENT_TERMS_VERSION } from "../constants/consent";
+import { doc, getDoc } from "../lib/rnFirestore";
+import { CONSENT_PRIVACY_VERSION, CONSENT_TERMS_VERSION, PENDING_CONSENT_KEY } from "../constants/consent";
 
 const Stack = createNativeStackNavigator();
 
@@ -46,6 +48,27 @@ export function RootNavigator() {
     if (!token || !user?.id) return;
     setGateLoading(true);
     try {
+      const pendingConsentRaw = await AsyncStorage.getItem(PENDING_CONSENT_KEY);
+      let hasPendingConsent = false;
+      if (pendingConsentRaw) {
+        try {
+          const pending = JSON.parse(pendingConsentRaw) as {
+            termsAccepted?: boolean;
+            privacyAccepted?: boolean;
+            termsVersion?: string;
+            privacyVersion?: string;
+          };
+          hasPendingConsent =
+            !!pending?.termsAccepted &&
+            !!pending?.privacyAccepted &&
+            pending.termsVersion === CONSENT_TERMS_VERSION &&
+            pending.privacyVersion === CONSENT_PRIVACY_VERSION;
+        } catch {
+          hasPendingConsent = false;
+        }
+      }
+      const pendingOnboardingRaw = await AsyncStorage.getItem("pending_onboarding");
+      const hasPendingOnboarding = !!pendingOnboardingRaw;
       const snap = await getDoc(doc(db, "users", user.id));
       if (snap.exists()) {
         const data = snap.data() as {
@@ -57,15 +80,17 @@ export function RootNavigator() {
         };
         const termsOk = !!data.termsAcceptedAt && data.termsVersion === CONSENT_TERMS_VERSION;
         const privacyOk = !!data.privacyAcceptedAt && data.privacyVersion === CONSENT_PRIVACY_VERSION;
-        setConsentOk(termsOk && privacyOk);
-        setOnboardingOk(!!data.onboardingCompletedAt);
+        setConsentOk((termsOk && privacyOk) || hasPendingConsent);
+        setOnboardingOk(!!data.onboardingCompletedAt || hasPendingOnboarding);
       } else {
-        setConsentOk(false);
-        setOnboardingOk(false);
+        setConsentOk(hasPendingConsent);
+        setOnboardingOk(hasPendingOnboarding);
       }
     } catch {
-      setConsentOk(false);
-      setOnboardingOk(false);
+      const pendingConsentRaw = await AsyncStorage.getItem(PENDING_CONSENT_KEY);
+      const pendingOnboardingRaw = await AsyncStorage.getItem("pending_onboarding");
+      setConsentOk(!!pendingConsentRaw);
+      setOnboardingOk(!!pendingOnboardingRaw);
     } finally {
       setGateLoading(false);
     }
@@ -140,6 +165,11 @@ export function RootNavigator() {
         name="Subscription"
         component={SubscriptionScreen}
         options={{ headerShown: true, title: "Predplatné" }}
+      />
+      <Stack.Screen
+        name="ExpenseReview"
+        component={ExpenseReviewScreen}
+        options={{ headerShown: true, title: "Kontrola faktúry" }}
       />
     </Stack.Navigator>
   );

@@ -1,20 +1,16 @@
 import React, { useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator } from "react-native";
-import { useAuth } from "../context/AuthContext";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { colors, radius, spacing } from "../theme";
-// CRITICAL: Import firebase.ts FIRST to ensure Firebase Auth is registered
-import { db, auth } from "../firebase";
-import { doc, updateDoc, serverTimestamp } from "firebase/firestore";
-import { updateProfile } from "firebase/auth";
 
 type Props = {
   onFinished: () => void;
 };
 
 type Mode = "build" | "trade" | "maintenance";
+const PENDING_ONBOARDING_KEY = "pending_onboarding";
 
 export function OnboardingMvpScreen({ onFinished }: Props) {
-  const { user } = useAuth();
   const [step, setStep] = useState<1 | 2>(1);
   const [mode, setMode] = useState<Mode | null>(null);
   const [displayName, setDisplayName] = useState("");
@@ -22,7 +18,6 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
   const [error, setError] = useState("");
 
   const save = async () => {
-    if (!user?.id) return;
     if (!mode) {
       setError("Vyberte možnosť.");
       return;
@@ -34,17 +29,27 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
     setSaving(true);
     setError("");
     try {
-      await updateDoc(doc(db, "users", user.id), {
+      console.log("ONBOARDING start");
+      const payload = {
         mode,
         displayName: displayName.trim(),
-        onboardingCompletedAt: serverTimestamp(),
-        updatedAt: serverTimestamp(),
-      });
-      if (auth.currentUser) {
-        await updateProfile(auth.currentUser, { displayName: displayName.trim() });
+        completedAt: new Date().toISOString(),
+      };
+      const savePromise = AsyncStorage.setItem(PENDING_ONBOARDING_KEY, JSON.stringify(payload));
+      const timeoutPromise = new Promise<"timeout">((resolve) =>
+        setTimeout(() => resolve("timeout"), 1000)
+      );
+      const result = await Promise.race([savePromise.then(() => "saved" as const), timeoutPromise]);
+      if (result === "saved") {
+        console.log("ONBOARDING saved");
+      } else {
+        console.warn("ONBOARDING save timeout");
+        savePromise.then(() => console.log("ONBOARDING saved"));
       }
       onFinished();
+      console.log("ONBOARDING finished");
     } catch (e) {
+      console.error("ONBOARDING error", e);
       setError("Nepodarilo sa uložiť onboarding.");
     } finally {
       setSaving(false);

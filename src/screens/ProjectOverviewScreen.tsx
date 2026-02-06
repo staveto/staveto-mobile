@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useState, useRef } from "react";
 import {
   View,
   Text,
@@ -14,6 +14,7 @@ import {
   Platform,
   Linking,
   Image,
+  Share,
 } from "react-native";
 // Conditional imports - only load if packages are installed
 let ImagePicker: typeof import('expo-image-picker') | null = null;
@@ -31,6 +32,13 @@ try {
   AudioModule = require('expo-av');
 } catch (e) {
   console.warn('expo-av not installed. Voice recording features will be disabled.');
+}
+
+let SpeechModule: typeof import('expo-speech') | null = null;
+try {
+  SpeechModule = require('expo-speech');
+} catch (e) {
+  console.warn('expo-speech not installed. Speech-to-text conversion will be disabled.');
 }
 
 let DateTimePicker: any = null;
@@ -51,6 +59,7 @@ import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
 import * as constructionDiaryService from "../services/constructionDiary";
 import * as projectDocumentsService from "../services/projectDocuments";
+import { extractInvoiceData } from "../services/invoiceOCR";
 import { updateTaskStatus } from "../services/taskService";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
 import { addPhasesToProject } from "../services/addPhasesToProject";
@@ -63,14 +72,30 @@ import type { ProjectDocumentDoc } from "../services/projectDocuments";
 import { colors, radius, spacing } from "../theme";
 import { openInMaps } from "../lib/maps";
 
+const DONE_COLOR = "#2e7d32";
+
 export function ProjectOverviewScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const { user, orgId } = useAuth();
-  const routeParams = (route.params as { projectId?: string; projectName?: string; openExpenseModal?: boolean; openNewTask?: boolean; selectedPhaseId?: string | null }) ?? {};
-  const { projectId: paramProjectId, projectName: paramProjectName, openExpenseModal: paramOpenExpenseModal, openNewTask: paramOpenNewTask, selectedPhaseId: paramSelectedPhaseId } = routeParams;
+  const routeParams = (route.params as {
+    projectId?: string;
+    projectName?: string;
+    openExpenseModal?: boolean;
+    openNewTask?: boolean;
+    selectedPhaseId?: string | null;
+    openExpenseId?: string | null;
+  }) ?? {};
+  const {
+    projectId: paramProjectId,
+    projectName: paramProjectName,
+    openExpenseModal: paramOpenExpenseModal,
+    openNewTask: paramOpenNewTask,
+    selectedPhaseId: paramSelectedPhaseId,
+    openExpenseId: paramOpenExpenseId,
+  } = routeParams;
   const projectId = paramProjectId ?? "";
   const projectName = paramProjectName ?? "";
 
@@ -115,6 +140,7 @@ export function ProjectOverviewScreen() {
   const [editProjectName, setEditProjectName] = useState("");
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [editingExpense, setEditingExpense] = useState<ExpenseDoc | null>(null);
+  const [openedExpenseId, setOpenedExpenseId] = useState<string | null>(null);
   const [expenseTitle, setExpenseTitle] = useState("");
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseDate, setExpenseDate] = useState(new Date().toISOString().split('T')[0]);
@@ -131,6 +157,18 @@ export function ProjectOverviewScreen() {
   const [taskAttachmentsMap, setTaskAttachmentsMap] = useState<Map<string, number>>(new Map());
   const [expenseAttachmentsMap, setExpenseAttachmentsMap] = useState<Map<string, number>>(new Map());
   const [attachmentThumbnails, setAttachmentThumbnails] = useState<Map<string, string>>(new Map());
+  const [ocrLoading, setOcrLoading] = useState(false);
+  const ocrRequestIdRef = useRef(0);
+  const [ocrPendingReview, setOcrPendingReview] = useState<{
+    projectId: string;
+    expenseId: string;
+    defaultTitle: string;
+    defaultAmount: string;
+    defaultDate: string;
+    defaultSupplierName?: string;
+    attachmentId?: string;
+    storagePath?: string;
+  } | null>(null);
   
   // Diary entries state
   const [diaryEntries, setDiaryEntries] = useState<DiaryEntryDoc[]>([]);
@@ -140,8 +178,11 @@ export function ProjectOverviewScreen() {
   const [diaryWeather, setDiaryWeather] = useState("");
   const [diaryWorkers, setDiaryWorkers] = useState("");
   const [diaryWorkDescription, setDiaryWorkDescription] = useState("");
+  const [diaryWorkDescriptionMode, setDiaryWorkDescriptionMode] = useState<'text' | 'voice'>('text');
+  const [diaryWorkDescriptionRecordingUri, setDiaryWorkDescriptionRecordingUri] = useState<string | null>(null);
+  const [diaryWorkDescriptionIsRecording, setDiaryWorkDescriptionIsRecording] = useState(false);
+  const [diaryWorkDescriptionRecording, setDiaryWorkDescriptionRecording] = useState<any>(null);
   const [diaryMaterials, setDiaryMaterials] = useState("");
-  const [diaryNotes, setDiaryNotes] = useState("");
   const [diaryPhaseId, setDiaryPhaseId] = useState<string | null>(null);
   const [diaryAttachment, setDiaryAttachment] = useState<{ uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' } | null>(null);
   const [uploadingDiaryAttachment, setUploadingDiaryAttachment] = useState(false);
@@ -367,6 +408,22 @@ export function ProjectOverviewScreen() {
     }
   }, [paramOpenExpenseModal, projectId, paramSelectedPhaseId]);
 
+  useEffect(() => {
+    if (!paramOpenExpenseId || !projectId) return;
+    if (openedExpenseId === paramOpenExpenseId) return;
+    const exp = expenses.find((e) => e.id === paramOpenExpenseId);
+    if (exp) {
+      setEditingExpense(exp);
+      setExpenseTitle(exp.title ?? "");
+      setExpenseAmount(exp.amount != null ? String(exp.amount) : "");
+      setExpenseDate(exp.date ?? new Date().toISOString().split("T")[0]);
+      setExpenseNote(exp.note ?? "");
+      setExpensePhaseId(exp.phaseId ?? null);
+      setShowExpenseModal(true);
+      setOpenedExpenseId(paramOpenExpenseId);
+    }
+  }, [paramOpenExpenseId, projectId, openedExpenseId, expenses]);
+
   // Open new task modal if requested from navigation
   useEffect(() => {
     if (paramOpenNewTask && projectId) {
@@ -377,6 +434,22 @@ export function ProjectOverviewScreen() {
 
   const goBack = () => navigation.goBack();
   const goToMembers = () => (navigation as { navigate: (n: string, p?: object) => void }).navigate("ProjectMembers", { projectId, projectName });
+
+  // Helper to validate and format amount input (only numbers and one decimal point/comma)
+  const handleAmountChange = (text: string) => {
+    // Remove all non-numeric characters except one decimal point or comma
+    const cleaned = text.replace(/[^\d.,]/g, '');
+    // Replace comma with dot for consistency
+    const normalized = cleaned.replace(',', '.');
+    // Ensure only one decimal point
+    const parts = normalized.split('.');
+    if (parts.length > 2) {
+      // If more than one dot, keep only first part + dot + second part
+      setExpenseAmount(parts[0] + '.' + parts.slice(1).join(''));
+    } else {
+      setExpenseAmount(normalized);
+    }
+  };
 
   const onCreateTask = async () => {
     if (!orgId || !projectId) return;
@@ -440,7 +513,7 @@ export function ProjectOverviewScreen() {
     } catch (e: unknown) {
       console.error(`[ProjectOverview] Error creating task:`, e);
       const c = (e as { code?: string }).code;
-      Alert.alert("", c === "permission-denied" ? "Nemáte oprávnenie." : (e instanceof Error ? e.message : "Chyba."));
+      Alert.alert("", c === "permission-denied" ? t("projectOverview.noPermission") : (e instanceof Error ? e.message : t("common.error")));
     } finally {
       setSubmitting(false);
     }
@@ -486,7 +559,7 @@ export function ProjectOverviewScreen() {
       console.log(`[ProjectOverview] Task status updated successfully`);
     } catch (error: any) {
       console.error(`[ProjectOverview] Error toggling task status:`, error);
-      Alert.alert('Chyba', error.message || 'Nepodarilo sa zmeniť status úlohy.');
+      Alert.alert(t("common.error"), error.message || t("projectOverview.failedToChangeStatus"));
     }
   };
 
@@ -494,12 +567,12 @@ export function ProjectOverviewScreen() {
     if (!projectId) return;
     
     Alert.alert(
-      'Archivovať úlohu?',
-      `Naozaj chceš archivovať úlohu "${task.title}"? Úloha sa skryje zo zoznamu, ale zostane v databáze.`,
+      t("projectOverview.archiveTask") || 'Archivovať úlohu?',
+      t("projectOverview.archiveTaskConfirm", { title: task.title }) || `Naozaj chceš archivovať úlohu "${task.title}"? Úloha sa skryje zo zoznamu, ale zostane v databáze.`,
       [
-        { text: 'Zrušiť', style: 'cancel' },
+        { text: t("common.cancel"), style: 'cancel' },
         {
-          text: 'Archivovať',
+          text: t("projectOverview.archiveTask") || 'Archivovať',
           style: 'destructive',
           onPress: async () => {
             try {
@@ -543,7 +616,7 @@ export function ProjectOverviewScreen() {
     } catch (error: any) {
       console.error(`[ProjectOverview] Error updating task:`, error);
       const c = (error as { code?: string }).code;
-      Alert.alert('Chyba', c === "permission-denied" ? "Nemáte oprávnenie." : (error instanceof Error ? error.message : "Chyba."));
+      Alert.alert(t("common.error"), c === "permission-denied" ? t("projectOverview.noPermission") : (error instanceof Error ? error.message : t("common.error")));
     } finally {
       setSubmitting(false);
     }
@@ -553,12 +626,12 @@ export function ProjectOverviewScreen() {
     if (!projectId) return;
     
     Alert.alert(
-      'Vymazať úlohu?',
-      `Naozaj chceš vymazať úlohu "${task.title}"? Táto akcia je nezvratná.`,
+      t("projectOverview.deleteTask"),
+      t("projectOverview.deleteTaskConfirm", { title: task.title || "" }),
       [
-        { text: 'Zrušiť', style: 'cancel' },
+        { text: t("common.cancel"), style: 'cancel' },
         {
-          text: 'Vymazať',
+          text: t("common.delete"),
           style: 'destructive',
           onPress: async () => {
             if (!orgId) return;
@@ -570,7 +643,7 @@ export function ProjectOverviewScreen() {
             } catch (error: any) {
               console.error(`[ProjectOverview] Error deleting task:`, error);
               const c = (error as { code?: string }).code;
-              Alert.alert('Chyba', c === "permission-denied" ? "Nemáte oprávnenie." : (error instanceof Error ? error.message : "Chyba."));
+              Alert.alert(t("common.error"), c === "permission-denied" ? t("projectOverview.noPermission") : (error instanceof Error ? error.message : t("common.error")));
             }
           },
         },
@@ -596,7 +669,7 @@ export function ProjectOverviewScreen() {
     if (Platform.OS === 'ios') {
       ActionSheetIOS.showActionSheetWithOptions(
         {
-          options: ['Zrušiť', 'Upraviť projekt', 'Vymazať projekt'],
+          options: [t("common.cancel"), t("projectOverview.editProject"), t("projectOverview.deleteProject")],
           destructiveButtonIndex: 2,
           cancelButtonIndex: 0,
         },
@@ -611,12 +684,12 @@ export function ProjectOverviewScreen() {
     } else {
       // Android - použij Alert
       Alert.alert(
-        projectName || 'Projekt',
-        'Vyberte akciu',
+        projectName || t("projectOverview.project"),
+        t("projectOverview.selectAction"),
         [
-          { text: 'Zrušiť', style: 'cancel' },
-          { text: 'Upraviť projekt', onPress: handleEditProject },
-          { text: 'Vymazať projekt', style: 'destructive', onPress: handleDeleteProject },
+          { text: t("common.cancel"), style: 'cancel' },
+          { text: t("projectOverview.editProject"), onPress: handleEditProject },
+          { text: t("projectOverview.deleteProject"), style: 'destructive', onPress: handleDeleteProject },
         ]
       );
     }
@@ -642,7 +715,7 @@ export function ProjectOverviewScreen() {
     } catch (error: any) {
       console.error(`[ProjectOverview] Error updating project:`, error);
       const c = (error as { code?: string }).code;
-      Alert.alert('Chyba', c === "permission-denied" ? "Nemáte oprávnenie." : (error instanceof Error ? error.message : "Chyba."));
+      Alert.alert(t("common.error"), c === "permission-denied" ? t("projectOverview.noPermission") : (error instanceof Error ? error.message : t("common.error")));
     } finally {
       setSubmitting(false);
     }
@@ -650,12 +723,12 @@ export function ProjectOverviewScreen() {
 
   const handleDeleteProject = () => {
     Alert.alert(
-      'Vymazať projekt?',
-      `Naozaj chceš vymazať projekt "${projectName}"? Táto akcia je nezvratná a vymaže všetky fázy, úlohy a prílohy.`,
+      t("projectOverview.deleteProject"),
+      t("projectOverview.deleteProjectConfirm", { name: projectName || "" }),
       [
-        { text: 'Zrušiť', style: 'cancel' },
+        { text: t("common.cancel"), style: 'cancel' },
         {
-          text: 'Vymazať',
+          text: t("common.delete"),
           style: 'destructive',
           onPress: async () => {
             if (!projectId || !orgId) return;
@@ -663,13 +736,13 @@ export function ProjectOverviewScreen() {
             try {
               console.log(`[ProjectOverview] Deleting project ${projectId}`);
               await projectsService.deleteProject(orgId, projectId);
-              Alert.alert('Úspech', 'Projekt bol vymazaný.');
+              Alert.alert(t("common.success"), t("projectOverview.projectDeleted"));
               // Navigate back to projects list
               navigation.goBack();
             } catch (error: any) {
               console.error(`[ProjectOverview] Error deleting project:`, error);
               const c = (error as { code?: string }).code;
-              Alert.alert('Chyba', c === "permission-denied" ? "Nemáte oprávnenie." : (error instanceof Error ? error.message : "Chyba."));
+              Alert.alert(t("common.error"), c === "permission-denied" ? t("projectOverview.noPermission") : (error instanceof Error ? error.message : t("common.error")));
             } finally {
               setSubmitting(false);
             }
@@ -721,7 +794,7 @@ export function ProjectOverviewScreen() {
       setNewPhaseName("");
     } catch (error: any) {
       console.error(`[ProjectOverview] Error creating phase:`, error);
-      Alert.alert('Chyba', error.message || 'Nepodarilo sa vytvoriť fázu.');
+      Alert.alert(t("common.error"), error.message || t("projectOverview.createPhaseFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -759,8 +832,8 @@ export function ProjectOverviewScreen() {
     const phaseTasks = tasks.filter(t => t.phaseId === phase.id);
     if (phaseTasks.length > 0) {
       Alert.alert(
-        'Nemožno vymazať fázu',
-        `Táto fáza obsahuje ${phaseTasks.length} úloh. Najprv vymažte alebo presuňte úlohy.`
+        t("projectOverview.cannotDeletePhase") || 'Nemožno vymazať fázu',
+        t("projectOverview.cannotDeletePhaseMessage", { count: phaseTasks.length.toString() }) || `Táto fáza obsahuje ${phaseTasks.length} úloh. Najprv vymažte alebo presuňte úlohy.`
       );
       return;
     }
@@ -769,9 +842,9 @@ export function ProjectOverviewScreen() {
       'Vymazať fázu?',
       `Naozaj chcete vymazať fázu "${phase.name}"?`,
       [
-        { text: 'Zrušiť', style: 'cancel' },
+        { text: t("common.cancel"), style: 'cancel' },
         {
-          text: 'Vymazať',
+          text: t("common.delete"),
           style: 'destructive',
           onPress: async () => {
             try {
@@ -837,7 +910,7 @@ export function ProjectOverviewScreen() {
       if (Platform.OS === 'ios') {
         ActionSheetIOS.showActionSheetWithOptions(
           {
-            options: ['Zrušiť', 'Odfotiť faktúru', 'Vybrať z galérie'],
+            options: [t("common.cancel"), t("projectOverview.takeInvoicePhoto"), t("projectOverview.selectFromGalleryForInvoice")],
             cancelButtonIndex: 0,
           },
           async (buttonIndex) => {
@@ -850,18 +923,18 @@ export function ProjectOverviewScreen() {
         );
       } else {
         Alert.alert(
-          'Vyberte zdroj',
-          'Odkiaľ chcete pridať faktúru?',
+          t("projectOverview.selectSource"),
+          t("projectOverview.selectSourceForInvoice") || 'Odkiaľ chcete pridať faktúru?',
           [
-            { text: 'Zrušiť', style: 'cancel' },
-            { text: 'Odfotiť faktúru', onPress: launchCameraForExpense },
-            { text: 'Vybrať z galérie', onPress: launchGalleryForExpense },
+            { text: t("common.cancel"), style: 'cancel' },
+            { text: t("projectOverview.takeInvoicePhoto"), onPress: launchCameraForExpense },
+            { text: t("projectOverview.selectFromGalleryForInvoice"), onPress: launchGalleryForExpense },
           ]
         );
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error picking expense image:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa vybrať obrázok.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectImage"));
     }
   };
 
@@ -871,7 +944,7 @@ export function ProjectOverviewScreen() {
     try {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Oprávnenie', 'Potrebujeme prístup ku kamere na fotografovanie faktúr.');
+        Alert.alert(t("projectOverview.cameraPermission"), t("projectOverview.cameraPermissionForInvoice"));
         return;
       }
 
@@ -892,7 +965,7 @@ export function ProjectOverviewScreen() {
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error launching camera for expense:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa otvoriť kameru.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToOpenCamera"));
     }
   };
 
@@ -902,7 +975,7 @@ export function ProjectOverviewScreen() {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== 'granted') {
-        Alert.alert('Oprávnenie', 'Potrebujeme prístup k galérii na výber faktúr.');
+        Alert.alert(t("projectOverview.galleryPermission"), t("projectOverview.galleryPermissionForInvoice"));
         return;
       }
 
@@ -923,7 +996,7 @@ export function ProjectOverviewScreen() {
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error picking expense from gallery:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa vybrať obrázok.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectImage"));
     }
   };
 
@@ -937,7 +1010,7 @@ export function ProjectOverviewScreen() {
       if (Platform.OS === 'ios') {
         ActionSheetIOS.showActionSheetWithOptions(
           {
-            options: ['Zrušiť', 'Odfotiť', 'Vybrať z galérie'],
+            options: [t("common.cancel"), t("projectOverview.takePhoto"), t("projectOverview.selectFromGallery")],
             cancelButtonIndex: 0,
           },
           async (buttonIndex) => {
@@ -953,7 +1026,7 @@ export function ProjectOverviewScreen() {
           'Vyberte zdroj',
           'Odkiaľ chcete pridať fotku?',
           [
-            { text: 'Zrušiť', style: 'cancel' },
+            { text: t("common.cancel"), style: 'cancel' },
             { text: 'Odfotiť', onPress: launchCameraForDiary },
             { text: 'Vybrať z galérie', onPress: launchGalleryForDiary },
           ]
@@ -961,7 +1034,7 @@ export function ProjectOverviewScreen() {
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error picking diary image:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa vybrať fotku.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectPhoto"));
     }
   };
 
@@ -992,7 +1065,7 @@ export function ProjectOverviewScreen() {
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error launching camera for diary:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa otvoriť kameru.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToOpenCamera"));
     }
   };
 
@@ -1023,13 +1096,13 @@ export function ProjectOverviewScreen() {
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error picking diary image from gallery:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa vybrať fotku.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectPhoto"));
     }
   };
 
   const pickExpenseDocument = async () => {
     if (!DocumentPicker) {
-      Alert.alert('Chyba', 'expo-document-picker nie je nainštalovaný.');
+      Alert.alert(t("common.error"), t("projectOverview.documentPickerNotInstalled"));
       return;
     }
     try {
@@ -1050,7 +1123,73 @@ export function ProjectOverviewScreen() {
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error picking expense document:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa vybrať dokument.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectDocument"));
+    }
+  };
+
+  const navigateToExpenseReview = (params: {
+    projectId: string;
+    expenseId: string;
+    status: "success" | "failed" | "limit" | "cancelled";
+    parsed: { supplierName: string | null; invoiceNumber: string | null; issueDate: string | null; totalAmount: number | null; vatAmount: number | null; currency: "EUR"; } | null;
+    defaultTitle: string;
+    defaultAmount: string;
+    defaultDate: string;
+    defaultSupplierName?: string;
+    attachmentId?: string;
+    storagePath?: string;
+  }) => {
+    (navigation as { navigate: (name: string, params?: unknown) => void }).navigate("ExpenseReview", params);
+  };
+
+  const handleOcrCancel = () => {
+    ocrRequestIdRef.current = 0;
+    setOcrLoading(false);
+    const pending = ocrPendingReview;
+    setOcrPendingReview(null);
+    if (pending) {
+      navigateToExpenseReview({
+        ...pending,
+        status: "cancelled",
+        parsed: null,
+      });
+    }
+  };
+
+  const startOcrReview = async (input: {
+    projectId: string;
+    expenseId: string;
+    storagePath: string;
+    attachmentId?: string;
+    defaultTitle: string;
+    defaultAmount: string;
+    defaultDate: string;
+    defaultSupplierName?: string;
+  }) => {
+    const requestId = Date.now();
+    ocrRequestIdRef.current = requestId;
+    setOcrPendingReview(input);
+    setOcrLoading(true);
+    try {
+      const result = await extractInvoiceData({ storagePath: input.storagePath, attachmentId: input.attachmentId });
+      if (ocrRequestIdRef.current !== requestId) return;
+      setOcrLoading(false);
+      setOcrPendingReview(null);
+      navigateToExpenseReview({
+        ...input,
+        status: result.status,
+        parsed: result.parsed,
+      });
+    } catch (error) {
+      if (ocrRequestIdRef.current !== requestId) return;
+      console.error("[ProjectOverview] OCR failed:", error);
+      setOcrLoading(false);
+      setOcrPendingReview(null);
+      navigateToExpenseReview({
+        ...input,
+        status: "failed",
+        parsed: null,
+      });
     }
   };
 
@@ -1059,11 +1198,12 @@ export function ProjectOverviewScreen() {
     
     const amount = parseFloat(expenseAmount);
     if (isNaN(amount) || amount <= 0) {
-      Alert.alert('Chyba', 'Zadajte platnú sumu.');
+      Alert.alert(t("common.error"), t("projectOverview.enterValidAmount"));
       return;
     }
     
     setSubmitting(true);
+    let openedOcrReview = false;
     try {
       const expenseDateObj = new Date(expenseDate);
       let attachmentId: string | null = null;
@@ -1086,7 +1226,7 @@ export function ProjectOverviewScreen() {
             console.log(`[ProjectOverview] Uploaded expense attachment: ${attachmentId}`);
           } catch (error: any) {
             console.error(`[ProjectOverview] Error uploading expense attachment:`, error);
-            Alert.alert('Upozornenie', 'Výdavok bol uložený, ale príloha sa nepodarila nahrať.');
+            Alert.alert(t("common.warning"), t("projectOverview.expenseSavedAttachmentFailed"));
           } finally {
             setUploadingExpenseAttachment(false);
           }
@@ -1099,7 +1239,7 @@ export function ProjectOverviewScreen() {
           note: expenseNote.trim() || undefined,
           attachmentId: attachmentId || editingExpense.attachmentId || undefined,
         });
-        Alert.alert('Úspech', 'Výdavok bol upravený.');
+        Alert.alert(t("common.success"), t("projectOverview.expenseUpdated"));
       } else {
         // For new expense: create expense first, then upload attachment with expenseId
         const newExpense = await expensesService.createExpense(orgId, projectId, {
@@ -1128,17 +1268,34 @@ export function ProjectOverviewScreen() {
             // Update expense with attachmentId
             await expensesService.updateExpense(projectId, newExpense.id, {
               attachmentId: attachmentId,
+              ocrStatus: expenseAttachment.kind === "image" ? "pending" : undefined,
             });
             console.log(`[ProjectOverview] Uploaded expense attachment: ${attachmentId}`);
+
+            if (expenseAttachment.kind === "image" && attachment.storagePath) {
+              setShowExpenseModal(false);
+              openedOcrReview = true;
+              await startOcrReview({
+                projectId,
+                expenseId: newExpense.id,
+                storagePath: attachment.storagePath,
+                attachmentId: attachmentId,
+                defaultTitle: expenseTitle.trim(),
+                defaultAmount: expenseAmount,
+                defaultDate: expenseDate,
+              });
+            }
           } catch (error: any) {
             console.error(`[ProjectOverview] Error uploading expense attachment:`, error);
-            Alert.alert('Upozornenie', 'Výdavok bol uložený, ale príloha sa nepodarila nahrať.');
+            Alert.alert(t("common.warning"), t("projectOverview.expenseSavedAttachmentFailed"));
           } finally {
             setUploadingExpenseAttachment(false);
           }
         }
-        
-        Alert.alert('Úspech', 'Výdavok bol pridaný.');
+
+        if (!openedOcrReview) {
+          Alert.alert(t("common.success"), t("projectOverview.expenseAdded"));
+        }
       }
       setShowExpenseModal(false);
       setExpenseAttachment(null);
@@ -1146,7 +1303,7 @@ export function ProjectOverviewScreen() {
     } catch (error: any) {
       console.error(`[ProjectOverview] Error saving expense:`, error);
       const c = (error as { code?: string }).code;
-      Alert.alert('Chyba', c === "permission-denied" ? "Nemáte oprávnenie." : (error instanceof Error ? error.message : "Chyba."));
+      Alert.alert(t("common.error"), c === "permission-denied" ? t("projectOverview.noPermission") : (error instanceof Error ? error.message : t("common.error")));
     } finally {
       setSubmitting(false);
       setUploadingExpenseAttachment(false);
@@ -1155,23 +1312,23 @@ export function ProjectOverviewScreen() {
 
   const handleDeleteExpense = (expense: ExpenseDoc) => {
     Alert.alert(
-      'Vymazať výdavok?',
-      `Naozaj chceš vymazať výdavok "${expense.title}"?`,
+      t("projectOverview.deleteExpense"),
+      t("projectOverview.deleteExpenseConfirmMessage", { title: expense.title || "" }),
       [
-        { text: 'Zrušiť', style: 'cancel' },
+        { text: t("common.cancel"), style: 'cancel' },
         {
-          text: 'Vymazať',
+          text: t("common.delete"),
           style: 'destructive',
           onPress: async () => {
             if (!projectId) return;
             try {
               await expensesService.deleteExpense(projectId, expense.id);
               await load(true);
-              Alert.alert('Úspech', 'Výdavok bol vymazaný.');
+              Alert.alert(t("common.success"), t("projectOverview.expenseDeleted"));
             } catch (error: any) {
               console.error(`[ProjectOverview] Error deleting expense:`, error);
               const c = (error as { code?: string }).code;
-              Alert.alert('Chyba', c === "permission-denied" ? "Nemáte oprávnenie." : (error instanceof Error ? error.message : "Chyba."));
+              Alert.alert(t("common.error"), c === "permission-denied" ? t("projectOverview.noPermission") : (error instanceof Error ? error.message : t("common.error")));
             }
           },
         },
@@ -1189,15 +1346,102 @@ export function ProjectOverviewScreen() {
     }
   };
 
+  const shareDiaryEntry = async (entry: DiaryEntryDoc) => {
+    try {
+      const phaseName = entry.phaseId ? phases.find(p => p.id === entry.phaseId)?.name : null;
+      
+      let shareText = `Update z projektu: ${projectName}\n\n`;
+      shareText += `Dátum: ${formatDate(entry.date)}\n`;
+      if (phaseName) {
+        shareText += `Fáza: ${phaseName}\n`;
+      }
+      shareText += `\nPopis práce:\n${entry.workDescription}\n`;
+      
+      if (entry.weather) {
+        shareText += `\nPočasie: ${entry.weather}\n`;
+      }
+      if (entry.workers) {
+        shareText += `Pracovníci: ${entry.workers}\n`;
+      }
+      if (entry.materials) {
+        shareText += `Materiály: ${entry.materials}\n`;
+      }
+      
+      if (entry.attachments && entry.attachments.length > 0) {
+        shareText += `\nPriložené: ${entry.attachments.length} ${entry.attachments.length === 1 ? 'súbor' : 'súborov'}`;
+      }
+      
+      await Share.share({
+        message: shareText,
+        title: `Update: ${projectName} - ${formatDate(entry.date)}`,
+      });
+    } catch (error: any) {
+      console.error('[ProjectOverview] Error sharing diary entry:', error);
+      Alert.alert(t("common.error"), t("projectOverview.failedToShareUpdate"));
+    }
+  };
+
+  const sharePhase = async (phase: ProjectPhaseDoc) => {
+    try {
+      const phaseTasks = tasksByPhase.get(phase.id) || [];
+      const completedTasks = phaseTasks.filter(t => t.status === 'DONE');
+      
+      let shareText = `Update z projektu: ${projectName}\n\n`;
+      shareText += `Fáza: ${phase.name}\n`;
+      shareText += `\nStav: ${completedTasks.length} z ${phaseTasks.length} úloh dokončených\n`;
+      
+      if (completedTasks.length > 0) {
+        shareText += `\nDokončené úlohy:\n`;
+        completedTasks.forEach(task => {
+          shareText += `✓ ${task.title || 'Bez názvu'}\n`;
+          if (task.dueDate) {
+            shareText += `  Termín: ${task.dueDate}\n`;
+          }
+        });
+      }
+      
+      // Add diary entries for this phase
+      const phaseDiaryEntries = diaryEntries.filter(e => e.phaseId === phase.id);
+      if (phaseDiaryEntries.length > 0) {
+        shareText += `\nZápisy do denníka:\n`;
+        phaseDiaryEntries.forEach(entry => {
+          shareText += `\n${formatDate(entry.date)}:\n`;
+          shareText += `${entry.workDescription}\n`;
+          if (entry.attachments && entry.attachments.length > 0) {
+            shareText += `(${entry.attachments.length} ${entry.attachments.length === 1 ? 'fotka' : 'fotiek'})\n`;
+          }
+        });
+      }
+      
+      await Share.share({
+        message: shareText,
+        title: `Update: ${projectName} - ${phase.name}`,
+      });
+    } catch (error: any) {
+      console.error('[ProjectOverview] Error sharing phase:', error);
+      Alert.alert(t("common.error"), t("projectOverview.failedToSharePhaseUpdate"));
+    }
+  };
+
   const handleSaveDiaryEntry = async () => {
-    if (!diaryWorkDescription.trim() || !projectId || !orgId) return;
+    if (!projectId || !orgId) return;
+    
+    // Validate: either text mode with text, or voice mode with recording
+    if (diaryWorkDescriptionMode === 'text' && !diaryWorkDescription.trim()) {
+      Alert.alert(t("common.error"), t("projectOverview.fillWorkDescription"));
+      return;
+    }
+    if (diaryWorkDescriptionMode === 'voice' && !diaryWorkDescriptionRecordingUri) {
+      Alert.alert(t("common.error"), t("projectOverview.uploadVoiceOrSwitchToText"));
+      return;
+    }
     
     setSubmitting(true);
     try {
       const entryDate = new Date(diaryDate);
       let attachmentIds: string[] = [];
       
-      // Upload attachment if provided
+      // Upload photo attachment if provided
       if (diaryAttachment) {
         try {
           setUploadingDiaryAttachment(true);
@@ -1210,11 +1454,42 @@ export function ProjectOverviewScreen() {
             mimeType: diaryAttachment.mimeType,
             kind: diaryAttachment.kind,
           });
-          attachmentIds = [attachment.id];
+          attachmentIds.push(attachment.id);
           console.log(`[ProjectOverview] Uploaded diary attachment: ${attachment.id}`);
         } catch (error: any) {
           console.error(`[ProjectOverview] Error uploading diary attachment:`, error);
-          Alert.alert('Chyba', 'Nepodarilo sa nahrať fotku.');
+          Alert.alert(t("common.error"), t("projectOverview.failedToUploadPhoto"));
+          setSubmitting(false);
+          setUploadingDiaryAttachment(false);
+          return;
+        } finally {
+          setUploadingDiaryAttachment(false);
+        }
+      }
+      
+      // Upload voice recording if provided
+      let workDescriptionText = diaryWorkDescription.trim() || undefined;
+      if (diaryWorkDescriptionMode === 'voice' && diaryWorkDescriptionRecordingUri) {
+        try {
+          setUploadingDiaryAttachment(true);
+          const voiceAttachment = await attachmentsService.uploadAttachment(projectId, {
+            expenseId: null,
+            taskId: null,
+            phaseId: diaryPhaseId,
+            localUri: diaryWorkDescriptionRecordingUri,
+            fileName: `diary_work_description_${Date.now()}.m4a`,
+            mimeType: 'audio/m4a',
+            kind: 'audio',
+          });
+          attachmentIds.push(voiceAttachment.id);
+          console.log(`[ProjectOverview] Uploaded diary voice recording: ${voiceAttachment.id}`);
+          // If work description text is empty, set a placeholder
+          if (!workDescriptionText) {
+            workDescriptionText = '[Hlasová správa]';
+          }
+        } catch (error: any) {
+          console.error(`[ProjectOverview] Error uploading diary voice recording:`, error);
+          Alert.alert(t("common.error"), t("projectOverview.failedToUploadVoice"));
           setSubmitting(false);
           setUploadingDiaryAttachment(false);
           return;
@@ -1226,31 +1501,31 @@ export function ProjectOverviewScreen() {
       if (editingDiaryEntry) {
         // For editing, merge with existing attachments
         const existingAttachments = editingDiaryEntry.attachments || [];
-        const finalAttachments = diaryAttachment ? [...existingAttachments, ...attachmentIds] : existingAttachments;
+        const finalAttachments = attachmentIds.length > 0 ? [...existingAttachments, ...attachmentIds] : existingAttachments;
         
         await constructionDiaryService.updateDiaryEntry(projectId, editingDiaryEntry.id, {
           date: entryDate,
           weather: diaryWeather.trim() || undefined,
           workers: diaryWorkers.trim() || undefined,
-          workDescription: diaryWorkDescription.trim(),
+          workDescription: workDescriptionText,
           materials: diaryMaterials.trim() || undefined,
-          notes: diaryNotes.trim() || undefined,
+          notes: undefined, // Notes field removed, using workDescription instead
           phaseId: diaryPhaseId,
           attachments: finalAttachments,
         });
-        Alert.alert('Úspech', 'Zápis do denníka bol upravený.');
+        Alert.alert(t("common.success"), t("projectOverview.diaryEntryUpdated"));
       } else {
         await constructionDiaryService.createDiaryEntry(orgId, projectId, {
           date: entryDate,
           weather: diaryWeather.trim() || undefined,
           workers: diaryWorkers.trim() || undefined,
-          workDescription: diaryWorkDescription.trim(),
+          workDescription: workDescriptionText,
           materials: diaryMaterials.trim() || undefined,
-          notes: diaryNotes.trim() || undefined,
+          notes: undefined, // Notes field removed, using workDescription instead
           phaseId: diaryPhaseId,
           attachments: attachmentIds,
         });
-        Alert.alert('Úspech', 'Zápis do denníka bol pridaný.');
+        Alert.alert(t("common.success"), t("projectOverview.diaryEntryAdded"));
       }
       
       setShowDiaryModal(false);
@@ -1259,14 +1534,17 @@ export function ProjectOverviewScreen() {
       setDiaryWeather("");
       setDiaryWorkers("");
       setDiaryWorkDescription("");
+      setDiaryWorkDescriptionMode('text');
+      setDiaryWorkDescriptionRecordingUri(null);
+      setDiaryWorkDescriptionIsRecording(false);
+      setDiaryWorkDescriptionRecording(null);
       setDiaryMaterials("");
-      setDiaryNotes("");
       setDiaryPhaseId(null);
       setDiaryAttachment(null);
       await load(true);
     } catch (error: any) {
       console.error(`[ProjectOverview] Error saving diary entry:`, error);
-      Alert.alert('Chyba', error.message || 'Nepodarilo sa uložiť zápis do denníka.');
+      Alert.alert(t("common.error"), error.message || t("projectOverview.failedToSaveDiaryEntry"));
     } finally {
       setSubmitting(false);
       setUploadingDiaryAttachment(false);
@@ -1275,7 +1553,7 @@ export function ProjectOverviewScreen() {
 
   const pickDocumentFile = async () => {
     if (!DocumentPicker) {
-      Alert.alert('Chyba', 'expo-document-picker nie je nainštalovaný.');
+      Alert.alert(t("common.error"), t("projectOverview.documentPickerNotInstalled"));
       return;
     }
     try {
@@ -1296,7 +1574,7 @@ export function ProjectOverviewScreen() {
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error picking document:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa vybrať dokument.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectDocument"));
     }
   };
 
@@ -1304,7 +1582,7 @@ export function ProjectOverviewScreen() {
     if (!documentName.trim() || !projectId || !orgId) return;
     
     if (!documentAttachment && !editingDocument) {
-      Alert.alert('Chyba', 'Musíte pridať súbor dokumentu.');
+      Alert.alert(t("common.error"), t("projectOverview.mustAddDocumentFile"));
       return;
     }
     
@@ -1329,7 +1607,7 @@ export function ProjectOverviewScreen() {
           console.log(`[ProjectOverview] Uploaded document attachment: ${attachmentId}`);
         } catch (error: any) {
           console.error(`[ProjectOverview] Error uploading document attachment:`, error);
-          Alert.alert('Chyba', 'Nepodarilo sa nahrať súbor dokumentu.');
+          Alert.alert(t("common.error"), t("projectOverview.failedToUploadDocument"));
           setSubmitting(false);
           setUploadingDocumentAttachment(false);
           return;
@@ -1345,10 +1623,10 @@ export function ProjectOverviewScreen() {
           description: documentDescription.trim() || undefined,
           phaseId: documentPhaseId,
         });
-        Alert.alert('Úspech', 'Dokument bol upravený.');
+        Alert.alert(t("common.success"), t("projectOverview.documentUpdated"));
       } else {
         if (!attachmentId) {
-          Alert.alert('Chyba', 'Musíte pridať súbor dokumentu.');
+          Alert.alert(t("common.error"), t("projectOverview.mustAddDocumentFile"));
           setSubmitting(false);
           return;
         }
@@ -1360,7 +1638,7 @@ export function ProjectOverviewScreen() {
           attachmentId: attachmentId,
           phaseId: documentPhaseId,
         });
-        Alert.alert('Úspech', 'Dokument bol pridaný.');
+        Alert.alert(t("common.success"), t("projectOverview.documentAdded"));
       }
       
       setShowDocumentModal(false);
@@ -1373,7 +1651,7 @@ export function ProjectOverviewScreen() {
       await load(true);
     } catch (error: any) {
       console.error(`[ProjectOverview] Error saving document:`, error);
-      Alert.alert('Chyba', error.message || 'Nepodarilo sa uložiť dokument.');
+      Alert.alert(t("common.error"), error.message || t("projectOverview.failedToSaveDocument"));
     } finally {
       setSubmitting(false);
       setUploadingDocumentAttachment(false);
@@ -1430,13 +1708,13 @@ export function ProjectOverviewScreen() {
       setAttachmentThumbnails(thumbnailMap);
     } catch (error: any) {
       console.error(`[ProjectOverview] Error loading attachments:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa načítať prílohy.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToLoadAttachments"));
     }
   };
 
   const pickImage = async () => {
     if (!ImagePicker) {
-      Alert.alert('Chyba', 'expo-image-picker nie je nainštalovaný. Spustite: npx expo install expo-image-picker');
+      Alert.alert(t("common.error"), t("projectOverview.imagePickerInstallCommand"));
       return;
     }
     try {
@@ -1444,7 +1722,7 @@ export function ProjectOverviewScreen() {
       if (Platform.OS === 'ios') {
         ActionSheetIOS.showActionSheetWithOptions(
           {
-            options: ['Zrušiť', 'Odfotiť', 'Vybrať z galérie', 'Vybrať video'],
+            options: [t("common.cancel"), t("projectOverview.takePhoto"), t("projectOverview.selectFromGallery"), t("projectOverview.selectVideo")],
             cancelButtonIndex: 0,
           },
           async (buttonIndex) => {
@@ -1463,13 +1741,13 @@ export function ProjectOverviewScreen() {
       } else {
         // Android - show Alert with options
         Alert.alert(
-          'Vyberte zdroj',
-          'Odkiaľ chcete pridať prílohu?',
+          t("projectOverview.selectSource") || 'Vyberte zdroj',
+          t("projectOverview.selectSourceMessage") || 'Odkiaľ chcete pridať prílohu?',
           [
-            { text: 'Zrušiť', style: 'cancel' },
-            { text: 'Odfotiť', onPress: launchCameraForAttachment },
-            { text: 'Vybrať z galérie', onPress: launchGalleryForAttachment },
-            { text: 'Vybrať video', onPress: launchVideoPicker },
+            { text: t("common.cancel"), style: 'cancel' },
+            { text: t("projectOverview.takePhoto"), onPress: launchCameraForAttachment },
+            { text: t("projectOverview.selectFromGallery"), onPress: launchGalleryForAttachment },
+            { text: t("projectOverview.selectVideo"), onPress: launchVideoPicker },
           ]
         );
       }
@@ -1500,7 +1778,7 @@ export function ProjectOverviewScreen() {
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error launching camera:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa otvoriť kameru.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToOpenCamera"));
     }
   };
 
@@ -1525,7 +1803,7 @@ export function ProjectOverviewScreen() {
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error picking from gallery:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa vybrať obrázok.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectImage"));
     }
   };
 
@@ -1578,7 +1856,7 @@ export function ProjectOverviewScreen() {
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error picking document:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa vybrať dokument.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectDocument"));
     }
   };
 
@@ -1640,11 +1918,11 @@ export function ProjectOverviewScreen() {
         setExpenseAttachmentsMap(newMap);
       }
       
-      Alert.alert('Úspech', 'Príloha bola pridaná.');
+      Alert.alert(t("common.success"), t("projectOverview.attachmentAdded"));
     } catch (error: any) {
       console.error(`[ProjectOverview] Error uploading attachment:`, error);
       const c = (error as { code?: string }).code;
-      Alert.alert('Chyba', c === "permission-denied" ? "Nemáte oprávnenie." : (error instanceof Error ? error.message : "Chyba."));
+      Alert.alert(t("common.error"), c === "permission-denied" ? t("projectOverview.noPermission") : (error instanceof Error ? error.message : t("common.error")));
     } finally {
       setUploadingAttachment(false);
     }
@@ -1676,8 +1954,8 @@ export function ProjectOverviewScreen() {
         
         if (errorCode === 'storage/unauthorized' || errorCode === 'permission-denied') {
           Alert.alert(
-            'Chyba oprávnení',
-            'Nemáte oprávnenie na zobrazenie tejto prílohy. Skontrolujte Storage rules a či ste vlastníkom projektu.'
+            t("projectOverview.permissionError"),
+            t("projectOverview.attachmentPermissionDenied") || 'Nemáte oprávnenie na zobrazenie tejto prílohy. Skontrolujte Storage rules a či ste vlastníkom projektu.'
           );
         } else {
           Alert.alert(
@@ -1703,12 +1981,12 @@ export function ProjectOverviewScreen() {
         } else {
           Alert.alert(
             'Otvoriť prílohu',
-            `Nepodarilo sa automaticky otvoriť prílohu. Skúste otvoriť URL v prehliadači.`
+            t("projectOverview.failedToAutoOpenAttachment")
           );
         }
       } catch (error: any) {
         console.error(`[ProjectOverview] Error opening document:`, error);
-        Alert.alert('Chyba', `Nepodarilo sa otvoriť prílohu: ${error.message || 'Neznáma chyba'}`);
+        Alert.alert(t("common.error"), t("projectOverview.failedToOpenAttachment", { error: error.message || t("common.unknown") }));
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error opening attachment:`, error);
@@ -1718,12 +1996,12 @@ export function ProjectOverviewScreen() {
 
   const deleteAttachmentHandler = async (attachment: AttachmentDoc) => {
     Alert.alert(
-      'Vymazať prílohu?',
-      `Naozaj chceš vymazať "${attachment.fileName}"?`,
+      t("projectOverview.deleteAttachment"),
+      t("projectOverview.deleteAttachmentConfirmMessage", { fileName: attachment.fileName || "" }),
       [
-        { text: 'Zrušiť', style: 'cancel' },
+        { text: t("common.cancel"), style: 'cancel' },
         {
-          text: 'Vymazať',
+          text: t("common.delete"),
           style: 'destructive',
           onPress: async () => {
             if (!projectId) return;
@@ -1762,11 +2040,11 @@ export function ProjectOverviewScreen() {
                 setExpenseAttachmentsMap(newMap);
               }
               
-              Alert.alert('Úspech', 'Príloha bola vymazaná.');
+              Alert.alert(t("common.success"), t("projectOverview.attachmentDeleted"));
             } catch (error: any) {
               console.error(`[ProjectOverview] Error deleting attachment:`, error);
               const c = (error as { code?: string }).code;
-              Alert.alert('Chyba', c === "permission-denied" ? "Nemáte oprávnenie." : (error instanceof Error ? error.message : "Chyba."));
+              Alert.alert(t("common.error"), c === "permission-denied" ? t("projectOverview.noPermission") : (error instanceof Error ? error.message : t("common.error")));
             }
           },
         },
@@ -1818,7 +2096,7 @@ export function ProjectOverviewScreen() {
   if (!projectId) {
     return (
       <View style={styles.centered}>
-        <Text style={styles.muted}>Project not found.</Text>
+        <Text style={styles.muted}>{t("projectOverview.projectNotFound") || "Project not found."}</Text>
       </View>
     );
   }
@@ -1870,7 +2148,7 @@ export function ProjectOverviewScreen() {
             onPress={() => openInMaps(addressText)}
           >
             <Ionicons name="navigate" size={18} color="#FFFFFF" />
-            <Text style={styles.navigateButtonText}>Navigovať</Text>
+            <Text style={styles.navigateButtonText}>{t("projectOverview.navigate")}</Text>
           </TouchableOpacity>
         </View>
       )}
@@ -1905,52 +2183,25 @@ export function ProjectOverviewScreen() {
           </View>
           {loading ? (
             <ActivityIndicator color={colors.primary} style={styles.loader} />
-          ) : tasks.length === 0 ? (
+          ) : tasks.length === 0 && (isTradeOrMaintenance || phases.length === 0) ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.empty}>
               {isTradeOrMaintenance 
-                ? "Projekt nemá žiadne úlohy." 
+                ? t("projectOverview.noTasksProject")
                 : (t("projectOverview.noPhases") || "Projekt nemá žiadne fázy ani úlohy.")}
             </Text>
             <Text style={styles.emptySubtext}>
               {isTradeOrMaintenance 
-                ? "Môžeš pridať úlohy pomocou tlačidla '+' v pravom dolnom rohu." 
+                ? t("projectOverview.noTasksHint")
                 : (t("projectOverview.addPhaseHint") || "Môžeš pridať fázy a úlohy neskôr.")}
             </Text>
-            {projectType === 'MANAGEMENT' && !templateId && !isTradeOrMaintenance && (
+            {!isTradeOrMaintenance && !templateId && (projectType === 'MANAGEMENT' || projectType === 'BUILD') && (
               <TouchableOpacity
                 style={styles.addTemplateButton}
-                onPress={async () => {
-                  if (!projectId) return;
-                  setAddingPhases(true);
-                  try {
-                    console.log(`[ProjectOverview] Adding phases to project ${projectId}...`);
-                    await addPhasesToProject(projectId, 'eu-construction-v1');
-                    console.log(`[ProjectOverview] Phases added successfully, reloading data...`);
-                    // Wait a bit for Firestore to sync
-                    await new Promise(resolve => setTimeout(resolve, 1000));
-                    // Force reload twice to ensure data is fetched
-                    await load(true);
-                    await new Promise(resolve => setTimeout(resolve, 500));
-                    await load(true);
-                    console.log(`[ProjectOverview] Data reloaded. Current phases: ${phases.length}, tasks: ${tasks.length}`);
-                  } catch (error: any) {
-                    console.error(`[ProjectOverview] Error adding phases:`, error);
-                    Alert.alert('Chyba', error.message || 'Nepodarilo sa pridať fázy.');
-                  } finally {
-                    setAddingPhases(false);
-                  }
-                }}
-                disabled={addingPhases}
+                onPress={() => setShowNewPhaseModal(true)}
               >
-                {addingPhases ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <>
-                    <Ionicons name="add-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
-                    <Text style={styles.addTemplateButtonText}>Pridať fázy zo šablóny</Text>
-                  </>
-                )}
+                <Ionicons name="add-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
+                <Text style={styles.addTemplateButtonText}>{t("projectOverview.createPhase")}</Text>
               </TouchableOpacity>
             )}
           </View>
@@ -1966,9 +2217,9 @@ export function ProjectOverviewScreen() {
                   style={styles.statusToggle}
                 >
                   <Ionicons 
-                    name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"} 
-                    size={24} 
-                    color={task.status === "DONE" ? colors.primary : colors.textMuted} 
+                    name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
+                    size={24}
+                    color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
                   />
                 </TouchableOpacity>
                 <TouchableOpacity 
@@ -1980,7 +2231,7 @@ export function ProjectOverviewScreen() {
                     {task.title || t("tasks.noTitle")}
                   </Text>
                   {task.dueDate && (
-                    <Text style={styles.taskDueDate}>
+                    <Text style={[styles.taskDueDate, task.status === "DONE" && styles.taskDueDateDone]}>
                       <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
                     </Text>
                   )}
@@ -2022,48 +2273,14 @@ export function ProjectOverviewScreen() {
           <View style={styles.emptyContainer}>
             <Text style={styles.empty}>{t("projectOverview.noPhases") || "Projekt nemá žiadne fázy."}</Text>
             <Text style={styles.emptySubtext}>{t("projectOverview.addPhaseHint") || "Môžeš pridať fázy neskôr."}</Text>
-            {projectType === 'MANAGEMENT' && !templateId && (
+            {(projectType === 'MANAGEMENT' || projectType === 'BUILD') && !templateId && (
               <>
                 <TouchableOpacity
                   style={styles.addTemplateButton}
                   onPress={() => setShowNewPhaseModal(true)}
                 >
                   <Ionicons name="add-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
-                  <Text style={styles.addTemplateButtonText}>Vytvoriť fázu</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.addTemplateButton, { marginTop: spacing.sm, backgroundColor: colors.card, borderWidth: 1, borderColor: colors.border }]}
-                  onPress={async () => {
-                    if (!projectId) return;
-                    setAddingPhases(true);
-                    try {
-                      console.log(`[ProjectOverview] Adding phases to project ${projectId}...`);
-                      await addPhasesToProject(projectId, 'eu-construction-v1');
-                      console.log(`[ProjectOverview] Phases added successfully, reloading data...`);
-                      // Wait a bit for Firestore to sync
-                      await new Promise(resolve => setTimeout(resolve, 1000));
-                      // Force reload twice to ensure data is fetched
-                      await load(true);
-                      await new Promise(resolve => setTimeout(resolve, 500));
-                      await load(true);
-                      console.log(`[ProjectOverview] Data reloaded. Current phases: ${phases.length}, tasks: ${tasks.length}`);
-                    } catch (error: any) {
-                      console.error(`[ProjectOverview] Error adding phases:`, error);
-                      Alert.alert('Chyba', error.message || 'Nepodarilo sa pridať fázy.');
-                    } finally {
-                      setAddingPhases(false);
-                    }
-                  }}
-                  disabled={addingPhases}
-                >
-                  {addingPhases ? (
-                    <ActivityIndicator color={colors.primary} size="small" />
-                  ) : (
-                    <>
-                      <Ionicons name="document-text-outline" size={20} color={colors.primary} style={{ marginRight: 8 }} />
-                      <Text style={[styles.addTemplateButtonText, { color: colors.primary }]}>Pridať fázy zo šablóny</Text>
-                    </>
-                  )}
+                  <Text style={styles.addTemplateButtonText}>{t("projectOverview.createPhase")}</Text>
                 </TouchableOpacity>
               </>
             )}
@@ -2071,14 +2288,14 @@ export function ProjectOverviewScreen() {
         ) : (
           <>
             {/* Add phase button - for MANAGEMENT projects created from scratch */}
-            {projectType === 'MANAGEMENT' && !templateId && (
+            {(projectType === 'MANAGEMENT' || projectType === 'BUILD') && !templateId && (
               <TouchableOpacity
                 style={styles.addPhaseButton}
                 onPress={() => setShowNewPhaseModal(true)}
                 activeOpacity={0.7}
               >
                 <Ionicons name="add-circle-outline" size={20} color={colors.primary} style={{ marginRight: 8 }} />
-                <Text style={styles.addPhaseButtonText}>Pridať fázu</Text>
+                <Text style={styles.addPhaseButtonText}>{t("projectOverview.addPhase")}</Text>
               </TouchableOpacity>
             )}
             
@@ -2115,6 +2332,16 @@ export function ProjectOverviewScreen() {
                         )}
                       </TouchableOpacity>
                       <View style={styles.phaseActions}>
+                        <TouchableOpacity
+                          style={styles.phaseActionButton}
+                          onPress={(e) => {
+                            e.stopPropagation();
+                            sharePhase(phase);
+                          }}
+                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                        >
+                          <Ionicons name="share-outline" size={18} color={colors.primary} />
+                        </TouchableOpacity>
                         <TouchableOpacity
                           style={styles.phaseActionButton}
                           onPress={(e) => {
@@ -2161,9 +2388,9 @@ export function ProjectOverviewScreen() {
                                   style={styles.statusToggle}
                                 >
                                   <Ionicons 
-                                    name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"} 
-                                    size={24} 
-                                    color={task.status === "DONE" ? colors.primary : colors.textMuted} 
+                                    name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
+                                    size={24}
+                                    color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
                                   />
                                 </TouchableOpacity>
                                 <TouchableOpacity 
@@ -2175,7 +2402,7 @@ export function ProjectOverviewScreen() {
                                     {task.title || t("tasks.noTitle")}
                                   </Text>
                                   {task.dueDate && (
-                                    <Text style={styles.taskDueDate}>
+                                    <Text style={[styles.taskDueDate, task.status === "DONE" && styles.taskDueDateDone]}>
                                       <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
                                     </Text>
                                   )}
@@ -2231,7 +2458,7 @@ export function ProjectOverviewScreen() {
                     color={colors.primary} 
                     style={{ marginRight: 8 }}
                   />
-                  <Text style={styles.phaseTitle}>Úlohy bez fázy</Text>
+                  <Text style={styles.phaseTitle}>{t("projectOverview.tasksWithoutPhase")}</Text>
                   <Text style={styles.phaseTaskCount}>({tasksWithoutPhase.length})</Text>
                 </View>
                 <View style={styles.phaseContent}>
@@ -2244,9 +2471,9 @@ export function ProjectOverviewScreen() {
                           style={styles.statusToggle}
                         >
                           <Ionicons 
-                            name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"} 
-                            size={24} 
-                            color={task.status === "DONE" ? colors.primary : colors.textMuted} 
+                            name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
+                            size={24}
+                            color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
                           />
                         </TouchableOpacity>
                         <TouchableOpacity 
@@ -2258,7 +2485,7 @@ export function ProjectOverviewScreen() {
                             {task.title || t("tasks.noTitle")}
                           </Text>
                           {task.dueDate && (
-                            <Text style={styles.taskDueDate}>
+                            <Text style={[styles.taskDueDate, task.status === "DONE" && styles.taskDueDateDone]}>
                               <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
                             </Text>
                           )}
@@ -2314,7 +2541,7 @@ export function ProjectOverviewScreen() {
               color={colors.text} 
               style={{ marginRight: spacing.sm }}
             />
-            <Text style={styles.expensesHeaderText}>Výdavky</Text>
+            <Text style={styles.expensesHeaderText}>{t("projectOverview.expenses")}</Text>
             <Text style={styles.expensesCount}>({expenses.length})</Text>
           </View>
           <TouchableOpacity
@@ -2328,7 +2555,7 @@ export function ProjectOverviewScreen() {
         {expandedExpenses && (
           <View style={styles.expensesList}>
             {expenses.length === 0 ? (
-              <Text style={styles.emptyExpenses}>Žiadne výdavky</Text>
+              <Text style={styles.emptyExpenses}>{t("projectOverview.noExpenses")}</Text>
             ) : (
               expenses.map((expense) => (
                 <View key={expense.id} style={styles.expenseRow}>
@@ -2402,8 +2629,11 @@ export function ProjectOverviewScreen() {
                 setDiaryWeather("");
                 setDiaryWorkers("");
                 setDiaryWorkDescription("");
+                setDiaryWorkDescriptionMode('text');
+                setDiaryWorkDescriptionRecordingUri(null);
+                setDiaryWorkDescriptionIsRecording(false);
+                setDiaryWorkDescriptionRecording(null);
                 setDiaryMaterials("");
-                setDiaryNotes("");
                 setDiaryPhaseId(null);
                 setDiaryAttachment(null);
                 setShowDiaryModal(true);
@@ -2417,7 +2647,7 @@ export function ProjectOverviewScreen() {
           {expandedDiary && (
             <View style={styles.expensesList}>
               {diaryEntries.length === 0 ? (
-                <Text style={styles.emptyExpenses}>Žiadne zápisy do denníka</Text>
+                <Text style={styles.emptyExpenses}>{t("projectOverview.noDiaryEntries") || "Žiadne zápisy do denníka"}</Text>
               ) : (
                 diaryEntries.map((entry) => (
                   <View key={entry.id} style={styles.expenseRow}>
@@ -2430,13 +2660,20 @@ export function ProjectOverviewScreen() {
                       </View>
                       <Text style={styles.expenseNote} numberOfLines={3}>{entry.workDescription}</Text>
                       {entry.weather && (
-                        <Text style={styles.expenseDate}>Počasie: {entry.weather}</Text>
+                        <Text style={styles.expenseDate}>{t("projectOverview.weather")}: {entry.weather}</Text>
                       )}
                       {entry.workers && (
-                        <Text style={styles.expenseDate}>Pracovníci: {entry.workers}</Text>
+                        <Text style={styles.expenseDate}>{t("projectOverview.workers")}: {entry.workers}</Text>
                       )}
                     </View>
                     <View style={styles.expenseActions}>
+                      <TouchableOpacity
+                        style={styles.expenseActionButton}
+                        onPress={() => shareDiaryEntry(entry)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      >
+                        <Ionicons name="share-outline" size={20} color={colors.primary} />
+                      </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.expenseActionButton}
                         onPress={() => {
@@ -2444,9 +2681,12 @@ export function ProjectOverviewScreen() {
                           setDiaryDate(entry.date.split('T')[0]);
                           setDiaryWeather(entry.weather || "");
                           setDiaryWorkers(entry.workers || "");
-                          setDiaryWorkDescription(entry.workDescription);
+                          setDiaryWorkDescription(entry.workDescription || "");
+                          setDiaryWorkDescriptionMode('text');
+                          setDiaryWorkDescriptionRecordingUri(null);
+                          setDiaryWorkDescriptionIsRecording(false);
+                          setDiaryWorkDescriptionRecording(null);
                           setDiaryMaterials(entry.materials || "");
-                          setDiaryNotes(entry.notes || "");
                           setDiaryPhaseId(entry.phaseId || null);
                           setDiaryAttachment(null); // Reset attachment when editing (existing attachments are already saved)
                           setShowDiaryModal(true);
@@ -2459,12 +2699,12 @@ export function ProjectOverviewScreen() {
                         style={styles.expenseActionButton}
                         onPress={() => {
                           Alert.alert(
-                            'Vymazať zápis',
-                            `Naozaj chceš vymazať zápis z ${formatDate(entry.date)}?`,
+                            t("projectOverview.deleteDiaryEntry"),
+                            t("projectOverview.deleteDiaryEntryConfirmMessage", { date: formatDate(entry.date) }),
                             [
-                              { text: 'Zrušiť', style: 'cancel' },
+                              { text: t("common.cancel"), style: 'cancel' },
                               {
-                                text: 'Vymazať',
+                                text: t("common.delete"),
                                 style: 'destructive',
                                 onPress: async () => {
                                   try {
@@ -2506,7 +2746,7 @@ export function ProjectOverviewScreen() {
                 color={colors.text} 
                 style={{ marginRight: spacing.sm }}
               />
-              <Text style={styles.expensesHeaderText}>Dokumenty projektu</Text>
+              <Text style={styles.expensesHeaderText}>{t("projectOverview.projectDocuments")}</Text>
               <Text style={styles.expensesCount}>({projectDocuments.length})</Text>
             </View>
             <TouchableOpacity
@@ -2550,7 +2790,7 @@ export function ProjectOverviewScreen() {
                               await Linking.openURL(attachment);
                             }
                           } catch (error: any) {
-                            Alert.alert('Chyba', 'Nepodarilo sa otvoriť dokument.');
+                            Alert.alert(t("common.error"), t("projectOverview.failedToOpenDocument"));
                           }
                         }}
                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -2575,12 +2815,12 @@ export function ProjectOverviewScreen() {
                         style={styles.expenseActionButton}
                         onPress={() => {
                           Alert.alert(
-                            'Vymazať dokument',
-                            `Naozaj chceš vymazať dokument "${doc.name}"?`,
+                            t("projectOverview.deleteDocument"),
+                            t("projectOverview.deleteDocumentConfirmMessage", { name: doc.name || "" }),
                             [
-                              { text: 'Zrušiť', style: 'cancel' },
+                              { text: t("common.cancel"), style: 'cancel' },
                               {
-                                text: 'Vymazať',
+                                text: t("common.delete"),
                                 style: 'destructive',
                                 onPress: async () => {
                                   try {
@@ -2650,7 +2890,7 @@ export function ProjectOverviewScreen() {
               style={styles.input}
               value={editProjectName}
               onChangeText={setEditProjectName}
-              placeholder="Názov projektu"
+              placeholder={t("projectOverview.projectNamePlaceholder")}
               placeholderTextColor={colors.textMuted}
               autoFocus
             />
@@ -2666,7 +2906,7 @@ export function ProjectOverviewScreen() {
                 onPress={handleSaveEdit} 
                 disabled={!editProjectName.trim()}
               >
-                <Text style={styles.modalOkText}>Uložiť</Text>
+                <Text style={styles.modalOkText}>{t("common.save")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -2678,40 +2918,40 @@ export function ProjectOverviewScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>
-              {editingExpense ? 'Upraviť výdavok' : 'Pridať výdavok'}
+              {editingExpense ? t("expense.edit") || 'Upraviť výdavok' : t("expense.add")}
             </Text>
             <TextInput
-              style={[styles.input, { color: '#FFFFFF' }]}
+              style={styles.input}
               value={expenseTitle}
               onChangeText={setExpenseTitle}
-              placeholder="Názov výdavku *"
-              placeholderTextColor="rgba(255, 255, 255, 0.6)"
+              placeholder={t("projectOverview.expenseTitlePlaceholder")}
+              placeholderTextColor="#FFFFFF"
               autoFocus
             />
             <View style={styles.expenseAmountRow}>
               <TextInput
-                style={[styles.input, styles.expenseAmountInput, { color: '#FFFFFF' }]}
+                style={[styles.input, styles.expenseAmountInput]}
                 value={expenseAmount}
-                onChangeText={setExpenseAmount}
-                placeholder="Suma *"
-                placeholderTextColor="rgba(255, 255, 255, 0.6)"
+                onChangeText={handleAmountChange}
+                placeholder={t("projectOverview.expenseAmountPlaceholder")}
+                placeholderTextColor="#FFFFFF"
                 keyboardType="decimal-pad"
               />
               <Text style={styles.expenseCurrencyLabel}>EUR</Text>
             </View>
             <TextInput
-              style={[styles.input, { color: '#FFFFFF' }]}
+              style={styles.input}
               value={expenseDate}
               onChangeText={setExpenseDate}
-              placeholder="Dátum (YYYY-MM-DD)"
-              placeholderTextColor="rgba(255, 255, 255, 0.6)"
+              placeholder={t("projectOverview.expenseDatePlaceholder")}
+              placeholderTextColor="#FFFFFF"
             />
             <TextInput
-              style={[styles.input, styles.textArea, { color: '#FFFFFF' }]}
+              style={[styles.input, styles.textArea]}
               value={expenseNote}
               onChangeText={setExpenseNote}
-              placeholder="Poznámka (voliteľné)"
-              placeholderTextColor="rgba(255, 255, 255, 0.6)"
+              placeholder={t("projectOverview.expenseNotePlaceholder")}
+              placeholderTextColor="#FFFFFF"
               multiline
               numberOfLines={3}
             />
@@ -2759,7 +2999,7 @@ export function ProjectOverviewScreen() {
               {uploadingExpenseAttachment && (
                 <View style={styles.expenseAttachmentUploading}>
                   <ActivityIndicator size="small" color={colors.primary} />
-                  <Text style={styles.expenseAttachmentUploadingText}>Nahráva sa...</Text>
+                  <Text style={styles.expenseAttachmentUploadingText}>{t("common.uploading") || 'Nahráva sa...'}</Text>
                 </View>
               )}
             </View>
@@ -2790,6 +3030,19 @@ export function ProjectOverviewScreen() {
                 </Text>
               </TouchableOpacity>
             </View>
+          </View>
+        </View>
+      </Modal>
+
+      {/* OCR loading */}
+      <Modal visible={ocrLoading} transparent animationType="fade">
+        <View style={styles.modalOverlay}>
+          <View style={styles.ocrModal}>
+            <ActivityIndicator size="large" color={colors.primary} />
+            <Text style={styles.ocrText}>Spracovávam faktúru…</Text>
+            <TouchableOpacity style={styles.ocrCancelButton} onPress={handleOcrCancel}>
+              <Text style={styles.ocrCancelText}>Pokračovať manuálne</Text>
+            </TouchableOpacity>
           </View>
         </View>
       </Modal>
@@ -2834,7 +3087,7 @@ export function ProjectOverviewScreen() {
             {uploadingAttachment && (
               <View style={styles.uploadingIndicator}>
                 <ActivityIndicator size="small" color={colors.primary} />
-                <Text style={styles.uploadingText}>Nahráva sa...</Text>
+                <Text style={styles.uploadingText}>{t("common.uploading") || 'Nahráva sa...'}</Text>
               </View>
             )}
 
@@ -2930,8 +3183,8 @@ export function ProjectOverviewScreen() {
                 onError={(error) => {
                   console.error(`[ProjectOverview] Image load error:`, error);
                   Alert.alert(
-                    'Chyba', 
-                    'Nepodarilo sa načítať obrázok.\n\nSkontrolujte:\n- Storage rules\n- Oprávnenia\n- Sieťové pripojenie'
+                    t("common.error"), 
+                    t("projectOverview.failedToLoadImage") || 'Nepodarilo sa načítať obrázok.\n\nSkontrolujte:\n- Storage rules\n- Oprávnenia\n- Sieťové pripojenie'
                   );
                   setViewingAttachment(null);
                   setViewingAttachmentURL(null);
@@ -2949,16 +3202,16 @@ export function ProjectOverviewScreen() {
       <Modal visible={showEditTaskModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Upraviť úlohu</Text>
+            <Text style={styles.modalTitle}>{t("projectOverview.editTask") || 'Upraviť úlohu'}</Text>
             <TextInput
               style={[styles.input, { backgroundColor: colors.card, color: colors.text }]}
               value={editTaskTitle}
               onChangeText={setEditTaskTitle}
-              placeholder="Názov úlohy"
+              placeholder={t("projectOverview.taskTitlePlaceholder")}
               placeholderTextColor="#000000"
               autoFocus
             />
-            <Text style={styles.modalLabel}>Plánovaný termín ukončenia (voliteľné)</Text>
+            <Text style={styles.modalLabel}>{t("projectOverview.plannedDueDate") || 'Plánovaný termín ukončenia (voliteľné)'}</Text>
             <TouchableOpacity
               style={styles.dateInputButton}
               onPress={() => {
@@ -3029,7 +3282,7 @@ export function ProjectOverviewScreen() {
                           setShowDatePicker(false);
                         }}
                       >
-                        <Text style={styles.modalCancelText}>Zrušiť</Text>
+                        <Text style={styles.modalCancelText}>{t("common.cancel")}</Text>
                       </TouchableOpacity>
                       <TouchableOpacity
                         style={styles.modalOk}
@@ -3162,7 +3415,7 @@ export function ProjectOverviewScreen() {
                           setRecording(null);
                         } catch (error: any) {
                           console.error('[ProjectOverview] Error stopping recording:', error);
-                          Alert.alert('Chyba', 'Nepodarilo sa zastaviť nahrávanie: ' + (error.message || 'Neznáma chyba'));
+                          Alert.alert(t("common.error"), t("projectOverview.failedToStopRecording", { error: error.message || t("common.unknown") }));
                         }
                       }}
                     >
@@ -3174,7 +3427,7 @@ export function ProjectOverviewScreen() {
                   <>
                     <View style={styles.recordingPlayback}>
                       <Ionicons name="play-circle" size={48} color={colors.primary} />
-                      <Text style={styles.recordingInfo}>Nahrávka pripravená</Text>
+                      <Text style={styles.recordingInfo}>{t("projectOverview.recordingReady")}</Text>
                       <TouchableOpacity
                         style={styles.rerecordButton}
                         onPress={async () => {
@@ -3199,7 +3452,7 @@ export function ProjectOverviewScreen() {
                     style={styles.startRecordingButton}
                     onPress={async () => {
                       if (!AudioModule) {
-                        Alert.alert('Chyba', 'Hlasová nahrávka nie je dostupná. Nainštalujte expo-av.');
+                        Alert.alert(t("common.error"), t("projectOverview.voiceRecordingNotAvailable"));
                         return;
                       }
                       
@@ -3207,7 +3460,7 @@ export function ProjectOverviewScreen() {
                         // Request permissions
                         const { status } = await AudioModule.Audio.requestPermissionsAsync();
                         if (status !== 'granted') {
-                          Alert.alert('Chyba', 'Potrebujeme povolenie na nahrávanie zvuku.');
+                          Alert.alert(t("common.error"), t("projectOverview.audioPermissionRequired"));
                           return;
                         }
                         
@@ -3227,7 +3480,7 @@ export function ProjectOverviewScreen() {
                         console.log('[ProjectOverview] Recording started');
                       } catch (error: any) {
                         console.error('[ProjectOverview] Error starting recording:', error);
-                        Alert.alert('Chyba', 'Nepodarilo sa spustiť nahrávanie: ' + (error.message || 'Neznáma chyba'));
+                        Alert.alert(t("common.error"), t("projectOverview.failedToStartRecording", { error: error.message || t("common.unknown") }));
                       }
                     }}
                   >
@@ -3250,7 +3503,7 @@ export function ProjectOverviewScreen() {
               />
             )}
             
-            <Text style={styles.modalLabel}>Plánovaný termín ukončenia (voliteľné)</Text>
+            <Text style={styles.modalLabel}>{t("projectOverview.plannedDueDate") || 'Plánovaný termín ukončenia (voliteľné)'}</Text>
             <TouchableOpacity
               style={styles.dateInputButton}
               onPress={() => {
@@ -3311,50 +3564,218 @@ export function ProjectOverviewScreen() {
               {editingDiaryEntry ? 'Upraviť zápis do denníka' : 'Pridať zápis do denníka'}
             </Text>
             <TextInput
-              style={[styles.input, { color: '#FFFFFF' }]}
+              style={styles.input}
               value={diaryDate}
               onChangeText={setDiaryDate}
-              placeholder="Dátum *"
-              placeholderTextColor="rgba(255, 255, 255, 0.6)"
+              placeholder={t("projectOverview.diaryDatePlaceholder")}
+              placeholderTextColor={colors.textMuted}
             />
             <TextInput
-              style={[styles.input, { color: '#FFFFFF' }]}
+              style={styles.input}
               value={diaryWeather}
               onChangeText={setDiaryWeather}
               placeholder="Počasie"
-              placeholderTextColor="rgba(255, 255, 255, 0.6)"
+              placeholderTextColor={colors.textMuted}
             />
             <TextInput
-              style={[styles.input, { color: '#FFFFFF' }]}
+              style={styles.input}
               value={diaryWorkers}
               onChangeText={setDiaryWorkers}
               placeholder="Pracovníci"
-              placeholderTextColor="rgba(255, 255, 255, 0.6)"
+              placeholderTextColor={colors.textMuted}
             />
+            {/* Work Description Input Mode Selector */}
+            <Text style={styles.modalLabel}>Popis práce *:</Text>
+            <View style={styles.inputOptionContainer}>
+              <TouchableOpacity
+                style={[styles.inputOptionButton, diaryWorkDescriptionMode === 'text' && styles.inputOptionButtonActive]}
+                onPress={() => {
+                  setDiaryWorkDescriptionMode('text');
+                  if (diaryWorkDescriptionRecording) {
+                    try {
+                      diaryWorkDescriptionRecording.stopAndUnloadAsync();
+                    } catch (e) {
+                      // Ignore
+                    }
+                  }
+                  setDiaryWorkDescriptionRecordingUri(null);
+                  setDiaryWorkDescriptionIsRecording(false);
+                  setDiaryWorkDescriptionRecording(null);
+                }}
+              >
+                <Ionicons name="create-outline" size={24} color={diaryWorkDescriptionMode === 'text' ? colors.primary : colors.textMuted} />
+                <Text style={[styles.inputOptionText, diaryWorkDescriptionMode === 'text' && styles.inputOptionTextActive]}>
+                  Písať text
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.inputOptionButton, diaryWorkDescriptionMode === 'voice' && styles.inputOptionButtonActive]}
+                onPress={() => {
+                  setDiaryWorkDescriptionMode('voice');
+                  setDiaryWorkDescription('');
+                }}
+              >
+                <Ionicons name="mic" size={24} color={diaryWorkDescriptionMode === 'voice' ? colors.primary : colors.textMuted} />
+                <Text style={[styles.inputOptionText, diaryWorkDescriptionMode === 'voice' && styles.inputOptionTextActive]}>
+                  Nahrávať hlas
+                </Text>
+              </TouchableOpacity>
+            </View>
+
+            {diaryWorkDescriptionMode === 'voice' ? (
+              <View style={styles.voiceRecordingContainer}>
+                {diaryWorkDescriptionIsRecording ? (
+                  <>
+                    <View style={styles.recordingIndicator}>
+                      <View style={styles.recordingDot} />
+                      <Text style={styles.recordingText}>Nahrávam...</Text>
+                    </View>
+                    <TouchableOpacity
+                      style={styles.stopRecordingButton}
+                      onPress={async () => {
+                        if (!diaryWorkDescriptionRecording) return;
+                        
+                        try {
+                          console.log('[ProjectOverview] Stopping diary work description recording...');
+                          await diaryWorkDescriptionRecording.stopAndUnloadAsync();
+                          const uri = diaryWorkDescriptionRecording.getURI();
+                          console.log('[ProjectOverview] Diary work description recording stopped, URI:', uri);
+                          
+                          setDiaryWorkDescriptionRecordingUri(uri);
+                          setDiaryWorkDescriptionIsRecording(false);
+                          setDiaryWorkDescriptionRecording(null);
+                        } catch (error: any) {
+                          console.error('[ProjectOverview] Error stopping diary work description recording:', error);
+                          Alert.alert(t("common.error"), t("projectOverview.failedToStopRecording", { error: error.message || t("common.unknown") }));
+                        }
+                      }}
+                    >
+                      <Ionicons name="stop-circle" size={48} color="#FF3B30" />
+                      <Text style={styles.stopRecordingText}>Zastaviť nahrávanie</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : diaryWorkDescriptionRecordingUri ? (
+                  <>
+                    <View style={styles.recordingPlayback}>
+                      <Ionicons name="play-circle" size={48} color={colors.primary} />
+                      <Text style={styles.recordingInfo}>{t("projectOverview.recordingReady")}</Text>
+                      <View style={styles.recordingActions}>
+                        <TouchableOpacity
+                          style={styles.convertToTextButton}
+                          onPress={async () => {
+                            if (!diaryWorkDescriptionRecordingUri) return;
+                            
+                            try {
+                              // TODO: Implement speech-to-text conversion
+                              // This would require a backend API or service like Google Speech-to-Text
+                              // For now, show a placeholder message
+                              Alert.alert(
+                                'Konverzia na text',
+                                'Konverzia hlasu na text bude dostupná v budúcej verzii. Pre teraz môžete použiť hlasovú správu alebo prepnúť na textový režim.',
+                                [
+                                  {
+                                    text: 'Prepnut na text',
+                                    onPress: () => {
+                                      setDiaryWorkDescriptionMode('text');
+                                      setDiaryWorkDescriptionRecordingUri(null);
+                                    },
+                                  },
+                                  { text: t("common.ok") },
+                                ]
+                              );
+                            } catch (error: any) {
+                              console.error('[ProjectOverview] Error converting speech to text:', error);
+                              Alert.alert(t("common.error"), t("projectOverview.failedToConvertSpeech"));
+                            }
+                          }}
+                        >
+                          <Ionicons name="text-outline" size={20} color={colors.primary} />
+                          <Text style={styles.convertToTextText}>{t("projectOverview.convertToText")}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={styles.rerecordButton}
+                          onPress={async () => {
+                            if (diaryWorkDescriptionRecording) {
+                              try {
+                                await diaryWorkDescriptionRecording.stopAndUnloadAsync();
+                              } catch (e) {
+                                // Ignore errors when stopping
+                              }
+                            }
+                            setDiaryWorkDescriptionRecordingUri(null);
+                            setDiaryWorkDescriptionIsRecording(false);
+                            setDiaryWorkDescriptionRecording(null);
+                          }}
+                        >
+                          <Text style={styles.rerecordText}>Nahrať znova</Text>
+                        </TouchableOpacity>
+                      </View>
+                    </View>
+                  </>
+                ) : (
+                  <TouchableOpacity
+                    style={styles.startRecordingButton}
+                    onPress={async () => {
+                      if (!AudioModule) {
+                        Alert.alert(t("common.error"), t("projectOverview.voiceRecordingNotAvailable"));
+                        return;
+                      }
+                      
+                      try {
+                        // Request permissions
+                        const { status } = await AudioModule.Audio.requestPermissionsAsync();
+                        if (status !== 'granted') {
+                          Alert.alert(t("common.error"), t("projectOverview.audioPermissionRequired"));
+                          return;
+                        }
+                        
+                        // Configure audio mode
+                        await AudioModule.Audio.setAudioModeAsync({
+                          allowsRecordingIOS: true,
+                          playsInSilentModeIOS: true,
+                        });
+                        
+                        // Start recording
+                        const { recording: newRecording } = await AudioModule.Audio.Recording.createAsync(
+                          AudioModule.Audio.RecordingOptionsPresets.HIGH_QUALITY
+                        );
+                        
+                        setDiaryWorkDescriptionRecording(newRecording);
+                        setDiaryWorkDescriptionIsRecording(true);
+                        console.log('[ProjectOverview] Diary work description recording started');
+                      } catch (error: any) {
+                        console.error('[ProjectOverview] Error starting diary work description recording:', error);
+                        Alert.alert(t("common.error"), t("projectOverview.failedToStartRecording", { error: error.message || t("common.unknown") }));
+                      }
+                    }}
+                  >
+                    <Ionicons name="mic-circle" size={64} color={colors.primary} />
+                    <Text style={styles.startRecordingText}>Začať nahrávanie</Text>
+                  </TouchableOpacity>
+                )}
+              </View>
+            ) : (
+              <View style={styles.textInputContainer}>
+                <View style={styles.textInputIconContainer}>
+                  <Ionicons name="create-outline" size={20} color={colors.textMuted} />
+                </View>
+                <TextInput
+                  style={[styles.input, styles.textArea, styles.textInputWithIcon]}
+                  value={diaryWorkDescription}
+                  onChangeText={setDiaryWorkDescription}
+                  placeholder="Popis práce *"
+                  placeholderTextColor={colors.textMuted}
+                  multiline
+                  numberOfLines={4}
+                />
+              </View>
+            )}
             <TextInput
-              style={[styles.input, styles.textArea, { color: '#FFFFFF' }]}
-              value={diaryWorkDescription}
-              onChangeText={setDiaryWorkDescription}
-              placeholder="Popis práce *"
-              placeholderTextColor="rgba(255, 255, 255, 0.6)"
-              multiline
-              numberOfLines={4}
-            />
-            <TextInput
-              style={[styles.input, { color: '#FFFFFF' }]}
+              style={styles.input}
               value={diaryMaterials}
               onChangeText={setDiaryMaterials}
               placeholder="Materiály"
-              placeholderTextColor="rgba(255, 255, 255, 0.6)"
-            />
-            <TextInput
-              style={[styles.input, styles.textArea, { color: '#FFFFFF' }]}
-              value={diaryNotes}
-              onChangeText={setDiaryNotes}
-              placeholder="Poznámky"
-              placeholderTextColor="rgba(255, 255, 255, 0.6)"
-              multiline
-              numberOfLines={3}
+              placeholderTextColor={colors.textMuted}
             />
             {phases.length > 0 && (
               <View style={styles.phaseSelector}>
@@ -3418,7 +3839,7 @@ export function ProjectOverviewScreen() {
               {uploadingDiaryAttachment && (
                 <View style={styles.expenseAttachmentUploading}>
                   <ActivityIndicator size="small" color={colors.primary} />
-                  <Text style={styles.expenseAttachmentUploadingText}>Nahráva sa...</Text>
+                  <Text style={styles.expenseAttachmentUploadingText}>{t("common.uploading") || 'Nahráva sa...'}</Text>
                 </View>
               )}
             </View>
@@ -3433,9 +3854,13 @@ export function ProjectOverviewScreen() {
                   setDiaryWeather("");
                   setDiaryWorkers("");
                   setDiaryWorkDescription("");
+                  setDiaryWorkDescriptionMode('text');
+                  setDiaryWorkDescriptionRecordingUri(null);
+                  setDiaryWorkDescriptionIsRecording(false);
+                  setDiaryWorkDescriptionRecording(null);
                   setDiaryMaterials("");
-                  setDiaryNotes("");
                   setDiaryPhaseId(null);
+                  setDiaryAttachment(null);
                 }}
               >
                 <Text style={styles.modalCancelText}>{t("tasks.cancel")}</Text>
@@ -3443,7 +3868,11 @@ export function ProjectOverviewScreen() {
               <TouchableOpacity 
                 style={styles.modalOk} 
                 onPress={handleSaveDiaryEntry} 
-                disabled={!diaryWorkDescription.trim() || submitting}
+                disabled={
+                  submitting || 
+                  (diaryWorkDescriptionMode === 'text' && !diaryWorkDescription.trim()) ||
+                  (diaryWorkDescriptionMode === 'voice' && !diaryWorkDescriptionRecordingUri)
+                }
               >
                 <Text style={styles.modalOkText}>
                   {submitting ? 'Ukladá sa...' : (editingDiaryEntry ? 'Uložiť' : 'Pridať')}
@@ -3462,11 +3891,11 @@ export function ProjectOverviewScreen() {
               {editingDocument ? 'Upraviť dokument' : 'Pridať dokument'}
             </Text>
             <TextInput
-              style={[styles.input, { color: '#FFFFFF' }]}
+              style={styles.input}
               value={documentName}
               onChangeText={setDocumentName}
-              placeholder="Názov dokumentu *"
-              placeholderTextColor="rgba(255, 255, 255, 0.6)"
+              placeholder={t("projectOverview.documentNamePlaceholder")}
+              placeholderTextColor={colors.textMuted}
               autoFocus
             />
             <View style={styles.documentTypeSelector}>
@@ -3486,40 +3915,17 @@ export function ProjectOverviewScreen() {
               </View>
             </View>
             <TextInput
-              style={[styles.input, styles.textArea, { color: '#FFFFFF' }]}
+              style={[styles.input, styles.textArea]}
               value={documentDescription}
               onChangeText={setDocumentDescription}
               placeholder="Popis (voliteľné)"
-              placeholderTextColor="rgba(255, 255, 255, 0.6)"
+              placeholderTextColor={colors.textMuted}
               multiline
               numberOfLines={3}
             />
-            {phases.length > 0 && (
-              <View style={styles.phaseSelector}>
-                <Text style={styles.phaseSelectorLabel}>Fáza (voliteľné):</Text>
-                <ScrollView style={styles.phaseSelectorScroll} horizontal>
-                  <TouchableOpacity
-                    style={[styles.phaseChip, documentPhaseId === null && styles.phaseChipSelected]}
-                    onPress={() => setDocumentPhaseId(null)}
-                  >
-                    <Text style={[styles.phaseChipText, documentPhaseId === null && styles.phaseChipTextSelected]}>
-                      Žiadna
-                    </Text>
-                  </TouchableOpacity>
-                  {phases.map((phase) => (
-                    <TouchableOpacity
-                      key={phase.id}
-                      style={[styles.phaseChip, documentPhaseId === phase.id && styles.phaseChipSelected]}
-                      onPress={() => setDocumentPhaseId(phase.id)}
-                    >
-                      <Text style={[styles.phaseChipText, documentPhaseId === phase.id && styles.phaseChipTextSelected]}>
-                        {phase.name}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-              </View>
-            )}
+            <View style={styles.phaseSelector}>
+              <Text style={styles.phaseSelectorLabel}>Dokument sa pridá za projekt: {projectName}</Text>
+            </View>
             {!editingDocument && (
               <View style={styles.expenseAttachmentSection}>
                 <Text style={styles.expenseAttachmentLabel}>Súbor dokumentu *</Text>
@@ -3529,7 +3935,7 @@ export function ProjectOverviewScreen() {
                     onPress={pickDocumentFile}
                     disabled={uploadingDocumentAttachment || submitting}
                   >
-                    <Ionicons name="document-outline" size={20} color={colors.primary} />
+                    <Ionicons name="document-outline" size={20} color={colors.text} />
                     <Text style={styles.expenseAttachmentButtonText}>PDF / Obrázok</Text>
                   </TouchableOpacity>
                 </View>
@@ -3555,7 +3961,7 @@ export function ProjectOverviewScreen() {
                 {uploadingDocumentAttachment && (
                   <View style={styles.expenseAttachmentUploading}>
                     <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={styles.expenseAttachmentUploadingText}>Nahráva sa...</Text>
+                    <Text style={styles.expenseAttachmentUploadingText}>{t("common.uploading") || 'Nahráva sa...'}</Text>
                   </View>
                 )}
               </View>
@@ -3594,12 +4000,12 @@ export function ProjectOverviewScreen() {
       <Modal visible={showNewPhaseModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Vytvoriť fázu</Text>
+            <Text style={styles.modalTitle}>{t("projectOverview.createPhaseTitle")}</Text>
             <TextInput
               style={styles.input}
               value={newPhaseName}
               onChangeText={setNewPhaseName}
-              placeholder="Názov fázy"
+              placeholder={t("projectOverview.phaseNamePlaceholder")}
               placeholderTextColor="rgba(0, 0, 0, 0.5)"
               autoFocus
             />
@@ -3611,7 +4017,7 @@ export function ProjectOverviewScreen() {
                   setNewPhaseName("");
                 }}
               >
-                <Text style={styles.modalCancelText}>Zrušiť</Text>
+                <Text style={styles.modalCancelText}>{t("common.cancel")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalOk, (!newPhaseName.trim() || submitting) && styles.modalOkDisabled]}
@@ -3621,7 +4027,7 @@ export function ProjectOverviewScreen() {
                 {submitting ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Text style={styles.modalOkText}>Vytvoriť</Text>
+                  <Text style={styles.modalOkText}>{t("common.create")}</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -3633,12 +4039,12 @@ export function ProjectOverviewScreen() {
       <Modal visible={showEditPhaseModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Upraviť fázu</Text>
+            <Text style={styles.modalTitle}>{t("projectOverview.editPhaseTitle")}</Text>
             <TextInput
               style={styles.input}
               value={editPhaseName}
               onChangeText={setEditPhaseName}
-              placeholder="Názov fázy"
+              placeholder={t("projectOverview.phaseNamePlaceholder")}
               placeholderTextColor="rgba(0, 0, 0, 0.5)"
               autoFocus
             />
@@ -3651,7 +4057,7 @@ export function ProjectOverviewScreen() {
                   setEditPhaseName("");
                 }}
               >
-                <Text style={styles.modalCancelText}>Zrušiť</Text>
+                <Text style={styles.modalCancelText}>{t("common.cancel")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.modalOk, (!editPhaseName.trim() || submitting) && styles.modalOkDisabled]}
@@ -3661,7 +4067,7 @@ export function ProjectOverviewScreen() {
                 {submitting ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Text style={styles.modalOkText}>Uložiť</Text>
+                  <Text style={styles.modalOkText}>{t("common.save")}</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -3673,17 +4079,17 @@ export function ProjectOverviewScreen() {
       <Modal visible={showMoveTaskModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Presunúť úlohu</Text>
+            <Text style={styles.modalTitle}>{t("projectOverview.moveTaskTitle")}</Text>
             {movingTask && (
               <Text style={styles.modalSubtitle}>"{movingTask.title}"</Text>
             )}
-            <Text style={styles.modalLabel}>Vyberte fázu:</Text>
+            <Text style={styles.modalLabel}>{t("projectOverview.selectPhaseLabel")}</Text>
             <ScrollView style={styles.phaseList}>
               <TouchableOpacity
                 style={styles.phaseOption}
                 onPress={() => handleMoveTaskToPhase(null)}
               >
-                <Text style={styles.phaseOptionText}>Bez fázy</Text>
+                <Text style={styles.phaseOptionText}>{t("projectOverview.noPhaseOption")}</Text>
               </TouchableOpacity>
               {phases.map((phase) => (
                 <TouchableOpacity
@@ -3703,7 +4109,7 @@ export function ProjectOverviewScreen() {
                   setMovingTask(null);
                 }}
               >
-                <Text style={styles.modalCancelText}>Zrušiť</Text>
+                <Text style={styles.modalCancelText}>{t("common.cancel")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -3982,10 +4388,10 @@ const styles = StyleSheet.create({
   },
   taskTitleContainer: { flex: 1 },
   taskTitle: { fontSize: 15, color: colors.text, flex: 1, lineHeight: 20 },
-  taskTitleDone: { 
+  taskTitleDone: {
     textDecorationLine: "line-through",
-    color: colors.textMuted,
-    opacity: 0.7,
+    textDecorationColor: DONE_COLOR,
+    color: DONE_COLOR,
   },
   taskDueDate: {
     fontSize: 12,
@@ -3995,6 +4401,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
 
   },
+  taskDueDateDone: { color: DONE_COLOR },
   assigneeCell: { flexDirection: "row", alignItems: "flex-start", justifyContent: "flex-end", gap: 4, paddingTop: 2 },
   assigneeText: { fontSize: 13, color: colors.textMuted, maxWidth: 70 },
   taskActions: {
@@ -4069,35 +4476,58 @@ const styles = StyleSheet.create({
     gap: spacing.md,
     marginBottom: spacing.md,
   },
+  inputOptionContainer: {
+    flexDirection: "row",
+    gap: spacing.md,
+    marginBottom: spacing.lg,
+  },
   inputOptionButton: {
     flex: 1,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
-    padding: spacing.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
     borderRadius: radius,
     borderWidth: 2,
     borderColor: colors.border,
     backgroundColor: colors.background,
     gap: spacing.sm,
+    minHeight: 56,
   },
   inputOptionButtonActive: {
     borderColor: colors.primary,
-    backgroundColor: colors.card,
+    backgroundColor: colors.primary + "15",
+    borderWidth: 3,
   },
   inputOptionText: {
-    fontSize: 14,
+    fontSize: 15,
     color: colors.textMuted,
     fontWeight: "500",
   },
   inputOptionTextActive: {
     color: colors.primary,
-    fontWeight: "600",
+    fontWeight: "700",
+  },
+  textInputContainer: {
+    position: "relative",
+    marginTop: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  textInputIconContainer: {
+    position: "absolute",
+    left: spacing.md,
+    top: spacing.md,
+    zIndex: 1,
+  },
+  textInputWithIcon: {
+    paddingLeft: spacing.lg + spacing.md + 4,
   },
   voiceRecordingContainer: {
     alignItems: "center",
     padding: spacing.lg,
-    marginBottom: spacing.md,
+    marginTop: spacing.md,
+    marginBottom: spacing.lg,
   },
   recordingIndicator: {
     flexDirection: "row",
@@ -4152,9 +4582,42 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontWeight: "500",
   },
+  recordingActions: {
+    flexDirection: "row",
+    gap: spacing.md,
+    marginTop: spacing.sm,
+    alignItems: "center",
+  },
+  convertToTextButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    padding: spacing.sm,
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  convertToTextText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: "500",
+  },
 
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },
   modal: { backgroundColor: colors.card, borderRadius: radius, padding: spacing.lg, borderWidth: 1, borderColor: colors.border },
+  ocrModal: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  ocrText: { color: colors.text, fontSize: 14, textAlign: "center" },
+  ocrCancelButton: { marginTop: spacing.sm },
+  ocrCancelText: { color: colors.primary, fontSize: 14, fontWeight: "600" },
   modalTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.md },
   modalLabel: { fontSize: 14, fontWeight: "500", color: colors.text, marginBottom: spacing.xs, marginTop: spacing.sm },
   input: {
@@ -4330,7 +4793,7 @@ const styles = StyleSheet.create({
   },
   expenseAttachmentButtonText: {
     fontSize: 14,
-    color: colors.primary,
+    color: "#000000",
     fontWeight: '500',
   },
   expenseAttachmentPreview: {
@@ -4552,11 +5015,11 @@ const styles = StyleSheet.create({
   },
   documentTypeButtonText: {
     fontSize: 14,
-    color: colors.text,
+    color: "#000000",
     fontWeight: "500",
   },
   documentTypeButtonTextSelected: {
-    color: "#fff",
+    color: "#000000",
     fontWeight: "600",
   },
 });

@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, query, orderBy } from 'firebase/firestore';
+import { collection, doc, getDoc, getDocs, query, orderBy } from '../lib/rnFirestore';
 import { db } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 import type { CatalogTemplate, CatalogPhase, CatalogTask } from '../lib/types';

@@ -1,5 +1,4 @@
-import { ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
-import { collection, addDoc, query, where, getDocs, deleteDoc, doc, orderBy, serverTimestamp, Timestamp, getDoc } from "firebase/firestore";
+import { collection, addDoc, query, where, getDocs, deleteDoc, doc, orderBy, serverTimestamp, Timestamp, getDoc } from "../lib/rnFirestore";
 import { storage, db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { AttachmentMetadata, AttachmentKind } from "../lib/attachmentTypes";
@@ -100,7 +99,7 @@ export async function uploadAttachment(
   
   // Storage path: projects/{projectId}/attachments/{attachmentId}/{fileName}
   const storagePath = `projects/${projectId}/attachments/${attachmentId}/${options.fileName}`;
-  const storageRef = ref(storage, storagePath);
+  const storageRef = storage.ref(storagePath);
 
   // Upload to Storage
   console.log(`[attachments] Uploading to Storage: ${storagePath}`);
@@ -109,7 +108,7 @@ export async function uploadAttachment(
   console.log(`[attachments] File size: ${(fileSize / 1024).toFixed(2)} KB`);
   
   try {
-    await uploadBytes(storageRef, blob);
+    await storageRef.putFile(options.localUri, { contentType: options.mimeType });
     console.log(`[attachments] ✅ Upload successful: ${storagePath}`);
   } catch (error: any) {
     console.error(`[attachments] Storage upload error:`, error);
@@ -124,7 +123,7 @@ export async function uploadAttachment(
   }
   
   // Get download URL
-  const downloadURL = await getDownloadURL(storageRef);
+  const downloadURL = await storageRef.getDownloadURL();
   console.log(`[attachments] Uploaded, download URL: ${downloadURL}`);
 
   // Create Firestore metadata
@@ -211,8 +210,8 @@ export async function listAttachments(
  * Get download URL for an attachment
  */
 export async function getAttachmentURL(attachment: AttachmentDoc): Promise<string> {
-  const storageRef = ref(storage, attachment.storagePath);
-  return await getDownloadURL(storageRef);
+  const storageRef = storage.ref(attachment.storagePath);
+  return await storageRef.getDownloadURL();
 }
 
 /**
@@ -225,8 +224,8 @@ export async function deleteAttachment(
 ): Promise<void> {
   // Delete from Storage
   try {
-    const storageRef = ref(storage, storagePath);
-    await deleteObject(storageRef);
+    const storageRef = storage.ref(storagePath);
+    await storageRef.delete();
     console.log(`[attachments] Deleted from Storage: ${storagePath}`);
   } catch (error: any) {
     console.warn(`[attachments] Error deleting from Storage (may not exist):`, error);

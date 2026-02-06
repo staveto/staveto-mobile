@@ -2,7 +2,7 @@
  * Type definitions for Firestore models
  */
 
-import { Timestamp } from 'firebase/firestore';
+import { Timestamp } from './rnFirestore';
 
 export type ProjectType = 'BUILD' | 'MAINTENANCE' | 'TRADE' | 'RESIDENTIAL' | 'MANAGEMENT';
 
@@ -114,6 +114,14 @@ export interface ProjectExpense {
   taskId?: string | null; // Optional: link to task
   phaseId?: string | null; // Optional: link to phase
   attachmentId?: string | null; // Optional: invoice/receipt attachment
+  ocrStatus?: "success" | "failed" | "limit" | "cancelled" | "pending";
+  ocrParsedAt?: Timestamp | null;
+  ocrSupplierName?: string | null;
+  ocrInvoiceNumber?: string | null;
+  ocrIssueDate?: string | null;
+  ocrTotalAmount?: number | null;
+  ocrVatAmount?: number | null;
+  ocrCurrency?: string | null;
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }

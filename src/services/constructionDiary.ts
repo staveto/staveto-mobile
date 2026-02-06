@@ -11,7 +11,7 @@ import {
   serverTimestamp,
   Timestamp,
   getDoc,
-} from "firebase/firestore";
+} from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { ConstructionDiaryEntry } from "../lib/types";

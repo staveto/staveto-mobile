@@ -1,3 +1,4 @@
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import {
   collection,
   query,
@@ -11,221 +12,205 @@ import {
   Timestamp,
   limit,
   writeBatch,
-} from "firebase/firestore";
+  getDoc,
+  addDoc,
+} from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
 
-export type NotificationEntityType = "task" | "project" | "expense" | "document";
-export type NotificationEventType =
-  | "assigned"
-  | "status_changed"
-  | "comment_added"
-  | "expense_added"
-  | "document_added";
+export type NotificationType =
+  | "TASK_DUE_TODAY"
+  | "TASK_OVERDUE"
+  | "PROJECT_ACTIVITY"
+  | "EXPENSE_ADDED"
+  | "SYNC_ISSUE";
+
+export type NotificationSeverity = "info" | "warning" | "error";
 
 export type NotificationDoc = {
   id: string;
   userId: string;
-  projectId?: string;
-  entityType: NotificationEntityType;
-  entityId: string;
-  eventType: NotificationEventType;
-  title?: string;
-  message: string;
-  actorId?: string;
-  actorName?: string;
+  type: NotificationType;
   createdAt: string;
   readAt?: string | null;
+  projectId?: string | null;
+  projectName?: string | null;
+  taskId?: string | null;
+  taskTitle?: string | null;
+  dueDate?: string | null;
+  expenseId?: string | null;
+  amount?: number | null;
+  currency?: string | null;
+  severity?: NotificationSeverity;
   deepLink?: { screen: string; params?: Record<string, unknown> };
+  message?: string;
+  isLocal?: boolean;
 };
+
+const LOCAL_KEY = "@staveto:local_notifications";
+const PENDING_READ_KEY = "@staveto:pending_notification_reads";
 
 function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): NotificationDoc {
   const d = docSnap.data();
-  
+
   const convertTimestamp = (ts: unknown): string | undefined => {
     if (!ts) return undefined;
     if (ts instanceof Timestamp) {
       return ts.toDate().toISOString();
     }
-    if (typeof ts === 'string') {
+    if (typeof ts === "string") {
       return ts;
     }
-    if (typeof ts === 'object' && ts !== null && 'toDate' in ts) {
+    if (typeof ts === "object" && ts !== null && "toDate" in ts) {
       return (ts as { toDate: () => Date }).toDate().toISOString();
     }
     return undefined;
   };
-  
+
   return {
     id: docSnap.id,
     userId: (d.userId as string) ?? "",
-    projectId: (d.projectId as string) ?? undefined,
-    entityType: (d.entityType as NotificationEntityType) ?? "project",
-    entityId: (d.entityId as string) ?? "",
-    eventType: (d.eventType as NotificationEventType) ?? "comment_added",
-    title: (d.title as string) ?? undefined,
-    message: (d.message as string) ?? "",
-    actorId: (d.actorId as string) ?? undefined,
-    actorName: (d.actorName as string) ?? undefined,
+    type: (d.type as NotificationType) ?? "PROJECT_ACTIVITY",
     createdAt: convertTimestamp(d.createdAt) ?? new Date().toISOString(),
     readAt: convertTimestamp(d.readAt) ?? null,
+    projectId: (d.projectId as string) ?? null,
+    projectName: (d.projectName as string) ?? null,
+    taskId: (d.taskId as string) ?? null,
+    taskTitle: (d.taskTitle as string) ?? null,
+    dueDate: convertTimestamp(d.dueDate) ?? (d.dueDate as string | null) ?? null,
+    expenseId: (d.expenseId as string) ?? null,
+    amount: (d.amount as number) ?? null,
+    currency: (d.currency as string) ?? "EUR",
+    severity: (d.severity as NotificationSeverity) ?? "info",
     deepLink: (d.deepLink as { screen: string; params?: Record<string, unknown> }) ?? undefined,
+    message: (d.message as string) ?? undefined,
   };
 }
 
-/**
- * List all notifications for a user, ordered by creation date (newest first)
- */
-export async function listNotifications(
-  userId: string,
-  opts?: { limitCount?: number; unreadOnly?: boolean }
-): Promise<NotificationDoc[]> {
-  const currentUser = auth.currentUser;
-  if (!currentUser || !currentUser.uid) {
-    throw new Error('Musíte byť prihlásený na načítanie notifikácií.');
-  }
-  
-  // Ensure user can only access their own notifications
-  if (currentUser.uid !== userId) {
-    throw new Error('Nemáte oprávnenie na načítanie týchto notifikácií.');
-  }
-  
-  try {
-    const c = collection(db, "notifications");
-    const clauses = [
-      where("userId", "==", userId),
-      orderBy("createdAt", "desc"),
-      limit(opts?.limitCount ?? 30),
-    ];
-    if (opts?.unreadOnly) {
-      clauses.splice(1, 0, where("readAt", "==", null));
-    }
-    const q = query(c, ...clauses);
-    const snap = await getDocs(q);
+const parseDateOnly = (dateStr?: string | null) => {
+  if (!dateStr) return null;
+  const parts = dateStr.split("-");
+  if (parts.length !== 3) return null;
+  const [y, m, d] = parts.map((p) => Number(p));
+  if (!y || !m || !d) return null;
+  return new Date(y, m - 1, d);
+};
 
-    return snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) }));
-  } catch (error: any) {
-    console.error(`[notifications] Error listing notifications:`, error);
-    const errorCode = error.code || '';
-    const errorMessage = error.message || 'Unknown error';
-    
-    // If collection doesn't exist or is empty, return empty array
-    if (errorCode === 'failed-precondition' || errorCode === 'not-found') {
-      console.warn(`[notifications] Collection may not exist yet, returning empty array`);
-      return [];
-    }
-    
-    // If index is missing, try without orderBy
-    if (errorCode === 'failed-precondition' && errorMessage.includes('index')) {
-      console.warn(`[notifications] Index missing, trying without orderBy`);
-      try {
-        const c = collection(db, "notifications");
-        const q = query(c, where("userId", "==", userId));
-        const snap = await getDocs(q);
-        const notifications = snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) }));
-        // Sort manually
-        return notifications.sort((a, b) => {
-          const dateA = new Date(a.createdAt).getTime();
-          const dateB = new Date(b.createdAt).getTime();
-          return dateB - dateA; // Descending order
-        });
-      } catch (fallbackError: any) {
-        console.error(`[notifications] Fallback query also failed:`, fallbackError);
-        return [];
-      }
-    }
-    
-    // For other errors, return empty array instead of throwing
-    console.warn(`[notifications] Returning empty array due to error:`, errorMessage);
+const getTaskDueType = (dueDate?: string | null): NotificationType | null => {
+  const date = parseDateOnly(dueDate ?? undefined);
+  if (!date) return null;
+  const today = new Date();
+  today.setHours(0, 0, 0, 0);
+  date.setHours(0, 0, 0, 0);
+  if (date.getTime() === today.getTime()) return "TASK_DUE_TODAY";
+  if (date.getTime() < today.getTime()) return "TASK_OVERDUE";
+  return null;
+};
+
+async function loadLocalNotifications(): Promise<NotificationDoc[]> {
+  try {
+    const raw = await AsyncStorage.getItem(LOCAL_KEY);
+    if (!raw) return [];
+    const parsed = JSON.parse(raw) as NotificationDoc[];
+    return parsed.map((n) => ({ ...n, isLocal: true }));
+  } catch {
     return [];
   }
 }
 
-/**
- * Mark a notification as read
- */
-export async function markNotificationAsRead(userId: string, notificationId: string): Promise<void> {
-  const currentUser = auth.currentUser;
-  if (!currentUser || !currentUser.uid) {
-    throw new Error('Musíte byť prihlásený na označenie notifikácie ako prečítanej.');
-  }
-  
-  // Ensure user can only update their own notifications
-  if (currentUser.uid !== userId) {
-    throw new Error('Nemáte oprávnenie na úpravu tejto notifikácie.');
-  }
-  
-  const ref = doc(db, "notifications", notificationId);
-  await updateDoc(ref, {
-    readAt: serverTimestamp(),
-  });
-  
-  console.log(`[notifications] Marked notification ${notificationId} as read for user ${userId}`);
+async function saveLocalNotifications(list: NotificationDoc[]): Promise<void> {
+  const cleaned = list.map((n) => ({ ...n, isLocal: true }));
+  await AsyncStorage.setItem(LOCAL_KEY, JSON.stringify(cleaned));
 }
 
-/**
- * Create a notification for a user
- */
-export async function createNotification(
-  data: {
-    userId: string;
-    projectId?: string;
-    entityType: NotificationEntityType;
-    entityId: string;
-    eventType: NotificationEventType;
-    title?: string;
-    message: string;
-    actorId?: string;
-    actorName?: string;
-    deepLink?: { screen: string; params?: Record<string, unknown> };
+async function queuePendingRead(notificationId: string): Promise<void> {
+  const raw = await AsyncStorage.getItem(PENDING_READ_KEY);
+  const list = raw ? (JSON.parse(raw) as string[]) : [];
+  if (!list.includes(notificationId)) list.push(notificationId);
+  await AsyncStorage.setItem(PENDING_READ_KEY, JSON.stringify(list));
+}
+
+async function flushPendingReads(userId: string): Promise<void> {
+  const raw = await AsyncStorage.getItem(PENDING_READ_KEY);
+  if (!raw) return;
+  const pending = JSON.parse(raw) as string[];
+  if (!pending.length) return;
+  const remaining: string[] = [];
+  for (const id of pending) {
+    try {
+      const ref = doc(db, "notifications", id);
+      await updateDoc(ref, { readAt: serverTimestamp() });
+    } catch {
+      remaining.push(id);
+    }
   }
-): Promise<NotificationDoc> {
+  await AsyncStorage.setItem(PENDING_READ_KEY, JSON.stringify(remaining));
+}
+
+export async function listNotifications(
+  userId: string,
+  opts?: { limitCount?: number }
+): Promise<NotificationDoc[]> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
-    throw new Error('Musíte byť prihlásený na vytvorenie notifikácie.');
+    throw new Error("Musíte byť prihlásený na načítanie notifikácií.");
+  }
+  if (currentUser.uid !== userId) {
+    throw new Error("Nemáte oprávnenie na načítanie týchto notifikácií.");
   }
 
-  const c = collection(db, "notifications");
-  const ref = doc(c);
-  await setDoc(ref, {
-    userId: data.userId,
-    projectId: data.projectId ?? null,
-    entityType: data.entityType,
-    entityId: data.entityId,
-    eventType: data.eventType,
-    title: data.title?.trim() ?? null,
-    message: data.message.trim(),
-    actorId: data.actorId ?? null,
-    actorName: data.actorName ?? null,
-    createdAt: serverTimestamp(),
-    readAt: null,
-    deepLink: data.deepLink ?? null,
-  });
+  await flushPendingReads(userId);
 
-  return {
-    id: ref.id,
-    userId: data.userId,
-    projectId: data.projectId,
-    entityType: data.entityType,
-    entityId: data.entityId,
-    eventType: data.eventType,
-    title: data.title,
-    message: data.message,
-    actorId: data.actorId,
-    actorName: data.actorName,
-    createdAt: new Date().toISOString(),
-    readAt: null,
-    deepLink: data.deepLink,
-  };
+  const c = collection(db, "notifications");
+  const q = query(c, where("userId", "==", userId), orderBy("createdAt", "desc"), limit(opts?.limitCount ?? 50));
+  const snap = await getDocs(q);
+  const remote = snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) }));
+  const local = await loadLocalNotifications();
+  const merged = [...local, ...remote].sort((a, b) => {
+    const aTime = new Date(a.createdAt).getTime();
+    const bTime = new Date(b.createdAt).getTime();
+    return bTime - aTime;
+  });
+  return merged;
+}
+
+export async function markNotificationAsRead(notification: NotificationDoc): Promise<void> {
+  if (notification.readAt) return;
+  if (notification.isLocal) {
+    const local = await loadLocalNotifications();
+    const updated = local.map((n) =>
+      n.id === notification.id ? { ...n, readAt: new Date().toISOString() } : n
+    );
+    await saveLocalNotifications(updated);
+    return;
+  }
+
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error("Musíte byť prihlásený na označenie notifikácie ako prečítanej.");
+  }
+  if (currentUser.uid !== notification.userId) {
+    throw new Error("Nemáte oprávnenie na úpravu tejto notifikácie.");
+  }
+  try {
+    const ref = doc(db, "notifications", notification.id);
+    await updateDoc(ref, { readAt: serverTimestamp() });
+  } catch {
+    await queuePendingRead(notification.id);
+  }
 }
 
 export async function markAllAsRead(userId: string, maxCount: number = 100): Promise<void> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
-    throw new Error('Musíte byť prihlásený na označenie notifikácií.');
+    throw new Error("Musíte byť prihlásený na označenie notifikácií.");
   }
   if (currentUser.uid !== userId) {
-    throw new Error('Nemáte oprávnenie na úpravu týchto notifikácií.');
+    throw new Error("Nemáte oprávnenie na úpravu týchto notifikácií.");
   }
+
+  const local = await loadLocalNotifications();
+  const updatedLocal = local.map((n) => (n.readAt ? n : { ...n, readAt: new Date().toISOString() }));
+  await saveLocalNotifications(updatedLocal);
 
   const c = collection(db, "notifications");
   const q = query(
@@ -241,6 +226,171 @@ export async function markAllAsRead(userId: string, maxCount: number = 100): Pro
     batch.update(d.ref, { readAt: serverTimestamp() });
   });
   await batch.commit();
+}
+
+export async function upsertTaskDueNotification(data: {
+  userId: string;
+  taskId: string;
+  taskTitle?: string | null;
+  dueDate?: string | null;
+  projectId?: string | null;
+  projectName?: string | null;
+}): Promise<NotificationDoc | null> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+  if (currentUser.uid !== data.userId) {
+    throw new Error("Nemáte oprávnenie na vytvorenie notifikácie.");
+  }
+
+  const type = getTaskDueType(data.dueDate ?? null);
+  if (!type) return null;
+
+  const id = `task_${data.userId}_${data.taskId}_${type}`;
+  const ref = doc(db, "notifications", id);
+  const existing = await getDoc(ref);
+  if (existing.exists()) {
+    return toDoc({ id, data: existing.data.bind(existing) });
+  }
+
+  const dueTimestamp = data.dueDate ? Timestamp.fromDate(parseDateOnly(data.dueDate) ?? new Date()) : null;
+
+  await setDoc(ref, {
+    userId: data.userId,
+    type,
+    createdAt: serverTimestamp(),
+    readAt: null,
+    projectId: data.projectId ?? null,
+    projectName: data.projectName ?? null,
+    taskId: data.taskId,
+    taskTitle: data.taskTitle ?? null,
+    dueDate: dueTimestamp,
+    expenseId: null,
+    amount: null,
+    currency: "EUR",
+    severity: type === "TASK_OVERDUE" ? "warning" : "info",
+  });
+
+  if (type === "TASK_OVERDUE") {
+    const todayId = `task_${data.userId}_${data.taskId}_TASK_DUE_TODAY`;
+    try {
+      const todayRef = doc(db, "notifications", todayId);
+      await updateDoc(todayRef, { readAt: serverTimestamp() });
+    } catch {
+      // ignore
+    }
+  }
+
+  return {
+    id,
+    userId: data.userId,
+    type,
+    createdAt: new Date().toISOString(),
+    readAt: null,
+    projectId: data.projectId ?? null,
+    projectName: data.projectName ?? null,
+    taskId: data.taskId,
+    taskTitle: data.taskTitle ?? null,
+    dueDate: data.dueDate ?? null,
+    expenseId: null,
+    amount: null,
+    currency: "EUR",
+    severity: type === "TASK_OVERDUE" ? "warning" : "info",
+  };
+}
+
+export async function markTaskNotificationsRead(userId: string, taskId: string): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) return;
+  if (currentUser.uid !== userId) return;
+  const ids = [
+    `task_${userId}_${taskId}_TASK_DUE_TODAY`,
+    `task_${userId}_${taskId}_TASK_OVERDUE`,
+  ];
+  for (const id of ids) {
+    try {
+      const ref = doc(db, "notifications", id);
+      await updateDoc(ref, { readAt: serverTimestamp() });
+    } catch {
+      // ignore
+    }
+  }
+}
+
+export async function createExpenseAddedNotification(data: {
+  userId: string;
+  projectId?: string | null;
+  projectName?: string | null;
+  expenseId: string;
+  amount?: number | null;
+  currency?: string | null;
+}): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+  if (currentUser.uid !== data.userId) {
+    throw new Error("Nemáte oprávnenie na vytvorenie notifikácie.");
+  }
+
+  const c = collection(db, "notifications");
+  await addDoc(c, {
+    userId: data.userId,
+    type: "EXPENSE_ADDED",
+    createdAt: serverTimestamp(),
+    readAt: null,
+    projectId: data.projectId ?? null,
+    projectName: data.projectName ?? null,
+    expenseId: data.expenseId,
+    amount: data.amount ?? null,
+    currency: data.currency ?? "EUR",
+    severity: "info",
+  });
+}
+
+export async function createProjectActivityNotification(data: {
+  userId: string;
+  projectId: string;
+  projectName?: string | null;
+  message?: string;
+}): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+  if (currentUser.uid !== data.userId) {
+    throw new Error("Nemáte oprávnenie na vytvorenie notifikácie.");
+  }
+
+  const c = collection(db, "notifications");
+  await addDoc(c, {
+    userId: data.userId,
+    type: "PROJECT_ACTIVITY",
+    createdAt: serverTimestamp(),
+    readAt: null,
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    message: data.message ?? null,
+    severity: "info",
+  });
+}
+
+export async function recordSyncIssue(message: string): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) return;
+  const local = await loadLocalNotifications();
+  const newItem: NotificationDoc = {
+    id: `local_sync_${Date.now()}`,
+    userId: currentUser.uid,
+    type: "SYNC_ISSUE",
+    createdAt: new Date().toISOString(),
+    readAt: null,
+    severity: "error",
+    message,
+    isLocal: true,
+  };
+  await saveLocalNotifications([newItem, ...local]);
 }
 
 /**

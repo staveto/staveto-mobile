@@ -4,7 +4,7 @@ import {
   setDoc, 
   writeBatch,
   serverTimestamp
-} from 'firebase/firestore';
+} from '../lib/rnFirestore';
 import { db, auth } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 import { getTemplatePhases, getTemplateTasks } from './templateService';

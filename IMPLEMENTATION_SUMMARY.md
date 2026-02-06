@@ -39,7 +39,7 @@
 14. **`src/lib/firestorePaths.ts`** - Added billing events paths
 15. **`firestore.rules`** - Updated to prevent client writes to subscription field
 16. **`src/navigation/RootNavigator.tsx`** - Added SubscriptionScreen to navigation
-17. **`src/screens/AccountScreen.tsx`** - Added link to SubscriptionScreen
+17. **`src/screens/Accounreen.tsx`** - Added link to SubscriptionScreen
 
 ### Documentation
 18. **`STRIPE_SETUP.md`** - Step-by-step Stripe setup guide

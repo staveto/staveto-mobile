@@ -14,7 +14,7 @@ import {
   Platform,
   Image,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import { TabActions, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -116,8 +116,27 @@ export function HomeScreen() {
   const [submittingExpense, setSubmittingExpense] = useState(false);
 
   const stackNav = navigation as { navigate: (name: string, params?: object) => void };
-  const tabNav = (navigation.getParent() as { navigate: (name: string, params?: object) => void } | undefined);
-  const rootNav = navigation.getParent()?.getParent() as { navigate: (name: string, params?: object) => void } | undefined;
+  const goToProjects = useCallback(
+    (params?: object) => {
+      let nav: any = navigation;
+      while (nav && typeof nav.getState === "function") {
+        const routeNames = nav.getState?.().routeNames as string[] | undefined;
+        if (routeNames?.includes("Projects")) {
+          if (nav.navigate) {
+            nav.navigate("Projects", params);
+            return;
+          }
+          if (nav.dispatch) {
+            nav.dispatch(TabActions.jumpTo("Projects", params));
+            return;
+          }
+        }
+        nav = nav.getParent?.();
+      }
+      console.warn("[HomeScreen] Unable to navigate to Projects tab");
+    },
+    [navigation]
+  );
   const displayName = user?.name ?? user?.email ?? t("home.userFallback");
 
   // Load last used project ID
@@ -145,30 +164,24 @@ export function HomeScreen() {
       // Enrich today tasks with project names and phase names
       // Filter out tasks from BUILD projects
       const enrichedTasks = await Promise.all(
-        data.todayTasks
-          .filter((task) => {
-            const project = data.projects.find((p) => p.id === task.projectId);
-            // Exclude tasks from BUILD projects
-            return project?.projectType !== 'BUILD';
-          })
-          .map(async (task) => {
-            const project = data.projects.find((p) => p.id === task.projectId);
-            let phaseName: string | undefined;
-            if (task.phaseId && project) {
-              try {
-                const phases = await projectsService.listProjectPhases(project.id);
-                const phase = phases.find((p) => p.id === task.phaseId);
-                phaseName = phase?.name;
-              } catch (error) {
-                // Ignore phase loading errors
-              }
+        data.todayTasks.map(async (task) => {
+          const project = data.projects.find((p) => p.id === task.projectId);
+          let phaseName: string | undefined;
+          if (task.phaseId && project) {
+            try {
+              const phases = await projectsService.listProjectPhases(project.id);
+              const phase = phases.find((p) => p.id === task.phaseId);
+              phaseName = phase?.name;
+            } catch (error) {
+              // Ignore phase loading errors
             }
-            return {
-              ...task,
-              projectName: project?.name || "Unknown",
-              phaseName,
-            };
-          })
+          }
+          return {
+            ...task,
+            projectName: project?.name || "Unknown",
+            phaseName,
+          };
+        })
       );
 
       setDashboardData({
@@ -232,7 +245,7 @@ export function HomeScreen() {
         if (Platform.OS === "ios") {
           ActionSheetIOS.showActionSheetWithOptions(
             {
-              options: ["Zrušiť", "Zmeniť projekt", "Pokračovať"],
+              options: [t("common.cancel"), t("home.changeProject"), t("common.continue")],
               cancelButtonIndex: 0,
               destructiveButtonIndex: -1,
             },
@@ -248,10 +261,10 @@ export function HomeScreen() {
         } else {
           Alert.alert(
             t("home.selectProject"),
-            `Použiť projekt "${dashboardData.projects.find((p) => p.id === lastUsedProjectId)?.name}"?`,
+            t("projectOverview.useProjectMessage", { name: dashboardData.projects.find((p) => p.id === lastUsedProjectId)?.name || "" }),
             [
-              { text: "Zrušiť", style: "cancel" },
-              { text: "Zmeniť projekt", onPress: () => {
+              { text: t("common.cancel"), style: "cancel" },
+              { text: t("home.changeProject"), onPress: () => {
                 setPendingAction(action);
                 setShowProjectSelector(true);
               }},
@@ -296,6 +309,22 @@ export function HomeScreen() {
     [dashboardData, saveLastUsedProject, stackNav]
   );
 
+  // Helper to validate and format amount input (only numbers and one decimal point/comma)
+  const handleAmountChange = (text: string) => {
+    // Remove all non-numeric characters except one decimal point or comma
+    const cleaned = text.replace(/[^\d.,]/g, '');
+    // Replace comma with dot for consistency
+    const normalized = cleaned.replace(',', '.');
+    // Ensure only one decimal point
+    const parts = normalized.split('.');
+    if (parts.length > 2) {
+      // If more than one dot, keep only first part + dot + second part
+      setExpenseAmount(parts[0] + '.' + parts.slice(1).join(''));
+    } else {
+      setExpenseAmount(normalized);
+    }
+  };
+
   const pickExpenseInvoiceImage = async () => {
     if (!ImagePicker) {
       Alert.alert(t("common.error"), t("expense.imagePickerNotInstalled"));
@@ -306,7 +335,7 @@ export function HomeScreen() {
       if (Platform.OS === 'ios') {
         ActionSheetIOS.showActionSheetWithOptions(
           {
-            options: ['Zrušiť', 'Odfotiť', 'Vybrať z galérie'],
+            options: [t("common.cancel"), t("projectOverview.takePhoto"), t("projectOverview.selectFromGallery")],
             cancelButtonIndex: 0,
           },
           async (buttonIndex) => {
@@ -322,18 +351,18 @@ export function HomeScreen() {
       } else {
         // Android - show Alert with options
         Alert.alert(
-          'Vyberte zdroj',
-          'Odkiaľ chcete pridať faktúru?',
+          t("projectOverview.selectSource"),
+          t("projectOverview.selectSourceForInvoice"),
           [
-            { text: 'Zrušiť', style: 'cancel' },
-            { text: 'Odfotiť', onPress: launchCameraForExpense },
-            { text: 'Vybrať z galérie', onPress: launchGalleryForExpense },
+            { text: t("common.cancel"), style: 'cancel' },
+            { text: t("projectOverview.takePhoto"), onPress: launchCameraForExpense },
+            { text: t("projectOverview.selectFromGallery"), onPress: launchGalleryForExpense },
           ]
         );
       }
     } catch (error: any) {
       console.error(`[HomeScreen] Error picking expense image:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa vybrať obrázok.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectImage"));
     }
   };
 
@@ -363,7 +392,7 @@ export function HomeScreen() {
       }
     } catch (error: any) {
       console.error(`[HomeScreen] Error launching camera:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa otvoriť kameru.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToOpenCamera"));
     }
   };
 
@@ -393,7 +422,7 @@ export function HomeScreen() {
       }
     } catch (error: any) {
       console.error(`[HomeScreen] Error picking from gallery:`, error);
-      Alert.alert('Chyba', 'Nepodarilo sa vybrať obrázok.');
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectImage"));
     }
   };
 
@@ -563,7 +592,7 @@ export function HomeScreen() {
       >
         {/* Welcome Header */}
         <View style={styles.welcomeHeader}>
-          <Text style={styles.welcomeTitle}>Vitajte, {displayName.split(" ")[0]}.</Text>
+          <Text style={styles.welcomeTitle}>{t("home.welcome", { name: displayName.split(" ")[0] })}</Text>
           <Text style={styles.welcomeSubtitle}>
             {t("home.openTasksCount", { count: data.kpis.openCount.toString(), projects: data.projects.length.toString() })}
           </Text>
@@ -575,15 +604,7 @@ export function HomeScreen() {
             style={styles.createProjectButton}
             onPress={() => {
               // Navigate to Projects tab and open create modal
-              // Try multiple navigation methods to ensure it works
-              if (rootNav) {
-                rootNav.navigate("Projects", { openNew: true });
-              } else if (tabNav) {
-                tabNav.navigate("Projects", { openNew: true });
-              } else {
-                // Fallback: navigate via stack
-                (navigation as any).navigate("Projects", { openNew: true });
-              }
+              goToProjects({ openNew: true });
             }}
           >
             <Ionicons name="add-circle" size={24} color="#FFFFFF" />
@@ -595,24 +616,24 @@ export function HomeScreen() {
         <View style={styles.quickActions}>
           <TouchableOpacity style={[styles.quickActionButton, styles.quickActionActive]} onPress={() => handleQuickAction("task")}>
             <Ionicons name="checkbox-outline" size={20} color={colors.primary} />
-            <Text style={styles.quickActionText}>Úloha</Text>
+            <Text style={styles.quickActionText}>{t("home.quickTask")}</Text>
           </TouchableOpacity>
           <TouchableOpacity style={styles.quickActionButton} onPress={() => handleQuickAction("photo")}>
             <Ionicons name="camera-outline" size={20} color={colors.primary} />
-            <Text style={styles.quickActionText}>Foto</Text>
+            <Text style={styles.quickActionText}>{t("home.quickPhoto")}</Text>
           </TouchableOpacity>
         </View>
 
         {/* Today / Next Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Najbližšia úloha</Text>
+            <Text style={styles.sectionTitle}>{t("home.nearestTask")}</Text>
             <TouchableOpacity onPress={() => stackNav.navigate("Tasks")}>
-              <Text style={styles.sectionMore}>Viac &gt;</Text>
+              <Text style={styles.sectionMore}>{t("home.seeMore")} &gt;</Text>
             </TouchableOpacity>
           </View>
           {data.todayTasks.length === 0 ? (
-            <Text style={styles.emptyText}>Žiadne úlohy na dnes</Text>
+            <Text style={styles.emptyText}>{t("home.noUpcomingTasks")}</Text>
           ) : (
             data.todayTasks.map((task) => (
               <TouchableOpacity
@@ -640,9 +661,9 @@ export function HomeScreen() {
         {/* KPI Cards */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>Prehľad projektov</Text>
-            <TouchableOpacity onPress={() => tabNav?.navigate("Projects")}>
-              <Text style={styles.sectionMore}>Všetky &gt;</Text>
+            <Text style={styles.sectionTitle}>{t("home.projectsOverview")}</Text>
+            <TouchableOpacity onPress={() => goToProjects()}>
+              <Text style={styles.sectionMore}>{t("home.seeAllProjects")} &gt;</Text>
             </TouchableOpacity>
           </View>
           <View style={styles.kpiRow}>
@@ -657,7 +678,7 @@ export function HomeScreen() {
                     stackNav.navigate("Tasks", card.navigationTarget.params);
                   } else if (card.navigationTarget.screen === "Projects") {
                     // Navigate to Projects tab
-                    tabNav?.navigate("Projects", card.navigationTarget.params);
+                    goToProjects(card.navigationTarget.params);
                   }
                 }}
               />
@@ -668,9 +689,9 @@ export function HomeScreen() {
         {/* Projects Section */}
         <View style={styles.section}>
           <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}> Otvorené Projekty</Text>
-            <TouchableOpacity onPress={() => tabNav?.navigate("Projects")}>
-              <Text style={styles.sectionMore}>Všetky &gt;</Text>
+            <Text style={styles.sectionTitle}>{t("home.openProjects")}</Text>
+            <TouchableOpacity onPress={() => goToProjects()}>
+              <Text style={styles.sectionMore}>{t("home.seeAllProjects")} &gt;</Text>
             </TouchableOpacity>
           </View>
 
@@ -679,15 +700,14 @@ export function HomeScreen() {
             <View style={styles.filterContainer}>
               {(["ALL", "ADMIN", "MANAGER", "TRADE"] as const).map((filterKey) => {
                 const isActive = roleFilter === filterKey;
-                // Use Slovak labels directly for clarity
                 const label =
                   filterKey === "ALL"
-                    ? "Všetky"
+                    ? t("role.all")
                     : filterKey === "ADMIN"
-                    ? "Správca"
+                    ? t("role.admin")
                     : filterKey === "MANAGER"
-                    ? "Stavbyvedúci"
-                    : "Remeselník";
+                    ? t("role.manager")
+                    : t("role.trade");
                 return (
                   <TouchableOpacity
                     key={filterKey}
@@ -789,7 +809,7 @@ export function HomeScreen() {
                   );
                 })}
                 {filteredProjects.length > 4 && (
-                  <TouchableOpacity style={styles.projectCardAdd} onPress={() => tabNav?.navigate("Projects")}>
+                  <TouchableOpacity style={styles.projectCardAdd} onPress={() => goToProjects()}>
                     <Ionicons name="add" size={32} color={colors.textMuted} />
                   </TouchableOpacity>
                 )}
@@ -800,8 +820,8 @@ export function HomeScreen() {
 
         {/* Recent Activity (Stub) */}
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Nedávna aktivita</Text>
-          <Text style={styles.emptyText}>Žiadna nedávna aktivita</Text>
+          <Text style={styles.sectionTitle}>{t("home.recentActivity")}</Text>
+          <Text style={styles.emptyText}>{t("home.noRecentActivity")}</Text>
         </View>
       </ScrollView>
 
@@ -943,7 +963,7 @@ export function HomeScreen() {
                   placeholder={t("expense.amount")}
                   placeholderTextColor="#FFFFFF"
                   value={expenseAmount}
-                  onChangeText={setExpenseAmount}
+                  onChangeText={handleAmountChange}
                   keyboardType="decimal-pad"
                 />
 
@@ -1007,7 +1027,7 @@ export function HomeScreen() {
                 {/* Date */}
                 <TextInput
                   style={styles.input}
-                  placeholder="Dátum (YYYY-MM-DD)"
+                  placeholder={t("expense.date")}
                   placeholderTextColor="#FFFFFF"
                   value={expenseDate}
                   onChangeText={setExpenseDate}
@@ -1032,7 +1052,7 @@ export function HomeScreen() {
                       setExpenseProjectId(null);
                     }}
                   >
-                    <Text style={styles.modalCancelText}>Späť</Text>
+                    <Text style={styles.modalCancelText}>{t("common.back")}</Text>
                   </TouchableOpacity>
                   <TouchableOpacity
                     style={[

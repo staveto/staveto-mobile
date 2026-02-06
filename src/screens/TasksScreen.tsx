@@ -18,6 +18,8 @@ import * as projectsService from "../services/projects";
 import * as tasksService from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
 
+const DONE_COLOR = "#2e7d32";
+
 function showError(msg: string) {
   Alert.alert("", msg);
 }
@@ -30,6 +32,7 @@ export function TasksScreen() {
   const navigation = useNavigation();
   const { t } = useI18n();
   const { orgId } = useAuth();
+  const dueFilter = (route.params as { dueFilter?: "today" | "overdue" })?.dueFilter;
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -76,6 +79,30 @@ export function TasksScreen() {
   useEffect(() => {
     if ((route.params as { openNew?: boolean })?.openNew) setShowNew(true);
   }, [(route.params as { openNew?: boolean })?.openNew]);
+
+  const parseDateOnly = (dateStr?: string) => {
+    if (!dateStr) return null;
+    const parts = dateStr.split("-");
+    if (parts.length !== 3) return null;
+    const [y, m, d] = parts.map((p) => Number(p));
+    if (!y || !m || !d) return null;
+    return new Date(y, m - 1, d);
+  };
+
+  const filteredTasks = (() => {
+    if (!dueFilter) return tasks;
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    return tasks.filter((task) => {
+      const date = parseDateOnly(task.dueDate);
+      if (!date) return false;
+      date.setHours(0, 0, 0, 0);
+      if (dueFilter === "today") {
+        return date.getTime() === today.getTime();
+      }
+      return date.getTime() < today.getTime();
+    });
+  })();
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -129,7 +156,7 @@ export function TasksScreen() {
       <TouchableOpacity style={styles.fab} onPress={() => setShowNew(true)}>
         <Text style={styles.fabText}>+ {t("tasks.fab")}</Text>
       </TouchableOpacity>
-      {!tasks.length ? (
+      {!filteredTasks.length ? (
         <View style={styles.centered}>
           <Text style={styles.emptyText}>{t("tasks.empty")}</Text>
           <TouchableOpacity style={styles.refreshBtn} onPress={onRefresh}>
@@ -138,23 +165,29 @@ export function TasksScreen() {
         </View>
       ) : (
         <FlatList
-          data={tasks}
+          data={filteredTasks}
           keyExtractor={(task) => task.id}
           contentContainerStyle={styles.list}
           refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} />}
-          renderItem={({ item }) => (
-            <TouchableOpacity style={styles.card} onPress={() => openDetail(item)} activeOpacity={0.7}>
-              <Text style={styles.title}>{item.title || t("tasks.noTitle")}</Text>
-              <View style={styles.row}>
-                {item.status ? (
-                  <TouchableOpacity style={styles.statusChip} onPress={() => onStatusCycle(item)}>
-                    <Text style={styles.statusChipText}>{item.status}</Text>
-                  </TouchableOpacity>
-                ) : null}
-                {item.dueDate ? <Text style={styles.metaText}>{item.dueDate}</Text> : null}
-              </View>
-            </TouchableOpacity>
-          )}
+          renderItem={({ item }) => {
+            const isDone = (item.status ?? "").toUpperCase() === "DONE";
+            return (
+              <TouchableOpacity style={styles.card} onPress={() => openDetail(item)} activeOpacity={0.7}>
+                <Text style={[styles.title, isDone && styles.titleDone]}>{item.title || t("tasks.noTitle")}</Text>
+                <View style={styles.row}>
+                  {item.status ? (
+                    <TouchableOpacity
+                      style={[styles.statusChip, isDone && styles.statusChipDone]}
+                      onPress={() => onStatusCycle(item)}
+                    >
+                      <Text style={[styles.statusChipText, isDone && styles.statusChipTextDone]}>{item.status}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                  {item.dueDate ? <Text style={styles.metaText}>{item.dueDate}</Text> : null}
+                </View>
+              </TouchableOpacity>
+            );
+          }}
         />
       )}
       <Modal visible={showNew} transparent animationType="slide">
@@ -204,9 +237,16 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   title: { fontSize: 16, fontWeight: "600", color: colors.text },
+  titleDone: {
+    textDecorationLine: "line-through",
+    textDecorationColor: DONE_COLOR,
+    color: DONE_COLOR,
+  },
   row: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: 4 },
   statusChip: { backgroundColor: colors.border, paddingHorizontal: spacing.sm, paddingVertical: 2, borderRadius: 8 },
+  statusChipDone: { backgroundColor: DONE_COLOR },
   statusChipText: { fontSize: 12, color: colors.text },
+  statusChipTextDone: { color: "#fff", fontWeight: "600" },
   metaText: { fontSize: 13, color: colors.textMuted },
   emptyText: { fontSize: 16, color: colors.textMuted },
   refreshBtn: { marginTop: spacing.md },

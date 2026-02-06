@@ -24,8 +24,7 @@ import { colors, radius, spacing } from "../theme";
 import { PRIVACY_URL, SUPPORT_EMAIL, TERMS_URL } from "../constants/consent";
 import { requestAccountDeletion } from "../services/account";
 import { db, storage } from "../firebase";
-import { doc, getDoc, updateDoc, serverTimestamp } from "firebase/firestore";
-import { ref, uploadBytes, getDownloadURL } from "firebase/storage";
+import { doc, getDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import * as ImagePicker from "expo-image-picker";
 
 function Row({
@@ -189,12 +188,10 @@ export function AccountScreen() {
 
       setUploadingPhoto(true);
       const asset = result.assets[0];
-      const response = await fetch(asset.uri);
-      const blob = await response.blob();
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
-      const storageRef = ref(storage, `users/${user.id}/profile/${fileName}`);
-      await uploadBytes(storageRef, blob);
-      const url = await getDownloadURL(storageRef);
+      const storageRef = storage().ref(`users/${user.id}/profile/${fileName}`);
+      await storageRef.putFile(asset.uri);
+      const url = await storageRef.getDownloadURL();
       setProfilePhotoURL(url);
     } catch (error) {
       console.error("[account] Failed to pick profile photo:", error);
@@ -221,12 +218,10 @@ export function AccountScreen() {
 
       setUploadingPhoto(true);
       const asset = result.assets[0];
-      const response = await fetch(asset.uri);
-      const blob = await response.blob();
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
-      const storageRef = ref(storage, `users/${user.id}/profile/${fileName}`);
-      await uploadBytes(storageRef, blob);
-      const url = await getDownloadURL(storageRef);
+      const storageRef = storage().ref(`users/${user.id}/profile/${fileName}`);
+      await storageRef.putFile(asset.uri);
+      const url = await storageRef.getDownloadURL();
       setProfilePhotoURL(url);
     } catch (error) {
       console.error("[account] Failed to take profile photo:", error);

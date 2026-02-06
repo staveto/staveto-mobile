@@ -10,16 +10,18 @@ import {
   orderBy,
   serverTimestamp,
   Timestamp,
-} from "firebase/firestore";
+} from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
-import { createNotification } from "./notifications";
+import { createExpenseAddedNotification } from "./notifications";
 import type { ProjectExpense } from "../lib/types";
 
 export type ExpenseSource = 'MANUAL' | 'DOCUMENT';
 export type ExpenseStatus = 'PROCESSING' | 'READY' | 'FAILED';
 export type ExpenseCategory = 'MATERIAL' | 'WORK' | 'OTHER';
+
+export type OcrStatus = "success" | "failed" | "limit" | "cancelled" | "pending";
 
 export type ExpenseDoc = {
   id: string;
@@ -36,6 +38,14 @@ export type ExpenseDoc = {
   status: ExpenseStatus;
   category?: ExpenseCategory;
   supplierName?: string;
+  ocrStatus?: OcrStatus;
+  ocrParsedAt?: string;
+  ocrSupplierName?: string;
+  ocrInvoiceNumber?: string;
+  ocrIssueDate?: string;
+  ocrTotalAmount?: number | null;
+  ocrVatAmount?: number | null;
+  ocrCurrency?: string;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -72,6 +82,14 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Ex
     status: (d.status as ExpenseStatus) ?? 'READY',
     category: (d.category as ExpenseCategory) ?? undefined,
     supplierName: (d.supplierName as string) ?? undefined,
+    ocrStatus: (d.ocrStatus as OcrStatus) ?? undefined,
+    ocrParsedAt: convertTimestamp(d.ocrParsedAt),
+    ocrSupplierName: (d.ocrSupplierName as string) ?? undefined,
+    ocrInvoiceNumber: (d.ocrInvoiceNumber as string) ?? undefined,
+    ocrIssueDate: (d.ocrIssueDate as string) ?? undefined,
+    ocrTotalAmount: (d.ocrTotalAmount as number | null) ?? undefined,
+    ocrVatAmount: (d.ocrVatAmount as number | null) ?? undefined,
+    ocrCurrency: (d.ocrCurrency as string) ?? undefined,
     createdAt: convertTimestamp(d.createdAt),
     updatedAt: convertTimestamp(d.updatedAt),
   };
@@ -96,6 +114,14 @@ export async function createExpense(
     status?: ExpenseStatus;
     category?: ExpenseCategory;
     supplierName?: string;
+    ocrStatus?: OcrStatus;
+    ocrParsedAt?: Date;
+    ocrSupplierName?: string | null;
+    ocrInvoiceNumber?: string | null;
+    ocrIssueDate?: string | null;
+    ocrTotalAmount?: number | null;
+    ocrVatAmount?: number | null;
+    ocrCurrency?: string | null;
   }
 ): Promise<ExpenseDoc> {
   const currentUser = auth.currentUser;
@@ -156,22 +182,29 @@ export async function createExpense(
     status: data.status ?? 'READY',
     category: data.category ?? null,
     supplierName: data.supplierName?.trim() ?? null,
+    ocrStatus: data.ocrStatus ?? null,
+    ocrParsedAt: data.ocrParsedAt ? Timestamp.fromDate(data.ocrParsedAt) : null,
+    ocrSupplierName: data.ocrSupplierName ?? null,
+    ocrInvoiceNumber: data.ocrInvoiceNumber ?? null,
+    ocrIssueDate: data.ocrIssueDate ?? null,
+    ocrTotalAmount: data.ocrTotalAmount ?? null,
+    ocrVatAmount: data.ocrVatAmount ?? null,
+    ocrCurrency: data.ocrCurrency ?? null,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
 
   if (currentUser?.uid) {
     try {
-      await createNotification({
+      const { getProject } = await import("./projects");
+      const project = await getProject(projectId);
+      await createExpenseAddedNotification({
         userId: ownerId,
         projectId,
-        entityType: "expense",
-        entityId: ref.id,
-        eventType: "expense_added",
-        title: "Nový výdavok",
-        message: `Výdavok "${data.title.trim()}" bol pridaný.`,
-        actorId: currentUser.uid,
-        actorName: currentUser.displayName ?? currentUser.email ?? undefined,
+        projectName: project?.name ?? null,
+        expenseId: ref.id,
+        amount: data.amount ?? null,
+        currency: data.currency ?? "EUR",
       });
     } catch (error) {
       console.warn("[expenses] Failed to create notification:", error);
@@ -195,6 +228,14 @@ export async function createExpense(
     status: data.status ?? 'READY',
     category: data.category,
     supplierName: data.supplierName,
+    ocrStatus: data.ocrStatus ?? undefined,
+    ocrParsedAt: data.ocrParsedAt ? data.ocrParsedAt.toISOString() : undefined,
+    ocrSupplierName: data.ocrSupplierName ?? undefined,
+    ocrInvoiceNumber: data.ocrInvoiceNumber ?? undefined,
+    ocrIssueDate: data.ocrIssueDate ?? undefined,
+    ocrTotalAmount: data.ocrTotalAmount ?? undefined,
+    ocrVatAmount: data.ocrVatAmount ?? undefined,
+    ocrCurrency: data.ocrCurrency ?? undefined,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
   };
@@ -229,6 +270,14 @@ export async function updateExpense(
     status?: ExpenseStatus;
     category?: ExpenseCategory;
     supplierName?: string;
+    ocrStatus?: OcrStatus;
+    ocrParsedAt?: Date | null;
+    ocrSupplierName?: string | null;
+    ocrInvoiceNumber?: string | null;
+    ocrIssueDate?: string | null;
+    ocrTotalAmount?: number | null;
+    ocrVatAmount?: number | null;
+    ocrCurrency?: string | null;
   }
 ): Promise<void> {
   const ref = doc(db, paths.projectExpense(projectId, expenseId));
@@ -247,6 +296,16 @@ export async function updateExpense(
   if (data.status !== undefined) updateData.status = data.status;
   if (data.category !== undefined) updateData.category = data.category ?? null;
   if (data.supplierName !== undefined) updateData.supplierName = data.supplierName?.trim() ?? null;
+  if (data.ocrStatus !== undefined) updateData.ocrStatus = data.ocrStatus ?? null;
+  if (data.ocrParsedAt !== undefined) {
+    updateData.ocrParsedAt = data.ocrParsedAt ? Timestamp.fromDate(data.ocrParsedAt) : null;
+  }
+  if (data.ocrSupplierName !== undefined) updateData.ocrSupplierName = data.ocrSupplierName ?? null;
+  if (data.ocrInvoiceNumber !== undefined) updateData.ocrInvoiceNumber = data.ocrInvoiceNumber ?? null;
+  if (data.ocrIssueDate !== undefined) updateData.ocrIssueDate = data.ocrIssueDate ?? null;
+  if (data.ocrTotalAmount !== undefined) updateData.ocrTotalAmount = data.ocrTotalAmount ?? null;
+  if (data.ocrVatAmount !== undefined) updateData.ocrVatAmount = data.ocrVatAmount ?? null;
+  if (data.ocrCurrency !== undefined) updateData.ocrCurrency = data.ocrCurrency ?? null;
   
   await updateDoc(ref, updateData);
   console.log(`[expenses] Updated expense ${expenseId} in project ${projectId}`);

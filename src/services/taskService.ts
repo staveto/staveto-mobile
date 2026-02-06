@@ -3,7 +3,7 @@ import {
   updateDoc, 
   serverTimestamp,
   getDoc 
-} from 'firebase/firestore';
+} from '../lib/rnFirestore';
 import { db } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 import type { TaskStatus, ProjectTask } from '../lib/types';

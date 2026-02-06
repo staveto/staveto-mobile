@@ -87,7 +87,7 @@ export function TaskDetailScreen() {
         setViewingAttachmentURL(url);
         setViewingAttachment(attachment);
       } catch (error: any) {
-        Alert.alert('Chyba', 'Nepodarilo sa načítať obrázok.');
+        Alert.alert(t("common.error"), t("taskDetail.failedToLoadImage"));
       }
     } else {
       try {
@@ -121,7 +121,7 @@ export function TaskDetailScreen() {
   if (!task) {
     return (
       <View style={styles.container}>
-        <Text style={styles.muted}>Úloha nebola nájdená.</Text>
+        <Text style={styles.muted}>{t("taskDetail.noTask")}</Text>
       </View>
     );
   }
@@ -146,14 +146,14 @@ export function TaskDetailScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       <View style={styles.card}>
-        <Text style={styles.title}>{task.title || "Bez názvu"}</Text>
-        {task.dueDate ? <Text style={styles.muted}>Termín: {task.dueDate}</Text> : null}
+        <Text style={styles.title}>{task.title || t("taskDetail.noTitle")}</Text>
+        {task.dueDate ? <Text style={styles.muted}>{t("taskDetail.dueDate", { date: task.dueDate })}</Text> : null}
       </View>
 
       {/* Attachments Section */}
       {attachments.length > 0 && (
         <>
-          <Text style={styles.sectionLabel}>Prílohy</Text>
+          <Text style={styles.sectionLabel}>{t("taskDetail.attachments") || 'Prílohy'}</Text>
           <View style={styles.attachmentsContainer}>
             {attachments.map((attachment) => {
               const thumbnail = attachmentThumbnails.get(attachment.id);
@@ -191,7 +191,7 @@ export function TaskDetailScreen() {
         <ActivityIndicator color={colors.primary} style={styles.loader} />
       )}
 
-      <Text style={styles.sectionLabel}>Status</Text>
+      <Text style={styles.sectionLabel}>{t("taskDetail.status")}</Text>
       <View style={styles.statusRow}>
         {statusMappings.map((mapping) => {
           const isActive = status === mapping.storedValue || 

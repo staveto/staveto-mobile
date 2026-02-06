@@ -1,10 +1,7 @@
-import React, { createContext, useContext, useEffect, useRef, useState } from "react";
+import React, { createContext, useContext, useEffect, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { onAuthStateChanged } from "firebase/auth";
-import { auth } from "../firebase";
-import * as authService from "../services/auth";
-
-const ONBOARDING_KEY = "staveto_onboarding_done";
+import auth from "@react-native-firebase/auth";
+import { GoogleSignin } from "@react-native-google-signin/google-signin";
 
 type User = { id: string; email: string; name?: string };
 
@@ -14,11 +11,17 @@ type AuthState = {
   orgId: string | null;
   loading: boolean;
   onboardingDone: boolean;
+  onboardingLoaded: boolean;
 };
 
 type AuthContextValue = AuthState & {
   login: (email: string, password: string) => Promise<void>;
-  register: (email: string, password: string, displayName?: string) => Promise<void>;
+  register: (
+    email: string,
+    password: string,
+    displayName?: string,
+    options?: any
+  ) => Promise<void>;
   logout: () => Promise<void>;
   loadFromStorage: () => Promise<void>;
   finishOnboarding: () => Promise<void>;
@@ -26,9 +29,10 @@ type AuthContextValue = AuthState & {
 
 const AuthContext = createContext<AuthContextValue | null>(null);
 
-function userToState(u: { id: string; email: string; name?: string }) {
-  return { id: u.id, email: u.email, name: u.name };
-}
+const ONBOARDING_KEY = "staveto_onboarding_done";
+const GOOGLE_WEB_CLIENT_ID =
+  process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ??
+  "255961550157-gaueraial600f02qa3qadki41fhvabit.apps.googleusercontent.com";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const [state, setState] = useState<AuthState>({
@@ -37,33 +41,42 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     orgId: null,
     loading: true,
     onboardingDone: true,
+    onboardingLoaded: false,
   });
 
-  const loadOnboarding = async () => {
+  const loadFromStorage = async () => {
     try {
       const ob = await AsyncStorage.getItem(ONBOARDING_KEY);
-      setState((s) => ({ ...s, onboardingDone: ob === "1" }));
+      setState((s) => ({ ...s, onboardingDone: ob === "1", onboardingLoaded: true }));
     } catch {
-      setState((s) => ({ ...s, onboardingDone: true }));
+      setState((s) => ({ ...s, onboardingDone: true, onboardingLoaded: true }));
     }
   };
 
   useEffect(() => {
-    loadOnboarding();
+    loadFromStorage();
   }, []);
 
   useEffect(() => {
-    const unsub = onAuthStateChanged(auth, async (fbUser) => {
+    if (!GOOGLE_WEB_CLIENT_ID) {
+      console.warn("[auth] Missing EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID");
+      return;
+    }
+    GoogleSignin.configure({ webClientId: GOOGLE_WEB_CLIENT_ID });
+  }, []);
+
+  useEffect(() => {
+    const unsubscribe = auth().onAuthStateChanged(async (fbUser) => {
       if (!fbUser) {
         setState((s) => ({ ...s, token: null, user: null, orgId: null, loading: false }));
         return;
       }
       const token = await fbUser.getIdToken();
-      const user = userToState({
+      const user = {
         id: fbUser.uid,
         email: fbUser.email ?? "",
         name: fbUser.displayName ?? undefined,
-      });
+      };
       setState((s) => ({
         ...s,
         token,
@@ -72,43 +85,27 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         loading: false,
       }));
     });
-    return () => unsub();
+    return () => unsubscribe();
   }, []);
 
-  const loadFromStorage = async () => {
-    await loadOnboarding();
+  const login = async (email: string, password: string) => {
+    await auth().signInWithEmailAndPassword(email, password);
+  };
+
+  const register = async (email: string, password: string, displayName?: string) => {
+    const cred = await auth().createUserWithEmailAndPassword(email, password);
+    if (displayName?.trim()) {
+      await cred.user.updateProfile({ displayName: displayName.trim() });
+    }
+  };
+
+  const logout = async () => {
+    await auth().signOut();
   };
 
   const finishOnboarding = async () => {
     await AsyncStorage.setItem(ONBOARDING_KEY, "1");
-    setState((s) => ({ ...s, onboardingDone: true }));
-  };
-
-  const login = async (email: string, password: string) => {
-    const { user, token } = await authService.login(email, password);
-    setState((s) => ({
-      ...s,
-      token,
-      user: userToState(user),
-      orgId: user.id,
-      loading: false,
-    }));
-  };
-
-  const register = async (email: string, password: string, displayName?: string) => {
-    const { user, token } = await authService.register(email, password, displayName);
-    setState((s) => ({
-      ...s,
-      token,
-      user: userToState(user),
-      orgId: user.id,
-      loading: false,
-    }));
-  };
-
-  const logout = async () => {
-    await authService.logout();
-    setState((s) => ({ ...s, token: null, user: null, orgId: null, loading: false }));
+    setState((s) => ({ ...s, onboardingDone: true, onboardingLoaded: true }));
   };
 
   return (

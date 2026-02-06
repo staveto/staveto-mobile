@@ -41,15 +41,9 @@ service cloud.firestore {
           // Allow initial FREE subscription creation (during registration)
           (!('subscription' in resource.data) && request.resource.data.subscription.tier == "FREE" && request.resource.data.subscription.status == "active")
         );
-      
-      // Notifications (user-specific)
-      match /notifications/{notificationId} {
-        allow read: if signedIn() && uid() == userId;
-        allow create: if signedIn() && uid() == userId;
-        allow update: if signedIn()
-          && uid() == userId
-          && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readAt"]);
-        allow delete: if false;
+
+      match /ocrCache/{hash} {
+        allow read, write: if signedIn() && uid() == userId;
       }
     }
     
@@ -77,8 +71,10 @@ service cloud.firestore {
       allow create: if signedIn()
         && request.resource.data.ownerId == uid();
 
-      // read/delete: len owner
-      allow read, delete: if signedIn()
+      // read/delete: len owner (fallback allow read for legacy docs without ownerId)
+      allow read: if signedIn()
+        && (resource.data.ownerId == uid() || !("ownerId" in resource.data));
+      allow delete: if signedIn()
         && resource.data.ownerId == uid();
 
       // update: len owner + ownerId sa nesmie meniť
@@ -88,21 +84,39 @@ service cloud.firestore {
 
       // subkolekcie (phases/tasks/expenses/attachments...)
       match /{subcol}/{docId} {
-        allow read, write: if signedIn()
+        allow read: if signedIn()
+          && exists(/databases/$(database)/documents/projects/$(projectId))
+          && (
+            get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid()
+            || !("ownerId" in get(/databases/$(database)/documents/projects/$(projectId)).data)
+          );
+        allow write: if signedIn()
           && exists(/databases/$(database)/documents/projects/$(projectId))
           && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
       }
 
       // hlbšie subkolekcie (napr. tasks/{id}/attachments/{fileId})
       match /{subcol}/{docId}/{subsub=**} {
-        allow read, write: if signedIn()
+        allow read: if signedIn()
+          && exists(/databases/$(database)/documents/projects/$(projectId))
+          && (
+            get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid()
+            || !("ownerId" in get(/databases/$(database)/documents/projects/$(projectId)).data)
+          );
+        allow write: if signedIn()
           && exists(/databases/$(database)/documents/projects/$(projectId))
           && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
       }
 
       // members – MVP: zatiaľ len owner
       match /members/{memberId} {
-        allow read, write: if signedIn()
+        allow read: if signedIn()
+          && exists(/databases/$(database)/documents/projects/$(projectId))
+          && (
+            get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid()
+            || !("ownerId" in get(/databases/$(database)/documents/projects/$(projectId)).data)
+          );
+        allow write: if signedIn()
           && exists(/databases/$(database)/documents/projects/$(projectId))
           && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
       }

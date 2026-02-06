@@ -12,7 +12,7 @@ import {
 import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
-import { getAuthErrorMessage } from "../services/auth";
+import { getAuthErrorMessage, loginWithGoogle } from "../services/auth";
 import { colors, radius, spacing } from "../theme";
 
 export function RegisterScreen() {
@@ -39,6 +39,19 @@ export function RegisterScreen() {
     setError("");
     try {
       await register(email.trim(), password, displayName.trim() || undefined);
+    } catch (e: unknown) {
+      const code = (e as { code?: string })?.code;
+      setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("register.failed")));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onGoogleRegister = async () => {
+    setSubmitting(true);
+    setError("");
+    try {
+      await loginWithGoogle();
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code;
       setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("register.failed")));
@@ -88,10 +101,10 @@ export function RegisterScreen() {
       <TouchableOpacity style={styles.button} onPress={onRegister} disabled={submitting}>
         {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("register.button")}</Text>}
       </TouchableOpacity>
-      <TouchableOpacity style={styles.googleBtn} onPress={() => setError(t("register.googleNotAvailable"))}>
+      <TouchableOpacity style={styles.googleBtn} onPress={onGoogleRegister} disabled={submitting}>
         <Text style={styles.googleBtnText}>{t("register.google")}</Text>
       </TouchableOpacity>
-      <TouchableOpacity style={styles.link} onPress={() => navigation.goBack()}>
+      <TouchableOpacity style={styles.link} onPress={() => (navigation as any).navigate("Login")}>
         <Text style={styles.linkText}>{t("register.haveAccount")}</Text>
       </TouchableOpacity>
     </KeyboardAvoidingView>

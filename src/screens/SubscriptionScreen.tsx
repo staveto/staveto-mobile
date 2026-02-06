@@ -28,6 +28,7 @@ import {
   type SubscriptionTier,
 } from "../services/subscription";
 import { colors, radius, spacing } from "../theme";
+import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
 import * as tasksService from "../services/tasks";
 import * as expensesService from "../services/expenses";
@@ -75,6 +76,7 @@ const SUBSCRIPTION_PLANS = [
 ];
 
 export function SubscriptionScreen() {
+  const { t } = useI18n();
   const { user, orgId } = useAuth();
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
@@ -152,7 +154,7 @@ export function SubscriptionScreen() {
 
   const handleUpgrade = async (priceId: string) => {
     if (!priceId) {
-      Alert.alert("Chyba", "Nie je možné spustiť platobný proces.");
+      Alert.alert(t("common.error"), t("subscription.cannotStartPayment") || "Nie je možné spustiť platobný proces.");
       return;
     }
     
@@ -165,15 +167,15 @@ export function SubscriptionScreen() {
       if (supported) {
         await Linking.openURL(url);
         Alert.alert(
-          "Platba",
-          "Po dokončení platby sa vaše predplatné aktualizuje automaticky. Obnovte obrazovku za pár sekúnd."
+          t("subscription.paymentTitle"),
+          t("subscription.paymentInfo")
         );
       } else {
-        Alert.alert("Chyba", "Nepodarilo sa otvoriť platobnú stránku.");
+        Alert.alert(t("common.error"), t("subscription.failedToOpenPaymentPage") || "Nepodarilo sa otvoriť platobnú stránku.");
       }
     } catch (error: any) {
       console.error("[SubscriptionScreen] Error creating checkout:", error);
-      Alert.alert("Chyba", error.message || "Nepodarilo sa spustiť platobný proces.");
+      Alert.alert(t("common.error"), error.message || t("subscription.failedToStartPayment") || "Nepodarilo sa spustiť platobný proces.");
     } finally {
       setUpgrading(null);
     }
@@ -186,11 +188,11 @@ export function SubscriptionScreen() {
       if (supported) {
         await Linking.openURL(url);
       } else {
-        Alert.alert("Chyba", "Nepodarilo sa otvoriť správcu predplatného.");
+        Alert.alert(t("common.error"), t("subscription.failedToOpenManager") || "Nepodarilo sa otvoriť správcu predplatného.");
       }
     } catch (error: any) {
       console.error("[SubscriptionScreen] Error creating billing portal:", error);
-      Alert.alert("Chyba", error.message || "Nepodarilo sa otvoriť správcu predplatného.");
+      Alert.alert(t("common.error"), error.message || t("subscription.failedToOpenManager") || "Nepodarilo sa otvoriť správcu predplatného.");
     }
   };
 
@@ -213,7 +215,7 @@ export function SubscriptionScreen() {
     >
       {/* Current Plan */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Aktuálne predplatné</Text>
+        <Text style={styles.sectionTitle}>{t("subscription.currentPlan") || 'Aktuálne predplatné'}</Text>
         <View style={styles.currentPlanCard}>
           <View style={styles.currentPlanHeader}>
             <Text style={styles.currentPlanName}>{currentPlan.name}</Text>
@@ -223,22 +225,22 @@ export function SubscriptionScreen() {
           {subscription?.status === "past_due" && (
             <View style={styles.warningBadge}>
               <Ionicons name="warning" size={16} color="#FF9800" />
-              <Text style={styles.warningText}>Platba neúspešná</Text>
+              <Text style={styles.warningText}>{t("subscription.paymentFailed") || 'Platba neúspešná'}</Text>
             </View>
           )}
           {subscription?.status === "trialing" && (
             <View style={styles.trialBadge}>
-              <Text style={styles.trialText}>Skúšobné obdobie</Text>
+              <Text style={styles.trialText}>{t("subscription.trialPeriod") || 'Skúšobné obdobie'}</Text>
             </View>
           )}
         </View>
 
         {/* Usage Stats */}
         <View style={styles.usageSection}>
-          <Text style={styles.usageTitle}>Využitie limitov</Text>
+          <Text style={styles.usageTitle}>{t("subscription.usageLimits") || 'Využitie limitov'}</Text>
           
           <View style={styles.usageItem}>
-            <Text style={styles.usageLabel}>Projekty</Text>
+            <Text style={styles.usageLabel}>{t("subscription.projects") || 'Projekty'}</Text>
             <View style={styles.usageBarContainer}>
               <View
                 style={[
@@ -256,7 +258,7 @@ export function SubscriptionScreen() {
           </View>
 
           <View style={styles.usageItem}>
-            <Text style={styles.usageLabel}>Výdavky tento mesiac</Text>
+            <Text style={styles.usageLabel}>{t("subscription.expensesThisMonth") || 'Výdavky tento mesiac'}</Text>
             <View style={styles.usageBarContainer}>
               <View
                 style={[
@@ -278,14 +280,14 @@ export function SubscriptionScreen() {
         {subscription?.status === "active" && subscription.tier !== "FREE" && (
           <TouchableOpacity style={styles.manageButton} onPress={handleManageBilling}>
             <Ionicons name="card-outline" size={20} color={colors.primary} />
-            <Text style={styles.manageButtonText}>Spravovať platbu a faktúry</Text>
+            <Text style={styles.manageButtonText}>{t("subscription.managePayment") || 'Spravovať platbu a faktúry'}</Text>
           </TouchableOpacity>
         )}
       </View>
 
       {/* Available Plans */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>Dostupné plány</Text>
+        <Text style={styles.sectionTitle}>{t("subscription.availablePlans") || 'Dostupné plány'}</Text>
         {SUBSCRIPTION_PLANS.map((plan) => {
           const isCurrent = plan.tier === currentTier;
           const isUpgrading = upgrading === plan.priceId;
@@ -311,7 +313,7 @@ export function SubscriptionScreen() {
 
               {isCurrent ? (
                 <View style={styles.currentBadge}>
-                  <Text style={styles.currentBadgeText}>Aktuálny plán</Text>
+                  <Text style={styles.currentBadgeText}>{t("subscription.currentPlanBadge") || 'Aktuálny plán'}</Text>
                 </View>
               ) : (
                 <TouchableOpacity
@@ -324,7 +326,7 @@ export function SubscriptionScreen() {
                   ) : (
                     <>
                       <Text style={styles.upgradeButtonText}>
-                        {plan.tier === "FREE" ? "Prepnut sa na" : "Upgrade na"} {plan.name}
+                        {plan.tier === "FREE" ? t("subscription.switchTo") || "Prepnut sa na" : t("subscription.upgradeTo") || "Upgrade na"} {plan.name}
                       </Text>
                     </>
                   )}
@@ -337,8 +339,7 @@ export function SubscriptionScreen() {
 
       <View style={styles.footer}>
         <Text style={styles.footerText}>
-          Predplatné sa aktualizuje automaticky po úspešnej platbe.{"\n"}
-          Ak máte otázky, kontaktujte podporu.
+          {t("subscription.footerText")}
         </Text>
       </View>
     </ScrollView>

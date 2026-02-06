@@ -14,11 +14,10 @@ import {
   serverTimestamp,
   Timestamp,
   writeBatch,
-} from "firebase/firestore";
+} from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
-import { getStatusLabel } from "../helpers/taskStatusMapping";
-import { createNotification } from "./notifications";
+import { upsertTaskDueNotification, markTaskNotificationsRead, recordSyncIssue } from "./notifications";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 
 export type TaskDoc = {
@@ -197,27 +196,52 @@ export async function createTask(
   }
   
   const c = collection(db, paths.projectTasks(projectId));
-  const ref = await addDoc(c, {
-    ownerId,
-    projectId, // Required: reference to parent project
-    phaseId: opts?.phaseId ?? null, // null for TRADE/MAINTENANCE, string for BUILD
-    order: order,
-    title: title.trim(),
-    trade: opts?.trade ?? null,
-    dueDate: opts?.dueDate || null,
-    status: "OPEN",
-    origin: "CUSTOM", // Mark as custom task
-    templateTaskId: null, // Custom tasks don't have template reference
-    isActive: true, // Active by default (MVP: soft delete flag)
-    assigneeId: null,
-    assigneeName: null,
-    doneAt: null,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
-  });
+  let ref;
+  try {
+    ref = await addDoc(c, {
+      ownerId,
+      projectId, // Required: reference to parent project
+      phaseId: opts?.phaseId ?? null, // null for TRADE/MAINTENANCE, string for BUILD
+      order: order,
+      title: title.trim(),
+      trade: opts?.trade ?? null,
+      dueDate: opts?.dueDate || null,
+      status: "OPEN",
+      origin: "CUSTOM", // Mark as custom task
+      templateTaskId: null, // Custom tasks don't have template reference
+      isActive: true, // Active by default (MVP: soft delete flag)
+      assigneeId: null,
+      assigneeName: null,
+      doneAt: null,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    });
+  } catch (error: any) {
+    if (error?.code === "unavailable" || error?.code === "network-request-failed") {
+      await recordSyncIssue("Nepodarilo sa uložiť úlohu. Skontrolujte pripojenie a skúste znova.");
+    }
+    throw error;
+  }
   
   console.log(`[tasks] Created custom task: ${ref.id} in project ${projectId}, phase ${opts?.phaseId || 'none'}, order ${order}`);
   
+  if (currentUser?.uid) {
+    try {
+      const { getProject } = await import("./projects");
+      const project = await getProject(projectId);
+      await upsertTaskDueNotification({
+        userId: currentUser.uid,
+        taskId: ref.id,
+        taskTitle: title.trim(),
+        dueDate: opts?.dueDate ?? null,
+        projectId,
+        projectName: project?.name ?? null,
+      });
+    } catch (error) {
+      console.warn("[tasks] Failed to create due notification:", error);
+    }
+  }
+
   return {
     id: ref.id,
     projectId,
@@ -339,41 +363,17 @@ export async function updateTaskStatus(
   status: string
 ): Promise<void> {
   const currentUser = auth.currentUser;
-  const taskRef = doc(db, paths.projectTask(projectId, taskId));
-  let taskTitle = "";
-  try {
-    const taskSnap = await getDoc(taskRef);
-    if (taskSnap.exists()) {
-      const d = taskSnap.data();
-      taskTitle = (d.title as string) ?? "";
-    }
-  } catch {
-    // ignore title fetch errors
-  }
-
   const ref = doc(db, paths.projectTask(projectId, taskId));
   await updateDoc(ref, {
     status,
     updatedAt: new Date().toISOString(),
   });
 
-  if (currentUser?.uid) {
-    const label = getStatusLabel(status);
-    const titleText = taskTitle ? `Úloha "${taskTitle}"` : "Úloha";
+  if (currentUser?.uid && status === "DONE") {
     try {
-      await createNotification({
-        userId: currentUser.uid,
-        projectId,
-        entityType: "task",
-        entityId: taskId,
-        eventType: "status_changed",
-        title: "Zmena stavu úlohy",
-        message: `${titleText} bola označená ako ${label}.`,
-        actorId: currentUser.uid,
-        actorName: currentUser.displayName ?? currentUser.email ?? undefined,
-      });
+      await markTaskNotificationsRead(currentUser.uid, taskId);
     } catch (error) {
-      console.warn("[tasks] Failed to create notification:", error);
+      console.warn("[tasks] Failed to mark task notifications as read:", error);
     }
   }
 }
@@ -576,7 +576,36 @@ export async function updateTaskTitle(
   if (dueDate !== undefined) {
     updateData.dueDate = dueDate || null;
   }
-  await updateDoc(ref, updateData);
+  try {
+    await updateDoc(ref, updateData);
+  } catch (error: any) {
+    if (error?.code === "unavailable" || error?.code === "network-request-failed") {
+      await recordSyncIssue("Nepodarilo sa uložiť zmenu úlohy. Skontrolujte pripojenie a skúste znova.");
+    }
+    throw error;
+  }
+
+  const currentUser = auth.currentUser;
+  if (currentUser?.uid) {
+    try {
+      if (dueDate) {
+        const { getProject } = await import("./projects");
+        const project = await getProject(projectId);
+        await upsertTaskDueNotification({
+          userId: currentUser.uid,
+          taskId,
+          taskTitle: title.trim(),
+          dueDate,
+          projectId,
+          projectName: project?.name ?? null,
+        });
+      } else {
+        await markTaskNotificationsRead(currentUser.uid, taskId);
+      }
+    } catch (error) {
+      console.warn("[tasks] Failed to update due notification:", error);
+    }
+  }
   console.log(`[tasks] Updated task ${taskId} title to "${title}"${dueDate !== undefined ? `, dueDate to "${dueDate || 'null'}"` : ''}`);
 }
 

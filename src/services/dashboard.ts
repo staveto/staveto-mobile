@@ -1,4 +1,3 @@
-import { auth } from "../firebase";
 import * as projectsService from "./projects";
 import * as tasksService from "./tasks";
 import * as expensesService from "./expenses";
@@ -22,8 +21,7 @@ export type DashboardViewModel = {
  * Load dashboard data for a user
  */
 export async function loadDashboardData(ownerId: string): Promise<DashboardViewModel> {
-  const currentUser = auth.currentUser;
-  if (!currentUser || !currentUser.uid) {
+  if (!ownerId) {
     throw new Error('Musíte byť prihlásený na načítanie dashboard dát.');
   }
 
@@ -129,29 +127,39 @@ export async function loadDashboardData(ownerId: string): Promise<DashboardViewM
     });
   });
 
-  // Get today's tasks (tasks with dueDate today or tasks from TRADE/MAINTENANCE projects)
-  const todayTasks = allTasks.filter(task => {
-    const project = projects.find(p => p.id === task.projectId);
-    
-    // For TRADE/MAINTENANCE projects, show tasks that are OPEN or DOING
-    if (project && (project.projectType === 'TRADE' || project.projectType === 'MAINTENANCE')) {
-      return task.status === 'OPEN' || task.status === 'DOING';
-    }
-    
-    // For BUILD projects, show tasks with dueDate today
-    if (task.dueDate) {
-      return task.dueDate === todayISO;
-    }
-    
-    return false;
-  }).map(task => ({
-    ...task,
-    projectName: projects.find(p => p.id === task.projectId)?.name || 'Unknown',
-  }));
+  const parseDateOnly = (dateStr?: string) => {
+    if (!dateStr) return null;
+    const parts = dateStr.split("-");
+    if (parts.length !== 3) return null;
+    const [y, m, d] = parts.map((p) => Number(p));
+    if (!y || !m || !d) return null;
+    return new Date(y, m - 1, d);
+  };
+
+  // Upcoming tasks (with dueDate today or later), sorted by date
+  const upcomingTasks = allTasks
+    .filter((task) => {
+      if (task.isActive === false) return false;
+      if (task.status === "DONE") return false;
+      if (!task.dueDate) return false;
+      const dueDate = parseDateOnly(task.dueDate);
+      if (!dueDate) return false;
+      dueDate.setHours(0, 0, 0, 0);
+      return dueDate.getTime() >= today.getTime();
+    })
+    .sort((a, b) => {
+      const aDate = parseDateOnly(a.dueDate)?.getTime() ?? 0;
+      const bDate = parseDateOnly(b.dueDate)?.getTime() ?? 0;
+      return aDate - bDate;
+    })
+    .map(task => ({
+      ...task,
+      projectName: projects.find(p => p.id === task.projectId)?.name || 'Unknown',
+    }));
 
   return {
     projects,
-    todayTasks,
+    todayTasks: upcomingTasks,
     kpis: {
       openCount: openTasks.length,
       doneTodayCount: doneTodayTasks.length,

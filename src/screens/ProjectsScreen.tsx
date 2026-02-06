@@ -12,7 +12,7 @@ import {
   RefreshControl,
   ScrollView,
 } from "react-native";
-import { useRoute, useNavigation } from "@react-navigation/native";
+import { useFocusEffect, useRoute, useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
@@ -56,6 +56,8 @@ export function ProjectsScreen() {
   const [showEdit, setShowEdit] = useState(false);
   const [editProject, setEditProject] = useState<Project | null>(null);
   const [editName, setEditName] = useState("");
+  const [menuProject, setMenuProject] = useState<Project | null>(null);
+  const [showMenu, setShowMenu] = useState(false);
 
   const load = useCallback(async (isRefresh = false) => {
     // Guard: orgId must be defined and not empty
@@ -75,7 +77,7 @@ export function ProjectsScreen() {
     
     try {
       console.log('[ProjectsScreen] Loading projects for orgId:', orgId);
-      const list = await projectsService.listMyProjects(orgId);
+      const list = await projectsService.listAllMyProjects(orgId);
       console.log('[ProjectsScreen] Loaded', list.length, 'projects');
       setProjects(list);
     } catch (e: unknown) {
@@ -99,15 +101,18 @@ export function ProjectsScreen() {
     load();
   }, [load]);
 
-  useEffect(() => {
-    if ((route.params as { openNew?: boolean })?.openNew) {
-      setShowNew(true);
-      setNewStep(1);
-      setSelectedType(null);
-      setNewName("");
-      setError(null);
-    }
-  }, [(route.params as { openNew?: boolean })?.openNew]);
+  useFocusEffect(
+    useCallback(() => {
+      if ((route.params as { openNew?: boolean })?.openNew) {
+        setShowNew(true);
+        setNewStep(1);
+        setSelectedType(null);
+        setNewName("");
+        setError(null);
+        (navigation as { setParams?: (params: Record<string, unknown>) => void }).setParams?.({ openNew: false });
+      }
+    }, [navigation, route.params])
+  );
 
   const closeNewModal = () => {
     setShowNew(false);
@@ -359,44 +364,65 @@ export function ProjectsScreen() {
   };
 
   const openProjectMenu = (item: Project) => {
-    Alert.alert(item.name || t("projects.noName"), "", [
-      { text: t("projects.cancel"), style: "cancel" },
-      {
-        text: t("projects.edit"),
-        onPress: () => {
-          setEditProject(item);
-          setEditName(item.name || "");
-          setShowEdit(true);
+    setMenuProject(item);
+    setShowMenu(true);
+  };
+
+  const closeProjectMenu = () => {
+    setShowMenu(false);
+    setMenuProject(null);
+  };
+
+  const onMenuEdit = () => {
+    if (!menuProject) return;
+    setEditProject(menuProject);
+    setEditName(menuProject.name || "");
+    setShowEdit(true);
+    closeProjectMenu();
+  };
+
+  const onMenuArchive = async () => {
+    if (!menuProject || !orgId) return;
+    const isArchived = !!menuProject.archivedAt;
+    try {
+      if (isArchived) {
+        await projectsService.unarchiveProject(orgId, menuProject.id);
+      } else {
+        await projectsService.archiveProject(orgId, menuProject.id);
+      }
+      load();
+    } catch (e: unknown) {
+      const c = (e as { code?: string }).code;
+      showError(c === "permission-denied" ? t("projectOverview.noPermission") : (e instanceof Error ? e.message : "Chyba."));
+    } finally {
+      closeProjectMenu();
+    }
+  };
+
+  const onMenuDelete = () => {
+    if (!menuProject) return;
+    Alert.alert(
+      t("projects.deleteConfirm"),
+      "",
+      [
+        { text: t("projects.cancel"), style: "cancel" },
+        {
+          text: t("projects.delete"),
+          style: "destructive",
+          onPress: async () => {
+            if (!orgId) return;
+            try {
+              await projectsService.deleteProject(orgId, menuProject.id);
+              load();
+            } catch (e: unknown) {
+              const c = (e as { code?: string }).code;
+              showError(c === "permission-denied" ? t("projectOverview.noPermission") : (e instanceof Error ? e.message : "Chyba."));
+            }
+          },
         },
-      },
-              {
-                text: t("projects.delete"),
-                style: "destructive",
-                onPress: () => {
-                  Alert.alert(
-                    t("projects.deleteConfirm"),
-                    "",
-                    [
-                      { text: t("projects.cancel"), style: "cancel" },
-                      {
-                        text: t("projects.delete"),
-                        style: "destructive",
-                        onPress: async () => {
-                          if (!orgId) return;
-                          try {
-                            await projectsService.deleteProject(orgId, item.id);
-                            load();
-                          } catch (e: unknown) {
-                            const c = (e as { code?: string }).code;
-                            showError(c === "permission-denied" ? "Nemáte oprávnenie." : (e instanceof Error ? e.message : "Chyba."));
-                          }
-                        },
-                      },
-                    ]
-                  );
-                },
-              },
-    ]);
+      ]
+    );
+    closeProjectMenu();
   };
 
   const onSaveEdit = async () => {
@@ -424,12 +450,15 @@ export function ProjectsScreen() {
     );
   }
 
+  const activeProjects = projects.filter((p) => !p.archivedAt);
+  const archivedProjects = projects.filter((p) => !!p.archivedAt);
+
   return (
     <View style={styles.container}>
       <TouchableOpacity style={styles.fab} onPress={() => setShowNew(true)}>
         <Text style={styles.fabText}>+ {t("projects.fab")}</Text>
       </TouchableOpacity>
-      {!projects.length && !loading ? (
+      {!activeProjects.length && !archivedProjects.length && !loading ? (
         <View style={styles.centered}>
           <Text style={styles.emptyText}>{t("projects.empty")}</Text>
           <TouchableOpacity 
@@ -444,7 +473,7 @@ export function ProjectsScreen() {
         </View>
       ) : (
         <FlatList
-          data={projects}
+          data={activeProjects}
           keyExtractor={(p) => p.id}
           contentContainerStyle={styles.list}
           refreshControl={
@@ -511,8 +540,97 @@ export function ProjectsScreen() {
               </TouchableOpacity>
             );
           }}
+          ListEmptyComponent={
+            archivedProjects.length ? (
+              <View style={styles.centered}>
+                <Text style={styles.emptyText}>{t("projects.noActive")}</Text>
+              </View>
+            ) : null
+          }
+          ListFooterComponent={
+            archivedProjects.length ? (
+              <View style={styles.archivedSection}>
+                <Text style={styles.archivedTitle}>{t("projects.archiveSection")}</Text>
+                {archivedProjects.map((item) => {
+                  const projectType = item.projectType;
+                  const categoryLabel = projectType === "RESIDENTIAL" 
+                    ? t("projectType.RESIDENTIAL") 
+                    : projectType === "TRADE"
+                    ? t("projectType.TRADE")
+                    : t("projectType.MANAGEMENT");
+                  return (
+                    <TouchableOpacity
+                      key={item.id}
+                      style={[styles.card, styles.archivedCard]}
+                      onPress={() => {
+                        (navigation as any).navigate('ProjectOverview', {
+                          projectId: item.id,
+                          projectName: item.name || t("projects.noName"),
+                        });
+                      }}
+                      activeOpacity={0.7}
+                    >
+                      <View style={styles.cardContent}>
+                        <View style={styles.cardMain}>
+                          <Text style={[styles.name, styles.archivedText]} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
+                          <Text style={[styles.category, styles.archivedText]} numberOfLines={1}>{categoryLabel}</Text>
+                        </View>
+                        <View style={styles.cardActions}>
+                          {item.addressText && (
+                            <TouchableOpacity
+                              style={styles.cardMapButton}
+                              onPress={(e) => {
+                                e.stopPropagation();
+                                openInMaps(item.addressText!);
+                              }}
+                              accessibilityLabel="Otvoriť v mapách"
+                              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                            >
+                              <Ionicons name="location" size={18} color={colors.textMuted} />
+                            </TouchableOpacity>
+                          )}
+                          <TouchableOpacity
+                            style={styles.cardMenu}
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              openProjectMenu(item);
+                            }}
+                            accessibilityLabel={t("projects.edit")}
+                            hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                          >
+                            <Text style={[styles.cardMenuText, styles.archivedText]}>⋯</Text>
+                          </TouchableOpacity>
+                        </View>
+                      </View>
+                    </TouchableOpacity>
+                  );
+                })}
+              </View>
+            ) : null
+          }
         />
       )}
+      <Modal visible={showMenu} transparent animationType="fade">
+        <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={closeProjectMenu}>
+          <View style={styles.menuCard}>
+            <Text style={styles.menuTitle}>{menuProject?.name || t("projects.noName")}</Text>
+            <TouchableOpacity style={styles.menuItem} onPress={closeProjectMenu}>
+              <Text style={styles.menuText}>{t("projects.cancel")}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={onMenuEdit}>
+              <Text style={styles.menuText}>{t("projects.edit")}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={onMenuArchive}>
+              <Text style={styles.menuText}>
+                {menuProject?.archivedAt ? t("projects.unarchive") : t("projects.archive")}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.menuItem} onPress={onMenuDelete}>
+              <Text style={styles.menuTextDanger}>{t("projects.delete")}</Text>
+            </TouchableOpacity>
+          </View>
+        </TouchableOpacity>
+      </Modal>
       <Modal visible={showNew} transparent animationType="slide">
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
@@ -924,6 +1042,57 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  archivedSection: {
+    marginTop: spacing.lg,
+    paddingTop: spacing.md,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  archivedTitle: {
+    fontSize: 14,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
+    fontWeight: "600",
+  },
+  archivedCard: {
+    opacity: 0.7,
+  },
+  archivedText: {
+    color: colors.textMuted,
+  },
+  menuOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.4)",
+    justifyContent: "flex-end",
+  },
+  menuCard: {
+    backgroundColor: colors.card,
+    paddingVertical: spacing.md,
+    borderTopLeftRadius: radius,
+    borderTopRightRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  menuTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.text,
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
+  menuItem: {
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+  },
+  menuText: {
+    fontSize: 15,
+    color: colors.text,
+  },
+  menuTextDanger: {
+    fontSize: 15,
+    color: "#c00",
+    fontWeight: "600",
+  },
   cardContent: {
     flexDirection: "row",
     alignItems: "center",
@@ -956,7 +1125,16 @@ const styles = StyleSheet.create({
   },
   fabText: { color: "#fff", fontWeight: "600" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },
-  modal: { backgroundColor: colors.card, borderRadius: radius, padding: spacing.lg, borderWidth: 1, borderColor: colors.border, maxHeight: "90%", flexDirection: "column" },
+  modal: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+    maxHeight: "90%",
+    minHeight: 360,
+    flexDirection: "column",
+  },
   modalContent: { flex: 1, maxHeight: "70%" },
   modalTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.md },
   modalLabel: { fontSize: 14, color: colors.textMuted, marginBottom: spacing.sm },

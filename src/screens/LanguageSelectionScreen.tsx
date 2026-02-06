@@ -1,15 +1,18 @@
 import React from "react";
-import { View, Text, TouchableOpacity, StyleSheet } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, Image } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import type { Locale } from "../i18n/translations";
 
 const LANGUAGES: { code: Locale; label: string }[] = [
-  { code: "sk", label: "Slovenčina" },
-  { code: "es", label: "Español" },
-  { code: "it", label: "Italiano" },
-  { code: "pl", label: "Polski" },
+  { code: "en", label: "🇬🇧 English" },
+  { code: "de", label: "🇩🇪 Deutsch" },
+  { code: "sk", label: "🇸🇰 Slovenčina" },
+  { code: "cs", label: "🇨🇿 Čeština" },
+  { code: "es", label: "🇪🇸 Español" },
+  { code: "it", label: "🇮🇹 Italiano" },
+  { code: "pl", label: "🇵🇱 Polski" },
 ];
 
 export function LanguageSelectionScreen() {
@@ -23,6 +26,12 @@ export function LanguageSelectionScreen() {
 
   return (
     <View style={styles.container}>
+      <Image
+        source={require("../../assets/logo.png")}
+        style={styles.logo}
+        resizeMode="contain"
+        accessibilityLabel="Staveto logo"
+      />
       <Text style={styles.title}>{t("languageSelect.title")}</Text>
       <Text style={styles.subtitle}>{t("languageSelect.subtitle")}</Text>
       <View style={styles.list}>
@@ -51,14 +60,20 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 28,
     fontWeight: "700",
-    color: colors.text,
+    color: "#fff",
     textAlign: "center",
   },
   subtitle: {
     marginTop: spacing.sm,
     fontSize: 14,
-    color: colors.textMuted,
+    color: "#fff",
     textAlign: "center",
+  },
+  logo: {
+    width: 160,
+    height: 80,
+    alignSelf: "center",
+    marginBottom: spacing.lg,
   },
   list: {
     marginTop: spacing.xl,

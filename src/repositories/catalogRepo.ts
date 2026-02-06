@@ -1,4 +1,4 @@
-import { collection, doc, getDoc, getDocs, orderBy, query } from "firebase/firestore";
+import { collection, doc, getDoc, getDocs, orderBy, query } from "../lib/rnFirestore";
 import { db } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 

@@ -1,9 +1,12 @@
-import { collection, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, setDoc, serverTimestamp, limit } from "firebase/firestore";
+import { collection, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, setDoc, serverTimestamp, limit } from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
+import firestore from "@react-native-firebase/firestore";
+import { getApp } from "@react-native-firebase/app";
 import { paths } from "../lib/firestorePaths";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 
 const COLLECTION = "projects";
+let didLogProjectContext = false;
 
 export type ProjectDoc = {
   id: string;
@@ -12,6 +15,7 @@ export type ProjectDoc = {
   templateId?: string;
   addressText?: string; // Project address for navigation
   ownerId?: string; // Read-only: included from existing DB field, no schema change
+  archivedAt?: unknown; // Timestamp when archived (truthy = archived)
 };
 
 export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
@@ -25,6 +29,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     projectType: d.projectType as "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE" | undefined,
     templateId: d.templateId as string | undefined,
     ownerId: (d.ownerId as string) || undefined, // Read-only: read from existing DB field
+    archivedAt: d.archivedAt ?? undefined,
   };
 }
 
@@ -42,6 +47,13 @@ export async function createProject(ownerId: string, name: string): Promise<Proj
   }
   
   const actualOwnerId = currentUser.uid; // Always use auth.currentUser.uid
+
+  if (!didLogProjectContext) {
+    didLogProjectContext = true;
+    const app = getApp();
+    console.log("[projects] RNFirebase projectId:", app?.options?.projectId);
+    console.log("[projects] auth.currentUser.uid:", actualOwnerId);
+  }
   
   // Debug: Verify ownerId matches auth.currentUser.uid
   if (ownerId && ownerId !== actualOwnerId) {
@@ -185,11 +197,14 @@ export async function getProject(projectId: string): Promise<ProjectDoc | null> 
   }
 }
 
-export async function listMyProjects(ownerId: string): Promise<ProjectDoc[]> {
+/**
+ * Internal helper to load all projects (including archived)
+ */
+async function listAllMyProjectsInternal(ownerId: string): Promise<ProjectDoc[]> {
   // CRITICAL FIX: Always use auth.currentUser.uid, never trust ownerId from params
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
-    console.warn('[projects] listMyProjects: auth.currentUser is null, returning empty array');
+    console.warn('[projects] listAllMyProjectsInternal: auth.currentUser is null, returning empty array');
     return [];
   }
   
@@ -197,20 +212,22 @@ export async function listMyProjects(ownerId: string): Promise<ProjectDoc[]> {
   
   // Guard: ownerId must be defined
   if (!ownerId) {
-    console.warn('[projects] listMyProjects called with undefined ownerId, using auth.currentUser.uid');
+    console.warn('[projects] listAllMyProjectsInternal called with undefined ownerId, using auth.currentUser.uid');
   } else if (ownerId !== actualOwnerId) {
-    console.warn(`[projects] listMyProjects: ownerId param (${ownerId}) differs from auth.currentUser.uid (${actualOwnerId}). Using auth.currentUser.uid.`);
+    console.warn(`[projects] listAllMyProjectsInternal: ownerId param (${ownerId}) differs from auth.currentUser.uid (${actualOwnerId}). Using auth.currentUser.uid.`);
   }
   
-  console.log(`[projects] listMyProjects: querying with ownerId="${actualOwnerId}" (from auth.currentUser.uid)`);
+  console.log(`[projects] listAllMyProjectsInternal: querying with ownerId="${actualOwnerId}" (from auth.currentUser.uid)`);
   console.log(`[projects] Query: collection('projects'), where('ownerId', '==', '${actualOwnerId}')`);
   
   try {
     // CRITICAL: Query MUST use where('ownerId', '==', auth.currentUser.uid)
     // This ensures Firestore rules can check resource.data.ownerId == uid()
-    const q = query(collection(db, COLLECTION), where("ownerId", "==", actualOwnerId));
-    const snap = await getDocs(q);
-    console.log(`[projects] listMyProjects: found ${snap.docs.length} projects`);
+    const snap = await firestore()
+      .collection(COLLECTION)
+      .where("ownerId", "==", actualOwnerId)
+      .get();
+    console.log(`[projects] listAllMyProjectsInternal: found ${snap.docs.length} projects`);
     
     // Debug: Check ownerId in each project
     snap.docs.forEach((doc) => {
@@ -221,7 +238,7 @@ export async function listMyProjects(ownerId: string): Promise<ProjectDoc[]> {
     
     return snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) })) as ProjectDoc[];
   } catch (error: any) {
-    console.error(`[projects] listMyProjects error:`, error);
+    console.error(`[projects] listAllMyProjectsInternal error:`, error);
     const errorCode = error.code || '';
     const errorMessage = error.message || 'Unknown error';
     
@@ -240,6 +257,29 @@ export async function listMyProjects(ownerId: string): Promise<ProjectDoc[]> {
     // For other errors, still throw
     throw error;
   }
+}
+
+/**
+ * List active (non-archived) projects for a user
+ * Used for dashboard, expense selection, etc.
+ */
+export async function listMyProjects(ownerId: string): Promise<ProjectDoc[]> {
+  const allProjects = await listAllMyProjectsInternal(ownerId);
+  
+  // Filter out archived projects (archivedAt is truthy)
+  const activeProjects = allProjects.filter((project) => !project.archivedAt);
+  
+  console.log(`[projects] listMyProjects: ${allProjects.length} total projects, ${activeProjects.length} active (non-archived) projects`);
+  
+  return activeProjects;
+}
+
+/**
+ * List all projects (including archived) for a user
+ * Used for ProjectsScreen where archived projects should be visible
+ */
+export async function listAllMyProjects(ownerId: string): Promise<ProjectDoc[]> {
+  return listAllMyProjectsInternal(ownerId);
 }
 
 export async function updateProject(_ownerId: string, projectId: string, name: string): Promise<void> {
@@ -267,6 +307,34 @@ export async function deleteProject(_ownerId: string, projectId: string): Promis
   const ref = doc(db, COLLECTION, projectId);
   await deleteDoc(ref);
   console.log(`[projects] Deleted project ${projectId}`);
+}
+
+export async function archiveProject(_ownerId: string, projectId: string): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error('Musíte byť prihlásený na archiváciu projektu.');
+  }
+
+  const ref = doc(db, COLLECTION, projectId);
+  await updateDoc(ref, {
+    archivedAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  });
+  console.log(`[projects] Archived project ${projectId}`);
+}
+
+export async function unarchiveProject(_ownerId: string, projectId: string): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error('Musíte byť prihlásený na obnovenie projektu.');
+  }
+
+  const ref = doc(db, COLLECTION, projectId);
+  await updateDoc(ref, {
+    archivedAt: null,
+    updatedAt: serverTimestamp(),
+  });
+  console.log(`[projects] Unarchived project ${projectId}`);
 }
 
 export async function createPhase(projectId: string, name: string): Promise<ProjectPhaseDoc> {

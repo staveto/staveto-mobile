@@ -1,0 +1,9 @@
+# Copy to .dev.vars and fill in. Use PART1+PART2 so the full Airtable PAT is loaded
+# (some loaders truncate at the dot in a single AIRTABLE_API_KEY value).
+
+AIRTABLE_API_KEY_PART1=patXXXXXXXXXXXXXXX
+AIRTABLE_API_KEY_PART2=yyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyyy
+JWT_SECRET=your-secret-min-32-chars
+AIRTABLE_BASE_ID=appXXXXXXXXXXXXXX
+
+# Full PAT from airtable.com/create/tokens = PART1 + "." + PART2

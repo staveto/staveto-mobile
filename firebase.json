@@ -1,0 +1,13 @@
+{
+  "functions": {
+    "source": "functions",
+    "runtime": "nodejs20"
+  },
+  "firestore": {
+    "rules": "mobile/firestore.rules",
+    "indexes": "mobile/firestore.indexes.json"
+  },
+  "storage": {
+    "rules": "mobile/storage.rules"
+  }
+}

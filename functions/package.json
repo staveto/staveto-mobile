@@ -1,0 +1,27 @@
+{
+  "name": "functions",
+  "version": "1.0.0",
+  "main": "lib/index.js",
+  "private": true,
+  "engines": {
+    "node": "20"
+  },
+  "scripts": {
+    "build": "tsc",
+    "serve": "npm run build && firebase emulators:start --only functions",
+    "deploy": "firebase deploy --only functions"
+  },
+  "keywords": [],
+  "author": "",
+  "license": "ISC",
+  "description": "",
+  "dependencies": {
+    "@google-cloud/vision": "^5.3.4",
+    "firebase-admin": "^13.6.1",
+    "firebase-functions": "^7.0.5"
+  },
+  "devDependencies": {
+    "@types/node": "^25.2.1",
+    "typescript": "^5.9.3"
+  }
+}

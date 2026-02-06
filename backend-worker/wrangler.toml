@@ -1,0 +1,6 @@
+name = "staveto-app-api"
+main = "src/index.ts"
+compatibility_date = "2026-01-25"
+
+[vars]
+AIRTABLE_BASE_ID = "app9LWohKKhQtNLD9"

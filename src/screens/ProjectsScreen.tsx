@@ -655,7 +655,7 @@ export function ProjectsScreen() {
                     }}
                   >
                     <View style={styles.typeIconContainer}>
-                      <Ionicons name="clipboard-outline" size={32} color={colors.primary} />
+                      <Text style={styles.typeEmoji}>🏗️</Text>
                     </View>
                     <Text style={[styles.typeCardText, selectedType === "MANAGEMENT" && styles.typeCardTextActive]}>
                       {t("projectType.MANAGEMENT")}
@@ -670,7 +670,7 @@ export function ProjectsScreen() {
                     }}
                   >
                     <View style={styles.typeIconContainer}>
-                      <Ionicons name="settings-outline" size={32} color={colors.primary} />
+                      <Text style={styles.typeEmoji}>🏠</Text>
                     </View>
                     <Text style={[styles.typeCardText, selectedType === "RESIDENTIAL" && styles.typeCardTextActive]}>
                       {t("projectType.RESIDENTIAL")}
@@ -686,7 +686,7 @@ export function ProjectsScreen() {
                     }}
                   >
                     <View style={styles.typeIconContainer}>
-                      <Ionicons name="construct-outline" size={32} color={colors.primary} />
+                      <Text style={styles.typeEmoji}>🛠️</Text>
                     </View>
                     <Text style={[styles.typeCardText, selectedType === "TRADE" && styles.typeCardTextActive]}>
                       {t("projectType.TRADE")}
@@ -1174,6 +1174,9 @@ const styles = StyleSheet.create({
     marginRight: spacing.md,
     alignItems: 'center',
     justifyContent: 'center',
+  },
+  typeEmoji: {
+    fontSize: 28,
   },
   typeCardText: {
     fontSize: 16,

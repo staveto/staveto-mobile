@@ -2,6 +2,7 @@ import React, { useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { colors, radius, spacing } from "../theme";
+import { useI18n } from "../i18n/I18nContext";
 
 type Props = {
   onFinished: () => void;
@@ -11,6 +12,7 @@ type Mode = "build" | "trade" | "maintenance";
 const PENDING_ONBOARDING_KEY = "pending_onboarding";
 
 export function OnboardingMvpScreen({ onFinished }: Props) {
+  const { t } = useI18n();
   const [step, setStep] = useState<1 | 2>(1);
   const [mode, setMode] = useState<Mode | null>(null);
   const [displayName, setDisplayName] = useState("");
@@ -19,11 +21,11 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
 
   const save = async () => {
     if (!mode) {
-      setError("Vyberte možnosť.");
+      setError(t("onboardingMvp.errorSelectOption"));
       return;
     }
     if (!displayName.trim()) {
-      setError("Zadajte meno.");
+      setError(t("onboardingMvp.errorEnterName"));
       return;
     }
     setSaving(true);
@@ -50,7 +52,7 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
       console.log("ONBOARDING finished");
     } catch (e) {
       console.error("ONBOARDING error", e);
-      setError("Nepodarilo sa uložiť onboarding.");
+      setError(t("onboardingMvp.errorSaveFailed"));
     } finally {
       setSaving(false);
     }
@@ -60,14 +62,14 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
     <View style={styles.container}>
       {step === 1 ? (
         <>
-          <Text style={styles.title}>Na čo budeš Staveto používať?</Text>
+          <Text style={styles.title}>{t("onboardingMvp.step1Title")}</Text>
           <View style={styles.options}>
             <TouchableOpacity
               style={[styles.option, mode === "build" && styles.optionActive]}
               onPress={() => setMode("build")}
             >
               <Text style={[styles.optionText, mode === "build" && styles.optionTextActive]}>
-                Výstavba / rekonštrukcia
+                {t("onboardingMvp.optionBuild")}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -75,7 +77,7 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
               onPress={() => setMode("trade")}
             >
               <Text style={[styles.optionText, mode === "trade" && styles.optionTextActive]}>
-                Remeselné zákazky
+                {t("onboardingMvp.optionTrade")}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -83,21 +85,21 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
               onPress={() => setMode("maintenance")}
             >
               <Text style={[styles.optionText, mode === "maintenance" && styles.optionTextActive]}>
-                Údržba / servis
+                {t("onboardingMvp.optionMaintenance")}
               </Text>
             </TouchableOpacity>
           </View>
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <TouchableOpacity style={styles.button} onPress={() => setStep(2)}>
-            <Text style={styles.buttonText}>Ďalej</Text>
+            <Text style={styles.buttonText}>{t("onboardingMvp.next")}</Text>
           </TouchableOpacity>
         </>
       ) : (
         <>
-          <Text style={styles.title}>Ako ťa máme volať?</Text>
+          <Text style={styles.title}>{t("onboardingMvp.step2Title")}</Text>
           <TextInput
             style={styles.input}
-            placeholder="Zadaj meno"
+            placeholder={t("onboardingMvp.placeholderName")}
             placeholderTextColor={colors.textMuted}
             value={displayName}
             onChangeText={setDisplayName}
@@ -105,10 +107,10 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <View style={styles.actions}>
             <TouchableOpacity style={styles.secondaryBtn} onPress={() => setStep(1)}>
-              <Text style={styles.secondaryText}>Späť</Text>
+              <Text style={styles.secondaryText}>{t("onboardingMvp.back")}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.button} onPress={save} disabled={saving}>
-              {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Uložiť</Text>}
+              {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("onboardingMvp.save")}</Text>}
             </TouchableOpacity>
           </View>
         </>

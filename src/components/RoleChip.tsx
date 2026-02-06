@@ -1,9 +1,10 @@
 import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
-import { getUserRoleLabel, getRoleColor, normalizeRoleKey, type RoleKey } from "../helpers/role";
+import { getRoleColor, normalizeRoleKey, type RoleKey } from "../helpers/role";
 import type { ProjectDoc } from "../services/projects";
 import { colors, radius, spacing } from "../theme";
+import { useI18n } from "../i18n/I18nContext";
 
 type RoleChipProps = {
   project: ProjectDoc & { ownerId?: string };
@@ -17,9 +18,17 @@ type RoleChipProps = {
  * Optional icon for visual enhancement
  */
 export function RoleChip({ project, currentUserId, showIcon = true }: RoleChipProps) {
-  const roleLabel = getUserRoleLabel(project, currentUserId);
+  const { t } = useI18n();
   const roleKey = normalizeRoleKey(project, currentUserId);
   const roleColor = getRoleColor(roleKey);
+  const roleLabel =
+    roleKey === "ADMIN"
+      ? t("role.admin")
+      : roleKey === "MANAGER"
+      ? t("role.manager")
+      : roleKey === "TRADE"
+      ? t("role.trade")
+      : t("role.unknown");
 
   // Get icon based on role
   const getRoleIcon = (key: RoleKey): keyof typeof Ionicons.glyphMap => {

@@ -1,9 +1,8 @@
-import React, { useState, useEffect } from "react";
+import React, { useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, Image } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
-import * as Localization from "expo-localization";
 
 type Slide = {
   titleKey: string;
@@ -14,7 +13,7 @@ type Slide = {
 type Props = { onFinish: () => void };
 
 export function OnboardingScreen({ onFinish }: Props) {
-  const { t, setLocale } = useI18n();
+  const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const [index, setIndex] = useState(0);
   
@@ -25,14 +24,6 @@ export function OnboardingScreen({ onFinish }: Props) {
     { titleKey: "onboarding.slide4.title", subtitleKey: "onboarding.slide4.subtitle" },
     { titleKey: "onboarding.slide5.title", subtitleKey: "onboarding.slide5.subtitle" },
   ];
-  
-  // Force Slovak locale for onboarding
-  useEffect(() => {
-    const currentLocale = Localization.getLocales()[0]?.languageCode || "sk";
-    if (currentLocale !== "sk") {
-      setLocale("sk");
-    }
-  }, [setLocale]);
   
   const s = slides[index];
   const isLast = index === slides.length - 1;

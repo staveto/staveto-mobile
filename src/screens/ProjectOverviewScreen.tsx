@@ -376,9 +376,13 @@ export function ProjectOverviewScreen() {
         setTaskAttachmentsMap(new Map());
         setExpenseAttachmentsMap(new Map());
       }
-      // Initialize all phases as collapsed (zrolované) by default
+      // Preserve expanded state across reloads
       const expanded = new Map<string, boolean>();
-      ph.forEach((p: { id: string }) => expanded.set(p.id, false));
+      ph.forEach((p: { id: string }) => {
+        const prev = expandedPhasesRef.current.get(p.id);
+        expanded.set(p.id, prev ?? false);
+      });
+      expandedPhasesRef.current = expanded;
       setExpandedPhases(expanded);
     } catch (error: any) {
       console.error('[ProjectOverview] Error loading data:', error);
@@ -2273,7 +2277,7 @@ export function ProjectOverviewScreen() {
           <View style={styles.emptyContainer}>
             <Text style={styles.empty}>{t("projectOverview.noPhases") || "Projekt nemá žiadne fázy."}</Text>
             <Text style={styles.emptySubtext}>{t("projectOverview.addPhaseHint") || "Môžeš pridať fázy neskôr."}</Text>
-            {(projectType === 'MANAGEMENT' || projectType === 'BUILD') && !templateId && (
+            {(projectType === 'BUILD' || (projectType === 'MANAGEMENT' && !templateId)) && (
               <>
                 <TouchableOpacity
                   style={styles.addTemplateButton}
@@ -2288,7 +2292,7 @@ export function ProjectOverviewScreen() {
         ) : (
           <>
             {/* Add phase button - for MANAGEMENT projects created from scratch */}
-            {(projectType === 'MANAGEMENT' || projectType === 'BUILD') && !templateId && (
+            {(projectType === 'BUILD' || (projectType === 'MANAGEMENT' && !templateId)) && (
               <TouchableOpacity
                 style={styles.addPhaseButton}
                 onPress={() => setShowNewPhaseModal(true)}
@@ -2315,6 +2319,7 @@ export function ProjectOverviewScreen() {
                         onPress={() => {
                           const newExpanded = new Map(expandedPhases);
                           newExpanded.set(phaseKey, !expanded);
+                          expandedPhasesRef.current = newExpanded;
                           setExpandedPhases(newExpanded);
                         }}
                         activeOpacity={0.7}
@@ -2326,10 +2331,21 @@ export function ProjectOverviewScreen() {
                           color={colors.primary} 
                           style={{ marginRight: 8 }}
                         />
-                        <Text style={styles.phaseTitle}>{phase.name}</Text>
-                        {phaseTasks.length > 0 && (
-                          <Text style={styles.phaseTaskCount}>({phaseTasks.length})</Text>
-                        )}
+                        {(() => {
+                          const phaseComplete = phaseTasks.length > 0 && phaseTasks.every((t) => t.status === "DONE");
+                          return (
+                            <>
+                              <Text style={[styles.phaseTitle, phaseComplete && styles.phaseTitleDone]}>
+                                {phase.name}
+                              </Text>
+                              {phaseTasks.length > 0 && (
+                                <Text style={[styles.phaseTaskCount, phaseComplete && styles.phaseTaskCountDone]}>
+                                  ({phaseTasks.length})
+                                </Text>
+                              )}
+                            </>
+                          );
+                        })()}
                       </TouchableOpacity>
                       <View style={styles.phaseActions}>
                         <TouchableOpacity
@@ -4241,7 +4257,9 @@ const styles = StyleSheet.create({
     minWidth: 0,
   },
   phaseTitle: { fontSize: 13, fontWeight: "600", color: colors.primary, flex: 1 },
+  phaseTitleDone: { color: DONE_COLOR },
   phaseTaskCount: { fontSize: 12, color: colors.textMuted, marginLeft: spacing.xs },
+  phaseTaskCountDone: { color: DONE_COLOR },
   phaseActions: {
     flexDirection: "row",
     alignItems: "center",

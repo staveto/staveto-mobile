@@ -8,6 +8,7 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  Image,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
@@ -62,6 +63,7 @@ export function RegisterScreen() {
 
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      <Image source={require("../../assets/logo.png")} style={styles.logo} resizeMode="contain" accessibilityLabel="Staveto logo" />
       <Text style={styles.title}>{t("register.title")}</Text>
       <TextInput
         style={styles.input}
@@ -118,10 +120,16 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: spacing.lg,
   },
+  logo: {
+    width: 160,
+    height: 80,
+    alignSelf: "center",
+    marginBottom: spacing.md,
+  },
   title: {
     fontSize: 28,
     fontWeight: "700",
-    color: colors.text,
+    color: "#fff",
     marginBottom: spacing.lg,
     textAlign: "center",
   },

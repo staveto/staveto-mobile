@@ -59,7 +59,7 @@ import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
 import * as constructionDiaryService from "../services/constructionDiary";
 import * as projectDocumentsService from "../services/projectDocuments";
-import { extractInvoiceData } from "../services/invoiceOCR";
+import { extractInvoiceData, type OcrParsed, type OcrStatus } from "../services/invoiceOCR";
 import { updateTaskStatus } from "../services/taskService";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
 import { addPhasesToProject } from "../services/addPhasesToProject";
@@ -71,8 +71,10 @@ import type { DiaryEntryDoc } from "../services/constructionDiary";
 import type { ProjectDocumentDoc } from "../services/projectDocuments";
 import { colors, radius, spacing } from "../theme";
 import { openInMaps } from "../lib/maps";
+import { isFeatureEnabled } from "../services/features";
 
 const DONE_COLOR = "#2e7d32";
+const OCR_MANUAL_FALLBACK_MESSAGE = "OCR zlyhalo – vyplň ručne";
 
 export function ProjectOverviewScreen() {
   const route = useRoute();
@@ -135,6 +137,7 @@ export function ProjectOverviewScreen() {
   const [projectType, setProjectType] = useState<string | undefined>(undefined);
   const [templateId, setTemplateId] = useState<string | undefined>(undefined);
   const [addressText, setAddressText] = useState<string | undefined>(undefined);
+  const [projectOwnerId, setProjectOwnerId] = useState<string | null>(null);
   const [addingPhases, setAddingPhases] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editProjectName, setEditProjectName] = useState("");
@@ -145,8 +148,21 @@ export function ProjectOverviewScreen() {
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseDate, setExpenseDate] = useState(new Date().toISOString().split('T')[0]);
   const [expenseNote, setExpenseNote] = useState("");
+  const [expenseCategory, setExpenseCategory] = useState<'WORK' | 'MATERIAL' | undefined>(undefined);
+  const [expenseSupplierName, setExpenseSupplierName] = useState("");
   const [expensePhaseId, setExpensePhaseId] = useState<string | null>(null);
   const [expenseAttachment, setExpenseAttachment] = useState<{ uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' } | null>(null);
+  const [expensePreuploadedAttachment, setExpensePreuploadedAttachment] = useState<{
+    attachmentId: string;
+    storagePath: string;
+    mimeType: string;
+    kind: 'image' | 'pdf' | 'document';
+    fileName: string;
+    localUri: string;
+    isLinkedToExpense: boolean;
+    linkedExpenseId?: string;
+  } | null>(null);
+  const [expenseOcrStatus, setExpenseOcrStatus] = useState<OcrStatus | null>(null);
   const [uploadingExpenseAttachment, setUploadingExpenseAttachment] = useState(false);
   const [showAttachmentModal, setShowAttachmentModal] = useState(false);
   const [attachmentContext, setAttachmentContext] = useState<{ type: 'task' | 'expense'; id: string } | null>(null);
@@ -169,6 +185,7 @@ export function ProjectOverviewScreen() {
     attachmentId?: string;
     storagePath?: string;
   } | null>(null);
+  const isOwner = !!projectOwnerId && projectOwnerId === user?.id;
   
   // Diary entries state
   const [diaryEntries, setDiaryEntries] = useState<DiaryEntryDoc[]>([]);
@@ -197,6 +214,9 @@ export function ProjectOverviewScreen() {
   const [documentPhaseId, setDocumentPhaseId] = useState<string | null>(null);
   const [documentAttachment, setDocumentAttachment] = useState<{ uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' } | null>(null);
   const [uploadingDocumentAttachment, setUploadingDocumentAttachment] = useState(false);
+  const [whatsappDiaryEnabled, setWhatsappDiaryEnabled] = useState(false);
+  const [contractorsEnabled, setContractorsEnabled] = useState(false);
+  const [phasesSectionExpanded, setPhasesSectionExpanded] = useState(true);
 
   const load = useCallback(async (isRefresh = false) => {
     if (!projectId) {
@@ -238,6 +258,7 @@ export function ProjectOverviewScreen() {
         setProjectType(project.projectType);
         setTemplateId(project.templateId);
         setAddressText(project.addressText);
+        setProjectOwnerId(project.ownerId ?? null);
       } else {
         console.warn(`[ProjectOverview] Project ${projectId} not found or no access - continuing without project metadata`);
       }
@@ -403,6 +424,12 @@ export function ProjectOverviewScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    isFeatureEnabled("whatsappDiary", user.id).then(setWhatsappDiaryEnabled).catch(() => setWhatsappDiaryEnabled(false));
+    isFeatureEnabled("contractors", user.id).then(setContractorsEnabled).catch(() => setContractorsEnabled(false));
+  }, [user?.id]);
   
   // Open expense modal if requested from navigation
   useEffect(() => {
@@ -430,11 +457,11 @@ export function ProjectOverviewScreen() {
 
   // Open new task modal if requested from navigation
   useEffect(() => {
-    if (paramOpenNewTask && projectId) {
+    if (paramOpenNewTask && projectId && isOwner) {
       setSelectedPhaseId(paramSelectedPhaseId ?? null);
       setShowNewTask(true);
     }
-  }, [paramOpenNewTask, projectId, paramSelectedPhaseId]);
+  }, [paramOpenNewTask, projectId, paramSelectedPhaseId, isOwner]);
 
   const goBack = () => navigation.goBack();
   const goToMembers = () => (navigation as { navigate: (n: string, p?: object) => void }).navigate("ProjectMembers", { projectId, projectName });
@@ -524,6 +551,10 @@ export function ProjectOverviewScreen() {
   };
 
   const openNewTaskModal = (phaseId?: string) => {
+    if (!isOwner) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
     setSelectedPhaseId(phaseId || null);
     setShowNewTask(true);
   };
@@ -595,6 +626,10 @@ export function ProjectOverviewScreen() {
   };
 
   const handleEditTask = (task: TaskDoc) => {
+    if (!isOwner) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
     setEditingTask(task);
     setEditTaskTitle(task.title || "");
     setEditTaskDueDate(task.dueDate || "");
@@ -627,6 +662,10 @@ export function ProjectOverviewScreen() {
   };
 
   const handleDeleteTask = async (task: TaskDoc) => {
+    if (!isOwner) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
     if (!projectId) return;
     
     Alert.alert(
@@ -671,17 +710,26 @@ export function ProjectOverviewScreen() {
 
   const handleMenuPress = () => {
     if (Platform.OS === 'ios') {
+      const actions = [
+        { key: "team", label: t("projectOverview.team"), onPress: () => (navigation as any).navigate("ProjectTeam", { projectId, projectName }) },
+        ...(isOwner ? [{ key: "edit", label: t("projectOverview.editProject"), onPress: handleEditProject }] : []),
+        ...(whatsappDiaryEnabled ? [{ key: "updates", label: t("projectOverview.updates"), onPress: () => (navigation as any).navigate("Updates", { projectId }) }] : []),
+        ...(contractorsEnabled ? [{ key: "suppliers", label: t("projectOverview.suppliers"), onPress: () => (navigation as any).navigate("ProjectSuppliers", { projectId }) }] : []),
+        ...(isOwner ? [{ key: "delete", label: t("projectOverview.deleteProject"), onPress: handleDeleteProject }] : []),
+      ];
+      const options = [t("common.cancel"), ...actions.map((a) => a.label)];
+      const deleteIndex = isOwner ? options.length - 1 : undefined;
       ActionSheetIOS.showActionSheetWithOptions(
         {
-          options: [t("common.cancel"), t("projectOverview.editProject"), t("projectOverview.deleteProject")],
-          destructiveButtonIndex: 2,
+          options,
+          destructiveButtonIndex: deleteIndex,
           cancelButtonIndex: 0,
         },
         (buttonIndex) => {
-          if (buttonIndex === 1) {
-            handleEditProject();
-          } else if (buttonIndex === 2) {
-            handleDeleteProject();
+          if (buttonIndex <= 0) return;
+          const action = actions[buttonIndex - 1];
+          if (action) {
+            action.onPress();
           }
         }
       );
@@ -692,8 +740,11 @@ export function ProjectOverviewScreen() {
         t("projectOverview.selectAction"),
         [
           { text: t("common.cancel"), style: 'cancel' },
-          { text: t("projectOverview.editProject"), onPress: handleEditProject },
-          { text: t("projectOverview.deleteProject"), style: 'destructive', onPress: handleDeleteProject },
+          { text: t("projectOverview.team"), onPress: () => (navigation as any).navigate("ProjectTeam", { projectId, projectName }) },
+          ...(isOwner ? [{ text: t("projectOverview.editProject"), onPress: handleEditProject }] : []),
+          ...(whatsappDiaryEnabled ? [{ text: t("projectOverview.updates"), onPress: () => (navigation as any).navigate("Updates", { projectId }) }] : []),
+          ...(contractorsEnabled ? [{ text: t("projectOverview.suppliers"), onPress: () => (navigation as any).navigate("ProjectSuppliers", { projectId }) }] : []),
+          ...(isOwner ? [{ text: t("projectOverview.deleteProject"), style: 'destructive', onPress: handleDeleteProject }] : []),
         ]
       );
     }
@@ -757,11 +808,19 @@ export function ProjectOverviewScreen() {
   };
 
   const handleMoveTask = (task: TaskDoc) => {
+    if (!isOwner) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
     setMovingTask(task);
     setShowMoveTaskModal(true);
   };
 
   const handleMoveTaskToPhase = async (targetPhaseId: string | null) => {
+    if (!isOwner) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
     if (!projectId || !movingTask) return;
     
     try {
@@ -779,6 +838,10 @@ export function ProjectOverviewScreen() {
   };
 
   const handleEditPhase = (phase: ProjectPhaseDoc) => {
+    if (!isOwner) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
     setEditingPhase(phase);
     setEditPhaseName(phase.name);
     setShowEditPhaseModal(true);
@@ -830,6 +893,10 @@ export function ProjectOverviewScreen() {
   };
 
   const handleDeletePhase = async (phase: ProjectPhaseDoc) => {
+    if (!isOwner) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
     if (!projectId) return;
     
     // Check if phase has tasks
@@ -890,18 +957,136 @@ export function ProjectOverviewScreen() {
       setExpenseAmount(expense.amount?.toString() || "");
       setExpenseDate(expense.date ? expense.date.split('T')[0] : new Date().toISOString().split('T')[0]);
       setExpenseNote(expense.note || "");
+      setExpenseCategory((expense.category as 'WORK' | 'MATERIAL' | undefined) || undefined);
+      setExpenseSupplierName(expense.supplierName || "");
       setExpensePhaseId(expense.phaseId || null);
       setExpenseAttachment(null); // Reset attachment - will load from expense.attachmentId if needed
+      setExpensePreuploadedAttachment(null);
+      setExpenseOcrStatus(null);
     } else {
       setEditingExpense(null);
       setExpenseTitle("");
       setExpenseAmount("");
       setExpenseDate(new Date().toISOString().split('T')[0]);
       setExpenseNote("");
+      setExpenseCategory(undefined);
+      setExpenseSupplierName("");
       setExpensePhaseId(null);
       setExpenseAttachment(null);
+      setExpensePreuploadedAttachment(null);
+      setExpenseOcrStatus(null);
     }
     setShowExpenseModal(true);
+  };
+
+  const applyOcrPrefill = (parsed: OcrParsed | null) => {
+    if (!parsed) return;
+    if (parsed.totalAmount != null) {
+      setExpenseAmount(String(parsed.totalAmount));
+    }
+    if (parsed.issueDate) {
+      setExpenseDate(parsed.issueDate);
+    }
+    if (parsed.supplierName) {
+      setExpenseSupplierName(parsed.supplierName);
+      if (!expenseTitle.trim()) {
+        setExpenseTitle(parsed.supplierName);
+      }
+    }
+  };
+
+  const cleanupPreuploadedExpenseAttachment = async (
+    nextPicked?: { uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' }
+  ) => {
+    const previous = expensePreuploadedAttachment;
+    if (!previous) return;
+    const isSameFile = !!nextPicked
+      && previous.localUri === nextPicked.uri
+      && previous.fileName === nextPicked.fileName
+      && previous.mimeType === nextPicked.mimeType;
+    if (isSameFile) return;
+    if (previous.isLinkedToExpense || previous.linkedExpenseId) {
+      console.log(
+        `[ProjectOverview] Skipping preupload cleanup for linked attachment ${previous.attachmentId} (expenseId=${previous.linkedExpenseId ?? "unknown"}).`
+      );
+      return;
+    }
+    if (!projectId || !previous.attachmentId || !previous.storagePath) {
+      console.warn("[ProjectOverview] Skipping preupload cleanup: missing projectId/attachmentId/storagePath.");
+      return;
+    }
+    try {
+      console.log(
+        `[ProjectOverview] Cleaning up replaced preuploaded attachment ${previous.attachmentId} at ${previous.storagePath}`
+      );
+      await attachmentsService.deleteAttachment(projectId, previous.attachmentId, previous.storagePath);
+      console.log(`[ProjectOverview] Cleanup successful for replaced attachment ${previous.attachmentId}`);
+    } catch (error) {
+      console.warn(`[ProjectOverview] Failed to cleanup replaced preuploaded attachment ${previous.attachmentId}:`, error);
+    } finally {
+      setExpensePreuploadedAttachment((current) =>
+        current?.attachmentId === previous.attachmentId ? null : current
+      );
+    }
+  };
+
+  const handlePickedExpenseAttachment = async (picked: { uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' }) => {
+    await cleanupPreuploadedExpenseAttachment(picked);
+    setExpenseAttachment(picked);
+    setExpenseOcrStatus(null);
+    if (editingExpense || picked.kind !== "image" || !projectId) {
+      return;
+    }
+    if (uploadingExpenseAttachment || ocrLoading) {
+      console.warn("[ProjectOverview] Ignoring attachment pick while OCR/upload is running.");
+      return;
+    }
+    try {
+      setUploadingExpenseAttachment(true);
+      const attachment = await attachmentsService.uploadAttachment(projectId, {
+        expenseId: null,
+        taskId: null,
+        phaseId: expensePhaseId,
+        localUri: picked.uri,
+        fileName: picked.fileName,
+        mimeType: picked.mimeType,
+        kind: "image",
+      });
+      const uploadedFilePath = attachment.storagePath?.trim();
+      if (!uploadedFilePath) {
+        throw new Error("Attachment upload returned empty filePath.");
+      }
+      console.log("[ProjectOverview] Auto OCR filePath:", uploadedFilePath);
+      setExpensePreuploadedAttachment({
+        attachmentId: attachment.id,
+        storagePath: uploadedFilePath,
+        mimeType: picked.mimeType,
+        kind: picked.kind,
+        fileName: picked.fileName,
+        localUri: picked.uri,
+        isLinkedToExpense: false,
+      });
+      setUploadingExpenseAttachment(false);
+      setOcrLoading(true);
+      const result = await extractInvoiceData({
+        filePath: uploadedFilePath,
+        mimeType: picked.mimeType,
+        attachmentId: attachment.id,
+      });
+      setExpenseOcrStatus(result.status);
+      if (result.status === "success") {
+        applyOcrPrefill(result.parsed);
+      } else {
+        Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+      }
+    } catch (error: any) {
+      console.error("[ProjectOverview] Auto OCR after pick failed:", error);
+      setExpenseOcrStatus("failed");
+      Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+    } finally {
+      setUploadingExpenseAttachment(false);
+      setOcrLoading(false);
+    }
   };
 
   const pickExpenseImage = async () => {
@@ -960,7 +1145,7 @@ export function ProjectOverviewScreen() {
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        setExpenseAttachment({
+        await handlePickedExpenseAttachment({
           uri: asset.uri,
           fileName: asset.fileName || `faktura_${Date.now()}.jpg`,
           mimeType: asset.mimeType || 'image/jpeg',
@@ -991,7 +1176,7 @@ export function ProjectOverviewScreen() {
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        setExpenseAttachment({
+        await handlePickedExpenseAttachment({
           uri: asset.uri,
           fileName: asset.fileName || `faktura_${Date.now()}.jpg`,
           mimeType: asset.mimeType || 'image/jpeg',
@@ -1118,7 +1303,7 @@ export function ProjectOverviewScreen() {
         const asset = result.assets[0];
         const kind = asset.mimeType?.includes('pdf') ? 'pdf' : 
                      asset.mimeType?.startsWith('image/') ? 'image' : 'document';
-        setExpenseAttachment({
+        await handlePickedExpenseAttachment({
           uri: asset.uri,
           fileName: asset.name || `faktura_${Date.now()}.pdf`,
           mimeType: asset.mimeType || 'application/pdf',
@@ -1164,6 +1349,7 @@ export function ProjectOverviewScreen() {
     projectId: string;
     expenseId: string;
     storagePath: string;
+    mimeType?: string;
     attachmentId?: string;
     defaultTitle: string;
     defaultAmount: string;
@@ -1171,14 +1357,56 @@ export function ProjectOverviewScreen() {
     defaultSupplierName?: string;
   }) => {
     const requestId = Date.now();
+    const normalizedPath = input.storagePath?.trim();
+    if (!normalizedPath) {
+      console.warn("[ProjectOverview] OCR skipped: empty filePath/storagePath");
+      Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+      await expensesService.updateExpense(input.projectId, input.expenseId, {
+        ocrStatus: "failed",
+      });
+      navigateToExpenseReview({
+        ...input,
+        status: "failed",
+        parsed: null,
+      });
+      return;
+    }
+    if (
+      normalizedPath.startsWith("file://") ||
+      normalizedPath.startsWith("content://") ||
+      normalizedPath.startsWith("gs://")
+    ) {
+      console.warn("[ProjectOverview] OCR skipped: invalid storage filePath:", normalizedPath);
+      Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+      await expensesService.updateExpense(input.projectId, input.expenseId, {
+        ocrStatus: "failed",
+      });
+      navigateToExpenseReview({
+        ...input,
+        status: "failed",
+        parsed: null,
+      });
+      return;
+    }
+    console.log("[ProjectOverview] OCR request filePath:", normalizedPath);
     ocrRequestIdRef.current = requestId;
     setOcrPendingReview(input);
     setOcrLoading(true);
     try {
-      const result = await extractInvoiceData({ storagePath: input.storagePath, attachmentId: input.attachmentId });
+      const result = await extractInvoiceData({
+        filePath: normalizedPath,
+        mimeType: input.mimeType,
+        attachmentId: input.attachmentId,
+      });
       if (ocrRequestIdRef.current !== requestId) return;
       setOcrLoading(false);
       setOcrPendingReview(null);
+      await expensesService.updateExpense(input.projectId, input.expenseId, {
+        ocrStatus: result.status === "success" ? "done" : "failed",
+      });
+      if (result.status !== "success") {
+        Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+      }
       navigateToExpenseReview({
         ...input,
         status: result.status,
@@ -1189,6 +1417,10 @@ export function ProjectOverviewScreen() {
       console.error("[ProjectOverview] OCR failed:", error);
       setOcrLoading(false);
       setOcrPendingReview(null);
+      await expensesService.updateExpense(input.projectId, input.expenseId, {
+        ocrStatus: "failed",
+      });
+      Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
       navigateToExpenseReview({
         ...input,
         status: "failed",
@@ -1198,11 +1430,28 @@ export function ProjectOverviewScreen() {
   };
 
   const handleSaveExpense = async () => {
-    if (!expenseTitle.trim() || !expenseAmount.trim() || !projectId || !orgId) return;
-    
-    const amount = parseFloat(expenseAmount);
-    if (isNaN(amount) || amount <= 0) {
+    if (submitting || uploadingExpenseAttachment || ocrLoading) {
+      console.warn("[ProjectOverview] Ignoring duplicate save click while busy.");
+      return;
+    }
+    if (!projectId || !orgId) return;
+    const canUseOcrDraft = !editingExpense && expenseAttachment?.kind === "image";
+    const titleValue = expenseTitle.trim() || (canUseOcrDraft ? "Invoice" : "");
+    if (!titleValue) return;
+
+    let amount: number | null = null;
+    if (expenseAmount.trim()) {
+      amount = parseFloat(expenseAmount);
+      if (isNaN(amount) || amount <= 0) {
+        Alert.alert(t("common.error"), t("projectOverview.enterValidAmount"));
+        return;
+      }
+    } else if (!canUseOcrDraft) {
       Alert.alert(t("common.error"), t("projectOverview.enterValidAmount"));
+      return;
+    }
+    if (!expenseCategory) {
+      Alert.alert(t("common.error"), t("expense.selectType"));
       return;
     }
     
@@ -1237,27 +1486,62 @@ export function ProjectOverviewScreen() {
         }
         
         await expensesService.updateExpense(projectId, editingExpense.id, {
-          title: expenseTitle.trim(),
+          title: titleValue,
           amount,
           date: expenseDateObj,
           note: expenseNote.trim() || undefined,
+          category: expenseCategory,
+          supplierName: expenseSupplierName.trim() || undefined,
           attachmentId: attachmentId || editingExpense.attachmentId || undefined,
         });
         Alert.alert(t("common.success"), t("projectOverview.expenseUpdated"));
       } else {
         // For new expense: create expense first, then upload attachment with expenseId
         const newExpense = await expensesService.createExpense(orgId, projectId, {
-          title: expenseTitle.trim(),
+          title: titleValue,
           amount,
           date: expenseDateObj,
           note: expenseNote.trim() || undefined,
+          category: expenseCategory,
+          supplierName: expenseSupplierName.trim() || undefined,
           phaseId: expensePhaseId || undefined,
+          source: (expenseAttachment || expensePreuploadedAttachment) ? "DOCUMENT" : "MANUAL",
+          status: "READY",
+          uploadStatus: expensePreuploadedAttachment ? "uploaded" : (expenseAttachment ? "pending" : undefined),
+          ocrStatus: expenseAttachment?.kind === "image"
+            ? (expenseOcrStatus === "success" ? "done" : (expenseOcrStatus ? "failed" : "pending"))
+            : undefined,
+          filePath: expensePreuploadedAttachment?.storagePath ?? null,
+          mimeType: expensePreuploadedAttachment?.mimeType ?? expenseAttachment?.mimeType ?? null,
         });
-        
+
+        if (expensePreuploadedAttachment) {
+          attachmentId = expensePreuploadedAttachment.attachmentId;
+          await attachmentsService.linkAttachmentToExpense(projectId, expensePreuploadedAttachment.attachmentId, newExpense.id);
+          setExpensePreuploadedAttachment((prev) => (
+            prev
+              ? { ...prev, isLinkedToExpense: true, linkedExpenseId: newExpense.id }
+              : prev
+          ));
+          await expensesService.updateExpense(projectId, newExpense.id, {
+            attachmentId: expensePreuploadedAttachment.attachmentId,
+            uploadStatus: "uploaded",
+            filePath: expensePreuploadedAttachment.storagePath,
+            mimeType: expensePreuploadedAttachment.mimeType,
+            ocrStatus: expenseAttachment?.kind === "image"
+              ? (expenseOcrStatus === "success" ? "done" : (expenseOcrStatus ? "failed" : "pending"))
+              : undefined,
+            ocrSupplierName: expenseSupplierName.trim() || null,
+            ocrIssueDate: expenseDate || null,
+            ocrTotalAmount: amount ?? null,
+          });
+        }
+
         // Upload attachment after expense creation (so we have expenseId)
-        if (expenseAttachment && newExpense.id) {
+        if (expenseAttachment && newExpense.id && !expensePreuploadedAttachment) {
           try {
             setUploadingExpenseAttachment(true);
+            let attachmentStoragePath: string | undefined;
             const attachment = await attachmentsService.uploadAttachment(projectId, {
               expenseId: newExpense.id,
               taskId: null,
@@ -1268,30 +1552,66 @@ export function ProjectOverviewScreen() {
               kind: expenseAttachment.kind === 'pdf' ? 'pdf' : expenseAttachment.kind === 'image' ? 'image' : 'document',
             });
             attachmentId = attachment.id;
+            attachmentStoragePath = attachment.storagePath?.trim();
+            if (!attachmentStoragePath) {
+              throw new Error("Attachment upload returned empty filePath.");
+            }
+            console.log("[ProjectOverview] Expense attachment uploaded filePath:", attachmentStoragePath);
             
             // Update expense with attachmentId
             await expensesService.updateExpense(projectId, newExpense.id, {
               attachmentId: attachmentId,
+              uploadStatus: "uploaded",
+              filePath: attachmentStoragePath ?? null,
+              mimeType: expenseAttachment.mimeType,
               ocrStatus: expenseAttachment.kind === "image" ? "pending" : undefined,
+              ocrSupplierName: expenseSupplierName.trim() || null,
+              ocrIssueDate: expenseDate || null,
+              ocrTotalAmount: amount ?? null,
             });
             console.log(`[ProjectOverview] Uploaded expense attachment: ${attachmentId}`);
 
-            if (expenseAttachment.kind === "image" && attachment.storagePath) {
+            if (expenseAttachment.kind === "image" && attachmentStoragePath) {
               setShowExpenseModal(false);
               openedOcrReview = true;
               await startOcrReview({
                 projectId,
                 expenseId: newExpense.id,
-                storagePath: attachment.storagePath,
+                storagePath: attachmentStoragePath,
+                mimeType: expenseAttachment.mimeType,
                 attachmentId: attachmentId,
-                defaultTitle: expenseTitle.trim(),
+                defaultTitle: titleValue,
                 defaultAmount: expenseAmount,
                 defaultDate: expenseDate,
+                defaultSupplierName: expenseSupplierName || undefined,
               });
             }
           } catch (error: any) {
             console.error(`[ProjectOverview] Error uploading expense attachment:`, error);
-            Alert.alert(t("common.warning"), t("projectOverview.expenseSavedAttachmentFailed"));
+            await expensesService.updateExpense(projectId, newExpense.id, {
+              uploadStatus: "failed",
+              status: "READY",
+              filePath: null,
+              ocrStatus: expenseAttachment.kind === "image" ? "failed" : undefined,
+              mimeType: expenseAttachment.mimeType,
+            });
+            if (expenseAttachment.kind === "image") {
+              setShowExpenseModal(false);
+              openedOcrReview = true;
+              Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+              navigateToExpenseReview({
+                projectId,
+                expenseId: newExpense.id,
+                status: "failed",
+                parsed: null,
+                defaultTitle: titleValue,
+                defaultAmount: expenseAmount,
+                defaultDate: expenseDate,
+                defaultSupplierName: expenseSupplierName || undefined,
+              });
+            } else {
+              Alert.alert(t("common.warning"), t("projectOverview.expenseSavedAttachmentFailed"));
+            }
           } finally {
             setUploadingExpenseAttachment(false);
           }
@@ -1303,6 +1623,9 @@ export function ProjectOverviewScreen() {
       }
       setShowExpenseModal(false);
       setExpenseAttachment(null);
+      setExpensePreuploadedAttachment(null);
+      setExpenseCategory(undefined);
+      setExpenseSupplierName("");
       await load(true);
     } catch (error: any) {
       console.error(`[ProjectOverview] Error saving expense:`, error);
@@ -1680,6 +2003,10 @@ export function ProjectOverviewScreen() {
 
   // Attachment handlers
   const openAttachmentModal = async (type: 'task' | 'expense', id: string) => {
+    if (!isOwner) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
     setAttachmentContext({ type, id });
     setShowAttachmentModal(true);
     try {
@@ -2181,6 +2508,26 @@ export function ProjectOverviewScreen() {
               contentContainerStyle={styles.table} 
               nestedScrollEnabled
             >
+          <TouchableOpacity
+            style={styles.phasesSectionHeader}
+            onPress={() => setPhasesSectionExpanded((prev) => !prev)}
+            activeOpacity={0.7}
+          >
+            <View style={styles.phasesSectionHeaderLeft}>
+              <Ionicons
+                name={phasesSectionExpanded ? "chevron-down" : "chevron-forward"}
+                size={18}
+                color={colors.primary}
+                style={{ marginRight: 8 }}
+              />
+              <Text style={styles.phasesSectionHeaderText}>
+                {t("projectOverview.phasesSection") || "Fázy a úlohy"}
+              </Text>
+              <Text style={styles.phasesSectionCount}>({tasks.length})</Text>
+            </View>
+          </TouchableOpacity>
+          {phasesSectionExpanded && (
+          <>
           <View style={styles.tableHeader}>
             <Text style={styles.tableHeaderText}>{t("projectOverview.taskName")}</Text>
             <Text style={[styles.tableHeaderText, styles.colAssignee]}>{t("projectOverview.assignee")}</Text>
@@ -2199,7 +2546,7 @@ export function ProjectOverviewScreen() {
                 ? t("projectOverview.noTasksHint")
                 : (t("projectOverview.addPhaseHint") || "Môžeš pridať fázy a úlohy neskôr.")}
             </Text>
-            {!isTradeOrMaintenance && !templateId && (projectType === 'MANAGEMENT' || projectType === 'BUILD') && (
+            {isOwner && !isTradeOrMaintenance && !templateId && (projectType === 'MANAGEMENT' || projectType === 'BUILD') && (
               <TouchableOpacity
                 style={styles.addTemplateButton}
                 onPress={() => setShowNewPhaseModal(true)}
@@ -2241,35 +2588,46 @@ export function ProjectOverviewScreen() {
                   )}
                 </TouchableOpacity>
               </View>
-              <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
-                <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.attachmentButton}
-                onPress={() => openAttachmentModal('task', task.id)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Ionicons 
-                  name="attach-outline" 
-                  size={20} 
-                  color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
-                />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.taskActionButton}
-                onPress={() => handleEditTask(task)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Ionicons name="create-outline" size={20} color={colors.textMuted} />
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.taskActionButton}
-                onPress={() => handleDeleteTask(task)}
-                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-              >
-                <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
-              </TouchableOpacity>
+              {isOwner ? (
+                <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
+                  <Ionicons name="person-outline" size={18} color={colors.textMuted} />
+                  <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={[styles.colAssignee, styles.assigneeCell]}>
+                  <Ionicons name="person-outline" size={18} color={colors.textMuted} />
+                  <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                </View>
+              )}
+              {isOwner ? (
+                <>
+                  <TouchableOpacity
+                    style={styles.attachmentButton}
+                    onPress={() => openAttachmentModal('task', task.id)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons 
+                      name="attach-outline" 
+                      size={20} 
+                      color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
+                    />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.taskActionButton}
+                    onPress={() => handleEditTask(task)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="create-outline" size={20} color={colors.textMuted} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.taskActionButton}
+                    onPress={() => handleDeleteTask(task)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
+                  </TouchableOpacity>
+                </>
+              ) : null}
               </View>
             ))}
           </>
@@ -2277,7 +2635,7 @@ export function ProjectOverviewScreen() {
           <View style={styles.emptyContainer}>
             <Text style={styles.empty}>{t("projectOverview.noPhases") || "Projekt nemá žiadne fázy."}</Text>
             <Text style={styles.emptySubtext}>{t("projectOverview.addPhaseHint") || "Môžeš pridať fázy neskôr."}</Text>
-            {(projectType === 'BUILD' || (projectType === 'MANAGEMENT' && !templateId)) && (
+            {isOwner && (projectType === 'BUILD' || (projectType === 'MANAGEMENT' && !templateId)) && (
               <>
                 <TouchableOpacity
                   style={styles.addTemplateButton}
@@ -2292,7 +2650,7 @@ export function ProjectOverviewScreen() {
         ) : (
           <>
             {/* Add phase button - for MANAGEMENT projects created from scratch */}
-            {(projectType === 'BUILD' || (projectType === 'MANAGEMENT' && !templateId)) && (
+            {isOwner && (projectType === 'BUILD' || (projectType === 'MANAGEMENT' && !templateId)) && (
               <TouchableOpacity
                 style={styles.addPhaseButton}
                 onPress={() => setShowNewPhaseModal(true)}
@@ -2347,50 +2705,54 @@ export function ProjectOverviewScreen() {
                           );
                         })()}
                       </TouchableOpacity>
-                      <View style={styles.phaseActions}>
-                        <TouchableOpacity
-                          style={styles.phaseActionButton}
-                          onPress={(e) => {
-                            e.stopPropagation();
-                            sharePhase(phase);
-                          }}
-                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        >
-                          <Ionicons name="share-outline" size={18} color={colors.primary} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.phaseActionButton}
-                          onPress={(e) => {
-                            e.stopPropagation();
-                            handleEditPhase(phase);
-                          }}
-                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        >
-                          <Ionicons name="create-outline" size={18} color={colors.textMuted} />
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.phaseActionButton}
-                          onPress={(e) => {
-                            e.stopPropagation();
-                            handleDeletePhase(phase);
-                          }}
-                          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                        >
-                          <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
-                        </TouchableOpacity>
-                      </View>
+                      {isOwner ? (
+                        <View style={styles.phaseActions}>
+                          <TouchableOpacity
+                            style={styles.phaseActionButton}
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              sharePhase(phase);
+                            }}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          >
+                            <Ionicons name="share-outline" size={18} color={colors.primary} />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.phaseActionButton}
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleEditPhase(phase);
+                            }}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          >
+                            <Ionicons name="create-outline" size={18} color={colors.textMuted} />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.phaseActionButton}
+                            onPress={(e) => {
+                              e.stopPropagation();
+                              handleDeletePhase(phase);
+                            }}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          >
+                            <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
+                          </TouchableOpacity>
+                        </View>
+                      ) : null}
                     </View>
                     {expanded && (
                       <>
                         {/* Add task button for this phase */}
-                        <TouchableOpacity 
-                          style={styles.addTaskToPhaseButton}
-                          onPress={() => openNewTaskModal(phaseKey)}
-                          activeOpacity={0.7}
-                        >
-                          <Ionicons name="add-circle-outline" size={18} color={colors.primary} style={{ marginRight: 6 }} />
-                          <Text style={styles.addTaskToPhaseText}>{t("projectOverview.addTaskToPhase") || "Pridať úlohu"}</Text>
-                        </TouchableOpacity>
+                        {isOwner ? (
+                          <TouchableOpacity 
+                            style={styles.addTaskToPhaseButton}
+                            onPress={() => openNewTaskModal(phaseKey)}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons name="add-circle-outline" size={18} color={colors.primary} style={{ marginRight: 6 }} />
+                            <Text style={styles.addTaskToPhaseText}>{t("projectOverview.addTaskToPhase") || "Pridať úlohu"}</Text>
+                          </TouchableOpacity>
+                        ) : null}
                         
                         {phaseTasks.length === 0 ? (
                           <Text style={styles.emptyPhase}>{t("projectOverview.noTasksInPhase")}</Text>
@@ -2424,32 +2786,43 @@ export function ProjectOverviewScreen() {
                                   )}
                                 </TouchableOpacity>
                               </View>
-                              <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
-                                <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                                <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
-                              </TouchableOpacity>
-                              <TouchableOpacity
-                                style={styles.attachmentButton}
-                                onPress={() => openAttachmentModal('task', task.id)}
-                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                              >
-                                <Ionicons 
-                                  name="attach-outline" 
-                                  size={20} 
-                                  color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
-                                />
-                              </TouchableOpacity>
-                              <TouchableOpacity
-                                style={styles.taskMoveButton}
-                                onPress={() => handleMoveTask(task)}
-                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                              >
-                                <Ionicons 
-                                  name="swap-horizontal-outline" 
-                                  size={20} 
-                                  color="#000000" 
-                                />
-                              </TouchableOpacity>
+                              {isOwner ? (
+                                <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
+                                  <Ionicons name="person-outline" size={18} color={colors.textMuted} />
+                                  <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                                </TouchableOpacity>
+                              ) : (
+                                <View style={[styles.colAssignee, styles.assigneeCell]}>
+                                  <Ionicons name="person-outline" size={18} color={colors.textMuted} />
+                                  <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                                </View>
+                              )}
+                              {isOwner ? (
+                                <>
+                                  <TouchableOpacity
+                                    style={styles.attachmentButton}
+                                    onPress={() => openAttachmentModal('task', task.id)}
+                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                  >
+                                    <Ionicons 
+                                      name="attach-outline" 
+                                      size={20} 
+                                      color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
+                                    />
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    style={styles.taskMoveButton}
+                                    onPress={() => handleMoveTask(task)}
+                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                  >
+                                    <Ionicons 
+                                      name="swap-horizontal-outline" 
+                                      size={20} 
+                                      color="#000000" 
+                                    />
+                                  </TouchableOpacity>
+                                </>
+                              ) : null}
                             </View>
                           ))
                         )}
@@ -2507,32 +2880,43 @@ export function ProjectOverviewScreen() {
                           )}
                         </TouchableOpacity>
                       </View>
-                      <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
-                        <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                        <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.attachmentButton}
-                        onPress={() => openAttachmentModal('task', task.id)}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      >
-                        <Ionicons 
-                          name="attach-outline" 
-                          size={20} 
-                          color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
-                        />
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.taskMoveButton}
-                        onPress={() => handleMoveTask(task)}
-                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                      >
-                        <Ionicons 
-                          name="swap-horizontal-outline" 
-                          size={20} 
-                          color="#000000" 
-                        />
-                      </TouchableOpacity>
+                      {isOwner ? (
+                        <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
+                          <Ionicons name="person-outline" size={18} color={colors.textMuted} />
+                          <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                        </TouchableOpacity>
+                      ) : (
+                        <View style={[styles.colAssignee, styles.assigneeCell]}>
+                          <Ionicons name="person-outline" size={18} color={colors.textMuted} />
+                          <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                        </View>
+                      )}
+                      {isOwner ? (
+                        <>
+                          <TouchableOpacity
+                            style={styles.attachmentButton}
+                            onPress={() => openAttachmentModal('task', task.id)}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          >
+                            <Ionicons 
+                              name="attach-outline" 
+                              size={20} 
+                              color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
+                            />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.taskMoveButton}
+                            onPress={() => handleMoveTask(task)}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                          >
+                            <Ionicons 
+                              name="swap-horizontal-outline" 
+                              size={20} 
+                              color="#000000" 
+                            />
+                          </TouchableOpacity>
+                        </>
+                      ) : null}
                     </View>
                   ))}
                 </View>
@@ -2540,6 +2924,8 @@ export function ProjectOverviewScreen() {
             )}
           </>
         )}
+          </>
+          )}
           </ScrollView>
         </View>
         )}
@@ -2879,22 +3265,24 @@ export function ProjectOverviewScreen() {
           <Ionicons name="swap-vertical" size={20} color={colors.textOnDark} style={{ marginRight: 6 }} />
           <Text style={styles.listBtnText}>{t("projectOverview.viewList")}</Text>
         </TouchableOpacity>
-        {isTradeOrMaintenance ? (
-          // For TRADE/MAINTENANCE: text button instead of FAB
-          <TouchableOpacity 
-            style={styles.addTaskButton} 
-            onPress={() => setShowNewTask(true)}
-            activeOpacity={0.7}
-          >
-            <Ionicons name="add-circle" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
-            <Text style={styles.addTaskButtonText}>Pridať úlohu</Text>
-          </TouchableOpacity>
-        ) : (
-          // For BUILD: FAB
-          <TouchableOpacity style={styles.fab} onPress={() => setShowNewTask(true)}>
-            <Ionicons name="add" size={28} color="#fff" />
-          </TouchableOpacity>
-        )}
+        {isOwner ? (
+          isTradeOrMaintenance ? (
+            // For TRADE/MAINTENANCE: text button instead of FAB
+            <TouchableOpacity 
+              style={styles.addTaskButton} 
+              onPress={() => openNewTaskModal()}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add-circle" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+              <Text style={styles.addTaskButtonText}>{t("projectOverview.addTask") || "Pridať úlohu"}</Text>
+            </TouchableOpacity>
+          ) : (
+            // For BUILD: FAB
+            <TouchableOpacity style={styles.fab} onPress={() => openNewTaskModal()}>
+              <Ionicons name="add" size={28} color="#fff" />
+            </TouchableOpacity>
+          )
+        ) : null}
       </View>
 
       {/* Edit project modal */}
@@ -2936,45 +3324,10 @@ export function ProjectOverviewScreen() {
             <Text style={styles.modalTitle}>
               {editingExpense ? t("expense.edit") || 'Upraviť výdavok' : t("expense.add")}
             </Text>
-            <TextInput
-              style={styles.input}
-              value={expenseTitle}
-              onChangeText={setExpenseTitle}
-              placeholder={t("projectOverview.expenseTitlePlaceholder")}
-              placeholderTextColor="#FFFFFF"
-              autoFocus
-            />
-            <View style={styles.expenseAmountRow}>
-              <TextInput
-                style={[styles.input, styles.expenseAmountInput]}
-                value={expenseAmount}
-                onChangeText={handleAmountChange}
-                placeholder={t("projectOverview.expenseAmountPlaceholder")}
-                placeholderTextColor="#FFFFFF"
-                keyboardType="decimal-pad"
-              />
-              <Text style={styles.expenseCurrencyLabel}>EUR</Text>
-            </View>
-            <TextInput
-              style={styles.input}
-              value={expenseDate}
-              onChangeText={setExpenseDate}
-              placeholder={t("projectOverview.expenseDatePlaceholder")}
-              placeholderTextColor="#FFFFFF"
-            />
-            <TextInput
-              style={[styles.input, styles.textArea]}
-              value={expenseNote}
-              onChangeText={setExpenseNote}
-              placeholder={t("projectOverview.expenseNotePlaceholder")}
-              placeholderTextColor="#FFFFFF"
-              multiline
-              numberOfLines={3}
-            />
-            
-            {/* Expense Attachment Section */}
+            {/* Expense Attachment Section (top-first for OCR flow) */}
             <View style={styles.expenseAttachmentSection}>
-              <Text style={styles.expenseAttachmentLabel}>Príloha faktúry (voliteľné)</Text>
+              <Text style={styles.expenseAttachmentLabel}>{t("expense.invoice") || "Priloha faktury (volitelne)"}</Text>
+              <Text style={styles.expenseAttachmentHint}>Odfot fakturu a udaje sa automaticky doplnia nizsie.</Text>
               <View style={styles.expenseAttachmentButtons}>
                 <TouchableOpacity
                   style={[styles.expenseAttachmentButton, (uploadingExpenseAttachment || submitting) && styles.expenseAttachmentButtonDisabled]}
@@ -3005,7 +3358,11 @@ export function ProjectOverviewScreen() {
                     {expenseAttachment.fileName}
                   </Text>
                   <TouchableOpacity
-                    onPress={() => setExpenseAttachment(null)}
+                    onPress={() => {
+                      setExpenseAttachment(null);
+                      setExpensePreuploadedAttachment(null);
+                      setExpenseOcrStatus(null);
+                    }}
                     style={styles.expenseAttachmentRemove}
                   >
                     <Ionicons name="close-circle" size={20} color={colors.textMuted} />
@@ -3015,10 +3372,107 @@ export function ProjectOverviewScreen() {
               {uploadingExpenseAttachment && (
                 <View style={styles.expenseAttachmentUploading}>
                   <ActivityIndicator size="small" color={colors.primary} />
-                  <Text style={styles.expenseAttachmentUploadingText}>{t("common.uploading") || 'Nahráva sa...'}</Text>
+                  <Text style={styles.expenseAttachmentUploadingText}>{t("common.uploading") || 'Nahrava sa...'}</Text>
                 </View>
               )}
             </View>
+
+            {/* Amount */}
+            <View style={styles.expenseAmountRow}>
+              <TextInput
+                style={[styles.input, styles.expenseAmountInput]}
+                value={expenseAmount}
+                onChangeText={handleAmountChange}
+                placeholder={t("projectOverview.expenseAmountPlaceholder")}
+                placeholderTextColor={colors.textMuted}
+                keyboardType="decimal-pad"
+              />
+              <Text style={styles.expenseCurrencyLabel}>EUR</Text>
+            </View>
+
+            {/* Category - identical function to Home */}
+            <View style={styles.expenseCategorySection}>
+              <Text style={styles.expenseCategoryLabel}>{t("expense.type")}</Text>
+              <View style={styles.expenseCategoryButtons}>
+                <TouchableOpacity
+                  style={[
+                    styles.expenseCategoryButton,
+                    expenseCategory === 'WORK' && styles.expenseCategoryButtonActive,
+                  ]}
+                  onPress={() => setExpenseCategory('WORK')}
+                >
+                  <Text
+                    style={[
+                      styles.expenseCategoryButtonText,
+                      expenseCategory === 'WORK' && styles.expenseCategoryButtonTextActive,
+                    ]}
+                  >
+                    {t("expense.typeWork")}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.expenseCategoryButton,
+                    expenseCategory === 'MATERIAL' && styles.expenseCategoryButtonActive,
+                  ]}
+                  onPress={() => setExpenseCategory('MATERIAL')}
+                >
+                  <Text
+                    style={[
+                      styles.expenseCategoryButtonText,
+                      expenseCategory === 'MATERIAL' && styles.expenseCategoryButtonTextActive,
+                    ]}
+                  >
+                    {t("expense.typeMaterial")}
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            </View>
+
+            {/* Supplier */}
+            <TextInput
+              style={styles.input}
+              value={expenseSupplierName}
+              onChangeText={setExpenseSupplierName}
+              placeholder={t("expense.supplierName")}
+              placeholderTextColor={colors.textMuted}
+            />
+
+            <TextInput
+              style={styles.input}
+              value={expenseTitle}
+              onChangeText={setExpenseTitle}
+              placeholder={t("projectOverview.expenseTitlePlaceholder")}
+              placeholderTextColor={colors.textMuted}
+              autoFocus
+            />
+            <View style={styles.expenseAmountRow}>
+              <TextInput
+                style={[styles.input, styles.expenseAmountInput]}
+                value={expenseAmount}
+                onChangeText={handleAmountChange}
+                placeholder={t("projectOverview.expenseAmountPlaceholder")}
+                placeholderTextColor={colors.textMuted}
+                keyboardType="decimal-pad"
+              />
+              <Text style={styles.expenseCurrencyLabel}>EUR</Text>
+            </View>
+            <TextInput
+              style={styles.input}
+              value={expenseDate}
+              onChangeText={setExpenseDate}
+              placeholder={t("projectOverview.expenseDatePlaceholder")}
+              placeholderTextColor={colors.textMuted}
+            />
+            <TextInput
+              style={[styles.input, styles.textArea]}
+              value={expenseNote}
+              onChangeText={setExpenseNote}
+              placeholder={t("projectOverview.expenseNotePlaceholder")}
+              placeholderTextColor={colors.textMuted}
+              multiline
+              numberOfLines={3}
+            />
             
             <View style={styles.modalButtons}>
               <TouchableOpacity 
@@ -3032,14 +3486,28 @@ export function ProjectOverviewScreen() {
                   setExpenseNote("");
                   setExpensePhaseId(null);
                   setExpenseAttachment(null);
+                  setExpensePreuploadedAttachment(null);
                 }}
               >
                 <Text style={styles.modalCancelText}>{t("tasks.cancel")}</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={[styles.modalOk, (!expenseTitle.trim() || (submitting)) && styles.modalOkDisabled]} 
+                style={[
+                  styles.modalOk,
+                  (
+                    (!expenseTitle.trim() && !(expenseAttachment?.kind === "image" && !editingExpense))
+                    || submitting
+                    || uploadingExpenseAttachment
+                    || ocrLoading
+                  ) && styles.modalOkDisabled,
+                ]} 
                 onPress={handleSaveExpense} 
-                disabled={!expenseTitle.trim() || submitting}
+                disabled={
+                  (!expenseTitle.trim() && !(expenseAttachment?.kind === "image" && !editingExpense))
+                  || submitting
+                  || uploadingExpenseAttachment
+                  || ocrLoading
+                }
               >
                 <Text style={styles.modalOkText}>
                   {submitting ? 'Ukladá sa...' : (editingExpense ? 'Uložiť' : 'Pridať')}
@@ -4706,6 +5174,30 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: '600',
     color: colors.text,
+  },
+  phasesSectionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingBottom: spacing.sm,
+    marginBottom: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+  },
+  phasesSectionHeaderLeft: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  phasesSectionHeaderText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  phasesSectionCount: {
+    fontSize: 14,
+    color: colors.textMuted,
+    marginLeft: spacing.xs,
   },
   expensesCount: {
     fontSize: 14,

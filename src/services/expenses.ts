@@ -21,7 +21,8 @@ export type ExpenseSource = 'MANUAL' | 'DOCUMENT';
 export type ExpenseStatus = 'PROCESSING' | 'READY' | 'FAILED';
 export type ExpenseCategory = 'MATERIAL' | 'WORK' | 'OTHER';
 
-export type OcrStatus = "success" | "failed" | "limit" | "cancelled" | "pending";
+export type OcrStatus = "success" | "done" | "failed" | "limit" | "cancelled" | "pending";
+export type UploadStatus = "pending" | "uploaded" | "failed";
 
 export type ExpenseDoc = {
   id: string;
@@ -38,6 +39,9 @@ export type ExpenseDoc = {
   status: ExpenseStatus;
   category?: ExpenseCategory;
   supplierName?: string;
+  uploadStatus?: UploadStatus;
+  filePath?: string;
+  mimeType?: string;
   ocrStatus?: OcrStatus;
   ocrParsedAt?: string;
   ocrSupplierName?: string;
@@ -82,6 +86,9 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Ex
     status: (d.status as ExpenseStatus) ?? 'READY',
     category: (d.category as ExpenseCategory) ?? undefined,
     supplierName: (d.supplierName as string) ?? undefined,
+    uploadStatus: (d.uploadStatus as UploadStatus) ?? undefined,
+    filePath: (d.filePath as string) ?? undefined,
+    mimeType: (d.mimeType as string) ?? undefined,
     ocrStatus: (d.ocrStatus as OcrStatus) ?? undefined,
     ocrParsedAt: convertTimestamp(d.ocrParsedAt),
     ocrSupplierName: (d.ocrSupplierName as string) ?? undefined,
@@ -114,6 +121,9 @@ export async function createExpense(
     status?: ExpenseStatus;
     category?: ExpenseCategory;
     supplierName?: string;
+    uploadStatus?: UploadStatus;
+    filePath?: string | null;
+    mimeType?: string | null;
     ocrStatus?: OcrStatus;
     ocrParsedAt?: Date;
     ocrSupplierName?: string | null;
@@ -182,6 +192,9 @@ export async function createExpense(
     status: data.status ?? 'READY',
     category: data.category ?? null,
     supplierName: data.supplierName?.trim() ?? null,
+    uploadStatus: data.uploadStatus ?? null,
+    filePath: data.filePath ?? null,
+    mimeType: data.mimeType ?? null,
     ocrStatus: data.ocrStatus ?? null,
     ocrParsedAt: data.ocrParsedAt ? Timestamp.fromDate(data.ocrParsedAt) : null,
     ocrSupplierName: data.ocrSupplierName ?? null,
@@ -228,6 +241,9 @@ export async function createExpense(
     status: data.status ?? 'READY',
     category: data.category,
     supplierName: data.supplierName,
+    uploadStatus: data.uploadStatus ?? undefined,
+    filePath: data.filePath ?? undefined,
+    mimeType: data.mimeType ?? undefined,
     ocrStatus: data.ocrStatus ?? undefined,
     ocrParsedAt: data.ocrParsedAt ? data.ocrParsedAt.toISOString() : undefined,
     ocrSupplierName: data.ocrSupplierName ?? undefined,
@@ -270,6 +286,9 @@ export async function updateExpense(
     status?: ExpenseStatus;
     category?: ExpenseCategory;
     supplierName?: string;
+    uploadStatus?: UploadStatus;
+    filePath?: string | null;
+    mimeType?: string | null;
     ocrStatus?: OcrStatus;
     ocrParsedAt?: Date | null;
     ocrSupplierName?: string | null;
@@ -296,6 +315,9 @@ export async function updateExpense(
   if (data.status !== undefined) updateData.status = data.status;
   if (data.category !== undefined) updateData.category = data.category ?? null;
   if (data.supplierName !== undefined) updateData.supplierName = data.supplierName?.trim() ?? null;
+  if (data.uploadStatus !== undefined) updateData.uploadStatus = data.uploadStatus ?? null;
+  if (data.filePath !== undefined) updateData.filePath = data.filePath ?? null;
+  if (data.mimeType !== undefined) updateData.mimeType = data.mimeType ?? null;
   if (data.ocrStatus !== undefined) updateData.ocrStatus = data.ocrStatus ?? null;
   if (data.ocrParsedAt !== undefined) {
     updateData.ocrParsedAt = data.ocrParsedAt ? Timestamp.fromDate(data.ocrParsedAt) : null;

@@ -18,6 +18,12 @@ import { ProjectOverviewScreen } from "../screens/ProjectOverviewScreen";
 import { ProjectMembersScreen } from "../screens/ProjectMembersScreen";
 import { SubscriptionScreen } from "../screens/SubscriptionScreen";
 import { ExpenseReviewScreen } from "../screens/ExpenseReviewScreen";
+import { ContractorsListScreen } from "../screens/contractors/ContractorsListScreen";
+import { ContractorFormScreen } from "../screens/contractors/ContractorFormScreen";
+import { ContractorDetailScreen } from "../screens/contractors/ContractorDetailScreen";
+import { ProjectSuppliersScreen } from "../screens/projects/ProjectSuppliersScreen";
+import { UpdatesScreen } from "../screens/projects/UpdatesScreen";
+import { ProjectTeamScreen } from "../screens/projects/ProjectTeamScreen";
 import { AppTabs } from "./AppTabs";
 import { colors, spacing } from "../theme";
 import { db } from "../firebase";
@@ -165,6 +171,36 @@ export function RootNavigator() {
         name="Subscription"
         component={SubscriptionScreen}
         options={{ headerShown: true, title: "Predplatné" }}
+      />
+      <Stack.Screen
+        name="ContractorsList"
+        component={ContractorsListScreen}
+        options={{ headerShown: true, title: "Moji dodávatelia" }}
+      />
+      <Stack.Screen
+        name="ContractorForm"
+        component={ContractorFormScreen}
+        options={{ headerShown: true, title: "Dodávateľ" }}
+      />
+      <Stack.Screen
+        name="ContractorDetail"
+        component={ContractorDetailScreen}
+        options={{ headerShown: true, title: "Dodávateľ" }}
+      />
+      <Stack.Screen
+        name="ProjectSuppliers"
+        component={ProjectSuppliersScreen}
+        options={{ headerShown: true, title: "Dodávatelia" }}
+      />
+      <Stack.Screen
+        name="ProjectTeam"
+        component={ProjectTeamScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="Updates"
+        component={UpdatesScreen}
+        options={{ headerShown: true, title: "Aktualizácie" }}
       />
       <Stack.Screen
         name="ExpenseReview"

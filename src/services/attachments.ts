@@ -1,4 +1,4 @@
-import { collection, addDoc, query, where, getDocs, deleteDoc, doc, orderBy, serverTimestamp, Timestamp, getDoc } from "../lib/rnFirestore";
+import { collection, addDoc, query, where, getDocs, deleteDoc, doc, orderBy, serverTimestamp, Timestamp, getDoc, updateDoc } from "../lib/rnFirestore";
 import { storage, db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { AttachmentMetadata, AttachmentKind } from "../lib/attachmentTypes";
@@ -121,6 +121,8 @@ export async function uploadAttachment(
     // Re-throw with more context
     throw new Error(`Nepodarilo sa nahrať súbor: ${error.message || error.code || 'Neznáma chyba'}`);
   }
+  const finalFilePath = storageRef.fullPath || storagePath;
+  console.log(`[attachments] Final uploaded filePath: ${finalFilePath}`);
   
   // Get download URL
   const downloadURL = await storageRef.getDownloadURL();
@@ -136,8 +138,12 @@ export async function uploadAttachment(
     fileName: options.fileName,
     fileType: options.kind,
     contentType: options.mimeType,
+    mimeType: options.mimeType,
     size: fileSize,
-    storagePath,
+    storagePath: finalFilePath,
+    filePath: finalFilePath,
+    uploadStatus: "uploaded",
+    ocrStatus: options.kind === "image" ? "pending" : null,
     downloadURL, // Store URL for quick access
     uploadedBy: currentUser.uid,
     createdAt: serverTimestamp(),
@@ -156,7 +162,7 @@ export async function uploadAttachment(
     fileType: options.kind,
     contentType: options.mimeType,
     size: fileSize,
-    storagePath,
+    storagePath: finalFilePath,
     uploadedBy: currentUser.uid,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
@@ -236,4 +242,20 @@ export async function deleteAttachment(
   const refDoc = doc(db, paths.projectAttachment(projectId, attachmentId));
   await deleteDoc(refDoc);
   console.log(`[attachments] Deleted metadata doc: ${attachmentId}`);
+}
+
+/**
+ * Link existing attachment to an expense (used when attachment is uploaded before expense creation).
+ */
+export async function linkAttachmentToExpense(
+  projectId: string,
+  attachmentId: string,
+  expenseId: string
+): Promise<void> {
+  const refDoc = doc(db, paths.projectAttachment(projectId, attachmentId));
+  await updateDoc(refDoc, {
+    expenseId,
+    updatedAt: serverTimestamp(),
+  });
+  console.log(`[attachments] Linked attachment ${attachmentId} -> expense ${expenseId}`);
 }

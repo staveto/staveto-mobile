@@ -12,6 +12,28 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
     }
 
+    function isOwner(projectId) {
+      return projectOwner(projectId);
+    }
+
+    function isMember(projectId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/projects/$(projectId)/members/$(uid()));
+    }
+
+    function memberTaskUpdateAllowed() {
+      return request.resource.data.diff(resource.data).changedKeys().hasOnly([
+        "status",
+        "completedAt",
+        "doneAt",
+        "updatedAt",
+        "notes",
+        "progressPercent",
+        "startedAt",
+        "lastPhotoAt"
+      ]);
+    }
+
     // Users (každý len svoj)
     match /users/{userId} {
       // Users can read their own document
@@ -45,6 +67,10 @@ service cloud.firestore {
       match /ocrCache/{hash} {
         allow read, write: if signedIn() && uid() == userId;
       }
+
+      match /contractors/{contractorId} {
+        allow read, write: if signedIn() && uid() == userId;
+      }
     }
     
     // Billing events (read-only for users, write-only for server)
@@ -73,7 +99,7 @@ service cloud.firestore {
 
       // read/delete: len owner (fallback allow read for legacy docs without ownerId)
       allow read: if signedIn()
-        && (resource.data.ownerId == uid() || !("ownerId" in resource.data));
+        && (resource.data.ownerId == uid() || isMember(projectId) || !("ownerId" in resource.data));
       allow delete: if signedIn()
         && resource.data.ownerId == uid();
 
@@ -81,6 +107,20 @@ service cloud.firestore {
       allow update: if signedIn()
         && resource.data.ownerId == uid()
         && request.resource.data.ownerId == resource.data.ownerId;
+
+      // members subcollection
+      match /members/{memberUid} {
+        allow read: if isOwner(projectId) || isMember(projectId);
+        allow create, update, delete: if isOwner(projectId);
+      }
+
+      // tasks: members can update limited fields
+      match /tasks/{taskId} {
+        allow read: if isOwner(projectId) || isMember(projectId);
+        allow create, delete: if isOwner(projectId);
+        allow update: if isOwner(projectId)
+          || (isMember(projectId) && memberTaskUpdateAllowed());
+      }
 
       // subkolekcie (phases/tasks/expenses/attachments...)
       match /{subcol}/{docId} {
@@ -108,18 +148,6 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
       }
 
-      // members – MVP: zatiaľ len owner
-      match /members/{memberId} {
-        allow read: if signedIn()
-          && exists(/databases/$(database)/documents/projects/$(projectId))
-          && (
-            get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid()
-            || !("ownerId" in get(/databases/$(database)/documents/projects/$(projectId)).data)
-          );
-        allow write: if signedIn()
-          && exists(/databases/$(database)/documents/projects/$(projectId))
-          && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
-      }
     }
 
     // Notifications (inbox)

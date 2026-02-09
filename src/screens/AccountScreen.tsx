@@ -23,6 +23,7 @@ import { getBaseURL, api } from "../api/client";
 import { colors, radius, spacing } from "../theme";
 import { PRIVACY_URL, SUPPORT_EMAIL, TERMS_URL } from "../constants/consent";
 import { requestAccountDeletion } from "../services/account";
+import { isFeatureEnabled } from "../services/features";
 import { db, storage } from "../firebase";
 import { doc, getDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import * as ImagePicker from "expo-image-picker";
@@ -89,6 +90,7 @@ export function AccountScreen() {
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [contractorsEnabled, setContractorsEnabled] = useState(false);
 
   const nav = navigation as { navigate: (name: string) => void };
   const displayName = user?.name ?? user?.email ?? "—";
@@ -152,6 +154,11 @@ export function AccountScreen() {
   useEffect(() => {
     loadProfile();
   }, [loadProfile]);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    isFeatureEnabled("contractors", user.id).then(setContractorsEnabled).catch(() => setContractorsEnabled(false));
+  }, [user?.id]);
 
   const saveProfile = useCallback(async () => {
     if (!user?.id) return;
@@ -383,6 +390,13 @@ export function AccountScreen() {
       {/* App */}
       <SectionTitle title={t("account.app")} />
       <View style={styles.card}>
+        {contractorsEnabled ? (
+          <Row
+            icon="people-outline"
+            label={t("account.contractors")}
+            onPress={() => nav.navigate("ContractorsList")}
+          />
+        ) : null}
         <Row icon="moon-outline" label={t("account.displaySetting")} onPress={() => Alert.alert(t("account.comingSoon"))} />
         <Row
           icon="language-outline"

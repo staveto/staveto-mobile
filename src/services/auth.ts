@@ -1,7 +1,8 @@
 import auth from "@react-native-firebase/auth";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
-import { doc, setDoc } from "../lib/rnFirestore";
+import { doc, setDoc, getDoc, serverTimestamp } from "../lib/rnFirestore";
 import { db } from "../firebase";
+import * as Localization from "expo-localization";
 
 export type AuthUser = { id: string; email: string; name?: string };
 
@@ -11,6 +12,42 @@ function toAuthUser(u: { uid: string; email: string | null; displayName: string 
     email: u.email ?? "",
     name: u.displayName ?? undefined,
   };
+}
+
+function hasField(data: Record<string, unknown>, key: string): boolean {
+  return Object.prototype.hasOwnProperty.call(data, key);
+}
+
+async function ensureUserProfile(user: AuthUser): Promise<void> {
+  const ref = doc(db, "users", user.id);
+  const snap = await getDoc(ref);
+  const existing = (snap.exists() ? snap.data() : {}) as Record<string, unknown>;
+  const emailLower = user.email.trim().toLowerCase();
+  const update: Record<string, unknown> = {
+    emailLower,
+    updatedAt: serverTimestamp(),
+  };
+
+  if (!hasField(existing, "email")) {
+    update.email = user.email;
+  }
+  if (!hasField(existing, "displayName")) {
+    update.displayName = user.name ?? null;
+  }
+  if (!hasField(existing, "phoneE164")) {
+    update.phoneE164 = null;
+  }
+  if (!hasField(existing, "locale")) {
+    update.locale = Localization.locale ?? null;
+  }
+  if (!hasField(existing, "countryCode")) {
+    update.countryCode = Localization.region ?? null;
+  }
+  if (!hasField(existing, "createdAt")) {
+    update.createdAt = serverTimestamp();
+  }
+
+  await setDoc(ref, update, { merge: true });
 }
 
 export async function register(
@@ -24,11 +61,10 @@ export async function register(
     await cred.user.updateProfile({ displayName: displayName.trim() });
   }
   const user = toAuthUser(cred.user);
-  await setDoc(doc(db, "users", cred.user.uid), {
+  await ensureUserProfile({
+    id: user.id,
     email: trimEmail,
-    displayName: displayName?.trim() ?? null,
-    createdAt: new Date().toISOString(),
-    updatedAt: new Date().toISOString(),
+    name: displayName?.trim() ?? user.name,
   });
   const token = await cred.user.getIdToken();
   return { user, token };
@@ -38,6 +74,7 @@ export async function login(email: string, password: string): Promise<{ user: Au
   const trimEmail = email.trim().toLowerCase();
   const cred = await auth().signInWithEmailAndPassword(trimEmail, password);
   const user = toAuthUser(cred.user);
+  await ensureUserProfile(user);
   const token = await cred.user.getIdToken();
   return { user, token };
 }
@@ -47,15 +84,7 @@ export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string
   const googleCredential = auth.GoogleAuthProvider.credential(idToken);
   const cred = await auth().signInWithCredential(googleCredential);
   const user = toAuthUser(cred.user);
-  await setDoc(
-    doc(db, "users", cred.user.uid),
-    {
-      email: user.email,
-      displayName: user.name ?? null,
-      updatedAt: new Date().toISOString(),
-    },
-    { merge: true }
-  );
+  await ensureUserProfile(user);
   const token = await cred.user.getIdToken();
   return { user, token };
 }

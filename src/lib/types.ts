@@ -47,9 +47,50 @@ export interface Project {
 export interface ProjectMember {
   id: string;
   userId: string;
+  emailLower: string;
+  displayName?: string;
+  role: "MEMBER";
+  joinedAt: Timestamp;
+  addedBy: string;
+}
+
+export interface Contractor {
+  id: string;
+  displayName: string;
+  phoneE164: string;
+  phoneRaw?: string;
   email?: string;
-  role?: 'owner' | 'member';
-  addedAt: Timestamp;
+  note?: string;
+  createdAt?: Timestamp;
+  updatedAt?: Timestamp;
+}
+
+export interface ProjectSupplier {
+  id: string;
+  contractorId: string;
+  phoneE164: string;
+  displayNameSnapshot: string;
+  status: "active" | "inactive";
+  createdAt?: Timestamp;
+}
+
+export interface ProjectUpdate {
+  id: string;
+  projectId: string;
+  supplierId?: string | null;
+  status: "pending" | "approved" | "ignored";
+  messageText?: string | null;
+  fromPhoneE164?: string | null;
+  sourceMessageId?: string | null;
+  media?: {
+    storagePath: string;
+    mimeType?: string;
+    size?: number;
+    fileName?: string;
+  }[];
+  createdAt?: Timestamp;
+  decidedBy?: string | null;
+  decidedAt?: Timestamp | null;
 }
 
 export interface ProjectPhase {
@@ -73,6 +114,8 @@ export interface ProjectTask {
   required: boolean;
   assigneeId: string | null; // User ID who is assigned (consistent naming)
   assigneeName?: string | null; // Optional: display name for assignee
+  assignedTo?: string | null;
+  assignedToEmail?: string | null;
   assignedTrade?: string | null;
   updatedAt: Timestamp;
   doneAt: Timestamp | null;
@@ -114,7 +157,10 @@ export interface ProjectExpense {
   taskId?: string | null; // Optional: link to task
   phaseId?: string | null; // Optional: link to phase
   attachmentId?: string | null; // Optional: invoice/receipt attachment
-  ocrStatus?: "success" | "failed" | "limit" | "cancelled" | "pending";
+  uploadStatus?: "pending" | "uploaded" | "failed";
+  filePath?: string | null;
+  mimeType?: string | null;
+  ocrStatus?: "success" | "done" | "failed" | "limit" | "cancelled" | "pending";
   ocrParsedAt?: Timestamp | null;
   ocrSupplierName?: string | null;
   ocrInvoiceNumber?: string | null;

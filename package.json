@@ -13,6 +13,7 @@
     "build:android": "eas build --platform android --profile production"
   },
   "dependencies": {
+    "@google-cloud/vision": "^5.3.4",
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/datetimepicker": "^8.2.0",
     "@react-native-firebase/app": "^23.8.6",
@@ -32,6 +33,7 @@
     "expo-image-picker": "~17.0.10",
     "expo-localization": "~17.0.3",
     "expo-status-bar": "~3.0.9",
+    "libphonenumber-js": "^1.12.36",
     "react": "19.1.0",
     "react-dom": "19.1.0",
     "react-native": "0.81.5",

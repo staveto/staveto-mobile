@@ -33,6 +33,8 @@ export type TaskDoc = {
   dueDate?: string;
   assigneeId?: string | null;
   assigneeName?: string | null; // Use assigneeName (consistent with types)
+  assignedTo?: string | null;
+  assignedToEmail?: string | null;
   createdAt?: string;
   updatedAt?: string;
   // MVP additions
@@ -76,6 +78,8 @@ function toDoc(
     dueDate: d.dueDate as string | undefined,
     assigneeId: (d.assigneeId as string | null) ?? undefined,
     assigneeName: (d.assigneeName as string | null) ?? undefined, // Use assigneeName (consistent with types)
+    assignedTo: (d.assignedTo as string | null) ?? undefined,
+    assignedToEmail: (d.assignedToEmail as string | null) ?? undefined,
     createdAt: convertTimestamp(d.createdAt),
     updatedAt: convertTimestamp(d.updatedAt),
     // MVP additions

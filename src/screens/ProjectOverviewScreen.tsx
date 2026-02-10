@@ -47,7 +47,7 @@ try {
 } catch (e) {
   console.warn('@react-native-community/datetimepicker not installed. Date picker features will be disabled.');
 }
-import { useRoute, useNavigation, NavigationProp } from "@react-navigation/native";
+import { useRoute, useNavigation, NavigationProp, useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
@@ -59,6 +59,9 @@ import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
 import * as constructionDiaryService from "../services/constructionDiary";
 import * as projectDocumentsService from "../services/projectDocuments";
+import * as projectEventsService from "../services/projectEvents";
+import * as projectMembersService from "../services/projectMembers";
+import * as weatherService from "../services/weather";
 import { extractInvoiceData, type OcrParsed, type OcrStatus } from "../services/invoiceOCR";
 import { updateTaskStatus } from "../services/taskService";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
@@ -69,9 +72,13 @@ import type { ExpenseDoc } from "../services/expenses";
 import type { AttachmentDoc } from "../services/attachments";
 import type { DiaryEntryDoc } from "../services/constructionDiary";
 import type { ProjectDocumentDoc } from "../services/projectDocuments";
+import type { ProjectMemberDoc } from "../services/projectMembers";
 import { colors, radius, spacing } from "../theme";
 import { openInMaps } from "../lib/maps";
 import { isFeatureEnabled } from "../services/features";
+import { formatEventSummary } from "../helpers/formatEvent";
+import type { ProjectEvent } from "../lib/types";
+import type { ProjectWeatherSnapshot } from "../services/weather";
 
 const DONE_COLOR = "#2e7d32";
 const OCR_MANUAL_FALLBACK_MESSAGE = "OCR zlyhalo – vyplň ručne";
@@ -87,6 +94,8 @@ export function ProjectOverviewScreen() {
     projectName?: string;
     openExpenseModal?: boolean;
     openNewTask?: boolean;
+    openDiaryModal?: boolean;
+    diaryInputMode?: "text" | "voice";
     selectedPhaseId?: string | null;
     openExpenseId?: string | null;
   }) ?? {};
@@ -95,6 +104,8 @@ export function ProjectOverviewScreen() {
     projectName: paramProjectName,
     openExpenseModal: paramOpenExpenseModal,
     openNewTask: paramOpenNewTask,
+    openDiaryModal: paramOpenDiaryModal,
+    diaryInputMode: paramDiaryInputMode,
     selectedPhaseId: paramSelectedPhaseId,
     openExpenseId: paramOpenExpenseId,
   } = routeParams;
@@ -141,6 +152,7 @@ export function ProjectOverviewScreen() {
   const [addingPhases, setAddingPhases] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editProjectName, setEditProjectName] = useState("");
+  const [editProjectAddress, setEditProjectAddress] = useState("");
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [editingExpense, setEditingExpense] = useState<ExpenseDoc | null>(null);
   const [openedExpenseId, setOpenedExpenseId] = useState<string | null>(null);
@@ -206,6 +218,12 @@ export function ProjectOverviewScreen() {
   
   // Project documents state
   const [projectDocuments, setProjectDocuments] = useState<ProjectDocumentDoc[]>([]);
+  const [projectMembers, setProjectMembers] = useState<ProjectMemberDoc[]>([]);
+  const [showAssigneeModal, setShowAssigneeModal] = useState(false);
+  const [assigneeTask, setAssigneeTask] = useState<TaskDoc | null>(null);
+  const [assigneeCandidates, setAssigneeCandidates] = useState<
+    Array<{ key: string; assigneeId: string | null; assigneeName: string | null; label: string }>
+  >([]);
   const [showDocumentModal, setShowDocumentModal] = useState(false);
   const [editingDocument, setEditingDocument] = useState<ProjectDocumentDoc | null>(null);
   const [documentName, setDocumentName] = useState("");
@@ -217,6 +235,99 @@ export function ProjectOverviewScreen() {
   const [whatsappDiaryEnabled, setWhatsappDiaryEnabled] = useState(false);
   const [contractorsEnabled, setContractorsEnabled] = useState(false);
   const [phasesSectionExpanded, setPhasesSectionExpanded] = useState(true);
+  const [activityEvents, setActivityEvents] = useState<ProjectEvent[]>([]);
+  const [activityLoading, setActivityLoading] = useState(false);
+  const [activityExpanded, setActivityExpanded] = useState(false);
+
+  const getOcrFallbackMessage = useCallback((errorCode?: string) => {
+    const code = String(errorCode || "").toLowerCase();
+    if (
+      code.includes("not_found") ||
+      code.includes("not-found") ||
+      code.includes("functions/not-found") ||
+      code.includes("unimplemented")
+    ) {
+      return "OCR backend nie je nasadeny. Nasadime Firebase function extractInvoiceData a potom to bude fungovat.";
+    }
+    if (code.includes("unauthenticated") || code.includes("permission-denied")) {
+      return "OCR nema opravnenie. Skontrolujte prihlasenie a Firebase pravidla/funkcie.";
+    }
+    return OCR_MANUAL_FALLBACK_MESSAGE;
+  }, []);
+  const [weatherSnapshot, setWeatherSnapshot] = useState<ProjectWeatherSnapshot | null>(null);
+  const [weatherLoading, setWeatherLoading] = useState(false);
+  const [weatherError, setWeatherError] = useState<string | null>(null);
+
+  const formatActivityAge = useCallback((value: ProjectEvent["createdAt"]) => {
+    try {
+      const date =
+        typeof value === "string"
+          ? new Date(value)
+          : value instanceof Date
+          ? value
+          : value?.toDate?.() ?? new Date();
+      const diffMs = Date.now() - date.getTime();
+      const diffMin = Math.floor(diffMs / 60000);
+      if (diffMin < 1) return "just now";
+      if (diffMin < 60) return `${diffMin}m ago`;
+      const diffH = Math.floor(diffMin / 60);
+      if (diffH < 24) return `${diffH}h ago`;
+      const diffD = Math.floor(diffH / 24);
+      return `${diffD}d ago`;
+    } catch {
+      return "";
+    }
+  }, []);
+
+  const loadActivity = useCallback(async () => {
+    if (!projectId) return;
+    setActivityLoading(true);
+    try {
+      const events = await projectEventsService.listProjectEvents(projectId, 30);
+      setActivityEvents(events);
+    } catch (error) {
+      console.warn("[ProjectOverview] Failed to load project events:", error);
+      setActivityEvents([]);
+    } finally {
+      setActivityLoading(false);
+    }
+  }, [projectId]);
+
+  const weatherTypeIcon = useCallback((type: weatherService.DayRiskType): React.ComponentProps<typeof Ionicons>["name"] => {
+    if (type === "RAIN") return "rainy-outline";
+    if (type === "WIND") return "flag-outline";
+    if (type === "FROST") return "snow-outline";
+    if (type === "HEAT") return "sunny-outline";
+    return "partly-sunny-outline";
+  }, []);
+
+  const weatherBadgeColor = useCallback((level: weatherService.WeatherRiskLevel) => {
+    if (level === "PROBLEM") return "#d63b3b";
+    if (level === "RISK") return "#e56f35";
+    return "#5ea96a";
+  }, []);
+
+  const loadWeather = useCallback(
+    async (forceRefresh = false) => {
+      if (!projectId || !addressText?.trim()) {
+        setWeatherSnapshot(null);
+        setWeatherError(null);
+        return;
+      }
+      setWeatherLoading(true);
+      setWeatherError(null);
+      try {
+        const result = await weatherService.getProjectWeatherRisk(projectId, addressText, { forceRefresh });
+        setWeatherSnapshot(result.snapshot);
+      } catch (error: any) {
+        setWeatherSnapshot(null);
+        setWeatherError(error?.message || "Počasie sa nepodarilo načítať.");
+      } finally {
+        setWeatherLoading(false);
+      }
+    },
+    [projectId, addressText]
+  );
 
   const load = useCallback(async (isRefresh = false) => {
     if (!projectId) {
@@ -311,30 +422,42 @@ export function ProjectOverviewScreen() {
         })
       );
       
-      // Load diary and documents for BUILD and MANAGEMENT projects
-      const hasDiaryAndDocuments = isBuildProject;
-      if (hasDiaryAndDocuments) {
+      // Diary is available across project types; documents remain BUILD/MANAGEMENT only.
+      const hasDiary = projectTypeForLoad === 'BUILD' || projectTypeForLoad === 'MANAGEMENT' || projectTypeForLoad === 'TRADE' || projectTypeForLoad === 'MAINTENANCE' || projectTypeForLoad === 'RESIDENTIAL';
+      const hasDocuments = isBuildProject;
+      if (hasDiary) {
         loadPromises.push(
           constructionDiaryService.listDiaryEntries(projectId).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading diary entries:`, error);
             return [];
-          }),
+          })
+        );
+      }
+      if (hasDocuments) {
+        loadPromises.push(
           projectDocumentsService.listProjectDocuments(projectId).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading project documents:`, error);
             return [];
           })
         );
       }
+      loadPromises.push(
+        projectMembersService.listProjectMembers(projectId).catch((error: any) => {
+          console.error(`[ProjectOverview] Error loading project members:`, error);
+          return [];
+        })
+      );
       
       const results = await Promise.all(loadPromises);
       const ph = results[0];
       const tk = results[1];
       const exp = results[2];
-      const diary = hasDiaryAndDocuments ? results[3] : [];
-      const docs = hasDiaryAndDocuments ? results[4] : [];
+      const diary = hasDiary ? results[3] : [];
+      const docs = hasDocuments ? results[hasDiary ? 4 : 3] : [];
+      const members = (results[results.length - 1] ?? []) as ProjectMemberDoc[];
       
       console.log(`[ProjectOverview] Loaded ${ph.length} phases, ${tk.length} tasks, ${exp.length} expenses for projectType="${projectTypeForLoad}"`);
-      if (hasDiaryAndDocuments) {
+      if (hasDiary || hasDocuments) {
         console.log(`[ProjectOverview] Loaded ${diary.length} diary entries, ${docs.length} documents`);
       }
       if (ph.length > 0) {
@@ -358,13 +481,9 @@ export function ProjectOverviewScreen() {
       }
       setTasks(tk || []);
       setExpenses(exp || []);
-      if (hasDiaryAndDocuments) {
-        setDiaryEntries(diary);
-        setProjectDocuments(docs);
-      } else {
-        setDiaryEntries([]);
-        setProjectDocuments([]);
-      }
+      setDiaryEntries(hasDiary ? diary : []);
+      setProjectDocuments(hasDocuments ? docs : []);
+      setProjectMembers(members);
       
       // Load all attachments for the project to build attachment count maps
       try {
@@ -419,11 +538,31 @@ export function ProjectOverviewScreen() {
   
   const onRefresh = useCallback(() => {
     load(true);
-  }, [load]);
+    loadActivity();
+    loadWeather(true);
+  }, [load, loadActivity, loadWeather]);
 
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    loadActivity();
+  }, [loadActivity]);
+
+  useEffect(() => {
+    loadWeather();
+  }, [loadWeather]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!projectId || !user?.id) return () => {};
+      projectEventsService.markProjectSeen(projectId, user.id).catch((error) => {
+        console.warn("[ProjectOverview] Failed to mark project seen:", error);
+      });
+      return () => {};
+    }, [projectId, user?.id])
+  );
 
   useEffect(() => {
     if (!user?.id) return;
@@ -462,6 +601,13 @@ export function ProjectOverviewScreen() {
       setShowNewTask(true);
     }
   }, [paramOpenNewTask, projectId, paramSelectedPhaseId, isOwner]);
+
+  useEffect(() => {
+    if (!paramOpenDiaryModal || !projectId) return;
+    // Wait for project owner to be loaded to avoid false "no permission" flash.
+    if (!projectOwnerId) return;
+    openNewDiaryModal(paramDiaryInputMode === "voice" ? "voice" : "text", false);
+  }, [paramOpenDiaryModal, paramDiaryInputMode, projectId, projectOwnerId, openNewDiaryModal]);
 
   const goBack = () => navigation.goBack();
   const goToMembers = () => (navigation as { navigate: (n: string, p?: object) => void }).navigate("ProjectMembers", { projectId, projectName });
@@ -558,6 +704,27 @@ export function ProjectOverviewScreen() {
     setSelectedPhaseId(phaseId || null);
     setShowNewTask(true);
   };
+
+  const openNewDiaryModal = useCallback((mode: "text" | "voice" = "text", showPermissionAlert = true) => {
+    if (!isOwner) {
+      if (!showPermissionAlert) return;
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
+    setEditingDiaryEntry(null);
+    setDiaryDate(new Date().toISOString().split("T")[0]);
+    setDiaryWeather("");
+    setDiaryWorkers("");
+    setDiaryWorkDescription("");
+    setDiaryWorkDescriptionMode(mode);
+    setDiaryWorkDescriptionRecordingUri(null);
+    setDiaryWorkDescriptionIsRecording(false);
+    setDiaryWorkDescriptionRecording(null);
+    setDiaryMaterials("");
+    setDiaryPhaseId(null);
+    setDiaryAttachment(null);
+    setShowDiaryModal(true);
+  }, [isOwner, t]);
 
   const openTaskDetail = (task: TaskDoc) => {
     console.log(`[ProjectOverview] Opening task detail for task ${task.id}`);
@@ -711,7 +878,6 @@ export function ProjectOverviewScreen() {
   const handleMenuPress = () => {
     if (Platform.OS === 'ios') {
       const actions = [
-        { key: "team", label: t("projectOverview.team"), onPress: () => (navigation as any).navigate("ProjectTeam", { projectId, projectName }) },
         ...(isOwner ? [{ key: "edit", label: t("projectOverview.editProject"), onPress: handleEditProject }] : []),
         ...(whatsappDiaryEnabled ? [{ key: "updates", label: t("projectOverview.updates"), onPress: () => (navigation as any).navigate("Updates", { projectId }) }] : []),
         ...(contractorsEnabled ? [{ key: "suppliers", label: t("projectOverview.suppliers"), onPress: () => (navigation as any).navigate("ProjectSuppliers", { projectId }) }] : []),
@@ -740,7 +906,6 @@ export function ProjectOverviewScreen() {
         t("projectOverview.selectAction"),
         [
           { text: t("common.cancel"), style: 'cancel' },
-          { text: t("projectOverview.team"), onPress: () => (navigation as any).navigate("ProjectTeam", { projectId, projectName }) },
           ...(isOwner ? [{ text: t("projectOverview.editProject"), onPress: handleEditProject }] : []),
           ...(whatsappDiaryEnabled ? [{ text: t("projectOverview.updates"), onPress: () => (navigation as any).navigate("Updates", { projectId }) }] : []),
           ...(contractorsEnabled ? [{ text: t("projectOverview.suppliers"), onPress: () => (navigation as any).navigate("ProjectSuppliers", { projectId }) }] : []),
@@ -752,6 +917,7 @@ export function ProjectOverviewScreen() {
 
   const handleEditProject = () => {
     setEditProjectName(projectName || "");
+    setEditProjectAddress(addressText || "");
     setShowEditModal(true);
   };
 
@@ -759,10 +925,18 @@ export function ProjectOverviewScreen() {
     if (!editProjectName.trim() || !projectId || !orgId) return;
     setSubmitting(true);
     try {
-      console.log(`[ProjectOverview] Updating project ${projectId}: name="${editProjectName.trim()}"`);
-      await projectsService.updateProject(orgId, projectId, editProjectName.trim());
+      console.log(
+        `[ProjectOverview] Updating project ${projectId}: name="${editProjectName.trim()}", address="${editProjectAddress.trim()}"`
+      );
+      await projectsService.updateProject(
+        orgId,
+        projectId,
+        editProjectName.trim(),
+        editProjectAddress.trim()
+      );
       setShowEditModal(false);
       setEditProjectName("");
+      setEditProjectAddress("");
       // Reload project data
       await load(true);
       // Update route params if needed
@@ -941,13 +1115,66 @@ export function ProjectOverviewScreen() {
 
   const onAssigneePress = (task: TaskDoc) => {
     if (!orgId || !user || !projectId) return;
-    const name = user.name ?? user.email ?? "Me";
-    if (task.assigneeId === user.id) {
-      tasksService.updateTaskAssignee(orgId, projectId, task.id, null, null).then(() => load()).catch(() => {});
-    } else {
-      tasksService.updateTaskAssignee(orgId, projectId, task.id, user.id, name).then(() => load()).catch(() => {});
-    }
+    const activeMembers = projectMembers
+      .filter((member) => !!member.userId && member.sharedItems?.tasks !== false)
+      .map((member) => ({
+        key: `user:${member.userId}`,
+        assigneeId: member.userId,
+        assigneeName: member.name || member.email || member.userId,
+        label: member.name || member.email || member.userId,
+      }));
+    const invitedMembers = projectMembers
+      .filter((member) => !member.userId && member.sharedItems?.tasks !== false && !!(member.name || member.email))
+      .map((member) => {
+        const display = member.name || member.email || "";
+        const invitedSuffix = t("projectMembers.invited") || "Pozvaný";
+        return {
+          key: `invited:${member.id}`,
+          assigneeId: null as string | null,
+          assigneeName: display,
+          label: `${display} (${invitedSuffix})`,
+        };
+      });
+
+    const candidates = [
+      {
+        key: `user:${user.id}`,
+        assigneeId: user.id,
+        assigneeName: user.name ?? user.email ?? "Ja",
+        label: user.name ?? user.email ?? "Ja",
+      },
+      ...activeMembers,
+      ...invitedMembers,
+      {
+        key: "unassigned",
+        assigneeId: null as string | null,
+        assigneeName: null,
+        label: t("projectOverview.unassigned") || "Nepriradené",
+      },
+    ].filter((entry, index, arr) => arr.findIndex((x) => x.key === entry.key) === index);
+
+    setAssigneeTask(task);
+    setAssigneeCandidates(candidates);
+    setShowAssigneeModal(true);
   };
+
+  const applyAssigneeSelection = useCallback(
+    (candidate: { key: string; assigneeId: string | null; assigneeName: string | null; label: string }) => {
+      if (!orgId || !projectId || !assigneeTask) return;
+      tasksService
+        .updateTaskAssignee(orgId, projectId, assigneeTask.id, candidate.assigneeId, candidate.assigneeName)
+        .then(() => load())
+        .catch((error) => {
+          console.error("[ProjectOverview] Failed to update assignee:", error);
+          Alert.alert(t("common.error"), t("projectOverview.failedToChangeStatus"));
+        })
+        .finally(() => {
+          setShowAssigneeModal(false);
+          setAssigneeTask(null);
+        });
+    },
+    [assigneeTask, orgId, projectId, load, t]
+  );
 
   // Expenses handlers
   const openExpenseModal = (expense?: ExpenseDoc) => {
@@ -1072,17 +1299,18 @@ export function ProjectOverviewScreen() {
         filePath: uploadedFilePath,
         mimeType: picked.mimeType,
         attachmentId: attachment.id,
+        projectId,
       });
       setExpenseOcrStatus(result.status);
       if (result.status === "success") {
         applyOcrPrefill(result.parsed);
       } else {
-        Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+        Alert.alert(t("common.warning"), getOcrFallbackMessage(result.errorCode));
       }
     } catch (error: any) {
       console.error("[ProjectOverview] Auto OCR after pick failed:", error);
       setExpenseOcrStatus("failed");
-      Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+      Alert.alert(t("common.warning"), getOcrFallbackMessage(error?.code || error?.message));
     } finally {
       setUploadingExpenseAttachment(false);
       setOcrLoading(false);
@@ -1360,7 +1588,7 @@ export function ProjectOverviewScreen() {
     const normalizedPath = input.storagePath?.trim();
     if (!normalizedPath) {
       console.warn("[ProjectOverview] OCR skipped: empty filePath/storagePath");
-      Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+      Alert.alert(t("common.warning"), getOcrFallbackMessage("EMPTY_FILE_PATH"));
       await expensesService.updateExpense(input.projectId, input.expenseId, {
         ocrStatus: "failed",
       });
@@ -1377,7 +1605,7 @@ export function ProjectOverviewScreen() {
       normalizedPath.startsWith("gs://")
     ) {
       console.warn("[ProjectOverview] OCR skipped: invalid storage filePath:", normalizedPath);
-      Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+      Alert.alert(t("common.warning"), getOcrFallbackMessage("INVALID_FILE_PATH"));
       await expensesService.updateExpense(input.projectId, input.expenseId, {
         ocrStatus: "failed",
       });
@@ -1397,6 +1625,7 @@ export function ProjectOverviewScreen() {
         filePath: normalizedPath,
         mimeType: input.mimeType,
         attachmentId: input.attachmentId,
+        projectId: input.projectId,
       });
       if (ocrRequestIdRef.current !== requestId) return;
       setOcrLoading(false);
@@ -1405,7 +1634,7 @@ export function ProjectOverviewScreen() {
         ocrStatus: result.status === "success" ? "done" : "failed",
       });
       if (result.status !== "success") {
-        Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+        Alert.alert(t("common.warning"), getOcrFallbackMessage(result.errorCode));
       }
       navigateToExpenseReview({
         ...input,
@@ -1420,7 +1649,7 @@ export function ProjectOverviewScreen() {
       await expensesService.updateExpense(input.projectId, input.expenseId, {
         ocrStatus: "failed",
       });
-      Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+      Alert.alert(t("common.warning"), getOcrFallbackMessage((error as any)?.code || (error as any)?.message));
       navigateToExpenseReview({
         ...input,
         status: "failed",
@@ -1598,7 +1827,7 @@ export function ProjectOverviewScreen() {
             if (expenseAttachment.kind === "image") {
               setShowExpenseModal(false);
               openedOcrReview = true;
-              Alert.alert(t("common.warning"), OCR_MANUAL_FALLBACK_MESSAGE);
+              Alert.alert(t("common.warning"), getOcrFallbackMessage("OCR_SAVE_FALLBACK"));
               navigateToExpenseReview({
                 projectId,
                 expenseId: newExpense.id,
@@ -2386,6 +2615,7 @@ export function ProjectOverviewScreen() {
   // Determine project type: BUILD has phases, TRADE/MAINTENANCE don't
   const isBuildProject = projectType === 'BUILD' || projectType === 'MANAGEMENT';
   const isTradeOrMaintenance = projectType === 'TRADE' || projectType === 'RESIDENTIAL' || projectType === 'MAINTENANCE';
+  const supportsDiary = isBuildProject || isTradeOrMaintenance;
   
   // Group tasks by phase (only for BUILD projects)
   const tasksByPhase = new Map<string, TaskDoc[]>();
@@ -2468,19 +2698,62 @@ export function ProjectOverviewScreen() {
       </View>
 
       {/* Address section */}
-      {addressText && (
+      {(addressText || isOwner) && (
         <View style={styles.addressSection}>
-          <View style={styles.addressContent}>
-            <Ionicons name="location" size={20} color={colors.primary} />
-            <Text style={styles.addressText} numberOfLines={2}>{addressText}</Text>
+          <View style={styles.addressTopRow}>
+            <View style={styles.addressContent}>
+              <Ionicons name="location" size={20} color={colors.primary} />
+              <Text style={styles.addressText} numberOfLines={1}>
+                {addressText?.trim() || "Adresa projektu nie je zadaná"}
+              </Text>
+              {isOwner ? (
+                <TouchableOpacity
+                  style={styles.editAddressButton}
+                  onPress={handleEditProject}
+                  hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                >
+                  <Ionicons name="create-outline" size={18} color={colors.primary} />
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            {addressText?.trim() ? (
+              <TouchableOpacity
+                style={styles.navigateButton}
+                onPress={() => openInMaps(addressText)}
+              >
+                <Ionicons name="navigate" size={18} color="#FFFFFF" />
+                <Text style={styles.navigateButtonText}>{t("projectOverview.navigate")}</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
-          <TouchableOpacity
-            style={styles.navigateButton}
-            onPress={() => openInMaps(addressText)}
-          >
-            <Ionicons name="navigate" size={18} color="#FFFFFF" />
-            <Text style={styles.navigateButtonText}>{t("projectOverview.navigate")}</Text>
-          </TouchableOpacity>
+
+          {weatherLoading && !weatherSnapshot ? (
+            <ActivityIndicator size="small" color={colors.primary} />
+          ) : weatherSnapshot ? (
+            <View style={styles.weatherDaysRow}>
+              {weatherSnapshot.daily.slice(0, 3).map((day) => (
+                <TouchableOpacity
+                  key={day.label}
+                  style={styles.weatherDayCard}
+                  onPress={() => Linking.openURL(weatherSnapshot.detailUrl)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.weatherDayLabel}>{day.label}</Text>
+                  <View style={styles.weatherInlineRow}>
+                    <Ionicons name={weatherTypeIcon(day.type)} size={18} color={weatherBadgeColor(day.level)} />
+                    <Text style={styles.weatherDayTemp}>
+                      {day.tempMaxC != null || day.tempMinC != null
+                        ? `${day.tempMaxC != null ? Math.round(day.tempMaxC) : "?"}° / ${day.tempMinC != null ? Math.round(day.tempMinC) : "?"}°`
+                        : "—"}
+                    </Text>
+                  </View>
+                  <View style={[styles.weatherDayBadge, { backgroundColor: weatherBadgeColor(day.level) }]} />
+                </TouchableOpacity>
+              ))}
+            </View>
+          ) : (
+            <Text style={styles.weatherErrorText}>{weatherError || "Počasie sa nepodarilo načítať."}</Text>
+          )}
         </View>
       )}
 
@@ -3005,8 +3278,8 @@ export function ProjectOverviewScreen() {
         )}
       </View>
 
-        {/* Construction Diary Section - For BUILD and MANAGEMENT projects */}
-        {(projectType === 'BUILD' || projectType === 'MANAGEMENT') && (
+        {/* Construction Diary Section */}
+        {supportsDiary && (
           <View style={styles.expensesSection}>
           <TouchableOpacity 
             style={styles.expensesHeader}
@@ -3020,26 +3293,12 @@ export function ProjectOverviewScreen() {
                 style={{ marginRight: spacing.sm }}
               />
               <Text style={styles.expensesHeaderText}>
-                {projectType === 'MANAGEMENT' ? 'Denník' : 'Stavebný denník'}
+                {(projectType === 'MANAGEMENT' || isTradeOrMaintenance) ? 'Denník' : 'Stavebný denník'}
               </Text>
               <Text style={styles.expensesCount}>({diaryEntries.length})</Text>
             </View>
             <TouchableOpacity
-              onPress={() => {
-                setEditingDiaryEntry(null);
-                setDiaryDate(new Date().toISOString().split('T')[0]);
-                setDiaryWeather("");
-                setDiaryWorkers("");
-                setDiaryWorkDescription("");
-                setDiaryWorkDescriptionMode('text');
-                setDiaryWorkDescriptionRecordingUri(null);
-                setDiaryWorkDescriptionIsRecording(false);
-                setDiaryWorkDescriptionRecording(null);
-                setDiaryMaterials("");
-                setDiaryPhaseId(null);
-                setDiaryAttachment(null);
-                setShowDiaryModal(true);
-              }}
+              onPress={() => openNewDiaryModal("text")}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
               <Ionicons name="add-circle" size={24} color={colors.primary} />
@@ -3257,6 +3516,44 @@ export function ProjectOverviewScreen() {
             <Text style={styles.addSectionText}>{t("projectOverview.addSection")}</Text>
           </TouchableOpacity>
         )}
+
+        <View style={styles.activityCard}>
+          <TouchableOpacity
+            style={styles.activityHeader}
+            onPress={() => setActivityExpanded((prev) => !prev)}
+            activeOpacity={0.7}
+          >
+            <Text style={styles.activityTitle}>{t("home.recentActivity") || "Activity"}</Text>
+            <View style={styles.activityHeaderRight}>
+              {activityLoading ? (
+                <ActivityIndicator size="small" color={colors.primary} />
+              ) : (
+                <>
+                  <Text style={styles.activityCount}>{activityEvents.length}</Text>
+                  <Ionicons
+                    name={activityExpanded ? "chevron-up" : "chevron-down"}
+                    size={18}
+                    color={colors.textMuted}
+                  />
+                </>
+              )}
+            </View>
+          </TouchableOpacity>
+
+          {activityEvents.length === 0 && !activityLoading ? (
+            <Text style={styles.activityEmpty}>{t("home.noRecentActivity")}</Text>
+          ) : (
+            (activityExpanded ? activityEvents.slice(0, 4) : activityEvents.slice(0, 1)).map((event) => (
+              <View key={event.id} style={styles.activityRow}>
+                <Text style={styles.activitySummary} numberOfLines={1}>{formatEventSummary(t, event)}</Text>
+                <Text style={styles.activityTime}>{formatActivityAge(event.createdAt)}</Text>
+              </View>
+            ))
+          )}
+          {!activityExpanded && activityEvents.length > 1 ? (
+            <Text style={styles.activityMore}>+{activityEvents.length - 1}</Text>
+          ) : null}
+        </View>
       </ScrollView>
 
       {/* Bottom: List toggle + FAB/Button for new task */}
@@ -3285,6 +3582,55 @@ export function ProjectOverviewScreen() {
         ) : null}
       </View>
 
+      <Modal
+        visible={showAssigneeModal}
+        transparent
+        animationType="slide"
+        onRequestClose={() => {
+          setShowAssigneeModal(false);
+          setAssigneeTask(null);
+        }}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <Text style={styles.modalTitle}>{t("projectOverview.assignee") || "Pridelený"}</Text>
+            <Text style={styles.assigneePickerSubtitle}>Vyber člena projektu</Text>
+            <ScrollView style={styles.assigneePickerList} contentContainerStyle={styles.assigneePickerListContent}>
+              {assigneeCandidates.map((candidate) => {
+                const isSelected =
+                  candidate.assigneeId !== null
+                    ? assigneeTask?.assigneeId === candidate.assigneeId
+                    : (assigneeTask?.assigneeId ?? null) === null &&
+                      (assigneeTask?.assigneeName ?? null) === candidate.assigneeName;
+                return (
+                  <TouchableOpacity
+                    key={candidate.key}
+                    style={[styles.assigneePickerRow, isSelected && styles.assigneePickerRowActive]}
+                    onPress={() => applyAssigneeSelection(candidate)}
+                  >
+                    <Text style={[styles.assigneePickerLabel, isSelected && styles.assigneePickerLabelActive]}>
+                      {candidate.label}
+                    </Text>
+                    {isSelected ? <Ionicons name="checkmark" size={18} color={colors.primary} /> : null}
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
+            <View style={styles.modalButtons}>
+              <TouchableOpacity
+                style={styles.modalCancel}
+                onPress={() => {
+                  setShowAssigneeModal(false);
+                  setAssigneeTask(null);
+                }}
+              >
+                <Text style={styles.modalCancelText}>{t("common.cancel")}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        </View>
+      </Modal>
+
       {/* Edit project modal */}
       <Modal visible={showEditModal} transparent animationType="slide">
         <View style={styles.modalOverlay}>
@@ -3298,10 +3644,21 @@ export function ProjectOverviewScreen() {
               placeholderTextColor={colors.textMuted}
               autoFocus
             />
+            <TextInput
+              style={styles.input}
+              value={editProjectAddress}
+              onChangeText={setEditProjectAddress}
+              placeholder="Adresa projektu"
+              placeholderTextColor={colors.textMuted}
+            />
             <View style={styles.modalButtons}>
               <TouchableOpacity 
                 style={styles.modalCancel} 
-                onPress={() => { setShowEditModal(false); setEditProjectName(""); }}
+                onPress={() => {
+                  setShowEditModal(false);
+                  setEditProjectName("");
+                  setEditProjectAddress("");
+                }}
               >
                 <Text style={styles.modalCancelText}>{t("tasks.cancel")}</Text>
               </TouchableOpacity>
@@ -4660,12 +5017,15 @@ const styles = StyleSheet.create({
   addressSection: {
     backgroundColor: colors.card,
     marginHorizontal: spacing.md,
-    marginTop: spacing.md,
+    marginTop: spacing.sm,
     marginBottom: spacing.sm,
-    padding: spacing.md,
+    padding: spacing.sm,
     borderRadius: radius,
     borderWidth: 1,
     borderColor: colors.border,
+    gap: spacing.xs,
+  },
+  addressTopRow: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
@@ -4678,22 +5038,126 @@ const styles = StyleSheet.create({
   },
   addressText: {
     flex: 1,
-    fontSize: 14,
+    fontSize: 13,
     color: colors.text,
     marginLeft: spacing.sm,
+  },
+  editAddressButton: {
+    marginLeft: spacing.xs,
+    padding: 2,
   },
   navigateButton: {
     flexDirection: "row",
     alignItems: "center",
     backgroundColor: colors.primary,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
     borderRadius: radius,
     gap: spacing.xs,
+    marginLeft: spacing.sm,
   },
   navigateButtonText: {
     color: "#FFFFFF",
-    fontSize: 14,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  weatherDaysRow: {
+    flexDirection: "row",
+    gap: spacing.xs,
+  },
+  weatherDayCard: {
+    flex: 1,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius,
+    backgroundColor: "#f5f6f8",
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.xs,
+    alignItems: "center",
+    minHeight: 74,
+  },
+  weatherDayLabel: {
+    fontSize: 11,
+    color: "#232323",
+    fontWeight: "700",
+    marginBottom: 2,
+  },
+  weatherInlineRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  weatherDayTemp: {
+    fontSize: 12,
+    color: "#232323",
+    fontWeight: "700",
+    marginTop: 0,
+    marginBottom: 2,
+  },
+  weatherDayBadge: {
+    marginTop: 2,
+    width: 18,
+    borderRadius: 999,
+    minHeight: 4,
+  },
+  weatherErrorText: {
+    fontSize: 13,
+    color: colors.textMuted,
+  },
+  activityCard: {
+    backgroundColor: colors.card,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+    padding: spacing.sm,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  activityHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    minHeight: 28,
+  },
+  activityHeaderRight: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  activityTitle: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  activityCount: {
+    color: colors.textMuted,
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  activityRow: {
+    paddingVertical: 6,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  activitySummary: {
+    color: colors.text,
+    fontSize: 13,
+  },
+  activityTime: {
+    marginTop: 1,
+    color: colors.textMuted,
+    fontSize: 11,
+  },
+  activityEmpty: {
+    marginTop: spacing.xs,
+    color: colors.textMuted,
+    fontSize: 13,
+  },
+  activityMore: {
+    marginTop: 2,
+    color: colors.textMuted,
+    fontSize: 11,
     fontWeight: "600",
   },
 
@@ -5105,6 +5569,26 @@ const styles = StyleSheet.create({
   ocrCancelButton: { marginTop: spacing.sm },
   ocrCancelText: { color: colors.primary, fontSize: 14, fontWeight: "600" },
   modalTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.md },
+  assigneePickerSubtitle: { fontSize: 13, color: colors.textMuted, marginBottom: spacing.sm },
+  assigneePickerList: { maxHeight: 280, marginBottom: spacing.md },
+  assigneePickerListContent: { gap: spacing.xs },
+  assigneePickerRow: {
+    minHeight: 44,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius,
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  assigneePickerRowActive: {
+    borderColor: colors.primary,
+    backgroundColor: `${colors.primary}14`,
+  },
+  assigneePickerLabel: { fontSize: 15, color: colors.text, fontWeight: "500" },
+  assigneePickerLabelActive: { color: colors.primary, fontWeight: "700" },
   modalLabel: { fontSize: 14, fontWeight: "500", color: colors.text, marginBottom: spacing.xs, marginTop: spacing.sm },
   input: {
     backgroundColor: colors.card,

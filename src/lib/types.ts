@@ -202,3 +202,37 @@ export interface ProjectDocument {
   createdAt: Timestamp;
   updatedAt: Timestamp;
 }
+
+export type ProjectEventType =
+  | "photo_added"
+  | "document_added"
+  | "expense_added"
+  | "ocr_completed"
+  | "task_created"
+  | "task_done"
+  | "member_invited"
+  | "diary_added";
+
+export interface ProjectEvent {
+  id: string;
+  type: ProjectEventType;
+  createdAt: unknown;
+  actorId: string;
+  actorName?: string | null;
+  payload?: {
+    actorName?: string;
+    projectName?: string;
+    taskTitle?: string;
+    fileName?: string;
+    amount?: number;
+    currency?: string;
+    supplier?: string;
+    count?: number;
+    email?: string;
+  };
+  ref?: {
+    kind?: string;
+    id?: string;
+    [key: string]: unknown;
+  } | null;
+}

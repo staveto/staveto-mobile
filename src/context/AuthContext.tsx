@@ -1,7 +1,8 @@
-import React, { createContext, useContext, useEffect, useState } from "react";
+import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import auth from "@react-native-firebase/auth";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
+import { claimProjectInvites } from "../services/invites";
 
 type User = { id: string; email: string; name?: string };
 
@@ -35,6 +36,7 @@ const GOOGLE_WEB_CLIENT_ID =
   "255961550157-gaueraial600f02qa3qadki41fhvabit.apps.googleusercontent.com";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  const claimedInviteSessionsRef = useRef<Set<string>>(new Set());
   const [state, setState] = useState<AuthState>({
     token: null,
     user: null,
@@ -77,6 +79,18 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email: fbUser.email ?? "",
         name: fbUser.displayName ?? undefined,
       };
+      if (!claimedInviteSessionsRef.current.has(fbUser.uid)) {
+        claimedInviteSessionsRef.current.add(fbUser.uid);
+        claimProjectInvites()
+          .then((result) => {
+            if (result.claimedCount > 0) {
+              console.log("[auth] claimed project invites:", result.claimedCount, result.projectIds);
+            }
+          })
+          .catch((error) => {
+            console.warn("[auth] claimProjectInvites failed:", error);
+          });
+      }
       setState((s) => ({
         ...s,
         token,

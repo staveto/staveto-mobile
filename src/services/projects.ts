@@ -223,20 +223,54 @@ async function listAllMyProjectsInternal(ownerId: string): Promise<ProjectDoc[]>
   try {
     // CRITICAL: Query MUST use where('ownerId', '==', auth.currentUser.uid)
     // This ensures Firestore rules can check resource.data.ownerId == uid()
-    const snap = await firestore()
+    const ownerSnap = await firestore()
       .collection(COLLECTION)
       .where("ownerId", "==", actualOwnerId)
       .get();
-    console.log(`[projects] listAllMyProjectsInternal: found ${snap.docs.length} projects`);
+    console.log(`[projects] listAllMyProjectsInternal: found ${ownerSnap.docs.length} owner projects`);
     
     // Debug: Check ownerId in each project
-    snap.docs.forEach((doc) => {
+    ownerSnap.docs.forEach((doc) => {
       const data = doc.data();
       const docOwnerId = data.ownerId;
       console.log(`[projects] Project ${doc.id}: ownerId="${docOwnerId}", match? ${docOwnerId === actualOwnerId ? 'YES ✅' : 'NO ❌'}`);
     });
-    
-    return snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) })) as ProjectDoc[];
+
+    const ownerProjects = ownerSnap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) })) as ProjectDoc[];
+
+    // Include projects shared via invite claim reverse index.
+    let memberProjects: ProjectDoc[] = [];
+    try {
+      const refsSnap = await getDocs(collection(db, paths.userProjectRefs(actualOwnerId)));
+      const ownerIds = new Set(ownerProjects.map((p) => p.id));
+      const memberProjectIds = refsSnap.docs
+        .map((d) => (typeof d.data().projectId === "string" ? (d.data().projectId as string) : d.id))
+        .filter((projectId) => !!projectId && !ownerIds.has(projectId));
+
+      const memberProjectDocs = await Promise.all(
+        memberProjectIds.map(async (projectId) => {
+          try {
+            const snap = await getDoc(doc(db, COLLECTION, projectId));
+            if (!snap.exists()) return null;
+            return toDoc({ id: snap.id, data: snap.data.bind(snap) });
+          } catch (error) {
+            console.warn(`[projects] Failed to load member project ${projectId}:`, error);
+            return null;
+          }
+        })
+      );
+      memberProjects = memberProjectDocs.filter((p): p is ProjectDoc => !!p);
+    } catch (error) {
+      console.warn("[projects] Failed to load member project refs:", error);
+    }
+
+    const merged = [...ownerProjects, ...memberProjects].filter(
+      (project, index, arr) => arr.findIndex((x) => x.id === project.id) === index
+    );
+    console.log(
+      `[projects] listAllMyProjectsInternal: owner=${ownerProjects.length}, member=${memberProjects.length}, merged=${merged.length}`
+    );
+    return merged;
   } catch (error: any) {
     console.error(`[projects] listAllMyProjectsInternal error:`, error);
     const errorCode = error.code || '';
@@ -282,19 +316,28 @@ export async function listAllMyProjects(ownerId: string): Promise<ProjectDoc[]> 
   return listAllMyProjectsInternal(ownerId);
 }
 
-export async function updateProject(_ownerId: string, projectId: string, name: string): Promise<void> {
+export async function updateProject(
+  _ownerId: string,
+  projectId: string,
+  name: string,
+  addressText?: string | null
+): Promise<void> {
   // CRITICAL FIX: Always use auth.currentUser.uid for verification
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
     throw new Error('Musíte byť prihlásený na úpravu projektu.');
   }
   
+  const normalizedAddress = (addressText ?? "").trim();
   const ref = doc(db, COLLECTION, projectId);
   await updateDoc(ref, { 
     name: name.trim(), 
+    addressText: normalizedAddress || null,
     updatedAt: serverTimestamp() // Use serverTimestamp()
   });
-  console.log(`[projects] Updated project ${projectId}: name="${name.trim()}"`);
+  console.log(
+    `[projects] Updated project ${projectId}: name="${name.trim()}", address="${normalizedAddress}"`
+  );
 }
 
 export async function deleteProject(_ownerId: string, projectId: string): Promise<void> {

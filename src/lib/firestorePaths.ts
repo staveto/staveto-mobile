@@ -23,6 +23,7 @@ export const paths = {
   projectAttachments: (projectId: string) => `projects/${projectId}/attachments`,
   projectAttachment: (projectId: string, attachmentId: string) =>
     `projects/${projectId}/attachments/${attachmentId}`,
+  projectEvents: (projectId: string) => `projects/${projectId}/events`,
   // DEPRECATED: Use projectAttachments with taskId in metadata instead
   // @deprecated Use projectAttachments(projectId) and filter by taskId metadata
   taskAttachments: (projectId: string, taskId: string) =>
@@ -47,4 +48,9 @@ export const paths = {
   userNotifications: (userId: string) => `users/${userId}/notifications`,
   userNotification: (userId: string, notificationId: string) =>
     `users/${userId}/notifications/${notificationId}`,
+  userProjectState: (uid: string, projectId: string) =>
+    `users/${uid}/projectState/${projectId}`,
+  userProjectRefs: (uid: string) => `users/${uid}/projectRefs`,
+  userProjectRef: (uid: string, projectId: string) =>
+    `users/${uid}/projectRefs/${projectId}`,
 };

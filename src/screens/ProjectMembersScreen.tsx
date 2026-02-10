@@ -191,6 +191,12 @@ export function ProjectMembersScreen() {
     );
   };
 
+  const memberStatusLabel = (member: ProjectMemberDoc): string => {
+    const status = (member.status || "").toLowerCase();
+    if (status === "invited" || !member.userId) return t("projectMembers.invited") || "Pozvaný";
+    return "Aktívny";
+  };
+
   return (
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
@@ -248,7 +254,10 @@ export function ProjectMembersScreen() {
                   </Text>
                 </View>
                 <View style={styles.memberInfo}>
-                  <Text style={styles.memberName}>{m.name || m.email || "—"}</Text>
+                  <View style={styles.memberNameRow}>
+                    <Text style={styles.memberName}>{m.name || m.email || "—"}</Text>
+                    <Text style={styles.memberRole}>({memberStatusLabel(m)})</Text>
+                  </View>
                   <Text style={styles.memberEmail}>{m.email || (t('projectMembers.waitingForLogin') || 'Čaká na prihlásenie')}</Text>
                   {m.permissionLevel && (
                     <Text style={styles.memberPermission}>
@@ -308,7 +317,7 @@ export function ProjectMembersScreen() {
                 <View style={styles.memberInfo}>
                   <View style={styles.memberNameRow}>
                     <Text style={styles.memberName}>{m.name || m.email || "—"}</Text>
-                    <Text style={styles.memberRole}>({t('projectMembers.invited') || 'Pozvaný'})</Text>
+                    <Text style={styles.memberRole}>({memberStatusLabel(m)})</Text>
                   </View>
                   <Text style={styles.memberEmail}>{m.email || (t('projectMembers.waitingForLogin') || 'Čaká na prihlásenie')}</Text>
                   {m.permissionLevel && (
@@ -358,7 +367,7 @@ export function ProjectMembersScreen() {
       </TouchableOpacity>
 
       <Modal visible={showAddMember} transparent animationType="slide">
-        <View style={[styles.addMemberOverlay, { paddingTop: insets.top }]}>
+        <View style={[styles.addMemberOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom + spacing.md }]}>
           <View style={styles.addMemberContainer}>
             <View style={styles.addMemberHeader}>
               <TouchableOpacity onPress={closeAddMember} style={styles.addMemberClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
@@ -367,6 +376,13 @@ export function ProjectMembersScreen() {
               <Text style={styles.addMemberTitle}>{t("addMember.title")}</Text>
               <View style={styles.addMemberHeaderRight} />
             </View>
+            <ScrollView
+              style={styles.addMemberScroll}
+              contentContainerStyle={styles.addMemberScrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+            >
             <Text style={styles.addMemberLabel}>{t('projectMembers.emailLabel') || 'Email *'}</Text>
             <TextInput
               style={styles.addMemberInput}
@@ -564,6 +580,7 @@ export function ProjectMembersScreen() {
                 )}
               </TouchableOpacity>
             </View>
+            </ScrollView>
           </View>
         </View>
       </Modal>
@@ -634,8 +651,15 @@ const styles = StyleSheet.create({
     borderRadius: radius,
     marginTop: spacing.lg,
     padding: spacing.lg,
+    flex: 1,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  addMemberScroll: {
+    flex: 1,
+  },
+  addMemberScrollContent: {
+    paddingBottom: spacing.md,
   },
   addMemberHeader: {
     flexDirection: "row",

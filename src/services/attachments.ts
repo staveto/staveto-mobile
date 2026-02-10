@@ -2,6 +2,7 @@ import { collection, addDoc, query, where, getDocs, deleteDoc, doc, orderBy, ser
 import { storage, db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { AttachmentMetadata, AttachmentKind } from "../lib/attachmentTypes";
+import { addProjectEvent } from "./projectEvents";
 
 export type AttachmentDoc = AttachmentMetadata;
 
@@ -151,6 +152,18 @@ export async function uploadAttachment(
   });
 
   console.log(`[attachments] Created metadata doc: ${refDoc.id}`);
+
+  try {
+    const eventType = options.mimeType?.startsWith("image/") ? "photo_added" : "document_added";
+    await addProjectEvent(
+      projectId,
+      eventType,
+      { fileName: options.fileName },
+      { kind: "attachment", id: refDoc.id }
+    );
+  } catch (error) {
+    console.warn("[attachments] Failed to create project event:", error);
+  }
 
   return {
     id: refDoc.id,

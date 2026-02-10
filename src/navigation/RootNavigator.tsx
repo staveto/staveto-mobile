@@ -7,7 +7,7 @@ import { useI18n } from "../i18n/I18nContext";
 import { LoginScreen } from "../screens/LoginScreen";
 import { RegisterScreen } from "../screens/RegisterScreen";
 import { LanguageSelectionScreen } from "../screens/LanguageSelectionScreen";
-import { OnboardingIntroScreen } from "../screens/OnboardingIntroScreen";
+import { OnboardingEvolutionScreen } from "../screens/OnboardingEvolutionScreen";
 import { ConsentRequiredScreen } from "../screens/ConsentRequiredScreen";
 import { OnboardingMvpScreen } from "../screens/OnboardingMvpScreen";
 import { HomeScreen } from "../screens/HomeScreen";
@@ -120,7 +120,7 @@ export function RootNavigator() {
         initialRouteName={onboardingDone ? "Login" : "LanguageSelect"}
       >
         <Stack.Screen name="LanguageSelect" component={LanguageSelectionScreen} />
-        <Stack.Screen name="OnboardingIntro" component={OnboardingIntroScreen} />
+        <Stack.Screen name="OnboardingIntro" component={OnboardingEvolutionScreen} />
         <Stack.Screen name="Login" component={LoginScreen} />
         <Stack.Screen name="Register" component={RegisterScreen} />
       </Stack.Navigator>

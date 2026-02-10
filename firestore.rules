@@ -18,7 +18,16 @@ service cloud.firestore {
 
     function isMember(projectId) {
       return signedIn()
-        && exists(/databases/$(database)/documents/projects/$(projectId)/members/$(uid()));
+        && (
+          exists(/databases/$(database)/documents/users/$(uid())/projectRefs/$(projectId))
+          || (
+            exists(/databases/$(database)/documents/projects/$(projectId)/members/$(uid()))
+            && (
+              !("status" in get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data)
+              || get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.status == "active"
+            )
+          )
+        );
     }
 
     function memberTaskUpdateAllowed() {
@@ -71,6 +80,15 @@ service cloud.firestore {
       match /contractors/{contractorId} {
         allow read, write: if signedIn() && uid() == userId;
       }
+
+      match /projectState/{projectId} {
+        allow read, write: if signedIn() && uid() == userId;
+      }
+
+      match /projectRefs/{projectId} {
+        allow read: if signedIn() && uid() == userId;
+        allow write: if false;
+      }
     }
     
     // Billing events (read-only for users, write-only for server)
@@ -122,12 +140,18 @@ service cloud.firestore {
           || (isMember(projectId) && memberTaskUpdateAllowed());
       }
 
+      // project activity events ticker
+      match /events/{eventId} {
+        allow read, write: if isOwner(projectId) || isMember(projectId);
+      }
+
       // subkolekcie (phases/tasks/expenses/attachments...)
       match /{subcol}/{docId} {
         allow read: if signedIn()
           && exists(/databases/$(database)/documents/projects/$(projectId))
           && (
             get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid()
+            || isMember(projectId)
             || !("ownerId" in get(/databases/$(database)/documents/projects/$(projectId)).data)
           );
         allow write: if signedIn()
@@ -141,6 +165,7 @@ service cloud.firestore {
           && exists(/databases/$(database)/documents/projects/$(projectId))
           && (
             get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid()
+            || isMember(projectId)
             || !("ownerId" in get(/databases/$(database)/documents/projects/$(projectId)).data)
           );
         allow write: if signedIn()

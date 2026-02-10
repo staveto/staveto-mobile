@@ -15,6 +15,7 @@ import {
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { ConstructionDiaryEntry } from "../lib/types";
+import { addProjectEvent } from "./projectEvents";
 
 export type DiaryEntryDoc = {
   id: string;
@@ -105,6 +106,17 @@ export async function createDiaryEntry(
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
+
+  try {
+    await addProjectEvent(
+      projectId,
+      "diary_added",
+      {},
+      { kind: "diary", id: ref.id }
+    );
+  } catch (error) {
+    console.warn("[constructionDiary] Failed to create project event:", error);
+  }
   
   console.log(`[constructionDiary] Created entry ${ref.id} in project ${projectId}`);
   

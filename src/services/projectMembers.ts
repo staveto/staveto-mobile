@@ -2,13 +2,17 @@ import { collection, addDoc, query, getDocs, deleteDoc, doc, serverTimestamp, wh
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import firestore from "@react-native-firebase/firestore";
+import { addProjectEvent } from "./projectEvents";
 
 export type ProjectMemberDoc = {
   id: string;
   userId: string;
   email?: string;
+  emailLower?: string;
   name?: string;
   role?: 'owner' | 'member';
+  status?: 'invited' | 'active';
+  joinedAt?: firestore.FirebaseFirestoreTypes.Timestamp | string;
   addedAt: firestore.FirebaseFirestoreTypes.Timestamp | string;
   // Permission level: 'viewer' = read-only, 'editor' = read-write
   permissionLevel?: 'viewer' | 'editor';
@@ -38,12 +42,22 @@ export async function listProjectMembers(projectId: string): Promise<ProjectMemb
     
     return snapshot.docs.map(doc => {
       const data = doc.data();
+      const hasUserIdField = Object.prototype.hasOwnProperty.call(data, "userId");
+      const parsedUserId =
+        typeof data.userId === "string"
+          ? data.userId
+          : !hasUserIdField
+          ? doc.id // backward compatibility for legacy docs where uid was document id
+          : "";
       return {
         id: doc.id,
-        userId: data.userId || doc.id,
+        userId: parsedUserId,
         email: data.email || undefined,
+        emailLower: data.emailLower || undefined,
         name: data.name || undefined,
         role: data.role || 'member',
+        status: data.status || (parsedUserId ? "active" : "invited"),
+        joinedAt: data.joinedAt || undefined,
         permissionLevel: data.permissionLevel || 'editor',
         addedAt: data.addedAt || new Date().toISOString(),
         sharedItems: data.sharedItems || {
@@ -96,19 +110,20 @@ export async function inviteMemberByEmail(
     
     // Check if member already exists
     const membersRef = collection(db, paths.projectMembers(projectId));
-    const existingQuery = query(membersRef, where('email', '==', normalizedEmail));
-    const existingSnapshot = await getDocs(existingQuery);
-    
-    if (!existingSnapshot.empty) {
+    const existingByEmailLower = await getDocs(query(membersRef, where('emailLower', '==', normalizedEmail)));
+    const existingByEmail = await getDocs(query(membersRef, where('email', '==', normalizedEmail)));
+    if (!existingByEmailLower.empty || !existingByEmail.empty) {
       throw new Error('Tento používateľ je už členom projektu.');
     }
 
     // Create member document
     const memberData: Record<string, unknown> = {
-      userId: '', // Will be set when user accepts invitation
+      userId: null, // Will be set when user claims invitation
       email: normalizedEmail,
+      emailLower: normalizedEmail,
       name: name?.trim() || undefined,
       role: 'member',
+      status: 'invited',
       permissionLevel: permissionLevel,
       addedAt: serverTimestamp(),
       invitedBy: currentUser.uid,
@@ -124,6 +139,16 @@ export async function inviteMemberByEmail(
     };
 
     await addDoc(membersRef, memberData);
+    try {
+      await addProjectEvent(
+        projectId,
+        "member_invited",
+        { email: normalizedEmail },
+        { kind: "member", id: normalizedEmail }
+      );
+    } catch (error) {
+      console.warn("[projectMembers] Failed to create project event:", error);
+    }
     
     console.log(`[projectMembers] Invited member ${normalizedEmail} to project ${projectId}`);
   } catch (error: any) {

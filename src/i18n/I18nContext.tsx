@@ -1,6 +1,5 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import * as Localization from "expo-localization";
 import { interpolate, type Locale, translations, LOCALE_NAMES } from "./translations";
 
 const STORAGE_KEY = "staveto_locale";
@@ -17,10 +16,7 @@ function resolveLocale(code: string | undefined): Locale {
 }
 
 function getDefaultLocale(): Locale {
-  try {
-    const locales = Localization.getLocales?.();
-    if (locales?.[0]?.languageCode) return resolveLocale(locales[0].languageCode);
-  } catch {}
+  // Product decision: first launch should always start in English.
   return "en";
 }
 

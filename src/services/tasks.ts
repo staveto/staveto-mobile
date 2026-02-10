@@ -19,6 +19,7 @@ import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { upsertTaskDueNotification, markTaskNotificationsRead, recordSyncIssue } from "./notifications";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
+import { addProjectEvent } from "./projectEvents";
 
 export type TaskDoc = {
   id: string;
@@ -246,6 +247,17 @@ export async function createTask(
     }
   }
 
+  try {
+    await addProjectEvent(
+      projectId,
+      "task_created",
+      { taskTitle: title.trim() },
+      { kind: "task", id: ref.id }
+    );
+  } catch (error) {
+    console.warn("[tasks] Failed to create task_created event:", error);
+  }
+
   return {
     id: ref.id,
     projectId,
@@ -367,6 +379,16 @@ export async function updateTaskStatus(
   status: string
 ): Promise<void> {
   const currentUser = auth.currentUser;
+  let taskTitle = "";
+  try {
+    const beforeSnap = await getDoc(doc(db, paths.projectTask(projectId, taskId)));
+    if (beforeSnap.exists()) {
+      const beforeData = beforeSnap.data() as { title?: string };
+      taskTitle = beforeData.title ?? "";
+    }
+  } catch (error) {
+    console.warn("[tasks] Failed to read task before status update:", error);
+  }
   const ref = doc(db, paths.projectTask(projectId, taskId));
   await updateDoc(ref, {
     status,
@@ -378,6 +400,16 @@ export async function updateTaskStatus(
       await markTaskNotificationsRead(currentUser.uid, taskId);
     } catch (error) {
       console.warn("[tasks] Failed to mark task notifications as read:", error);
+    }
+    try {
+      await addProjectEvent(
+        projectId,
+        "task_done",
+        { taskTitle: taskTitle || undefined },
+        { kind: "task", id: taskId }
+      );
+    } catch (error) {
+      console.warn("[tasks] Failed to create task_done event:", error);
     }
   }
 }

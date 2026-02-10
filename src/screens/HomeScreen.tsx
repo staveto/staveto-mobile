@@ -1,10 +1,12 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
   TouchableOpacity,
   StyleSheet,
   ScrollView,
+  FlatList,
+  Pressable,
   ActivityIndicator,
   RefreshControl,
   Modal,
@@ -25,6 +27,7 @@ import * as tasksService from "../services/tasks";
 import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
 import * as dashboardService from "../services/dashboard";
+import * as projectEventsService from "../services/projectEvents";
 import type { ProjectDoc } from "../services/projects";
 import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
@@ -64,6 +67,83 @@ type DashboardViewModel = {
   projectStats: Map<string, { openCount: number; totalCount: number; progress: number }>;
 };
 
+type LiveProjectRow = {
+  projectId: string;
+  projectName: string;
+  lastActivityLabel: string;
+  newCountLabel: string;
+  status: "OK" | "RISK" | "PROBLEM";
+};
+
+type CompactProjectItemProps = {
+  project: ProjectDoc;
+  openTasks: number;
+  lastActivity: string;
+  status: "OK" | "RISK" | "PROBLEM";
+  onOpen: (projectId: string) => void;
+  onPhoto: (projectId: string) => void;
+  onTask: (projectId: string) => void;
+};
+
+const CompactProjectItem = React.memo(function CompactProjectItem({
+  project,
+  openTasks,
+  lastActivity,
+  status,
+  onOpen,
+  onPhoto,
+  onTask,
+}: CompactProjectItemProps) {
+  const stripeColor =
+    project.projectType === "BUILD" || project.projectType === "MANAGEMENT"
+      ? "#ff9f43"
+      : project.projectType === "TRADE"
+      ? "#5dade2"
+      : "#7dcea0";
+  const statusLabel = status === "OK" ? "OK" : status === "RISK" ? "Riziko" : "Čaká";
+
+  return (
+    <TouchableOpacity
+      style={styles.compactProjectRow}
+      onPress={() => onOpen(project.id)}
+      activeOpacity={0.8}
+    >
+      <View style={[styles.compactStripe, { backgroundColor: stripeColor }]} />
+      <View style={styles.compactProjectBody}>
+        <Text style={styles.compactProjectTitle} numberOfLines={1}>
+          {project.name}
+        </Text>
+        <Text style={styles.compactProjectSubline} numberOfLines={1}>
+          {openTasks} {openTasks === 1 ? "otvorená úloha" : "otvorené úlohy"} • aktivita {lastActivity}
+        </Text>
+      </View>
+      <View style={styles.compactActions}>
+        <TouchableOpacity
+          style={styles.compactActionBtn}
+          onPress={(e) => {
+            e.stopPropagation();
+            onPhoto(project.id);
+          }}
+        >
+          <Ionicons name="camera-outline" size={16} color="#fff" />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.compactActionBtn, styles.compactActionBtnTask]}
+          onPress={(e) => {
+            e.stopPropagation();
+            onTask(project.id);
+          }}
+        >
+          <Ionicons name="checkmark-outline" size={16} color="#fff" />
+        </TouchableOpacity>
+      </View>
+      <View style={styles.statusTag}>
+        <Text style={styles.statusTagText}>{statusLabel}</Text>
+      </View>
+    </TouchableOpacity>
+  );
+});
+
 export function HomeScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
@@ -71,6 +151,8 @@ export function HomeScreen() {
   const { user, orgId } = useAuth();
   const [dashboardData, setDashboardData] = useState<DashboardViewModel | null>(null);
   const [allTasks, setAllTasks] = useState<TaskDoc[]>([]);
+  const [liveRows, setLiveRows] = useState<LiveProjectRow[]>([]);
+  const [liveLoading, setLiveLoading] = useState(false);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUsedProjectId, setLastUsedProjectId] = useState<string | null>(null);
@@ -101,7 +183,9 @@ export function HomeScreen() {
     }
   }, []);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
-  const [pendingAction, setPendingAction] = useState<"task" | "photo" | "expense" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"task" | "photo" | "expense" | "voice" | null>(null);
+  const [fabProjectSelectionMode, setFabProjectSelectionMode] = useState(false);
+  const [actionProjectId, setActionProjectId] = useState<string | null>(null);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [expenseStep, setExpenseStep] = useState<1 | 2>(1); // 1 = select project, 2 = enter details
   const [expenseProjectId, setExpenseProjectId] = useState<string | null>(null);
@@ -114,6 +198,7 @@ export function HomeScreen() {
   const [expenseInvoiceImage, setExpenseInvoiceImage] = useState<{ uri: string; fileName: string } | null>(null);
   const [uploadingExpenseAttachment, setUploadingExpenseAttachment] = useState(false);
   const [submittingExpense, setSubmittingExpense] = useState(false);
+  const [showActionSheet, setShowActionSheet] = useState(false);
 
   const stackNav = navigation as { navigate: (name: string, params?: object) => void };
   const goToProjects = useCallback(
@@ -137,7 +222,52 @@ export function HomeScreen() {
     },
     [navigation]
   );
+  const goToSearch = useCallback(() => {
+    let nav: any = navigation;
+    while (nav && typeof nav.getState === "function") {
+      const routeNames = nav.getState?.().routeNames as string[] | undefined;
+      if (routeNames?.includes("Search")) {
+        if (nav.navigate) {
+          nav.navigate("Search");
+          return;
+        }
+        if (nav.dispatch) {
+          nav.dispatch(TabActions.jumpTo("Search"));
+          return;
+        }
+      }
+      nav = nav.getParent?.();
+    }
+  }, [navigation]);
   const displayName = user?.name ?? user?.email ?? t("home.userFallback");
+
+  const formatLastActivity = useCallback((date: Date | null) => {
+    if (!date) return "No activity";
+    const diffMs = Date.now() - date.getTime();
+    const diffMin = Math.floor(diffMs / 60000);
+    if (diffMin < 1) return "just now";
+    if (diffMin < 60) return `${diffMin}m ago`;
+    const diffH = Math.floor(diffMin / 60);
+    if (diffH < 24) return `${diffH}h ago`;
+    const diffD = Math.floor(diffH / 24);
+    return `${diffD}d ago`;
+  }, []);
+
+  const getLiveStatus = useCallback((lastEventDate: Date | null, projectCreatedAt?: string) => {
+    const now = Date.now();
+    if (!lastEventDate) {
+      if (projectCreatedAt) {
+        const created = new Date(projectCreatedAt).getTime();
+        const ageDays = Math.floor((now - created) / (1000 * 60 * 60 * 24));
+        if (ageDays <= 0) return "OK" as const;
+      }
+      return "RISK" as const;
+    }
+    const ageDays = Math.floor((now - lastEventDate.getTime()) / (1000 * 60 * 60 * 24));
+    if (ageDays > 7) return "PROBLEM" as const;
+    if (ageDays >= 3) return "RISK" as const;
+    return "OK" as const;
+  }, []);
 
   // Load last used project ID
   useEffect(() => {
@@ -210,13 +340,72 @@ export function HomeScreen() {
     }
   }, [orgId]);
 
+  const loadLiveActivity = useCallback(async () => {
+    if (!user?.id || !dashboardData?.projects?.length) {
+      setLiveRows([]);
+      return;
+    }
+    setLiveLoading(true);
+    try {
+      const topProjects = dashboardData.projects.slice(0, 5);
+      const rows = await Promise.all(
+        topProjects.map(async (project) => {
+          let lastEventDate: Date | null = null;
+          let newCount = 0;
+          try {
+            const events = await projectEventsService.listProjectEvents(project.id, 1);
+            const latest = events[0];
+            if (latest) {
+              const raw = latest.createdAt;
+              lastEventDate =
+                typeof raw === "string"
+                  ? new Date(raw)
+                  : raw instanceof Date
+                  ? raw
+                  : raw?.toDate?.() ?? null;
+            }
+          } catch (error) {
+            console.warn(`[HomeScreen] Failed loading latest event for ${project.id}:`, error);
+          }
+          try {
+            const lastSeenAt = await projectEventsService.getProjectLastSeenAt(project.id, user.id);
+            if (lastSeenAt) {
+              newCount = await projectEventsService.countNewEventsSince(project.id, lastSeenAt);
+            } else {
+              // If user never opened project detail, consider up to 50 recent events as "new".
+              const initialEvents = await projectEventsService.listProjectEvents(project.id, 50);
+              newCount = initialEvents.length;
+            }
+          } catch (error) {
+            console.warn(`[HomeScreen] Failed loading new event count for ${project.id}:`, error);
+          }
+          return {
+            projectId: project.id,
+            projectName: project.name,
+            lastActivityLabel: formatLastActivity(lastEventDate),
+            newCountLabel: newCount >= 50 ? "50+" : String(newCount),
+            status: getLiveStatus(lastEventDate, (project as any).createdAt),
+          } as LiveProjectRow;
+        })
+      );
+      setLiveRows(rows);
+    } finally {
+      setLiveLoading(false);
+    }
+  }, [dashboardData?.projects, formatLastActivity, getLiveStatus, user?.id]);
+
   const onRefresh = useCallback(() => {
     loadDashboard(true);
-  }, [loadDashboard]);
+    loadLiveActivity();
+  }, [loadDashboard, loadLiveActivity]);
 
   useEffect(() => {
     loadDashboard();
   }, [loadDashboard]);
+
+  useEffect(() => {
+    loadLiveActivity();
+  }, [loadLiveActivity]);
 
   // Save last used project ID
   const saveLastUsedProject = useCallback(async (projectId: string) => {
@@ -281,7 +470,7 @@ export function HomeScreen() {
   );
 
   const executeAction = useCallback(
-    async (action: "task" | "photo" | "expense", projectId: string) => {
+    async (action: "task" | "photo" | "expense" | "voice", projectId: string) => {
       await saveLastUsedProject(projectId);
       const project = dashboardData?.projects.find((p) => p.id === projectId);
 
@@ -294,19 +483,45 @@ export function HomeScreen() {
           });
           break;
         case "expense":
-          // For expense, always start with step 1 (project selection)
-          setExpenseProjectId(null);
-          setExpenseStep(1);
-          setShowExpenseModal(true);
+          stackNav.navigate("ProjectOverview", {
+            projectId,
+            projectName: project?.name,
+            openExpenseModal: true,
+          });
           break;
         case "photo":
-          Alert.alert(t("common.warning"), t("expense.comingSoon"));
+          stackNav.navigate("ProjectOverview", {
+            projectId,
+            projectName: project?.name,
+            openDiaryModal: true,
+            diaryInputMode: "text",
+          });
+          break;
+        case "voice":
+          stackNav.navigate("ProjectOverview", {
+            projectId,
+            projectName: project?.name,
+            openDiaryModal: true,
+            diaryInputMode: "voice",
+          });
           break;
       }
       setPendingAction(null);
       setShowProjectSelector(false);
     },
     [dashboardData, saveLastUsedProject, stackNav]
+  );
+
+  const runContextAction = useCallback(
+    (action: "task" | "photo" | "expense" | "voice", projectId?: string) => {
+      if (projectId) {
+        executeAction(action, projectId);
+        return;
+      }
+      setPendingAction(action);
+      setShowProjectSelector(true);
+    },
+    [executeAction]
   );
 
   // Helper to validate and format amount input (only numbers and one decimal point/comma)
@@ -554,6 +769,16 @@ export function HomeScreen() {
     [dashboardData, saveLastUsedProject, stackNav]
   );
 
+  const startFabFlow = useCallback(() => {
+    if (!dashboardData || dashboardData.projects.length === 0) {
+      Alert.alert(t("common.error"), t("home.noProjects"));
+      return;
+    }
+    setPendingAction(null);
+    setFabProjectSelectionMode(true);
+    setShowProjectSelector(true);
+  }, [dashboardData, t]);
+
   const handleTaskClick = useCallback(
     (task: TaskDoc & { projectName: string }) => {
       stackNav.navigate("ProjectOverview", {
@@ -563,6 +788,63 @@ export function HomeScreen() {
     },
     [stackNav]
   );
+
+  const data = dashboardData || {
+    projects: [],
+    todayTasks: [],
+    kpis: { openCount: 0, doneTodayCount: 0, blockedCount: 0, expensesMonthSum: 0, expensesTotalSum: 0 },
+    projectStats: new Map(),
+  };
+
+  const liveMap = useMemo(() => {
+    const m = new Map<string, LiveProjectRow>();
+    liveRows.forEach((row) => m.set(row.projectId, row));
+    return m;
+  }, [liveRows]);
+
+  const focusProject = useMemo(() => {
+    if (lastUsedProjectId) {
+      const selected = data.projects.find((p) => p.id === lastUsedProjectId);
+      if (selected) return selected;
+    }
+    return data.projects[0] ?? null;
+  }, [data.projects, lastUsedProjectId]);
+
+  const otherProjects = useMemo(
+    () => data.projects.filter((p) => p.id !== focusProject?.id),
+    [data.projects, focusProject?.id]
+  );
+
+  const overdueCount = useMemo(
+    () =>
+      data.todayTasks.filter((task) => {
+        if (!task.dueDate) return false;
+        if (task.status === "DONE") return false;
+        return new Date(task.dueDate).getTime() < Date.now();
+      }).length,
+    [data.todayTasks]
+  );
+
+  const alerts = useMemo(() => {
+    const rows: Array<{ id: string; icon: string; text: string; onPress: () => void }> = [];
+    if (data.kpis.blockedCount > 0) {
+      rows.push({
+        id: "blocked",
+        icon: "⚠️",
+        text: `${data.kpis.blockedCount} veci čakajú na materiál`,
+        onPress: () => stackNav.navigate("Tasks", { status: "BLOCKED" }),
+      });
+    }
+    if (overdueCount > 0) {
+      rows.push({
+        id: "overdue",
+        icon: "⏱️",
+        text: `${overdueCount} úloha mešká`,
+        onPress: () => stackNav.navigate("Tasks", { overdue: true }),
+      });
+    }
+    return rows.slice(0, 2);
+  }, [data.kpis.blockedCount, overdueCount, stackNav]);
 
   if (loading && !dashboardData) {
     return (
@@ -574,256 +856,103 @@ export function HomeScreen() {
     );
   }
 
-  const data = dashboardData || {
-    projects: [],
-    todayTasks: [],
-    kpis: { openCount: 0, doneTodayCount: 0, blockedCount: 0, expensesMonthSum: 0, expensesTotalSum: 0 },
-    projectStats: new Map(),
-  };
-
   return (
     <View style={styles.container}>
-      <ScrollView
-        style={styles.scrollView}
-        contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg }]}
+      <FlatList
+        data={otherProjects}
+        keyExtractor={(item) => item.id}
+        contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: insets.bottom + 120 }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
         }
-      >
-        {/* Welcome Header */}
-        <View style={styles.welcomeHeader}>
-          <Text style={styles.welcomeTitle}>{t("home.welcome", { name: displayName.split(" ")[0] })}</Text>
-          <Text style={styles.welcomeSubtitle}>
-            {t("home.openTasksCount", { count: data.kpis.openCount.toString(), projects: data.projects.length.toString() })}
-          </Text>
-        </View>
-
-        {/* Create Project Button */}
-        <View style={styles.createProjectSection}>
-          <TouchableOpacity
-            style={styles.createProjectButton}
-            onPress={() => {
-              // Navigate to Projects tab and open create modal
-              goToProjects({ openNew: true });
-            }}
-          >
-            <Ionicons name="add-circle" size={24} color="#FFFFFF" />
-            <Text style={styles.createProjectButtonText}>{t("home.createNewProject")}</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Quick Actions */}
-        <View style={styles.quickActions}>
-          <TouchableOpacity style={[styles.quickActionButton, styles.quickActionActive]} onPress={() => handleQuickAction("task")}>
-            <Ionicons name="checkbox-outline" size={20} color={colors.primary} />
-            <Text style={styles.quickActionText}>{t("home.quickTask")}</Text>
-          </TouchableOpacity>
-          <TouchableOpacity style={styles.quickActionButton} onPress={() => handleQuickAction("photo")}>
-            <Ionicons name="camera-outline" size={20} color={colors.primary} />
-            <Text style={styles.quickActionText}>{t("home.quickPhoto")}</Text>
-          </TouchableOpacity>
-        </View>
-
-        {/* Today / Next Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>{t("home.nearestTask")}</Text>
-            <TouchableOpacity onPress={() => stackNav.navigate("Tasks")}>
-              <Text style={styles.sectionMore}>{t("home.seeMore")} &gt;</Text>
-            </TouchableOpacity>
-          </View>
-          {data.todayTasks.length === 0 ? (
-            <Text style={styles.emptyText}>{t("home.noUpcomingTasks")}</Text>
-          ) : (
-            data.todayTasks.map((task) => (
-              <TouchableOpacity
-                key={task.id}
-                style={styles.taskItem}
-                onPress={() => handleTaskClick(task)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.taskCheckbox}>
-                  <Ionicons name="square-outline" size={20} color="#FFFFFF" />
-                </View>
-                <View style={styles.taskContent}>
-                  <Text style={styles.taskTitle}>{task.title}</Text>
-                  <Text style={styles.taskSubtitle}>
-                    {task.projectName}
-                    {task.phaseName ? ` • ${task.phaseName}` : ""}
-                  </Text>
-                </View>
-                {task.dueDate && <Text style={styles.taskDue}>{formatDate(task.dueDate)}</Text>}
+        ListHeaderComponent={
+          <>
+            <View style={styles.headerRow}>
+              <View>
+                <Text style={styles.welcomeTitle}>Dobrý deň, Majster!</Text>
+                <Text style={styles.welcomeSubtitle}>Prehľad projektov</Text>
+              </View>
+              <TouchableOpacity style={styles.searchAction} onPress={goToSearch} accessibilityLabel="Search">
+                <Ionicons name="search" size={22} color={colors.textOnDark} />
               </TouchableOpacity>
-            ))
-          )}
-        </View>
-
-        {/* KPI Cards */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>{t("home.projectsOverview")}</Text>
-            <TouchableOpacity onPress={() => goToProjects()}>
-              <Text style={styles.sectionMore}>{t("home.seeAllProjects")} &gt;</Text>
-            </TouchableOpacity>
-          </View>
-          <View style={styles.kpiRow}>
-            {getKpiCardsWithTasks(data, allTasks, t).map((card) => (
-              <KpiCardComponent
-                key={card.id}
-                card={card}
-                onPress={(card) => {
-                  // Handle navigation based on card type
-                  if (card.navigationTarget.screen === "Tasks") {
-                    // Navigate to Tasks screen in HomeStack
-                    stackNav.navigate("Tasks", card.navigationTarget.params);
-                  } else if (card.navigationTarget.screen === "Projects") {
-                    // Navigate to Projects tab
-                    goToProjects(card.navigationTarget.params);
-                  }
-                }}
-              />
-            ))}
-          </View>
-        </View>
-
-        {/* Projects Section */}
-        <View style={styles.section}>
-          <View style={styles.sectionHeader}>
-            <Text style={styles.sectionTitle}>{t("home.openProjects")}</Text>
-            <TouchableOpacity onPress={() => goToProjects()}>
-              <Text style={styles.sectionMore}>{t("home.seeAllProjects")} &gt;</Text>
-            </TouchableOpacity>
-          </View>
-
-          {/* Role Filter Segmented Control - Top of Projects Section */}
-          {data.projects.length > 0 && user?.id && (
-            <View style={styles.filterContainer}>
-              {(["ALL", "ADMIN", "MANAGER", "TRADE"] as const).map((filterKey) => {
-                const isActive = roleFilter === filterKey;
-                const label =
-                  filterKey === "ALL"
-                    ? t("role.all")
-                    : filterKey === "ADMIN"
-                    ? t("role.admin")
-                    : filterKey === "MANAGER"
-                    ? t("role.manager")
-                    : t("role.trade");
-                return (
-                  <TouchableOpacity
-                    key={filterKey}
-                    style={[styles.filterButton, isActive && styles.filterButtonActive]}
-                    onPress={() => handleRoleFilterChange(filterKey)}
-                    activeOpacity={0.7}
-                    accessibilityRole="button"
-                    accessibilityState={{ selected: isActive }}
-                    accessibilityLabel={label}
-                  >
-                    <Text style={[styles.filterButtonText, isActive && styles.filterButtonTextActive]}>
-                      {label}
-                    </Text>
-                  </TouchableOpacity>
-                );
-              })}
             </View>
-          )}
 
-          {(() => {
-            // Filter projects by role (client-side, no DB changes)
-            const filteredProjects =
-              roleFilter === "ALL"
-                ? data.projects
-                : data.projects.filter((project) => {
-                    if (!user?.id) return false;
-                    return normalizeRoleKey(project, user.id) === roleFilter;
-                  });
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
+              <TouchableOpacity style={styles.statChip} onPress={() => stackNav.navigate("Tasks")} activeOpacity={0.8}>
+                <Text style={styles.statChipText}>Otvorené {data.kpis.openCount}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.statChip} onPress={() => goToProjects()} activeOpacity={0.8}>
+                <Text style={styles.statChipText}>Projekty {data.projects.length}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.statChip}
+                onPress={() => {
+                  setPendingAction("expense");
+                  setShowProjectSelector(true);
+                }}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.statChipText}>Výdavky {Math.round(data.kpis.expensesTotalSum)}€</Text>
+              </TouchableOpacity>
+            </ScrollView>
 
-            if (filteredProjects.length === 0) {
-              return <Text style={styles.emptyText}>{t("projects.empty")}</Text>;
-            }
+            {focusProject ? (
+              <View style={styles.focusCard}>
+                <Text style={styles.focusCaption}>Práve robím</Text>
+                <Text style={styles.focusTitle} numberOfLines={1}>
+                  {focusProject.name}
+                </Text>
+                <Text style={styles.focusSubline}>
+                  {(data.projectStats.get(focusProject.id)?.openCount ?? 0)} otvorené úlohy • posledná aktivita pred{" "}
+                  {liveMap.get(focusProject.id)?.lastActivityLabel ?? "—"}
+                </Text>
+                <TouchableOpacity
+                  style={styles.focusCta}
+                  onPress={() => handleProjectClick(focusProject.id)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.focusCtaText}>Pokračovať v práci</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
 
-            return (
-              <>
-                {filteredProjects.slice(0, 4).map((project) => {
-                  const stats = data.projectStats.get(project.id) || { openCount: 0, totalCount: 0, progress: 0 };
-                  // Get project type label for chip
-                  const projectTypeLabel =
-                    project.projectType === "BUILD" || project.projectType === "MANAGEMENT"
-                      ? t("projectType.build")
-                      : project.projectType === "TRADE"
-                      ? t("projectType.trade")
-                      : project.projectType === "MAINTENANCE" || project.projectType === "RESIDENTIAL"
-                      ? t("projectType.maintenance")
-                      : undefined;
-
-                  return (
-                    <TouchableOpacity
-                      key={project.id}
-                      style={styles.projectCard}
-                      onPress={() => handleProjectClick(project.id)}
-                      activeOpacity={0.7}
-                    >
-                      {/* Row 1: Icon + Name + Overflow Menu */}
-                      <View style={styles.projectCardRow1}>
-                        <Ionicons name={getProjectIcon(project.projectType)} size={24} color={colors.primary} />
-                        <Text style={styles.projectCardName} numberOfLines={1}>
-                          {project.name}
-                        </Text>
-                        <TouchableOpacity
-                          style={styles.projectCardOverflow}
-                          onPress={(e) => {
-                            e.stopPropagation();
-                            // TODO: Show project menu (archive, delete, etc.)
-                          }}
-                          hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
-                        >
-                          <Ionicons name="ellipsis-vertical" size={20} color={colors.textMuted} />
-                        </TouchableOpacity>
-                      </View>
-
-                      {/* Row 2: RoleChip + ProjectTypeChip + Location Text (no pin) */}
-                      <View style={styles.projectCardRow2}>
-                        {user?.id && <RoleChip project={project} currentUserId={user.id} showIcon={true} />}
-                        {projectTypeLabel && (
-                          <ProjectTypeChip projectType={project.projectType} label={projectTypeLabel} />
-                        )}
-                        {project.addressText && (
-                          <Text style={styles.projectCardLocation} numberOfLines={1}>
-                            {project.addressText}
-                          </Text>
-                        )}
-                      </View>
-
-                      {/* Row 3: Open Count + Progress Bar + Percentage */}
-                      <View style={styles.projectCardRow3}>
-                        <Text style={styles.projectCardStats}>
-                          {stats.openCount} {stats.openCount === 1 ? t("home.openTask") || "otvorená" : t("home.openTasks") || "otvorených"}
-                        </Text>
-                        <View style={styles.progressBar}>
-                          <View style={[styles.progressFill, { width: `${Math.min(100, Math.max(0, stats.progress))}%` }]} />
-                        </View>
-                        <Text style={styles.projectCardProgress}>
-                          {stats.progress === 100 ? t("home.completed") || "Hotovo" : `${stats.progress}%`}
-                        </Text>
-                      </View>
-                    </TouchableOpacity>
-                  );
-                })}
-                {filteredProjects.length > 4 && (
-                  <TouchableOpacity style={styles.projectCardAdd} onPress={() => goToProjects()}>
-                    <Ionicons name="add" size={32} color={colors.textMuted} />
+            {alerts.length > 0 ? (
+              <View style={styles.alertsSection}>
+                {alerts.map((row) => (
+                  <TouchableOpacity key={row.id} style={styles.alertRow} onPress={row.onPress} activeOpacity={0.8}>
+                    <Text style={styles.alertIcon}>{row.icon}</Text>
+                    <Text style={styles.alertText}>{row.text}</Text>
                   </TouchableOpacity>
-                )}
-              </>
-            );
-          })()}
-        </View>
+                ))}
+              </View>
+            ) : null}
 
-        {/* Recent Activity (Stub) */}
-        <View style={styles.section}>
-          <Text style={styles.sectionTitle}>{t("home.recentActivity")}</Text>
-          <Text style={styles.emptyText}>{t("home.noRecentActivity")}</Text>
-        </View>
-      </ScrollView>
+            <View style={styles.sectionHeaderCompact}>
+              <Text style={styles.sectionTitle}>Ostatné projekty</Text>
+            </View>
+          </>
+        }
+        renderItem={({ item }) => {
+          const live = liveMap.get(item.id);
+          const openTasks = data.projectStats.get(item.id)?.openCount ?? 0;
+          return (
+            <CompactProjectItem
+              project={item}
+              openTasks={openTasks}
+              lastActivity={live?.lastActivityLabel ?? "—"}
+              status={live?.status ?? "RISK"}
+              onOpen={handleProjectClick}
+              onPhoto={(projectId) => runContextAction("photo", projectId)}
+              onTask={(projectId) => runContextAction("task", projectId)}
+            />
+          );
+        }}
+        ListFooterComponent={
+          <TouchableOpacity style={styles.showAllButton} onPress={() => goToProjects()}>
+            <Text style={styles.showAllButtonText}>Zobraziť všetky projekty</Text>
+          </TouchableOpacity>
+        }
+      />
 
       {/* Project Selector Modal */}
       <Modal visible={showProjectSelector} transparent animationType="slide">
@@ -834,6 +963,7 @@ export function HomeScreen() {
               <TouchableOpacity onPress={() => {
                 setShowProjectSelector(false);
                 setPendingAction(null);
+                setFabProjectSelectionMode(false);
               }}>
                 <Ionicons name="close" size={24} color="#FFFFFF" />
               </TouchableOpacity>
@@ -846,6 +976,13 @@ export function HomeScreen() {
                   onPress={() => {
                     if (pendingAction) {
                       executeAction(pendingAction, project.id);
+                      return;
+                    }
+                    if (fabProjectSelectionMode) {
+                      setActionProjectId(project.id);
+                      setShowProjectSelector(false);
+                      setFabProjectSelectionMode(false);
+                      setShowActionSheet(true);
                     }
                   }}
                 >
@@ -858,22 +995,55 @@ export function HomeScreen() {
         </View>
       </Modal>
 
-      {/* Floating Action Button for Expense */}
+      {/* Central FAB */}
       <TouchableOpacity
-        style={[styles.fab, { bottom: insets.bottom + spacing.md }]}
-        onPress={() => {
-          // Directly open expense modal with step 1 (project selection)
-          if (!dashboardData || dashboardData.projects.length === 0) {
-            Alert.alert(t("common.error"), t("home.noProjects"));
-            return;
-          }
-          setExpenseStep(1);
-          setExpenseProjectId(null);
-          setShowExpenseModal(true);
-        }}
+        style={[styles.fab, styles.fabCenter, { bottom: insets.bottom + spacing.md }]}
+        onPress={startFabFlow}
       >
-        <Text style={styles.fabText}>€</Text>
+        <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
+
+      <Modal
+        visible={showActionSheet}
+        transparent
+        animationType="slide"
+        onRequestClose={() => setShowActionSheet(false)}
+      >
+        <Pressable style={styles.sheetBackdrop} onPress={() => setShowActionSheet(false)}>
+          <Pressable style={[styles.sheetPanel, { paddingBottom: insets.bottom + spacing.md }]} onPress={() => {}}>
+            <TouchableOpacity
+              style={styles.sheetActionRow}
+              onPress={() => {
+                setShowActionSheet(false);
+                runContextAction("photo", actionProjectId ?? undefined);
+              }}
+            >
+              <Text style={styles.sheetActionIcon}>📷</Text>
+              <Text style={styles.sheetActionText}>Pridať zápis do denníka</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.sheetActionRow}
+              onPress={() => {
+                setShowActionSheet(false);
+                runContextAction("task", actionProjectId ?? undefined);
+              }}
+            >
+              <Text style={styles.sheetActionIcon}>✅</Text>
+              <Text style={styles.sheetActionText}>Nová úloha</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.sheetActionRow}
+              onPress={() => {
+                setShowActionSheet(false);
+                runContextAction("expense", actionProjectId ?? undefined);
+              }}
+            >
+              <Text style={styles.sheetActionIcon}>€</Text>
+              <Text style={styles.sheetActionText}>Zapísať výdavok</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Expense Modal - Multi-step */}
       <Modal visible={showExpenseModal} transparent animationType="slide">
@@ -1105,6 +1275,301 @@ const styles = StyleSheet.create({
   welcomeSubtitle: {
     fontSize: 14,
     color: "rgba(255,255,255,0.85)",
+  },
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: spacing.md,
+  },
+  searchAction: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.card,
+  },
+  chipsRow: {
+    gap: spacing.sm,
+    paddingBottom: spacing.md,
+  },
+  statChip: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    minHeight: 44,
+    justifyContent: "center",
+  },
+  statChipText: {
+    color: colors.text,
+    fontSize: 13,
+    fontWeight: "600",
+  },
+  focusCard: {
+    borderWidth: 1.5,
+    borderColor: "#ff9f43",
+    borderRadius: radius,
+    backgroundColor: colors.card,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  focusCaption: {
+    color: "#ffb266",
+    fontSize: 12,
+    fontWeight: "700",
+    textTransform: "uppercase",
+    marginBottom: spacing.xs,
+  },
+  focusTitle: {
+    color: "#111111",
+    fontSize: 20,
+    fontWeight: "700",
+    marginBottom: spacing.xs,
+  },
+  focusSubline: {
+    color: colors.textMuted,
+    fontSize: 13,
+    marginBottom: spacing.md,
+  },
+  focusCta: {
+    minHeight: 46,
+    borderRadius: radius,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  focusCtaText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  alertsSection: {
+    marginBottom: spacing.md,
+    gap: spacing.xs,
+  },
+  alertRow: {
+    minHeight: 44,
+    borderRadius: radius,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+  },
+  alertIcon: {
+    marginRight: spacing.sm,
+    fontSize: 14,
+  },
+  alertText: {
+    color: colors.text,
+    fontSize: 13,
+    flex: 1,
+  },
+  sectionHeaderCompact: {
+    marginBottom: spacing.sm,
+  },
+  compactProjectRow: {
+    minHeight: 64,
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    overflow: "hidden",
+  },
+  compactStripe: {
+    width: 4,
+    alignSelf: "stretch",
+  },
+  compactProjectBody: {
+    flex: 1,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  compactProjectTitle: {
+    color: "#111111",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  compactProjectSubline: {
+    marginTop: 2,
+    color: colors.textMuted,
+    fontSize: 12,
+  },
+  compactActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginRight: spacing.sm,
+  },
+  compactActionBtn: {
+    width: 32,
+    height: 32,
+    borderRadius: 16,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "#2f80ed",
+  },
+  compactActionBtnTask: {
+    backgroundColor: "#27ae60",
+  },
+  statusTag: {
+    marginRight: spacing.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,159,67,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(255,159,67,0.45)",
+  },
+  statusTagText: {
+    color: "#ffb266",
+    fontSize: 11,
+    fontWeight: "700",
+  },
+  showAllButton: {
+    minHeight: 44,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: spacing.sm,
+    backgroundColor: colors.card,
+  },
+  showAllButtonText: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  fabCenter: {
+    alignSelf: "center",
+    right: undefined,
+  },
+  sheetBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "flex-end",
+  },
+  sheetPanel: {
+    backgroundColor: "#0f1724",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingTop: spacing.md,
+    paddingHorizontal: spacing.md,
+    gap: spacing.xs,
+  },
+  sheetActionRow: {
+    minHeight: 56,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+  },
+  sheetActionIcon: {
+    fontSize: 18,
+    marginRight: spacing.sm,
+  },
+  sheetActionText: {
+    color: "#111111",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  comingSoonModal: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.lg,
+    alignItems: "center",
+  },
+  comingSoonTitle: {
+    color: colors.textOnDark,
+    fontSize: 18,
+    fontWeight: "700",
+  },
+  comingSoonText: {
+    color: colors.textMuted,
+    marginTop: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  comingSoonButton: {
+    minHeight: 42,
+    minWidth: 80,
+    borderRadius: radius,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.md,
+  },
+  comingSoonButtonText: {
+    color: "#fff",
+    fontWeight: "700",
+  },
+  liveCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  liveCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  liveCardTitle: {
+    color: colors.textOnDark,
+    fontSize: 16,
+    fontWeight: "700",
+  },
+  liveRow: {
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  liveRowMain: {
+    flexDirection: "row",
+    alignItems: "center",
+  },
+  liveDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    marginRight: spacing.sm,
+  },
+  dotOk: { backgroundColor: "#2e7d32" },
+  dotRisk: { backgroundColor: "#f9a825" },
+  dotProblem: { backgroundColor: "#c62828" },
+  liveProjectName: {
+    flex: 1,
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "600",
+  },
+  liveMeta: {
+    color: colors.textMuted,
+    fontSize: 12,
+    marginTop: 2,
+  },
+  liveEmpty: {
+    color: colors.textMuted,
+    fontSize: 13,
   },
   searchContainer: {
     flexDirection: "row",

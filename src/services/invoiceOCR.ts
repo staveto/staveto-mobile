@@ -1,4 +1,5 @@
 import functionsModule from "@react-native-firebase/functions";
+import { addProjectEvent } from "./projectEvents";
 
 export type OcrStatus = "success" | "failed" | "limit";
 
@@ -18,10 +19,21 @@ export type OcrResult = {
   errorCode?: string;
 };
 
+function getRegionalFunctions(region: string) {
+  try {
+    // Preferred signature in RNFirebase namespaced API.
+    return (functionsModule as unknown as (region: string) => ReturnType<typeof functionsModule>)(region);
+  } catch {
+    // Backward-compatible fallback.
+    return functionsModule(undefined, region);
+  }
+}
+
 export async function extractInvoiceData(input: {
   filePath: string;
   mimeType?: string;
   attachmentId?: string;
+  projectId?: string;
 }): Promise<OcrResult> {
   try {
     const normalizedPath = input.filePath?.trim();
@@ -38,18 +50,53 @@ export async function extractInvoiceData(input: {
     }
     console.log("[invoiceOCR] Calling extractInvoiceData with filePath:", normalizedPath);
     console.log("[invoiceOCR] OCR payload mimeType:", input.mimeType ?? null, "attachmentId:", input.attachmentId ?? null);
-    const regionalFunctions = functionsModule(undefined, "europe-west1");
-    const fn = regionalFunctions.httpsCallable("extractInvoiceData");
     // Keep both keys for backward compatibility with already deployed backend.
-    const result = await fn({
+    const payload = {
       filePath: normalizedPath,
       storagePath: normalizedPath,
       mimeType: input.mimeType ?? null,
       attachmentId: input.attachmentId ?? null,
-    });
+    };
+
+    let result: { data?: unknown } | undefined;
+    try {
+      // Preferred region for this project.
+      const regionalFunctions = getRegionalFunctions("europe-west1");
+      const fn = regionalFunctions.httpsCallable("extractInvoiceData");
+      result = await fn(payload);
+    } catch (regionalError: any) {
+      const code = String(regionalError?.code || regionalError?.message || "").toLowerCase();
+      const shouldFallback =
+        code.includes("not_found") ||
+        code.includes("not-found") ||
+        code.includes("functions/not-found") ||
+        code.includes("unimplemented");
+
+      if (!shouldFallback) {
+        throw regionalError;
+      }
+
+      console.warn("[invoiceOCR] extractInvoiceData not found in europe-west1, retrying default region.");
+      const defaultFunctions = functionsModule();
+      const defaultFn = defaultFunctions.httpsCallable("extractInvoiceData");
+      result = await defaultFn(payload);
+    }
+
     const data = result?.data as OcrResult | undefined;
     if (!data || !data.status) {
       return { status: "failed", parsed: null };
+    }
+    if (data.status === "success" && input.projectId) {
+      try {
+        await addProjectEvent(
+          input.projectId,
+          "ocr_completed",
+          { supplier: data.parsed?.supplierName ?? undefined },
+          input.attachmentId ? { kind: "attachment", id: input.attachmentId } : { kind: "ocr" }
+        );
+      } catch (eventError) {
+        console.warn("[invoiceOCR] Failed to create project event:", eventError);
+      }
     }
     return data;
   } catch (error: any) {

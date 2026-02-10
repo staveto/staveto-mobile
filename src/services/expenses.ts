@@ -16,6 +16,7 @@ import { paths } from "../lib/firestorePaths";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 import { createExpenseAddedNotification } from "./notifications";
 import type { ProjectExpense } from "../lib/types";
+import { addProjectEvent } from "./projectEvents";
 
 export type ExpenseSource = 'MANUAL' | 'DOCUMENT';
 export type ExpenseStatus = 'PROCESSING' | 'READY' | 'FAILED';
@@ -222,6 +223,20 @@ export async function createExpense(
     } catch (error) {
       console.warn("[expenses] Failed to create notification:", error);
     }
+  }
+
+  try {
+    await addProjectEvent(
+      projectId,
+      "expense_added",
+      {
+        amount: data.amount ?? undefined,
+        currency: data.currency ?? "EUR",
+      },
+      { kind: "expense", id: ref.id }
+    );
+  } catch (error) {
+    console.warn("[expenses] Failed to create project event:", error);
   }
   
   console.log(`[expenses] Created expense ${ref.id} in project ${projectId}`);

@@ -15,37 +15,46 @@ export async function openInMaps(addressText: string): Promise<void> {
   // Encode address for URL
   const encodedAddress = encodeURIComponent(addressText.trim());
 
-  // Google Maps search URL (works on both iOS and Android)
+  // Google Maps web search URL (works as browser fallback)
   const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${encodedAddress}`;
+  const googleMapsSchemeUrl = `comgooglemaps://?q=${encodedAddress}`;
+  const androidGeoUrl = `geo:0,0?q=${encodedAddress}`;
+  const androidNavigationUrl = `google.navigation:q=${encodedAddress}`;
 
   // Apple Maps URL (iOS only)
   const appleMapsUrl = `http://maps.apple.com/?q=${encodedAddress}`;
 
   try {
-    // Try Google Maps first (works on both platforms)
-    const canOpenGoogleMaps = await Linking.canOpenURL(googleMapsUrl);
-    
-    if (canOpenGoogleMaps) {
+    if (Platform.OS === "android") {
+      if (await Linking.canOpenURL(androidNavigationUrl)) {
+        await Linking.openURL(androidNavigationUrl);
+        return;
+      }
+      if (await Linking.canOpenURL(androidGeoUrl)) {
+        await Linking.openURL(androidGeoUrl);
+        return;
+      }
+      // Final fallback for emulator: browser web maps.
       await Linking.openURL(googleMapsUrl);
       return;
     }
 
-    // Fallback to Apple Maps on iOS
-    if (Platform.OS === 'ios') {
-      const canOpenAppleMaps = await Linking.canOpenURL(appleMapsUrl);
-      if (canOpenAppleMaps) {
-        await Linking.openURL(appleMapsUrl);
-        return;
-      }
+    if (await Linking.canOpenURL(googleMapsSchemeUrl)) {
+      await Linking.openURL(googleMapsSchemeUrl);
+      return;
+    }
+    if (await Linking.canOpenURL(appleMapsUrl)) {
+      await Linking.openURL(appleMapsUrl);
+      return;
     }
 
-    // If neither works, show error
-    Alert.alert(
-      'Chyba',
-      'Nepodarilo sa otvoriť mapy. Skontrolujte, či máte nainštalovanú aplikáciu Google Maps alebo Apple Maps.'
-    );
+    // Final iOS fallback: open maps in browser.
+    await Linking.openURL(googleMapsUrl);
   } catch (error) {
     console.error('[maps] Error opening maps:', error);
-    Alert.alert('Chyba', 'Nepodarilo sa otvoriť mapy. Skúste to znova.');
+    Alert.alert(
+      'Chyba',
+      'Nepodarilo sa otvoriť mapy. Skúste to znova alebo nainštalujte mapovú aplikáciu v emulátore.'
+    );
   }
 }

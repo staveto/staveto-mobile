@@ -88,7 +88,10 @@ export function LoginScreen() {
       <TouchableOpacity style={styles.googleBtn} onPress={onGoogleLogin} disabled={submitting}>
         <Text style={styles.googleBtnText}>{t("register.google")}</Text>
       </TouchableOpacity>
-      <TouchableOpacity style={styles.link} onPress={() => (navigation as { navigate: (n: string) => void }).navigate("Register")}>
+      <TouchableOpacity
+        style={styles.link}
+        onPress={() => (navigation as { navigate: (n: string) => void }).navigate("LanguageSelect")}
+      >
         <Text style={styles.linkText}>{t("login.noAccount")}</Text>
       </TouchableOpacity>
     </KeyboardAvoidingView>

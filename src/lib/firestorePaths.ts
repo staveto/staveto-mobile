@@ -44,6 +44,14 @@ export const paths = {
   projectDocuments: (projectId: string) => `projects/${projectId}/documents`,
   projectDocument: (projectId: string, documentId: string) =>
     `projects/${projectId}/documents/${documentId}`,
+  // Equipment (MAINTENANCE v2)
+  projectEquipment: (projectId: string) => `projects/${projectId}/equipment`,
+  projectEquipmentItem: (projectId: string, equipmentId: string) =>
+    `projects/${projectId}/equipment/${equipmentId}`,
+  // Service Rules (MAINTENANCE v2)
+  projectServiceRules: (projectId: string) => `projects/${projectId}/serviceRules`,
+  projectServiceRule: (projectId: string, ruleId: string) =>
+    `projects/${projectId}/serviceRules/${ruleId}`,
   // Notifications (user-specific)
   userNotifications: (userId: string) => `users/${userId}/notifications`,
   userNotification: (userId: string, notificationId: string) =>

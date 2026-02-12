@@ -16,12 +16,21 @@ export type ProjectDoc = {
   addressText?: string; // Project address for navigation
   ownerId?: string; // Read-only: included from existing DB field, no schema change
   archivedAt?: unknown; // Timestamp when archived (truthy = archived)
+  createdAt?: string; // ISO string when project was created
 };
 
 export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
 
 function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ProjectDoc {
   const d = docSnap.data();
+  let createdAt: string | undefined;
+  const raw = d.createdAt;
+  if (raw) {
+    if (typeof raw === "string") createdAt = raw;
+    else if (raw && typeof raw === "object" && "toDate" in raw) {
+      createdAt = (raw as { toDate: () => Date }).toDate().toISOString();
+    }
+  }
   return {
     id: docSnap.id,
     name: (d.name as string) ?? "",
@@ -30,6 +39,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     templateId: d.templateId as string | undefined,
     ownerId: (d.ownerId as string) || undefined, // Read-only: read from existing DB field
     archivedAt: d.archivedAt ?? undefined,
+    createdAt,
   };
 }
 

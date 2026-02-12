@@ -18,6 +18,7 @@ import {
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { upsertTaskDueNotification, markTaskNotificationsRead, recordSyncIssue } from "./notifications";
+import { runServiceAutoNextOnDone } from "./serviceAutoNext";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 import { addProjectEvent } from "./projectEvents";
 
@@ -42,6 +43,13 @@ export type TaskDoc = {
   origin?: 'TEMPLATE' | 'CUSTOM';
   templateTaskId?: string | null;
   isActive?: boolean; // true = active, false = archived, undefined = legacy (treat as active)
+  // MAINTENANCE v2: service task fields
+  equipmentId?: string | null;
+  serviceRuleId?: string | null;
+  checklist?: Array<{ id: string; title: string; done: boolean }>;
+  /** Standard subtasks (preferred over checklist). Used for all project types. */
+  subtasks?: Array<{ id: string; title: string; done: boolean; order: number }>;
+  timeSpentMinutes?: number | null;
 };
 
 function toDoc(
@@ -87,6 +95,21 @@ function toDoc(
     origin: (d.origin as 'TEMPLATE' | 'CUSTOM') ?? undefined,
     templateTaskId: (d.templateTaskId as string | null) ?? undefined,
     isActive: d.isActive !== undefined ? (d.isActive as boolean) : undefined, // undefined = legacy (treat as active)
+    // MAINTENANCE v2
+    equipmentId: (d.equipmentId as string | null) ?? undefined,
+    serviceRuleId: (d.serviceRuleId as string | null) ?? undefined,
+    checklist: (d.checklist as Array<{ id: string; title: string; done: boolean }>) ?? undefined,
+    // subtasks: prefer from doc, else map from checklist (backward compat)
+    subtasks: (() => {
+      const raw = d.subtasks as Array<{ id: string; title: string; done: boolean; order: number }> | undefined;
+      if (raw && raw.length > 0) return raw;
+      const checklist = d.checklist as Array<{ id: string; title: string; done: boolean }> | undefined;
+      if (checklist && checklist.length > 0) {
+        return checklist.map((c, i) => ({ ...c, order: i }));
+      }
+      return undefined;
+    })(),
+    timeSpentMinutes: (d.timeSpentMinutes as number | null) ?? undefined,
   };
 }
 
@@ -380,11 +403,13 @@ export async function updateTaskStatus(
 ): Promise<void> {
   const currentUser = auth.currentUser;
   let taskTitle = "";
+  let serviceRuleId: string | undefined;
   try {
     const beforeSnap = await getDoc(doc(db, paths.projectTask(projectId, taskId)));
     if (beforeSnap.exists()) {
-      const beforeData = beforeSnap.data() as { title?: string };
+      const beforeData = beforeSnap.data() as { title?: string; serviceRuleId?: string };
       taskTitle = beforeData.title ?? "";
+      serviceRuleId = beforeData.serviceRuleId;
     }
   } catch (error) {
     console.warn("[tasks] Failed to read task before status update:", error);
@@ -394,6 +419,18 @@ export async function updateTaskStatus(
     status,
     updatedAt: new Date().toISOString(),
   });
+
+  // MAINTENANCE v2: auto-next when service task marked DONE
+  if (status === "DONE" && serviceRuleId) {
+    try {
+      await runServiceAutoNextOnDone({
+        projectId,
+        task: { id: taskId, serviceRuleId } as any,
+      });
+    } catch (error) {
+      console.warn("[tasks] runServiceAutoNextOnDone failed:", error);
+    }
+  }
 
   if (currentUser?.uid && status === "DONE") {
     try {
@@ -643,6 +680,22 @@ export async function updateTaskTitle(
     }
   }
   console.log(`[tasks] Updated task ${taskId} title to "${title}"${dueDate !== undefined ? `, dueDate to "${dueDate || 'null'}"` : ''}`);
+}
+
+/**
+ * Update task subtasks
+ */
+export async function updateTaskSubtasks(
+  _ownerId: string,
+  projectId: string,
+  taskId: string,
+  subtasks: Array<{ id: string; title: string; done: boolean; order: number }>
+): Promise<void> {
+  const ref = doc(db, paths.projectTask(projectId, taskId));
+  await updateDoc(ref, {
+    subtasks,
+    updatedAt: serverTimestamp(),
+  });
 }
 
 /**

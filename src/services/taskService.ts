@@ -10,6 +10,7 @@ import type { TaskStatus, ProjectTask } from '../lib/types';
 import { auth } from '../firebase';
 import { getStatusLabel } from '../helpers/taskStatusMapping';
 import { createNotification } from './notifications';
+import { runServiceAutoNextOnDone } from './serviceAutoNext';
 
 /**
  * Update task status with proper doneAt handling
@@ -48,6 +49,18 @@ export async function updateTaskStatus(
   }
   
   await updateDoc(taskRef, updateData);
+
+  // MAINTENANCE v2: auto-next when service task marked DONE
+  if (newStatus === 'DONE' && (currentTask as { serviceRuleId?: string }).serviceRuleId) {
+    try {
+      await runServiceAutoNextOnDone({
+        projectId,
+        task: { id: taskId, serviceRuleId: (currentTask as { serviceRuleId?: string }).serviceRuleId } as any,
+      });
+    } catch (error) {
+      console.warn('[taskService] runServiceAutoNextOnDone failed:', error);
+    }
+  }
 
   const currentUser = auth.currentUser;
   if (currentUser?.uid) {

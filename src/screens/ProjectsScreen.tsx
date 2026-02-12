@@ -31,6 +31,16 @@ function showError(msg: string) {
   Alert.alert("", msg);
 }
 
+function formatCreatedAt(isoStr?: string): string {
+  if (!isoStr) return "";
+  try {
+    const d = new Date(isoStr);
+    return d.toLocaleDateString("sk-SK", { day: "numeric", month: "numeric", year: "numeric" });
+  } catch {
+    return "";
+  }
+}
+
 type ProjectCreationType = NonNullable<ProjectDoc["projectType"]>;
 
 export function ProjectsScreen() {
@@ -491,6 +501,8 @@ export function ProjectsScreen() {
               ? t("projectType.RESIDENTIAL") 
               : projectType === "TRADE"
               ? t("projectType.TRADE")
+              : projectType === "MAINTENANCE"
+              ? t("projectType.maintenance")
               : t("projectType.MANAGEMENT"); // MANAGEMENT or undefined = Vedenie výstavby
             
             return (
@@ -509,6 +521,9 @@ export function ProjectsScreen() {
                   <View style={styles.cardMain}>
                     <Text style={styles.name} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
                     <Text style={styles.category} numberOfLines={1}>{categoryLabel}</Text>
+                    {item.createdAt && (
+                      <Text style={styles.createdAt}>{t("projects.createdAt")}: {formatCreatedAt(item.createdAt)}</Text>
+                    )}
                   </View>
                   <View style={styles.cardActions}>
                     {item.addressText && (
@@ -557,6 +572,8 @@ export function ProjectsScreen() {
                     ? t("projectType.RESIDENTIAL") 
                     : projectType === "TRADE"
                     ? t("projectType.TRADE")
+                    : projectType === "MAINTENANCE"
+                    ? t("projectType.maintenance")
                     : t("projectType.MANAGEMENT");
                   return (
                     <TouchableOpacity
@@ -574,6 +591,9 @@ export function ProjectsScreen() {
                         <View style={styles.cardMain}>
                           <Text style={[styles.name, styles.archivedText]} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
                           <Text style={[styles.category, styles.archivedText]} numberOfLines={1}>{categoryLabel}</Text>
+                          {item.createdAt && (
+                            <Text style={[styles.createdAt, styles.archivedText]}>{t("projects.createdAt")}: {formatCreatedAt(item.createdAt)}</Text>
+                          )}
                         </View>
                         <View style={styles.cardActions}>
                           {item.addressText && (
@@ -655,7 +675,11 @@ export function ProjectsScreen() {
                     }}
                   >
                     <View style={styles.typeIconContainer}>
-                      <Text style={styles.typeEmoji}>🏗️</Text>
+                      <Ionicons
+                        name="clipboard-outline"
+                        size={28}
+                        color={selectedType === "MANAGEMENT" ? colors.primary : colors.textMuted}
+                      />
                     </View>
                     <Text style={[styles.typeCardText, selectedType === "MANAGEMENT" && styles.typeCardTextActive]}>
                       {t("projectType.MANAGEMENT")}
@@ -670,7 +694,11 @@ export function ProjectsScreen() {
                     }}
                   >
                     <View style={styles.typeIconContainer}>
-                      <Text style={styles.typeEmoji}>🏠</Text>
+                      <Ionicons
+                        name="home-outline"
+                        size={28}
+                        color={selectedType === "RESIDENTIAL" ? colors.primary : colors.textMuted}
+                      />
                     </View>
                     <Text style={[styles.typeCardText, selectedType === "RESIDENTIAL" && styles.typeCardTextActive]}>
                       {t("projectType.RESIDENTIAL")}
@@ -686,10 +714,33 @@ export function ProjectsScreen() {
                     }}
                   >
                     <View style={styles.typeIconContainer}>
-                      <Text style={styles.typeEmoji}>🛠️</Text>
+                      <Ionicons
+                        name="person-outline"
+                        size={28}
+                        color={selectedType === "TRADE" ? colors.primary : colors.textMuted}
+                      />
                     </View>
                     <Text style={[styles.typeCardText, selectedType === "TRADE" && styles.typeCardTextActive]}>
                       {t("projectType.TRADE")}
+                    </Text>
+                  </TouchableOpacity>
+
+                  <TouchableOpacity
+                    style={[styles.typeCard, selectedType === "MAINTENANCE" && styles.typeCardActive]}
+                    onPress={() => {
+                      setSelectedType("MAINTENANCE");
+                      setError(null);
+                    }}
+                  >
+                    <View style={styles.typeIconContainer}>
+                      <Ionicons
+                        name="construct-outline"
+                        size={28}
+                        color={selectedType === "MAINTENANCE" ? colors.primary : colors.textMuted}
+                      />
+                    </View>
+                    <Text style={[styles.typeCardText, selectedType === "MAINTENANCE" && styles.typeCardTextActive]}>
+                      {t("projectType.maintenance")}
                     </Text>
                   </TouchableOpacity>
 
@@ -889,7 +940,8 @@ export function ProjectsScreen() {
                     <Text style={styles.summaryValue}>
                       {selectedType === "MANAGEMENT" ? t("projectType.MANAGEMENT") :
                        selectedType === "RESIDENTIAL" ? t("projectType.RESIDENTIAL") :
-                       selectedType === "TRADE" ? t("projectType.TRADE") : selectedType}
+                       selectedType === "TRADE" ? t("projectType.TRADE") :
+                       selectedType === "MAINTENANCE" ? t("projectType.maintenance") : selectedType}
                     </Text>
                   </View>
                   {newAddress.trim() && (
@@ -1110,6 +1162,7 @@ const styles = StyleSheet.create({
   },
   name: { fontSize: 16, fontWeight: "600", color: colors.text, marginBottom: 4 },
   category: { fontSize: 13, color: colors.textMuted },
+  createdAt: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   cardMenu: { padding: spacing.xs ?? 4 },
   cardMenuText: { fontSize: 18, color: colors.textMuted, fontWeight: "600" },
   emptyText: { fontSize: 16, color: colors.textMuted },
@@ -1174,9 +1227,7 @@ const styles = StyleSheet.create({
     marginRight: spacing.md,
     alignItems: 'center',
     justifyContent: 'center',
-  },
-  typeEmoji: {
-    fontSize: 28,
+    width: 32,
   },
   typeCardText: {
     fontSize: 16,

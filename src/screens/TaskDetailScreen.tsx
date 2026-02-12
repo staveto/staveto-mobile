@@ -1,21 +1,39 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, StyleSheet, TouchableOpacity, ScrollView, Image, Modal, ActivityIndicator, Linking, Alert } from "react-native";
+import {
+  View,
+  Text,
+  StyleSheet,
+  TouchableOpacity,
+  ScrollView,
+  Image,
+  Modal,
+  ActivityIndicator,
+  Linking,
+  Alert,
+  TextInput,
+} from "react-native";
 import { useRoute } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { Ionicons } from "@expo/vector-icons";
 import * as tasksService from "../services/tasks";
 import * as attachmentsService from "../services/attachments";
 import type { AttachmentDoc } from "../services/attachments";
+import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
-import { 
-  getStatusMappingsForUI, 
-  normalizeStatusValue, 
-  getStatusLabel,
-  type StoredStatusValue 
+import {
+  getStatusMappingsForUI,
+  normalizeStatusValue,
+  type StoredStatusValue,
 } from "../helpers/taskStatusMapping";
 
-type Task = { id: string; projectId: string; title: string; status?: string; dueDate?: string };
+function genId() {
+  return "st_" + Date.now() + "_" + Math.random().toString(36).slice(2, 9);
+}
+
+const DONE_COLOR = "#2e7d32";
+
+type Task = TaskDoc;
 
 export function TaskDetailScreen() {
   const route = useRoute();
@@ -23,6 +41,13 @@ export function TaskDetailScreen() {
   const { t } = useI18n();
   const task = (route.params as { task: Task })?.task;
   const [status, setStatus] = useState((task?.status ?? "OPEN").toUpperCase());
+  const [subtasks, setSubtasks] = useState<Array<{ id: string; title: string; done: boolean; order: number }>>(() => {
+    if (task?.subtasks && task.subtasks.length > 0) return task.subtasks;
+    const checklist = (task as any)?.checklist;
+    if (checklist?.length) return checklist.map((c: { id: string; title: string; done: boolean }, i: number) => ({ ...c, order: i }));
+    return [];
+  });
+  const [newSubtaskTitle, setNewSubtaskTitle] = useState("");
   const [attachments, setAttachments] = useState<AttachmentDoc[]>([]);
   const [attachmentThumbnails, setAttachmentThumbnails] = useState<Map<string, string>>(new Map());
   const [viewingAttachment, setViewingAttachment] = useState<AttachmentDoc | null>(null);
@@ -128,19 +153,60 @@ export function TaskDetailScreen() {
 
   const onStatusChange = async (newStatusValue: StoredStatusValue) => {
     if (!orgId || !task.projectId) return;
-    
-    // Normalize the status value to ensure we save the correct stored value
     const normalizedStatus = normalizeStatusValue(newStatusValue);
+
+    if (normalizedStatus === "DONE" && subtasks.length > 0) {
+      const doneCount = subtasks.filter((s) => s.done).length;
+      if (doneCount < subtasks.length) {
+        Alert.alert(
+          t("taskDetail.subtasksIncompleteTitle") || "Nie všetky subúlohy sú hotové",
+          t("taskDetail.subtasksIncompleteBody") || "Chcete označiť úlohu ako hotovú?",
+          [
+            { text: t("common.cancel") || "Zrušiť", style: "cancel" },
+            { text: t("taskDetail.markDone") || "Označiť", onPress: () => doStatusChange(normalizedStatus) },
+          ]
+        );
+        return;
+      }
+    }
+    await doStatusChange(normalizedStatus);
+  };
+
+  const doStatusChange = async (normalizedStatus: StoredStatusValue) => {
+    if (!orgId || !task.projectId) return;
     setStatus(normalizedStatus);
-    
     try {
-      // Save the stored value (not the UI label) to the database
       await tasksService.updateTaskStatus(orgId, task.projectId, task.id, normalizedStatus);
     } catch {
-      // On error, revert to the original task status
-      const originalStatus = normalizeStatusValue(task.status);
-      setStatus(originalStatus);
+      setStatus(normalizeStatusValue(task.status));
     }
+  };
+
+  const toggleSubtask = (id: string) => {
+    const next = subtasks.map((s) => (s.id === id ? { ...s, done: !s.done } : s));
+    setSubtasks(next);
+    tasksService.updateTaskSubtasks(orgId!, task.projectId, task.id, next);
+  };
+
+  const addSubtask = () => {
+    if (!newSubtaskTitle.trim()) return;
+    const newItem = { id: genId(), title: newSubtaskTitle.trim(), done: false, order: subtasks.length };
+    const next = [...subtasks, newItem];
+    setSubtasks(next);
+    setNewSubtaskTitle("");
+    tasksService.updateTaskSubtasks(orgId!, task.projectId, task.id, next);
+  };
+
+  const updateSubtaskTitle = (id: string, title: string) => {
+    const next = subtasks.map((s) => (s.id === id ? { ...s, title } : s));
+    setSubtasks(next);
+    if (orgId) tasksService.updateTaskSubtasks(orgId, task.projectId, task.id, next);
+  };
+
+  const removeSubtask = (id: string) => {
+    const next = subtasks.filter((s) => s.id !== id).map((s, i) => ({ ...s, order: i }));
+    setSubtasks(next);
+    tasksService.updateTaskSubtasks(orgId!, task.projectId, task.id, next);
   };
 
   return (
@@ -148,6 +214,43 @@ export function TaskDetailScreen() {
       <View style={styles.card}>
         <Text style={styles.title}>{task.title || t("taskDetail.noTitle")}</Text>
         {task.dueDate ? <Text style={styles.muted}>{t("taskDetail.dueDate", { date: task.dueDate })}</Text> : null}
+      </View>
+
+      {/* Subúlohy */}
+      <Text style={styles.sectionLabel}>{t("taskDetail.subtasks") || "Subúlohy"}</Text>
+      <View style={styles.subtasksContainer}>
+        {subtasks.map((s) => (
+          <View key={s.id} style={styles.subtaskRow}>
+            <TouchableOpacity onPress={() => toggleSubtask(s.id)} style={styles.subtaskCheck}>
+              <Ionicons name={s.done ? "checkmark-circle" : "ellipse-outline"} size={24} color={s.done ? DONE_COLOR : colors.textMuted} />
+            </TouchableOpacity>
+            <TextInput
+              style={[styles.subtaskInput, s.done && styles.subtaskInputDone]}
+              value={s.title}
+              onChangeText={(txt) => updateSubtaskTitle(s.id, txt)}
+              onBlur={() => {
+                const item = subtasks.find((x) => x.id === s.id);
+                if (item && !item.title.trim()) removeSubtask(s.id);
+              }}
+            />
+            <TouchableOpacity onPress={() => removeSubtask(s.id)}>
+              <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+        ))}
+        <View style={styles.addSubtaskRow}>
+          <TextInput
+            style={[styles.input, styles.addSubtaskInput]}
+            placeholder={t("taskDetail.addSubtask") || "Pridať subúlohu"}
+            placeholderTextColor={colors.textMuted}
+            value={newSubtaskTitle}
+            onChangeText={setNewSubtaskTitle}
+            onSubmitEditing={addSubtask}
+          />
+          <TouchableOpacity style={styles.addSubtaskBtn} onPress={addSubtask}>
+            <Ionicons name="add-circle" size={24} color={colors.primary} />
+          </TouchableOpacity>
+        </View>
       </View>
 
       {/* Attachments Section */}
@@ -270,6 +373,29 @@ const styles = StyleSheet.create({
   title: { fontSize: 20, fontWeight: "600", color: colors.text },
   muted: { fontSize: 14, color: colors.textMuted, marginTop: 4 },
   sectionLabel: { fontSize: 12, color: colors.textMuted, marginBottom: spacing.sm, marginTop: spacing.md },
+  subtasksContainer: { marginBottom: spacing.md },
+  subtaskRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    padding: spacing.sm,
+    marginBottom: spacing.xs,
+    gap: spacing.sm,
+  },
+  subtaskCheck: { padding: spacing.xs },
+  subtaskInput: { flex: 1, fontSize: 15, color: colors.text, paddingVertical: spacing.xs },
+  subtaskInputDone: { textDecorationLine: "line-through", color: colors.textMuted },
+  addSubtaskRow: { flexDirection: "row", alignItems: "center", gap: spacing.sm, marginTop: spacing.sm },
+  addSubtaskInput: { flex: 1 },
+  input: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    padding: spacing.sm,
+    fontSize: 15,
+    color: colors.text,
+  },
+  addSubtaskBtn: { padding: spacing.xs },
   statusRow: { flexDirection: "row", gap: spacing.sm, flexWrap: "wrap" },
   statusBtn: { 
     paddingVertical: spacing.sm, 

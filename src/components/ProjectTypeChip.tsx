@@ -20,8 +20,9 @@ export function ProjectTypeChip({ projectType, label, showIcon = false }: Projec
   const getProjectIcon = (): keyof typeof Ionicons.glyphMap => {
     if (!projectType) return "folder-outline";
     if (projectType === "BUILD" || projectType === "MANAGEMENT") return "clipboard-outline";
-    if (projectType === "MAINTENANCE" || projectType === "RESIDENTIAL") return "settings-outline";
-    if (projectType === "TRADE") return "construct-outline";
+    if (projectType === "MAINTENANCE") return "construct-outline";
+    if (projectType === "RESIDENTIAL") return "home-outline";
+    if (projectType === "TRADE") return "person-outline";
     return "folder-outline";
   };
 

@@ -61,8 +61,10 @@ import * as constructionDiaryService from "../services/constructionDiary";
 import * as projectDocumentsService from "../services/projectDocuments";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectMembersService from "../services/projectMembers";
+import * as equipmentService from "../services/equipment";
 import * as weatherService from "../services/weather";
 import { extractInvoiceData, type OcrParsed, type OcrStatus } from "../services/invoiceOCR";
+import { exportProjectToCsv } from "../services/projectExport";
 import { updateTaskStatus } from "../services/taskService";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
 import { addPhasesToProject } from "../services/addPhasesToProject";
@@ -73,6 +75,7 @@ import type { AttachmentDoc } from "../services/attachments";
 import type { DiaryEntryDoc } from "../services/constructionDiary";
 import type { ProjectDocumentDoc } from "../services/projectDocuments";
 import type { ProjectMemberDoc } from "../services/projectMembers";
+import type { EquipmentDoc } from "../services/equipment";
 import { colors, radius, spacing } from "../theme";
 import { openInMaps } from "../lib/maps";
 import { isFeatureEnabled } from "../services/features";
@@ -160,8 +163,9 @@ export function ProjectOverviewScreen() {
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseDate, setExpenseDate] = useState(new Date().toISOString().split('T')[0]);
   const [expenseNote, setExpenseNote] = useState("");
-  const [expenseCategory, setExpenseCategory] = useState<'WORK' | 'MATERIAL' | undefined>(undefined);
+  const [expenseCategory, setExpenseCategory] = useState<'WORK' | 'MATERIAL' | 'OTHER' | undefined>(undefined);
   const [expenseSupplierName, setExpenseSupplierName] = useState("");
+  const [expenseSupplierIco, setExpenseSupplierIco] = useState("");
   const [expensePhaseId, setExpensePhaseId] = useState<string | null>(null);
   const [expenseAttachment, setExpenseAttachment] = useState<{ uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' } | null>(null);
   const [expensePreuploadedAttachment, setExpensePreuploadedAttachment] = useState<{
@@ -198,6 +202,10 @@ export function ProjectOverviewScreen() {
     storagePath?: string;
   } | null>(null);
   const isOwner = !!projectOwnerId && projectOwnerId === user?.id;
+
+  // MAINTENANCE v2: equipment
+  const [equipmentList, setEquipmentList] = useState<EquipmentDoc[]>([]);
+  const [showEquipmentActionSheet, setShowEquipmentActionSheet] = useState(false);
   
   // Diary entries state
   const [diaryEntries, setDiaryEntries] = useState<DiaryEntryDoc[]>([]);
@@ -235,7 +243,11 @@ export function ProjectOverviewScreen() {
   const [whatsappDiaryEnabled, setWhatsappDiaryEnabled] = useState(false);
   const [contractorsEnabled, setContractorsEnabled] = useState(false);
   const [phasesSectionExpanded, setPhasesSectionExpanded] = useState(true);
+  const [taskFilter, setTaskFilter] = useState<'service' | 'all'>('service');
   const [activityEvents, setActivityEvents] = useState<ProjectEvent[]>([]);
+  useEffect(() => {
+    if (projectType === 'MAINTENANCE') setTaskFilter('service');
+  }, [projectId, projectType]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityExpanded, setActivityExpanded] = useState(false);
 
@@ -484,6 +496,20 @@ export function ProjectOverviewScreen() {
       setDiaryEntries(hasDiary ? diary : []);
       setProjectDocuments(hasDocuments ? docs : []);
       setProjectMembers(members);
+
+      // MAINTENANCE v2: load equipment only for MAINTENANCE projects
+      const isMaintenanceLike = projectTypeForLoad === 'MAINTENANCE';
+      if (isMaintenanceLike) {
+        try {
+          const eq = await equipmentService.listEquipment(projectId, { status: 'active' });
+          setEquipmentList(eq);
+        } catch (e: any) {
+          console.warn('[ProjectOverview] Error loading equipment:', e);
+          setEquipmentList([]);
+        }
+      } else {
+        setEquipmentList([]);
+      }
       
       // Load all attachments for the project to build attachment count maps
       try {
@@ -750,15 +776,31 @@ export function ProjectOverviewScreen() {
 
   const toggleTaskStatus = async (task: TaskDoc) => {
     if (!projectId) return;
-    
+    const newStatus = task.status === "DONE" ? "OPEN" : "DONE";
+
+    if (newStatus === "DONE" && (task.subtasks?.length ?? 0) > 0) {
+      const doneCount = task.subtasks?.filter((s) => s.done).length ?? 0;
+      if (doneCount < (task.subtasks?.length ?? 0)) {
+        Alert.alert(
+          t("taskDetail.subtasksIncompleteTitle") || "Nie všetky subúlohy sú hotové",
+          t("taskDetail.subtasksIncompleteBody") || "Chcete označiť úlohu ako hotovú?",
+          [
+            { text: t("common.cancel") || "Zrušiť", style: "cancel" },
+            { text: t("taskDetail.markDone") || "Označiť", onPress: () => doToggleTaskStatus(task, newStatus) },
+          ]
+        );
+        return;
+      }
+    }
+    await doToggleTaskStatus(task, newStatus);
+  };
+
+  const doToggleTaskStatus = async (task: TaskDoc, newStatus: string) => {
+    if (!projectId) return;
     try {
-      const newStatus = task.status === "DONE" ? "OPEN" : "DONE";
-      console.log(`[ProjectOverview] Toggling task ${task.id} from ${task.status} to ${newStatus}`);
+      console.log(`[ProjectOverview] Toggling task ${task.id} to ${newStatus}`);
       await updateTaskStatus(projectId, task.id, newStatus);
-      
-      // Reload tasks after status change
       await load(true);
-      console.log(`[ProjectOverview] Task status updated successfully`);
     } catch (error: any) {
       console.error(`[ProjectOverview] Error toggling task status:`, error);
       Alert.alert(t("common.error"), error.message || t("projectOverview.failedToChangeStatus"));
@@ -875,12 +917,25 @@ export function ProjectOverviewScreen() {
     }
   };
 
+  const handleExportCsv = async () => {
+    try {
+      const result = await exportProjectToCsv(projectId);
+      if (!result.ok) {
+        Alert.alert(t("common.error"), result.error || t("projectOverview.exportFailed"));
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      Alert.alert(t("common.error"), msg);
+    }
+  };
+
   const handleMenuPress = () => {
     if (Platform.OS === 'ios') {
       const actions = [
         ...(isOwner ? [{ key: "edit", label: t("projectOverview.editProject"), onPress: handleEditProject }] : []),
         ...(whatsappDiaryEnabled ? [{ key: "updates", label: t("projectOverview.updates"), onPress: () => (navigation as any).navigate("Updates", { projectId }) }] : []),
         ...(contractorsEnabled ? [{ key: "suppliers", label: t("projectOverview.suppliers"), onPress: () => (navigation as any).navigate("ProjectSuppliers", { projectId }) }] : []),
+        { key: "export", label: t("projectOverview.exportToCsv"), onPress: handleExportCsv },
         ...(isOwner ? [{ key: "delete", label: t("projectOverview.deleteProject"), onPress: handleDeleteProject }] : []),
       ];
       const options = [t("common.cancel"), ...actions.map((a) => a.label)];
@@ -909,6 +964,7 @@ export function ProjectOverviewScreen() {
           ...(isOwner ? [{ text: t("projectOverview.editProject"), onPress: handleEditProject }] : []),
           ...(whatsappDiaryEnabled ? [{ text: t("projectOverview.updates"), onPress: () => (navigation as any).navigate("Updates", { projectId }) }] : []),
           ...(contractorsEnabled ? [{ text: t("projectOverview.suppliers"), onPress: () => (navigation as any).navigate("ProjectSuppliers", { projectId }) }] : []),
+          { text: t("projectOverview.exportToCsv"), onPress: handleExportCsv },
           ...(isOwner ? [{ text: t("projectOverview.deleteProject"), style: 'destructive', onPress: handleDeleteProject }] : []),
         ]
       );
@@ -1184,8 +1240,9 @@ export function ProjectOverviewScreen() {
       setExpenseAmount(expense.amount?.toString() || "");
       setExpenseDate(expense.date ? expense.date.split('T')[0] : new Date().toISOString().split('T')[0]);
       setExpenseNote(expense.note || "");
-      setExpenseCategory((expense.category as 'WORK' | 'MATERIAL' | undefined) || undefined);
+      setExpenseCategory((expense.category as 'WORK' | 'MATERIAL' | 'OTHER' | undefined) || undefined);
       setExpenseSupplierName(expense.supplierName || "");
+      setExpenseSupplierIco(expense.supplierIco || "");
       setExpensePhaseId(expense.phaseId || null);
       setExpenseAttachment(null); // Reset attachment - will load from expense.attachmentId if needed
       setExpensePreuploadedAttachment(null);
@@ -1198,6 +1255,7 @@ export function ProjectOverviewScreen() {
       setExpenseNote("");
       setExpenseCategory(undefined);
       setExpenseSupplierName("");
+      setExpenseSupplierIco("");
       setExpensePhaseId(null);
       setExpenseAttachment(null);
       setExpensePreuploadedAttachment(null);
@@ -1219,6 +1277,9 @@ export function ProjectOverviewScreen() {
       if (!expenseTitle.trim()) {
         setExpenseTitle(parsed.supplierName);
       }
+    }
+    if (parsed.supplierTaxId) {
+      setExpenseSupplierIco(parsed.supplierTaxId);
     }
   };
 
@@ -1305,10 +1366,12 @@ export function ProjectOverviewScreen() {
       if (result.status === "success") {
         applyOcrPrefill(result.parsed);
       } else {
+        console.log("[OCR UI] error.code =", result.errorCode, "message=", result.errorCode);
         Alert.alert(t("common.warning"), getOcrFallbackMessage(result.errorCode));
       }
     } catch (error: any) {
       console.error("[ProjectOverview] Auto OCR after pick failed:", error);
+      console.log("[OCR UI] error.code =", error?.code, "message=", error?.message);
       setExpenseOcrStatus("failed");
       Alert.alert(t("common.warning"), getOcrFallbackMessage(error?.code || error?.message));
     } finally {
@@ -1634,6 +1697,7 @@ export function ProjectOverviewScreen() {
         ocrStatus: result.status === "success" ? "done" : "failed",
       });
       if (result.status !== "success") {
+        console.log("[OCR UI] error.code =", result.errorCode, "message=", result.errorCode);
         Alert.alert(t("common.warning"), getOcrFallbackMessage(result.errorCode));
       }
       navigateToExpenseReview({
@@ -1644,6 +1708,7 @@ export function ProjectOverviewScreen() {
     } catch (error) {
       if (ocrRequestIdRef.current !== requestId) return;
       console.error("[ProjectOverview] OCR failed:", error);
+      console.log("[OCR UI] error.code =", (error as any)?.code, "message=", (error as any)?.message);
       setOcrLoading(false);
       setOcrPendingReview(null);
       await expensesService.updateExpense(input.projectId, input.expenseId, {
@@ -1680,7 +1745,7 @@ export function ProjectOverviewScreen() {
       return;
     }
     if (!expenseCategory) {
-      Alert.alert(t("common.error"), t("expense.selectType"));
+      Alert.alert(t("common.error"), "Vyberte typ výdavku (Práca, Materiál alebo Práca + Materiál).");
       return;
     }
     
@@ -1721,6 +1786,7 @@ export function ProjectOverviewScreen() {
           note: expenseNote.trim() || undefined,
           category: expenseCategory,
           supplierName: expenseSupplierName.trim() || undefined,
+          supplierIco: expenseSupplierIco.trim() || undefined,
           attachmentId: attachmentId || editingExpense.attachmentId || undefined,
         });
         Alert.alert(t("common.success"), t("projectOverview.expenseUpdated"));
@@ -1733,6 +1799,7 @@ export function ProjectOverviewScreen() {
           note: expenseNote.trim() || undefined,
           category: expenseCategory,
           supplierName: expenseSupplierName.trim() || undefined,
+          supplierIco: expenseSupplierIco.trim() || undefined,
           phaseId: expensePhaseId || undefined,
           source: (expenseAttachment || expensePreuploadedAttachment) ? "DOCUMENT" : "MANUAL",
           status: "READY",
@@ -1855,6 +1922,7 @@ export function ProjectOverviewScreen() {
       setExpensePreuploadedAttachment(null);
       setExpenseCategory(undefined);
       setExpenseSupplierName("");
+      setExpenseSupplierIco("");
       await load(true);
     } catch (error: any) {
       console.error(`[ProjectOverview] Error saving expense:`, error);
@@ -2641,6 +2709,19 @@ export function ProjectOverviewScreen() {
   // Get tasks without phaseId for BUILD projects
   const tasksWithoutPhase = isBuildProject ? tasks.filter(t => !t.phaseId) : [];
   
+  // MAINTENANCE: filter tasks by type (service vs all)
+  const maintenanceTasks = projectType === 'MAINTENANCE' 
+    ? (taskFilter === 'service' ? tasks.filter(t => t.serviceRuleId != null) : tasks)
+    : tasks;
+  const displayTasksForMaintenance = projectType === 'MAINTENANCE' ? maintenanceTasks : tasks;
+  
+  // Equipment map for task row lookup (equipmentId -> equipment)
+  const equipmentMap = React.useMemo(() => {
+    const m = new Map<string, EquipmentDoc>();
+    equipmentList.forEach((eq) => m.set(eq.id, eq));
+    return m;
+  }, [equipmentList]);
+  
   console.log(`[ProjectOverview] Render: projectType="${projectType}", isBuildProject=${isBuildProject}, phases.length=${phases.length}, tasks.length=${tasks.length}, phaseOrder.length=${phaseOrder.length}`);
   if (phases.length > 0) {
     console.log(`[ProjectOverview] Phase order: ${phaseOrder.join(', ')}`);
@@ -2677,7 +2758,12 @@ export function ProjectOverviewScreen() {
             <Text style={styles.headerTitle} numberOfLines={1}>{projectName || t("projects.noName")}</Text>
             {projectType && (
               <Text style={styles.headerProjectType} numberOfLines={1}>
-                {t(`projectType.${projectType}` as any) || projectType}
+                {projectType === "MAINTENANCE" ? t("projectType.maintenance") :
+                  projectType === "RESIDENTIAL" ? t("projectType.RESIDENTIAL") :
+                  projectType === "TRADE" ? t("projectType.TRADE") :
+                  projectType === "MANAGEMENT" ? t("projectType.MANAGEMENT") :
+                  projectType === "BUILD" ? t("projectType.build") :
+                  t(`projectType.${projectType}` as any) || projectType}
               </Text>
             )}
           </View>
@@ -2771,6 +2857,64 @@ export function ProjectOverviewScreen() {
           />
         }
       >
+        {/* MAINTENANCE v2: Equipment section only for MAINTENANCE projects */}
+        {projectType === 'MAINTENANCE' && (
+          <View style={styles.equipmentSection}>
+            <Text style={styles.equipmentSectionTitle}>Zariadenia</Text>
+            {equipmentList.length === 0 ? (
+              <TouchableOpacity
+                style={styles.equipmentCta}
+                onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
+              >
+                <Ionicons name="add-circle-outline" size={24} color={colors.primary} />
+                <Text style={styles.equipmentCtaText}>Pridať zariadenie</Text>
+              </TouchableOpacity>
+            ) : (
+              <>
+                <View style={styles.equipmentListRow}>
+                  {equipmentList.slice(0, 2).map((eq) => (
+                    <TouchableOpacity
+                      key={eq.id}
+                      style={styles.equipmentChip}
+                      onPress={() => (navigation as any).navigate('EquipmentDetail', { projectId, projectName, equipmentId: eq.id })}
+                      onLongPress={() => {
+                        Alert.alert(
+                          "Archivovať zariadenie",
+                          `Naozaj chcete archivovať "${eq.name}"?`,
+                          [
+                            { text: "Zrušiť", style: "cancel" },
+                            {
+                              text: "Archivovať",
+                              style: "destructive",
+                              onPress: async () => {
+                                try {
+                                  await equipmentService.archiveEquipment(projectId!, eq.id);
+                                  onRefresh();
+                                } catch (e: any) {
+                                  Alert.alert("Chyba", e.message || "Nepodarilo sa archivovať.");
+                                }
+                              },
+                            },
+                          ]
+                        );
+                      }}
+                    >
+                      <Text style={styles.equipmentChipText} numberOfLines={1}>{eq.labelCode || eq.name}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </View>
+                <TouchableOpacity
+                  style={styles.equipmentViewAll}
+                  onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
+                >
+                  <Text style={styles.equipmentViewAllText}>{t("projectOverview.viewAll") || "Zobraziť všetky"}</Text>
+                  <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+                </TouchableOpacity>
+              </>
+            )}
+          </View>
+        )}
+
         {/* Table: Task Name | Assignee */}
         {/* For TRADE/MAINTENANCE: only show table if there are tasks */}
         {/* For BUILD/MANAGEMENT: always show table */}
@@ -2794,20 +2938,42 @@ export function ProjectOverviewScreen() {
                 style={{ marginRight: 8 }}
               />
               <Text style={styles.phasesSectionHeaderText}>
-                {t("projectOverview.phasesSection") || "Fázy a úlohy"}
+                {projectType === 'MAINTENANCE' ? (t("projectOverview.serviceTasks") || "Servisné úlohy") : (t("projectOverview.phasesSection") || "Fázy a úlohy")}
               </Text>
-              <Text style={styles.phasesSectionCount}>({tasks.length})</Text>
+              <Text style={styles.phasesSectionCount}>
+                ({projectType === 'MAINTENANCE' ? displayTasksForMaintenance.length : tasks.length})
+              </Text>
             </View>
           </TouchableOpacity>
           {phasesSectionExpanded && (
           <>
+          {projectType === 'MAINTENANCE' && (
+            <View style={{ flexDirection: 'row', gap: 8, marginBottom: 12, flexWrap: 'wrap' }}>
+              <TouchableOpacity
+                onPress={() => setTaskFilter('service')}
+                style={[styles.filterChip, taskFilter === 'service' && { backgroundColor: colors.primary, borderColor: colors.primary }]}
+              >
+                <Text style={[styles.filterChipText, taskFilter === 'service' && { color: '#fff' }]}>
+                  {t("projectOverview.serviceTasksFilter") || "Servisné"}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                onPress={() => setTaskFilter('all')}
+                style={[styles.filterChip, taskFilter === 'all' && { backgroundColor: colors.primary, borderColor: colors.primary }]}
+              >
+                <Text style={[styles.filterChipText, taskFilter === 'all' && { color: '#fff' }]}>
+                  {t("projectOverview.allTasksFilter") || "Všetky"}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          )}
           <View style={styles.tableHeader}>
             <Text style={styles.tableHeaderText}>{t("projectOverview.taskName")}</Text>
             <Text style={[styles.tableHeaderText, styles.colAssignee]}>{t("projectOverview.assignee")}</Text>
           </View>
           {loading ? (
             <ActivityIndicator color={colors.primary} style={styles.loader} />
-          ) : tasks.length === 0 && (isTradeOrMaintenance || phases.length === 0) ? (
+          ) : (projectType === 'MAINTENANCE' ? displayTasksForMaintenance.length : tasks.length) === 0 && (isTradeOrMaintenance || phases.length === 0) ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.empty}>
               {isTradeOrMaintenance 
@@ -2832,7 +2998,7 @@ export function ProjectOverviewScreen() {
         ) : isTradeOrMaintenance ? (
           // For TRADE/MAINTENANCE: show tasks without phases (flat list)
           <>
-            {tasks.filter(t => !t.phaseId).map((task) => (
+            {(projectType === 'MAINTENANCE' ? displayTasksForMaintenance : tasks).filter(t => !t.phaseId).map((task) => (
               <View key={task.id} style={styles.taskRow}>
               <View style={styles.taskNameCell}>
                 <TouchableOpacity 
@@ -2854,6 +3020,19 @@ export function ProjectOverviewScreen() {
                   <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={2}>
                     {task.title || t("tasks.noTitle")}
                   </Text>
+                  {(task.subtasks?.length ?? 0) > 0 && (
+                    <Text style={styles.taskSubtaskProgress}>
+                      {(task.subtasks?.filter((s) => s.done).length ?? 0)}/{(task.subtasks?.length ?? 0)}
+                    </Text>
+                  )}
+                  {projectType === 'MAINTENANCE' && task.equipmentId && (() => {
+                    const eq = equipmentMap.get(task.equipmentId);
+                    return eq ? (
+                      <Text style={[styles.taskEquipmentLabel, task.status === "DONE" && styles.taskEquipmentLabelDone]} numberOfLines={1}>
+                        {eq.labelCode || eq.name || ''}
+                      </Text>
+                    ) : null;
+                  })()}
                   {task.dueDate && (
                     <Text style={[styles.taskDueDate, task.status === "DONE" && styles.taskDueDateDone]}>
                       <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
@@ -3052,6 +3231,11 @@ export function ProjectOverviewScreen() {
                                   <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={2}>
                                     {task.title || t("tasks.noTitle")}
                                   </Text>
+                                  {(task.subtasks?.length ?? 0) > 0 && (
+                                    <Text style={styles.taskSubtaskProgress}>
+                                      {(task.subtasks?.filter((s) => s.done).length ?? 0)}/{(task.subtasks?.length ?? 0)}
+                                    </Text>
+                                  )}
                                   {task.dueDate && (
                                     <Text style={[styles.taskDueDate, task.status === "DONE" && styles.taskDueDateDone]}>
                                       <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
@@ -3146,6 +3330,11 @@ export function ProjectOverviewScreen() {
                           <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={2}>
                             {task.title || t("tasks.noTitle")}
                           </Text>
+                          {(task.subtasks?.length ?? 0) > 0 && (
+                            <Text style={styles.taskSubtaskProgress}>
+                              {(task.subtasks?.filter((s) => s.done).length ?? 0)}/{(task.subtasks?.length ?? 0)}
+                            </Text>
+                          )}
                           {task.dueDate && (
                             <Text style={[styles.taskDueDate, task.status === "DONE" && styles.taskDueDateDone]}>
                               <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
@@ -3509,14 +3698,6 @@ export function ProjectOverviewScreen() {
           </View>
         )}
 
-        {/* Add a custom section - only for BUILD projects */}
-        {isBuildProject && (
-          <TouchableOpacity style={styles.addSection}>
-            <Ionicons name="add-circle-outline" size={22} color={colors.textMuted} style={{ marginRight: 8 }} />
-            <Text style={styles.addSectionText}>{t("projectOverview.addSection")}</Text>
-          </TouchableOpacity>
-        )}
-
         <View style={styles.activityCard}>
           <TouchableOpacity
             style={styles.activityHeader}
@@ -3551,7 +3732,14 @@ export function ProjectOverviewScreen() {
             ))
           )}
           {!activityExpanded && activityEvents.length > 1 ? (
-            <Text style={styles.activityMore}>+{activityEvents.length - 1}</Text>
+            <TouchableOpacity
+              onPress={() => setActivityExpanded(true)}
+              style={styles.activityViewAll}
+              activeOpacity={0.7}
+            >
+              <Text style={styles.activityViewAllText}>{t("projectOverview.viewAll") || "Zobraziť všetko"}</Text>
+              <Ionicons name="chevron-forward" size={14} color={colors.primary} />
+            </TouchableOpacity>
           ) : null}
         </View>
       </ScrollView>
@@ -3564,15 +3752,52 @@ export function ProjectOverviewScreen() {
         </TouchableOpacity>
         {isOwner ? (
           isTradeOrMaintenance ? (
-            // For TRADE/MAINTENANCE: text button instead of FAB
-            <TouchableOpacity 
-              style={styles.addTaskButton} 
-              onPress={() => openNewTaskModal()}
-              activeOpacity={0.7}
-            >
-              <Ionicons name="add-circle" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
-              <Text style={styles.addTaskButtonText}>{t("projectOverview.addTask") || "Pridať úlohu"}</Text>
-            </TouchableOpacity>
+            // For TRADE/RESIDENTIAL: text button; MAINTENANCE shows action menu (úloha + zariadenie + servisný plán)
+            projectType === 'MAINTENANCE' ? (
+              <TouchableOpacity
+                style={styles.addTaskButton}
+                onPress={() => {
+                  if (Platform.OS === 'ios' && ActionSheetIOS) {
+                    ActionSheetIOS.showActionSheetWithOptions(
+                      {
+                        options: ['Zrušiť', 'Pridať úlohu', 'Pridať zariadenie', 'Pridať servisný plán'],
+                        cancelButtonIndex: 0,
+                      },
+                      (idx) => {
+                        if (idx === 1) openNewTaskModal();
+                        else if (idx === 2) (navigation as any).navigate('EquipmentList', { projectId, projectName });
+                        else if (idx === 3) (navigation as any).navigate('EquipmentList', { projectId, projectName, openServiceRule: true });
+                      }
+                    );
+                  } else {
+                    Alert.alert(
+                      'Pridať',
+                      '',
+                      [
+                        { text: 'Zrušiť', style: 'cancel' },
+                        { text: 'Pridať úlohu', onPress: () => openNewTaskModal() },
+                        { text: 'Pridať zariadenie', onPress: () => (navigation as any).navigate('EquipmentList', { projectId, projectName }) },
+                        { text: 'Pridať servisný plán', onPress: () => (navigation as any).navigate('EquipmentList', { projectId, projectName, openServiceRule: true }) },
+                      ]
+                    );
+                  }
+                }}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="add-circle" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+                <Text style={styles.addTaskButtonText}>{t("projectOverview.addTask") || "Pridať úlohu"}</Text>
+                <Ionicons name="chevron-down" size={16} color="#FFFFFF" style={{ marginLeft: 4 }} />
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity 
+                style={styles.addTaskButton} 
+                onPress={() => openNewTaskModal()}
+                activeOpacity={0.7}
+              >
+                <Ionicons name="add-circle" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+                <Text style={styles.addTaskButtonText}>{t("projectOverview.addTask") || "Pridať úlohu"}</Text>
+              </TouchableOpacity>
+            )
           ) : (
             // For BUILD: FAB
             <TouchableOpacity style={styles.fab} onPress={() => openNewTaskModal()}>
@@ -3683,8 +3908,8 @@ export function ProjectOverviewScreen() {
             </Text>
             {/* Expense Attachment Section (top-first for OCR flow) */}
             <View style={styles.expenseAttachmentSection}>
-              <Text style={styles.expenseAttachmentLabel}>{t("expense.invoice") || "Priloha faktury (volitelne)"}</Text>
-              <Text style={styles.expenseAttachmentHint}>Odfot fakturu a udaje sa automaticky doplnia nizsie.</Text>
+              <Text style={styles.expenseAttachmentLabel}>{t("expense.invoice")}</Text>
+              <Text style={styles.expenseAttachmentHint}>{t("expense.invoiceHint")}</Text>
               <View style={styles.expenseAttachmentButtons}>
                 <TouchableOpacity
                   style={[styles.expenseAttachmentButton, (uploadingExpenseAttachment || submitting) && styles.expenseAttachmentButtonDisabled]}
@@ -3692,7 +3917,7 @@ export function ProjectOverviewScreen() {
                   disabled={uploadingExpenseAttachment || submitting}
                 >
                   <Ionicons name="image-outline" size={20} color={colors.primary} />
-                  <Text style={styles.expenseAttachmentButtonText}>Foto</Text>
+                  <Text style={styles.expenseAttachmentButtonText}>{t("expense.photo")}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.expenseAttachmentButton, (uploadingExpenseAttachment || submitting) && styles.expenseAttachmentButtonDisabled]}
@@ -3700,7 +3925,7 @@ export function ProjectOverviewScreen() {
                   disabled={uploadingExpenseAttachment || submitting}
                 >
                   <Ionicons name="document-outline" size={20} color={colors.primary} />
-                  <Text style={styles.expenseAttachmentButtonText}>PDF</Text>
+                  <Text style={styles.expenseAttachmentButtonText}>{t("expense.pdf")}</Text>
                 </TouchableOpacity>
               </View>
               {expenseAttachment && (
@@ -3750,6 +3975,7 @@ export function ProjectOverviewScreen() {
             {/* Category - identical function to Home */}
             <View style={styles.expenseCategorySection}>
               <Text style={styles.expenseCategoryLabel}>{t("expense.type")}</Text>
+              <Text style={styles.expenseCategoryHint}>{t("expense.categoryHint")}</Text>
               <View style={styles.expenseCategoryButtons}>
                 <TouchableOpacity
                   style={[
@@ -3758,6 +3984,9 @@ export function ProjectOverviewScreen() {
                   ]}
                   onPress={() => setExpenseCategory('WORK')}
                 >
+                  {expenseCategory === "WORK" ? (
+                    <Ionicons name="checkmark-circle" size={16} color={colors.primary} />
+                  ) : null}
                   <Text
                     style={[
                       styles.expenseCategoryButtonText,
@@ -3774,6 +4003,9 @@ export function ProjectOverviewScreen() {
                   ]}
                   onPress={() => setExpenseCategory('MATERIAL')}
                 >
+                  {expenseCategory === "MATERIAL" ? (
+                    <Ionicons name="checkmark-circle" size={16} color={colors.primary} />
+                  ) : null}
                   <Text
                     style={[
                       styles.expenseCategoryButtonText,
@@ -3781,6 +4013,25 @@ export function ProjectOverviewScreen() {
                     ]}
                   >
                     {t("expense.typeMaterial")}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.expenseCategoryButton,
+                    expenseCategory === 'OTHER' && styles.expenseCategoryButtonActive,
+                  ]}
+                  onPress={() => setExpenseCategory('OTHER')}
+                >
+                  {expenseCategory === "OTHER" ? (
+                    <Ionicons name="checkmark-circle" size={16} color={colors.primary} />
+                  ) : null}
+                  <Text
+                    style={[
+                      styles.expenseCategoryButtonText,
+                      expenseCategory === 'OTHER' && styles.expenseCategoryButtonTextActive,
+                    ]}
+                  >
+                    {t("expense.typeWorkMaterial")}
                   </Text>
                 </TouchableOpacity>
               </View>
@@ -3794,6 +4045,14 @@ export function ProjectOverviewScreen() {
               placeholder={t("expense.supplierName")}
               placeholderTextColor={colors.textMuted}
             />
+            <TextInput
+              style={styles.input}
+              value={expenseSupplierIco}
+              onChangeText={setExpenseSupplierIco}
+              placeholder={t("expense.supplierTaxId")}
+              placeholderTextColor={colors.textMuted}
+              keyboardType="number-pad"
+            />
 
             <TextInput
               style={styles.input}
@@ -3803,17 +4062,6 @@ export function ProjectOverviewScreen() {
               placeholderTextColor={colors.textMuted}
               autoFocus
             />
-            <View style={styles.expenseAmountRow}>
-              <TextInput
-                style={[styles.input, styles.expenseAmountInput]}
-                value={expenseAmount}
-                onChangeText={handleAmountChange}
-                placeholder={t("projectOverview.expenseAmountPlaceholder")}
-                placeholderTextColor={colors.textMuted}
-                keyboardType="decimal-pad"
-              />
-              <Text style={styles.expenseCurrencyLabel}>EUR</Text>
-            </View>
             <TextInput
               style={styles.input}
               value={expenseDate}
@@ -3842,6 +4090,7 @@ export function ProjectOverviewScreen() {
                   setExpenseDate(new Date().toISOString().split('T')[0]);
                   setExpenseNote("");
                   setExpensePhaseId(null);
+                  setExpenseSupplierIco("");
                   setExpenseAttachment(null);
                   setExpensePreuploadedAttachment(null);
                 }}
@@ -3867,7 +4116,7 @@ export function ProjectOverviewScreen() {
                 }
               >
                 <Text style={styles.modalOkText}>
-                  {submitting ? 'Ukladá sa...' : (editingExpense ? 'Uložiť' : 'Pridať')}
+                  {submitting ? t("common.saving") : (editingExpense ? t("common.save") : t("common.add"))}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -3880,9 +4129,9 @@ export function ProjectOverviewScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.ocrModal}>
             <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={styles.ocrText}>Spracovávam faktúru…</Text>
+            <Text style={styles.ocrText}>{t("expense.ocrProcessing")}</Text>
             <TouchableOpacity style={styles.ocrCancelButton} onPress={handleOcrCancel}>
-              <Text style={styles.ocrCancelText}>Pokračovať manuálne</Text>
+              <Text style={styles.ocrCancelText}>{t("expense.proceedManually")}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -5157,7 +5406,16 @@ const styles = StyleSheet.create({
   activityMore: {
     marginTop: 2,
     color: colors.textMuted,
-    fontSize: 11,
+  },
+  activityViewAll: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: 8,
+    gap: 4,
+  },
+  activityViewAllText: {
+    fontSize: 13,
+    color: colors.primary,
     fontWeight: "600",
   },
 
@@ -5343,6 +5601,11 @@ const styles = StyleSheet.create({
     textDecorationColor: DONE_COLOR,
     color: DONE_COLOR,
   },
+  taskSubtaskProgress: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
   taskDueDate: {
     fontSize: 12,
     color: colors.textMuted,
@@ -5352,6 +5615,17 @@ const styles = StyleSheet.create({
 
   },
   taskDueDateDone: { color: DONE_COLOR },
+  taskEquipmentLabel: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
+  taskEquipmentLabelDone: { color: DONE_COLOR },
+  filterChip: {
+    paddingHorizontal: 12,
+    paddingVertical: 6,
+    borderRadius: 16,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  filterChipText: { fontSize: 13, color: colors.text },
   assigneeCell: { flexDirection: "row", alignItems: "flex-start", justifyContent: "flex-end", gap: 4, paddingTop: 2 },
   assigneeText: { fontSize: 13, color: colors.textMuted, maxWidth: 70 },
   taskActions: {
@@ -5365,19 +5639,6 @@ const styles = StyleSheet.create({
   taskMenuButton: {
     padding: spacing.xs,
   },
-
-  addSection: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginHorizontal: spacing.md,
-    marginTop: spacing.sm,
-    padding: spacing.md,
-    backgroundColor: colors.card,
-    borderRadius: radius,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  addSectionText: { fontSize: 14, color: colors.textMuted },
 
   bottomBar: {
     flexDirection: "row",
@@ -5407,6 +5668,62 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary,
     alignItems: "center",
     justifyContent: "center",
+  },
+  equipmentSection: {
+    marginBottom: spacing.lg,
+    paddingHorizontal: spacing.md,
+  },
+  equipmentSectionTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  equipmentCta: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  equipmentCtaText: {
+    fontSize: 15,
+    color: colors.primary,
+    fontWeight: "500",
+  },
+  equipmentListRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  equipmentChip: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    maxWidth: 120,
+  },
+  equipmentChipText: {
+    fontSize: 13,
+    color: colors.text,
+    fontWeight: "500",
+  },
+  equipmentViewAll: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+  },
+  equipmentViewAllText: {
+    fontSize: 14,
+    color: colors.primary,
+    fontWeight: "500",
   },
   addTaskButton: {
     flexDirection: "row",
@@ -5754,6 +6071,49 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.text,
     fontWeight: '500',
+  },
+  expenseCategorySection: {
+    marginBottom: spacing.md,
+  },
+  expenseCategoryLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: spacing.xs,
+  },
+  expenseCategoryHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
+  },
+  expenseCategoryButtons: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    flexWrap: "wrap",
+  },
+  expenseCategoryButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  expenseCategoryButtonActive: {
+    borderColor: colors.primary,
+    backgroundColor: `${colors.primary}14`,
+  },
+  expenseCategoryButtonText: {
+    fontSize: 14,
+    color: colors.textMuted,
+    fontWeight: "500",
+  },
+  expenseCategoryButtonTextActive: {
+    color: colors.primary,
+    fontWeight: "700",
   },
   expenseAttachmentSection: {
     marginTop: spacing.sm,

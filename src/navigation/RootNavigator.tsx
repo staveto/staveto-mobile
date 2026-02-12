@@ -18,6 +18,13 @@ import { ProjectOverviewScreen } from "../screens/ProjectOverviewScreen";
 import { ProjectMembersScreen } from "../screens/ProjectMembersScreen";
 import { SubscriptionScreen } from "../screens/SubscriptionScreen";
 import { ExpenseReviewScreen } from "../screens/ExpenseReviewScreen";
+import { EquipmentListScreen } from "../screens/equipment/EquipmentListScreen";
+import { EquipmentDetailScreen } from "../screens/equipment/EquipmentDetailScreen";
+import { EquipmentFormScreen } from "../screens/equipment/EquipmentFormScreen";
+import { EquipmentQrScreen } from "../screens/equipment/EquipmentQrScreen";
+import { ServiceRuleFormScreen } from "../screens/equipment/ServiceRuleFormScreen";
+import { EquipmentLinkHandlerScreen } from "../screens/equipment/EquipmentLinkHandlerScreen";
+import { QrScanScreen } from "../screens/equipment/QrScanScreen";
 import { ContractorsListScreen } from "../screens/contractors/ContractorsListScreen";
 import { ContractorFormScreen } from "../screens/contractors/ContractorFormScreen";
 import { ContractorDetailScreen } from "../screens/contractors/ContractorDetailScreen";
@@ -206,6 +213,41 @@ export function RootNavigator() {
         name="ExpenseReview"
         component={ExpenseReviewScreen}
         options={{ headerShown: true, title: "Kontrola faktúry" }}
+      />
+      <Stack.Screen
+        name="EquipmentList"
+        component={EquipmentListScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="EquipmentDetail"
+        component={EquipmentDetailScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="EquipmentForm"
+        component={EquipmentFormScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="EquipmentQr"
+        component={EquipmentQrScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ServiceRuleForm"
+        component={ServiceRuleFormScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="EquipmentLinkHandler"
+        component={EquipmentLinkHandlerScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="QrScan"
+        component={QrScanScreen}
+        options={{ headerShown: false }}
       />
     </Stack.Navigator>
   );

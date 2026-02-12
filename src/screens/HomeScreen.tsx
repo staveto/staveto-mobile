@@ -239,7 +239,20 @@ export function HomeScreen() {
       nav = nav.getParent?.();
     }
   }, [navigation]);
-  const displayName = user?.name ?? user?.email ?? t("home.userFallback");
+  const [onboardingDisplayName, setOnboardingDisplayName] = useState<string | null>(null);
+  useEffect(() => {
+    AsyncStorage.getItem("pending_onboarding").then((raw) => {
+      if (raw) {
+        try {
+          const parsed = JSON.parse(raw) as { displayName?: string };
+          if (parsed?.displayName?.trim()) setOnboardingDisplayName(parsed.displayName.trim());
+        } catch {
+          // ignore
+        }
+      }
+    });
+  }, []);
+  const displayName = user?.name ?? onboardingDisplayName ?? user?.email ?? t("home.userFallback");
 
   const formatLastActivity = useCallback((date: Date | null) => {
     if (!date) return "No activity";
@@ -752,8 +765,9 @@ export function HomeScreen() {
 
   const getProjectIcon = (projectType?: string): React.ComponentProps<typeof Ionicons>["name"] => {
     if (projectType === "BUILD" || projectType === "MANAGEMENT") return "clipboard-outline";
-    if (projectType === "MAINTENANCE" || projectType === "RESIDENTIAL") return "settings-outline";
-    if (projectType === "TRADE") return "construct-outline";
+    if (projectType === "MAINTENANCE") return "construct-outline";
+    if (projectType === "RESIDENTIAL") return "home-outline";
+    if (projectType === "TRADE") return "person-outline";
     return "folder-outline";
   };
 
@@ -869,7 +883,7 @@ export function HomeScreen() {
           <>
             <View style={styles.headerRow}>
               <View>
-                <Text style={styles.welcomeTitle}>Dobrý deň, Majster!</Text>
+                <Text style={styles.welcomeTitle}>{t("home.greeting", { name: displayName })}</Text>
                 <Text style={styles.welcomeSubtitle}>Prehľad projektov</Text>
               </View>
               <TouchableOpacity style={styles.searchAction} onPress={goToSearch} accessibilityLabel="Search">
@@ -879,7 +893,7 @@ export function HomeScreen() {
 
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
               <TouchableOpacity style={styles.statChip} onPress={() => stackNav.navigate("Tasks")} activeOpacity={0.8}>
-                <Text style={styles.statChipText}>Otvorené {data.kpis.openCount}</Text>
+                <Text style={styles.statChipText}>{t("home.openTasksChip")} {data.kpis.openCount}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.statChip} onPress={() => goToProjects()} activeOpacity={0.8}>
                 <Text style={styles.statChipText}>Projekty {data.projects.length}</Text>

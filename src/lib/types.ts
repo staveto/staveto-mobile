@@ -2,7 +2,9 @@
  * Type definitions for Firestore models
  */
 
-import { Timestamp } from './rnFirestore';
+import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
+
+type Timestamp = FirebaseFirestoreTypes.Timestamp;
 
 export type ProjectType = 'BUILD' | 'MAINTENANCE' | 'TRADE' | 'RESIDENTIAL' | 'MANAGEMENT';
 
@@ -124,6 +126,13 @@ export interface ProjectTask {
   origin: 'TEMPLATE' | 'CUSTOM'; // Where task came from
   templateTaskId?: string | null; // Reference to template task if origin is TEMPLATE
   isActive?: boolean; // Soft delete flag (true = active, false = archived)
+  // MAINTENANCE v2: service task fields
+  equipmentId?: string | null;
+  serviceRuleId?: string | null;
+  checklist?: Array<{ id: string; title: string; done: boolean }>;
+  /** Standard subtasks (preferred over checklist). Used for all project types. */
+  subtasks?: Array<{ id: string; title: string; done: boolean; order: number }>;
+  timeSpentMinutes?: number | null;
 }
 
 export interface PhaseStats {
@@ -154,6 +163,7 @@ export interface ProjectExpense {
   currency: string; // e.g., "EUR", "CZK"
   date: Timestamp; // Date of expense
   note?: string;
+  supplierIco?: string | null; // Optional: supplier ICO
   taskId?: string | null; // Optional: link to task
   phaseId?: string | null; // Optional: link to phase
   attachmentId?: string | null; // Optional: invoice/receipt attachment

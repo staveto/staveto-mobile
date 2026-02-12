@@ -21,6 +21,7 @@ export type NotificationType =
   | "TASK_DUE_TODAY"
   | "TASK_OVERDUE"
   | "PROJECT_ACTIVITY"
+  | "PROJECT_CREATED"
   | "EXPENSE_ADDED"
   | "SYNC_ISSUE";
 
@@ -345,6 +346,31 @@ export async function createExpenseAddedNotification(data: {
     expenseId: data.expenseId,
     amount: data.amount ?? null,
     currency: data.currency ?? "EUR",
+    severity: "info",
+  });
+}
+
+export async function createProjectCreatedNotification(data: {
+  userId: string;
+  projectId: string;
+  projectName: string;
+}): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+  if (currentUser.uid !== data.userId) {
+    throw new Error("Nemáte oprávnenie na vytvorenie notifikácie.");
+  }
+
+  const c = collection(db, "notifications");
+  await addDoc(c, {
+    userId: data.userId,
+    type: "PROJECT_CREATED",
+    createdAt: serverTimestamp(),
+    readAt: null,
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
     severity: "info",
   });
 }

@@ -18,8 +18,17 @@ function AppContent() {
     );
   }
 
+  const linking = {
+    prefixes: ["staveto://"],
+    config: {
+      screens: {
+        EquipmentLinkHandler: "equipment/:qrToken",
+      },
+    },
+  };
+
   return (
-    <NavigationContainer>
+    <NavigationContainer linking={linking}>
       <AuthProvider>
         <StatusBar style="light" />
         <RootNavigator />

@@ -28,7 +28,7 @@ export function NotificationsScreen() {
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [filter, setFilter] = useState<"all" | "unread" | "today" | "overdue">("all");
+  const [filter, setFilter] = useState<"all" | "unread" | "today" | "overdue">("unread");
   const [showMenu, setShowMenu] = useState(false);
 
   const loadNotifications = useCallback(async (isRefresh = false) => {
@@ -142,6 +142,8 @@ export function NotificationsScreen() {
         return "warning-outline";
       case "EXPENSE_ADDED":
         return "cash-outline";
+      case "PROJECT_CREATED":
+        return "add-circle-outline";
       case "PROJECT_ACTIVITY":
         return "folder-outline";
       case "SYNC_ISSUE":
@@ -159,6 +161,8 @@ export function NotificationsScreen() {
         return "Po termíne";
       case "EXPENSE_ADDED":
         return "Nový výdavok";
+      case "PROJECT_CREATED":
+        return "Nový projekt";
       case "PROJECT_ACTIVITY":
         return "Zmena v projekte";
       case "SYNC_ISSUE":
@@ -212,7 +216,7 @@ export function NotificationsScreen() {
             openExpenseId: notification.expenseId,
           });
         }
-      } else if (notification.type === "PROJECT_ACTIVITY" && notification.projectId) {
+      } else if ((notification.type === "PROJECT_ACTIVITY" || notification.type === "PROJECT_CREATED") && notification.projectId) {
         // Navigate to root stack ProjectOverview screen
         const parentNav = navigation.getParent();
         if (parentNav) {
@@ -272,14 +276,8 @@ export function NotificationsScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Filter Bar */}
+      {/* Filter Bar - Neprečítané je prvé a default */}
       <View style={styles.filterBar}>
-        <TouchableOpacity
-          style={[styles.filterChip, filter === "all" && styles.filterChipActive, { marginRight: spacing.sm }]}
-          onPress={() => setFilter("all")}
-        >
-          <Text style={[styles.filterChipText, filter === "all" && styles.filterChipTextActive]}>Všetky</Text>
-        </TouchableOpacity>
         <TouchableOpacity
           style={[styles.filterChip, filter === "unread" && styles.filterChipActive, { marginRight: spacing.sm }]}
           onPress={() => setFilter("unread")}
@@ -287,6 +285,12 @@ export function NotificationsScreen() {
           <Text style={[styles.filterChipText, filter === "unread" && styles.filterChipTextActive]}>
             Neprečítané {unreadCount > 0 && `(${unreadCount})`}
           </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.filterChip, filter === "all" && styles.filterChipActive, { marginRight: spacing.sm }]}
+          onPress={() => setFilter("all")}
+        >
+          <Text style={[styles.filterChipText, filter === "all" && styles.filterChipTextActive]}>Všetky</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.filterChip, filter === "today" && styles.filterChipActive, { marginRight: spacing.sm }]}

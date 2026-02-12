@@ -38,7 +38,7 @@ export function RoleChip({ project, currentUserId, showIcon = true }: RoleChipPr
       case "MANAGER":
         return "construct-outline";
       case "TRADE":
-        return "hammer-outline";
+        return "person-outline";
       default:
         return "help-outline";
     }

@@ -40,6 +40,7 @@ export type ExpenseDoc = {
   status: ExpenseStatus;
   category?: ExpenseCategory;
   supplierName?: string;
+  supplierIco?: string;
   uploadStatus?: UploadStatus;
   filePath?: string;
   mimeType?: string;
@@ -87,6 +88,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Ex
     status: (d.status as ExpenseStatus) ?? 'READY',
     category: (d.category as ExpenseCategory) ?? undefined,
     supplierName: (d.supplierName as string) ?? undefined,
+    supplierIco: (d.supplierIco as string) ?? undefined,
     uploadStatus: (d.uploadStatus as UploadStatus) ?? undefined,
     filePath: (d.filePath as string) ?? undefined,
     mimeType: (d.mimeType as string) ?? undefined,
@@ -122,6 +124,7 @@ export async function createExpense(
     status?: ExpenseStatus;
     category?: ExpenseCategory;
     supplierName?: string;
+    supplierIco?: string;
     uploadStatus?: UploadStatus;
     filePath?: string | null;
     mimeType?: string | null;
@@ -193,6 +196,7 @@ export async function createExpense(
     status: data.status ?? 'READY',
     category: data.category ?? null,
     supplierName: data.supplierName?.trim() ?? null,
+    supplierIco: data.supplierIco?.trim() ?? null,
     uploadStatus: data.uploadStatus ?? null,
     filePath: data.filePath ?? null,
     mimeType: data.mimeType ?? null,
@@ -256,6 +260,7 @@ export async function createExpense(
     status: data.status ?? 'READY',
     category: data.category,
     supplierName: data.supplierName,
+    supplierIco: data.supplierIco,
     uploadStatus: data.uploadStatus ?? undefined,
     filePath: data.filePath ?? undefined,
     mimeType: data.mimeType ?? undefined,
@@ -301,6 +306,7 @@ export async function updateExpense(
     status?: ExpenseStatus;
     category?: ExpenseCategory;
     supplierName?: string;
+    supplierIco?: string;
     uploadStatus?: UploadStatus;
     filePath?: string | null;
     mimeType?: string | null;
@@ -330,6 +336,7 @@ export async function updateExpense(
   if (data.status !== undefined) updateData.status = data.status;
   if (data.category !== undefined) updateData.category = data.category ?? null;
   if (data.supplierName !== undefined) updateData.supplierName = data.supplierName?.trim() ?? null;
+  if (data.supplierIco !== undefined) updateData.supplierIco = data.supplierIco?.trim() ?? null;
   if (data.uploadStatus !== undefined) updateData.uploadStatus = data.uploadStatus ?? null;
   if (data.filePath !== undefined) updateData.filePath = data.filePath ?? null;
   if (data.mimeType !== undefined) updateData.mimeType = data.mimeType ?? null;

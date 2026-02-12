@@ -8,6 +8,7 @@ import {
 import { db, auth } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 import { getTemplatePhases, getTemplateTasks } from './templateService';
+import { createProjectCreatedNotification } from './notifications';
 import type { ProjectType } from '../lib/types';
 
 export type PhaseStatus = 'completed' | 'active' | 'later';
@@ -199,9 +200,9 @@ export async function instantiateTemplate(
   console.log(`[projectFactory] DEBUG: Match? ${projectData.ownerId === currentUser.uid ? '✅ YES' : '❌ NO'}`);
   
   try {
-    console.log(`[projectFactory] Setting project document...`);
+    console.log(`[projectFactory] Setting project document... projectType="${projectType}"`);
     await setDoc(projectRef, projectData);
-    console.log(`[projectFactory] ✅ Project document created successfully. Project ID: ${projectId}`);
+    console.log(`[projectFactory] ✅ Project document created successfully. Project ID: ${projectId}, projectType: ${projectData.projectType}`);
   } catch (error: any) {
     console.error('[projectFactory] ❌ Error creating project document:', error);
     const errorCode = error.code || '';
@@ -237,6 +238,17 @@ export async function instantiateTemplate(
     console.error('[projectFactory] ⚠️ Error committing batch1b (member):', error);
     // Nevyhadzujme error - projekt bol vytvorený, member sa môže pridať neskôr
     console.warn(`[projectFactory] Projekt ${projectId} bol vytvorený, ale member sa nepodarilo pridať. Môže sa pridať neskôr.`);
+  }
+
+  // Create "Nový projekt" notification for the owner
+  try {
+    await createProjectCreatedNotification({
+      userId: ownerId,
+      projectId,
+      projectName: name,
+    });
+  } catch (error: any) {
+    console.warn("[projectFactory] Failed to create project notification:", error);
   }
   
   // 4. Batch 2: Create phases and tasks (teraz už projekt existuje)

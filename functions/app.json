@@ -1,0 +1,15 @@
+{
+  "expo": {
+    "extra": {
+      "eas": {
+        "projectId": "cb8fdc29-4b9b-4e9a-891d-5d38c3b98c98"
+      }
+    },
+    "ios": {
+      "bundleIdentifier": "com.info.staveto.functions",
+      "infoPlist": {
+        "ITSAppUsesNonExemptEncryption": false
+      }
+    }
+  }
+}

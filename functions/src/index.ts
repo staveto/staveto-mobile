@@ -183,6 +183,7 @@ export const claimProjectInvites = onCall(
     region: "europe-west1",
     timeoutSeconds: 60,
     memory: "256MiB",
+    invoker: "public",
   },
   async (request) => {
     if (!request.auth?.uid) {
@@ -214,7 +215,9 @@ export const claimProjectInvites = onCall(
     let claimedCount = 0;
     const projectIds: string[] = [];
     const projectOwnerCache = new Map<string, string | undefined>();
+    const projectSharedCountCache = new Map<string, number>();
     const displayName = (request.auth.token.name as string) ?? request.auth.token.email ?? emailLower;
+    const { setMembersByUidMirror } = await import("./team");
 
     for (const memberDoc of memberDocs) {
       const data = memberDoc.data() as {
@@ -225,6 +228,9 @@ export const claimProjectInvites = onCall(
         role?: string;
         name?: string;
         invitedBy?: string;
+        permissionLevel?: "viewer" | "editor";
+        sharedItems?: { tasks?: boolean; phases?: boolean; expenses?: boolean; diary?: boolean; documents?: boolean };
+        sharedPhaseIds?: string[];
       };
 
       const normalizedStoredEmail = normalizeEmail(data.emailLower || data.email);
@@ -287,17 +293,48 @@ export const claimProjectInvites = onCall(
         }
 
         claimedCount += 1;
-      }
-      batch.set(
-        db.doc(`users/${uid}/projectRefs/${projectId}`),
-        {
-          projectId,
-          role: typeof data.role === "string" ? data.role : "member",
+
+        const permissionLevel = (data.permissionLevel === "viewer" || data.permissionLevel === "editor" ? data.permissionLevel : "editor") as "viewer" | "editor";
+        const sharedItems = data.sharedItems && typeof data.sharedItems === "object"
+          ? data.sharedItems
+          : { tasks: true, phases: true, expenses: false, diary: false, documents: false };
+        const sharedPhaseIds = Array.isArray(data.sharedPhaseIds)
+          ? data.sharedPhaseIds.filter((id): id is string => typeof id === "string")
+          : [];
+
+        batch.set(
+          db.doc(`users/${uid}/projectRefs/${projectId}`),
+          {
+            projectId,
+            role: typeof data.role === "string" ? data.role : "member",
+            permissionLevel,
+            sharedItems,
+            sharedPhaseIds,
+            joinedAt: now,
+            source: "invite",
+          },
+          { merge: true }
+        );
+
+        setMembersByUidMirror(batch, projectId, uid, {
+          permissionLevel,
+          sharedItems,
+          sharedPhaseIds,
+          status: "active",
           joinedAt: now,
-          source: "invite",
-        },
-        { merge: true }
-      );
+        });
+
+        const projectRef = db.doc(`projects/${projectId}`);
+        if (!projectOwnerCache.has(projectId)) {
+          const projectSnap = await db.doc(`projects/${projectId}`).get();
+          projectOwnerCache.set(projectId, projectSnap.data()?.ownerId as string | undefined);
+        }
+        const currentSharedWithCount = projectSharedCountCache.get(projectId)
+          ?? (await projectRef.get()).data()?.sharedWithCount ?? 0;
+        const nextCount = currentSharedWithCount + 1;
+        projectSharedCountCache.set(projectId, nextCount);
+        batch.update(projectRef, { sharedWithCount: nextCount });
+      }
 
       if (!projectIds.includes(projectId)) {
         projectIds.push(projectId);
@@ -319,6 +356,7 @@ export const listPendingInvites = onCall(
     region: "europe-west1",
     timeoutSeconds: 30,
     memory: "256MiB",
+    invoker: "public",
   },
   async (request) => {
     try {
@@ -327,33 +365,49 @@ export const listPendingInvites = onCall(
       }
 
       const data = (request.data ?? {}) as { email?: string };
-      const tokenEmail = request.auth?.token?.email;
       const emailLower =
-        normalizeEmail(tokenEmail) || normalizeEmail(data.email);
+        normalizeEmail(request.auth?.token?.email) || normalizeEmail(data?.email);
       if (!emailLower) {
         return { invites: [] };
       }
 
       const db = admin.firestore();
-      const membersSnap = await db
-        .collectionGroup("members")
-        .where("emailLower", "==", emailLower)
-        .where("status", "==", "invited")
-        .where("userId", "==", null)
-        .get();
+      let membersSnap;
+      try {
+        membersSnap = await db
+          .collectionGroup("members")
+          .where("emailLower", "==", emailLower)
+          .where("status", "==", "invited")
+          .where("userId", "==", null)
+          .get();
+      } catch (queryErr) {
+        const msg = queryErr instanceof Error ? queryErr.message : String(queryErr);
+        const code = (queryErr as { code?: number | string })?.code;
+        const isIndexError =
+          msg.includes("index") ||
+          msg.includes("FAILED_PRECONDITION") ||
+          msg.includes("requires an index") ||
+          code === "FAILED_PRECONDITION" ||
+          code === 9;
+        if (isIndexError) {
+          console.error("[listPendingInvites] index required", msg);
+          throw new HttpsError("failed-precondition", "index_required");
+        }
+        throw queryErr;
+      }
 
       const invites: Array<{
         projectId: string;
         projectName: string;
         memberId: string;
-        invitedBy?: string;
-        invitedAt?: unknown;
-        permissionLevel?: string;
-        role?: string;
-        sharedItems?: Record<string, boolean>;
-        sharedPhaseIds?: string[];
-        email?: string;
-        name?: string;
+        invitedBy: string | null;
+        invitedAt: unknown;
+        permissionLevel: string;
+        role: string;
+        sharedItems: Record<string, boolean>;
+        sharedPhaseIds: string[];
+        email: string;
+        name: string;
       }> = [];
       const projectIds = new Set<string>();
 
@@ -367,8 +421,10 @@ export const listPendingInvites = onCall(
       await Promise.all(
         Array.from(projectIds).map(async (projectId) => {
           const projectSnap = await db.doc(`projects/${projectId}`).get();
-          const name = (projectSnap.data()?.name as string) ?? projectId;
-          projectCache.set(projectId, name);
+          const name = projectSnap.exists
+            ? (String((projectSnap.data() as { name?: string })?.name ?? "").trim() || projectId)
+            : "";
+          projectCache.set(projectId, name || projectId);
         })
       );
 
@@ -385,27 +441,28 @@ export const listPendingInvites = onCall(
           email?: string;
           name?: string;
         };
+        const projectName = projectCache.get(projectId) ?? projectId;
         invites.push({
           projectId,
-          projectName: projectCache.get(projectId) ?? projectId,
+          projectName: projectName || "",
           memberId: doc.id,
-          invitedBy: d.invitedBy,
-          invitedAt: d.invitedAt,
-          permissionLevel: d.permissionLevel,
-          role: d.role,
-          sharedItems: d.sharedItems,
-          sharedPhaseIds: d.sharedPhaseIds,
-          email: d.email,
-          name: d.name,
+          invitedBy: d.invitedBy ?? null,
+          invitedAt: d.invitedAt ?? null,
+          permissionLevel: d.permissionLevel ?? "",
+          role: d.role ?? "",
+          sharedItems: d.sharedItems ?? {},
+          sharedPhaseIds: Array.isArray(d.sharedPhaseIds) ? d.sharedPhaseIds : [],
+          email: d.email ?? "",
+          name: d.name ?? "",
         });
       }
 
       return { invites };
     } catch (err) {
-      const msg = err instanceof Error ? err.message : String(err);
-      const stack = err instanceof Error ? err.stack : undefined;
-      console.error("[listPendingInvites] error", { message: msg, stack });
-      throw new HttpsError("internal", `listPendingInvites failed: ${msg}`);
+      if (err instanceof HttpsError) throw err;
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error("[listPendingInvites] error", err);
+      throw new HttpsError("internal", `listPendingInvites_failed: ${errMsg}`);
     }
   }
 );
@@ -415,127 +472,160 @@ export const acceptProjectInvite = onCall(
     region: "europe-west1",
     timeoutSeconds: 60,
     memory: "256MiB",
+    invoker: "public",
   },
   async (request) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError("unauthenticated", "Authentication required.");
-    }
+    try {
+      console.log("[acceptProjectInvite] auth?", !!request.auth, "uid?", request.auth?.uid ?? "null");
+      if (!request.auth?.uid) {
+        console.warn("[acceptProjectInvite] UNAUTHENTICATED: request.auth missing or uid empty");
+        throw new HttpsError("unauthenticated", "Authentication required.");
+      }
 
-    const uid = request.auth.uid;
-    const data = (request.data ?? {}) as { projectId?: string };
-    const projectId = typeof data.projectId === "string" ? data.projectId.trim() : "";
-    if (!projectId) {
-      throw new HttpsError("invalid-argument", "projectId is required.");
-    }
+      const uid = request.auth.uid;
+      const data = (request.data ?? {}) as { projectId?: string };
+      const projectId = typeof data.projectId === "string" ? data.projectId.trim() : "";
+      if (!projectId) {
+        throw new HttpsError("invalid-argument", "projectId is required.");
+      }
 
-    const emailLower =
-      normalizeEmail(request.auth.token.email) ||
-      normalizeEmail((request.data as { email?: string })?.email);
-    if (!emailLower) {
-      throw new HttpsError(
-        "failed-precondition",
-        "User must have an email to accept invites."
-      );
-    }
+      const emailLower =
+        normalizeEmail(request.auth?.token?.email) ||
+        normalizeEmail((request.data as { email?: string })?.email);
+      if (!emailLower) {
+        throw new HttpsError(
+          "failed-precondition",
+          "User must have an email to accept invites."
+        );
+      }
 
-    const db = admin.firestore();
-    const membersRef = db.collection("projects").doc(projectId).collection("members");
-    const inviteSnap = await membersRef
-      .where("emailLower", "==", emailLower)
-      .where("status", "==", "invited")
-      .where("userId", "==", null)
-      .limit(1)
-      .get();
-
-    if (inviteSnap.empty) {
-      const alreadySnap = await membersRef
-        .where("userId", "==", uid)
+      const db = admin.firestore();
+      const membersRef = db.collection("projects").doc(projectId).collection("members");
+      const inviteSnap = await membersRef
+        .where("emailLower", "==", emailLower)
+        .where("status", "==", "invited")
+        .where("userId", "==", null)
         .limit(1)
         .get();
-      if (!alreadySnap.empty) {
-        return { ok: true, projectId, already: true };
+
+      if (inviteSnap.empty) {
+        const alreadySnap = await membersRef
+          .where("userId", "==", uid)
+          .limit(1)
+          .get();
+        if (!alreadySnap.empty) {
+          return { ok: true, projectId, already: true };
+        }
+        return { ok: false, reason: "NOT_FOUND" };
       }
-      return { ok: false, reason: "NOT_FOUND" };
-    }
 
-    const inviteDoc = inviteSnap.docs[0];
-    const inviteData = inviteDoc.data() as {
-      role?: string;
-      permissionLevel?: string;
-      name?: string;
-      invitedBy?: string;
-      sharedItems?: Record<string, boolean>;
-    };
+      const inviteDoc = inviteSnap.docs[0];
+      const inviteData = inviteDoc.data() as {
+        role?: string;
+        permissionLevel?: string;
+        name?: string;
+        invitedBy?: string;
+        sharedItems?: Record<string, boolean>;
+      };
 
-    const displayName =
-      (request.auth.token.name as string) ??
-      request.auth.token.email ??
-      emailLower;
-    const name = displayName || inviteData.name || emailLower;
+      const displayName =
+        (request.auth?.token?.name as string) ??
+        request.auth?.token?.email ??
+        emailLower;
+      const name = displayName || inviteData.name || emailLower;
 
-    const mappedRole =
-      inviteData.role ||
-      (inviteData.permissionLevel === "editor" ? "editor" : "viewer") ||
-      "member";
+      const mappedRole =
+        inviteData.role ||
+        (inviteData.permissionLevel === "editor" ? "editor" : "viewer") ||
+        "member";
 
-    const now = admin.firestore.FieldValue.serverTimestamp();
-    const batch = db.batch();
+      const now = admin.firestore.FieldValue.serverTimestamp();
+      const batch = db.batch();
 
-    batch.update(inviteDoc.ref, {
-      userId: uid,
-      status: "active",
-      name,
-      joinedAt: now,
-    });
+      const permissionLevel = (inviteData.permissionLevel === "viewer" || inviteData.permissionLevel === "editor" ? inviteData.permissionLevel : "editor") as "viewer" | "editor";
+      const sharedItems = inviteData.sharedItems && typeof inviteData.sharedItems === "object"
+        ? inviteData.sharedItems
+        : { tasks: true, phases: true, expenses: false, diary: false, documents: false };
+      const sharedPhaseIds = Array.isArray((inviteDoc.data() as { sharedPhaseIds?: unknown }).sharedPhaseIds)
+        ? (inviteDoc.data() as { sharedPhaseIds: string[] }).sharedPhaseIds.filter((id): id is string => typeof id === "string")
+        : [];
 
-    batch.set(
-      db.doc(`users/${uid}/projectRefs/${projectId}`),
-      {
-        projectId,
-        role: mappedRole,
-        permissionLevel: inviteData.permissionLevel ?? "editor",
-        sharedItems: inviteData.sharedItems ?? {},
+      batch.update(inviteDoc.ref, {
+        userId: uid,
+        status: "active",
+        name,
         joinedAt: now,
-        source: "invite",
-      },
-      { merge: true }
-    );
-
-    const eventsRef = db.collection("projects").doc(projectId).collection("events");
-    batch.set(eventsRef.doc(), {
-      type: "member_joined",
-      actorId: uid,
-      actorName: name,
-      createdAt: now,
-      payload: {
-        targetUserId: uid,
-        targetEmail: emailLower,
-        targetName: name,
-        text: `${name} vstúpil do projektu.`,
-      },
-    });
-
-    let recipientUid = inviteData.invitedBy ?? null;
-    if (!recipientUid) {
-      const projectSnap = await db.doc(`projects/${projectId}`).get();
-      recipientUid = (projectSnap.data()?.ownerId as string) ?? null;
-    }
-    if (recipientUid && recipientUid !== uid) {
-      batch.set(db.collection("notifications").doc(), {
-        userId: recipientUid,
-        type: "MEMBER_JOINED",
-        projectId,
-        createdAt: now,
-        readAt: null,
-        message: `Používateľ ${name} prijal pozvánku do projektu.`,
-        fromUserId: uid,
-        fromUserName: name,
-        severity: "info",
       });
-    }
 
-    await batch.commit();
-    return { ok: true, projectId };
+      batch.set(
+        db.doc(`users/${uid}/projectRefs/${projectId}`),
+        {
+          projectId,
+          role: mappedRole,
+          permissionLevel,
+          sharedItems,
+          sharedPhaseIds,
+          joinedAt: now,
+          source: "invite",
+        },
+        { merge: true }
+      );
+
+      const { setMembersByUidMirror } = await import("./team");
+      const projectRef = db.doc(`projects/${projectId}`);
+      setMembersByUidMirror(batch, projectId, uid, {
+        permissionLevel,
+        sharedItems,
+        sharedPhaseIds,
+        status: "active",
+        joinedAt: now,
+      });
+      const projectSnapForCount = await projectRef.get();
+      const currentSharedWithCount = (projectSnapForCount.data()?.sharedWithCount as number | undefined) ?? 0;
+      batch.update(projectRef, { sharedWithCount: currentSharedWithCount + 1 });
+
+      const eventsRef = db.collection("projects").doc(projectId).collection("events");
+      batch.set(eventsRef.doc(), {
+        type: "member_joined",
+        actorId: uid,
+        actorName: name,
+        createdAt: now,
+        payload: {
+          targetUserId: uid,
+          targetEmail: emailLower,
+          targetName: name,
+          text: `${name} vstúpil do projektu.`,
+        },
+      });
+
+      let recipientUid = inviteData.invitedBy ?? null;
+      if (!recipientUid) {
+        const projectSnap = await db.doc(`projects/${projectId}`).get();
+        recipientUid = projectSnap.exists
+          ? ((projectSnap.data() as { ownerId?: string })?.ownerId ?? null)
+          : null;
+      }
+      if (recipientUid && recipientUid !== uid) {
+        batch.set(db.collection("notifications").doc(), {
+          userId: recipientUid,
+          type: "MEMBER_JOINED",
+          projectId,
+          createdAt: now,
+          readAt: null,
+          message: `Používateľ ${name} prijal pozvánku do projektu.`,
+          fromUserId: uid,
+          fromUserName: name,
+          severity: "info",
+        });
+      }
+
+      await batch.commit();
+      return { ok: true, projectId };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      console.error("[acceptProjectInvite] error", err);
+      throw new HttpsError("internal", "acceptProjectInvite_failed");
+    }
   }
 );
 
@@ -544,46 +634,53 @@ export const declineProjectInvite = onCall(
     region: "europe-west1",
     timeoutSeconds: 30,
     memory: "256MiB",
+    invoker: "public",
   },
   async (request) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError("unauthenticated", "Authentication required.");
-    }
+    try {
+      if (!request.auth?.uid) {
+        throw new HttpsError("unauthenticated", "Authentication required.");
+      }
 
-    const uid = request.auth.uid;
-    const data = (request.data ?? {}) as { projectId?: string };
-    const projectId = typeof data.projectId === "string" ? data.projectId.trim() : "";
-    if (!projectId) {
-      throw new HttpsError("invalid-argument", "projectId is required.");
-    }
+      const uid = request.auth.uid;
+      const data = (request.data ?? {}) as { projectId?: string };
+      const projectId = typeof data.projectId === "string" ? data.projectId.trim() : "";
+      if (!projectId) {
+        throw new HttpsError("invalid-argument", "projectId is required.");
+      }
 
-    const emailLower =
-      normalizeEmail(request.auth.token.email) ||
-      normalizeEmail((request.data as { email?: string })?.email);
-    if (!emailLower) {
+      const emailLower =
+        normalizeEmail(request.auth?.token?.email) ||
+        normalizeEmail((request.data as { email?: string })?.email);
+      if (!emailLower) {
+        return { ok: true };
+      }
+
+      const db = admin.firestore();
+      const inviteSnap = await db
+        .collection("projects")
+        .doc(projectId)
+        .collection("members")
+        .where("emailLower", "==", emailLower)
+        .where("status", "==", "invited")
+        .where("userId", "==", null)
+        .limit(1)
+        .get();
+
+      if (!inviteSnap.empty) {
+        await inviteSnap.docs[0].ref.update({
+          status: "declined",
+          declinedAt: admin.firestore.FieldValue.serverTimestamp(),
+          declinedByUid: uid,
+        });
+      }
+
       return { ok: true };
+    } catch (err) {
+      if (err instanceof HttpsError) throw err;
+      console.error("[declineProjectInvite] error", err);
+      throw new HttpsError("internal", "declineProjectInvite_failed");
     }
-
-    const db = admin.firestore();
-    const inviteSnap = await db
-      .collection("projects")
-      .doc(projectId)
-      .collection("members")
-      .where("emailLower", "==", emailLower)
-      .where("status", "==", "invited")
-      .where("userId", "==", null)
-      .limit(1)
-      .get();
-
-    if (!inviteSnap.empty) {
-      await inviteSnap.docs[0].ref.update({
-        status: "declined",
-        declinedAt: admin.firestore.FieldValue.serverTimestamp(),
-        declinedByUid: uid,
-      });
-    }
-
-    return { ok: true };
   }
 );
 
@@ -795,4 +892,4 @@ export const extractInvoiceData = onCall(
 );
 
 export { inboundWebhook } from "./whatsapp";
-export { addProjectMemberByEmail, removeProjectMember } from "./team";
+export { addProjectMemberByEmail, removeProjectMember, updateMemberPermissions, backfillProjectSharedCounts } from "./team";

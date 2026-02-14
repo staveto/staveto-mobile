@@ -1,5 +1,8 @@
 {
   "projects": {
-    "default": "staveto-mvp-5f251"
-  }
+    "default": "staveto-mvp-5f251",
+    "prod": "staveto-mvp-5f251"
+  },
+  "targets": {},
+  "etags": {}
 }

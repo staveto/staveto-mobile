@@ -27,6 +27,8 @@ import { isFeatureEnabled } from "../services/features";
 import { db, storage, getFns } from "../firebase";
 import { doc, getDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import * as ImagePicker from "expo-image-picker";
+import * as Localization from "expo-localization";
+import auth from "@react-native-firebase/auth";
 
 function Row({
   icon,
@@ -75,15 +77,33 @@ function SectionTitle({ title }: { title: string }) {
 const LOCALES = ["sk", "en", "de", "cs", "es", "it", "pl"] as const;
 type Locale = (typeof LOCALES)[number];
 
+function normalizePhoneE164(input: string): string | null {
+  const raw = input.trim().replace(/\s/g, "");
+  if (!raw) return null;
+  try {
+    const { parsePhoneNumberFromString } = require("libphonenumber-js");
+    const region = (Localization.region ?? "SK") as string;
+    const parsed = parsePhoneNumberFromString(raw, region);
+    if (parsed?.isValid()) return parsed.number;
+  } catch {
+    const digits = raw.replace(/[^\d+]/g, "");
+    if (digits.length >= 9) return digits.startsWith("+") ? digits : `+${digits}`;
+  }
+  return null;
+}
+
 export function AccountScreen() {
   const navigation = useNavigation();
   const { t, locale, setLocale, localeNames } = useI18n();
-  const { user, orgId, token, logout } = useAuth();
+  const { user, orgId, token, logout, refreshUser } = useAuth();
   const [showAway, setShowAway] = useState(false);
   const [doNotDisturb, setDoNotDisturb] = useState(false);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
   const [showDebug, setShowDebug] = useState(false);
   const [debugMessage, setDebugMessage] = useState("");
+  const [profileFirstName, setProfileFirstName] = useState("");
+  const [profileLastName, setProfileLastName] = useState("");
+  const [profilePhone, setProfilePhone] = useState("");
   const [profileProfession, setProfileProfession] = useState("");
   const [profilePhotoURL, setProfilePhotoURL] = useState<string | null>(null);
   const [loadingProfile, setLoadingProfile] = useState(true);
@@ -140,16 +160,28 @@ export function AccountScreen() {
     try {
       const snap = await getDoc(doc(db, "users", user.id));
       if (snap.exists()) {
-        const data = snap.data() as { profession?: string; photoURL?: string | null };
+        const data = snap.data() as {
+          profession?: string;
+          photoURL?: string | null;
+          firstName?: string;
+          lastName?: string;
+          phoneE164?: string | null;
+        };
+        setProfileFirstName(data.firstName ?? user.firstName ?? "");
+        setProfileLastName(data.lastName ?? user.lastName ?? "");
+        setProfilePhone(data.phoneE164 ?? "");
         setProfileProfession(data.profession ?? "");
         setProfilePhotoURL(data.photoURL ?? null);
+      } else {
+        setProfileFirstName(user.firstName ?? "");
+        setProfileLastName(user.lastName ?? "");
       }
     } catch (error) {
       console.warn("[account] Failed to load profile data:", error);
     } finally {
       setLoadingProfile(false);
     }
-  }, [user?.id]);
+  }, [user?.id, user?.firstName, user?.lastName]);
 
   useEffect(() => {
     loadProfile();
@@ -162,13 +194,36 @@ export function AccountScreen() {
 
   const saveProfile = useCallback(async () => {
     if (!user?.id) return;
+    if (!profileFirstName.trim()) {
+      Alert.alert(t("common.error"), t("account.errorFirstNameRequired"));
+      return;
+    }
+    if (!profileLastName.trim()) {
+      Alert.alert(t("common.error"), t("account.errorLastNameRequired"));
+      return;
+    }
+    const phoneE164 = profilePhone.trim() ? normalizePhoneE164(profilePhone) : null;
+    if (profilePhone.trim() && !phoneE164) {
+      Alert.alert(t("common.error"), t("account.errorPhoneInvalid"));
+      return;
+    }
     setSavingProfile(true);
     try {
+      const displayName = `${profileFirstName.trim()} ${profileLastName.trim()}`.trim();
       await updateDoc(doc(db, "users", user.id), {
+        firstName: profileFirstName.trim(),
+        lastName: profileLastName.trim(),
+        displayName,
+        phoneE164: phoneE164 ?? null,
         profession: profileProfession.trim() || null,
         photoURL: profilePhotoURL ?? null,
         updatedAt: serverTimestamp(),
       });
+      const fbUser = auth().currentUser;
+      if (fbUser?.uid === user.id && displayName) {
+        await fbUser.updateProfile({ displayName });
+      }
+      await refreshUser();
       setShowProfileModal(false);
     } catch (error) {
       console.error("[account] Failed to save profile:", error);
@@ -176,7 +231,7 @@ export function AccountScreen() {
     } finally {
       setSavingProfile(false);
     }
-  }, [user?.id, profileProfession, profilePhotoURL]);
+  }, [user?.id, profileFirstName, profileLastName, profilePhone, profileProfession, profilePhotoURL, t]);
 
   const pickProfilePhoto = useCallback(async () => {
     if (!user?.id) return;
@@ -503,7 +558,7 @@ export function AccountScreen() {
         <View style={styles.modalBackdrop}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowProfileModal(false)} />
           <View style={styles.profileModal}>
-            <Text style={styles.profileModalTitle}>Profil</Text>
+            <Text style={styles.profileModalTitle}>{t("account.profile")}</Text>
             <View style={styles.profilePhotoRow}>
               <View style={styles.profilePhotoPreview}>
                 {profilePhotoURL ? (
@@ -538,6 +593,31 @@ export function AccountScreen() {
                 <Text style={styles.profileUploadingText}>Nahrávam fotku…</Text>
               </View>
             )}
+            <Text style={styles.profileFieldLabel}>{t("account.firstName")}</Text>
+            <TextInput
+              style={styles.profileInput}
+              placeholder={t("account.placeholderFirstName")}
+              placeholderTextColor={colors.textMuted}
+              value={profileFirstName}
+              onChangeText={setProfileFirstName}
+            />
+            <Text style={styles.profileFieldLabel}>{t("account.lastName")}</Text>
+            <TextInput
+              style={styles.profileInput}
+              placeholder={t("account.placeholderLastName")}
+              placeholderTextColor={colors.textMuted}
+              value={profileLastName}
+              onChangeText={setProfileLastName}
+            />
+            <Text style={styles.profileFieldLabel}>{t("account.phone")}</Text>
+            <TextInput
+              style={styles.profileInput}
+              placeholder={t("account.placeholderPhone")}
+              placeholderTextColor={colors.textMuted}
+              value={profilePhone}
+              onChangeText={setProfilePhone}
+              keyboardType="phone-pad"
+            />
             <Text style={styles.profileFieldLabel}>Primárna profesia</Text>
             <TextInput
               style={styles.profileInput}

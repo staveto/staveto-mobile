@@ -12,6 +12,7 @@ import {
   RefreshControl,
   ScrollView,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useRoute, useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
@@ -31,6 +32,9 @@ type Project = ProjectDoc;
 function showError(msg: string) {
   Alert.alert("", msg);
 }
+
+const PROJECTS_FILTER_KEY = "projects_filter_v1";
+type ProjectFilter = "all" | "mine" | "shared";
 
 function formatCreatedAt(isoStr?: string): string {
   if (!isoStr) return "";
@@ -69,6 +73,26 @@ export function ProjectsScreen() {
   const [editName, setEditName] = useState("");
   const [menuProject, setMenuProject] = useState<Project | null>(null);
   const [showMenu, setShowMenu] = useState(false);
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
+
+  useEffect(() => {
+    AsyncStorage.getItem(PROJECTS_FILTER_KEY).then((saved) => {
+      if (saved === "mine" || saved === "shared" || saved === "all") {
+        setProjectFilter(saved);
+        if (__DEV__) console.log("[ProjectsScreen] Loaded filter:", saved);
+      }
+    });
+  }, []);
+
+  const handleFilterChange = useCallback(async (filter: ProjectFilter) => {
+    setProjectFilter(filter);
+    try {
+      await AsyncStorage.setItem(PROJECTS_FILTER_KEY, filter);
+      if (__DEV__) console.log("[ProjectsScreen] Filter changed:", filter);
+    } catch (e) {
+      console.warn("[ProjectsScreen] Failed to persist filter:", e);
+    }
+  }, []);
 
   const load = useCallback(async (isRefresh = false) => {
     // Guard: orgId must be defined and not empty
@@ -462,15 +486,24 @@ export function ProjectsScreen() {
     );
   }
 
-  const activeProjects = projects.filter((p) => !p.archivedAt);
-  const archivedProjects = projects.filter((p) => !!p.archivedAt);
+  const filterProjects = useCallback(
+    (list: Project[]) => {
+      if (projectFilter === "mine") return list.filter((p) => p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0);
+      if (projectFilter === "shared") return list.filter((p) => p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0);
+      return list;
+    },
+    [projectFilter]
+  );
+
+  const activeProjects = filterProjects(projects.filter((p) => !p.archivedAt));
+  const archivedProjects = filterProjects(projects.filter((p) => !!p.archivedAt));
 
   return (
     <View style={styles.container}>
       <TouchableOpacity style={styles.fab} onPress={() => setShowNew(true)}>
         <Text style={styles.fabText}>+ {t("projects.fab")}</Text>
       </TouchableOpacity>
-      {!activeProjects.length && !archivedProjects.length && !loading ? (
+      {!projects.length && !loading ? (
         <View style={styles.centered}>
           <Text style={styles.emptyText}>{t("projects.empty")}</Text>
           <TouchableOpacity 
@@ -484,10 +517,38 @@ export function ProjectsScreen() {
           </TouchableOpacity>
         </View>
       ) : (
+        <>
+        <View style={styles.filterRow}>
+          <TouchableOpacity
+            style={[styles.filterChip, projectFilter === "all" && styles.filterChipActive]}
+            onPress={() => handleFilterChange("all")}
+          >
+            <Text style={[styles.filterChipText, projectFilter === "all" && styles.filterChipTextActive]}>Všetko</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterChip, projectFilter === "mine" && styles.filterChipActive]}
+            onPress={() => handleFilterChange("mine")}
+          >
+            <Text style={[styles.filterChipText, projectFilter === "mine" && styles.filterChipTextActive]}>Moje</Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={[styles.filterChip, projectFilter === "shared" && styles.filterChipActive]}
+            onPress={() => handleFilterChange("shared")}
+          >
+            <Text style={[styles.filterChipText, projectFilter === "shared" && styles.filterChipTextActive]}>Zdieľané</Text>
+          </TouchableOpacity>
+        </View>
         <FlatList
           data={activeProjects}
           keyExtractor={(p) => p.id}
           contentContainerStyle={styles.list}
+          ListEmptyComponent={
+            projects.length > 0 && activeProjects.length === 0 && archivedProjects.length === 0 ? (
+              <View style={styles.emptyFiltered}>
+                <Text style={styles.emptyFilteredText}>Žiadne projekty v tejto kategórii</Text>
+              </View>
+            ) : null
+          }
           refreshControl={
             <RefreshControl
               refreshing={refreshing}
@@ -525,7 +586,7 @@ export function ProjectsScreen() {
                     <View style={styles.nameRow}>
                       <Text style={styles.name} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
                     </View>
-                    <ProjectBadgesRow isOwner={isOwner} sharedWithCount={item.sharedWithCount ?? 0} />
+                    <ProjectBadgesRow isOwner={isOwner} sharedWithCount={item.sharedWithCount ?? 0} isSharedToMe={item.isSharedToMe} />
                     <Text style={styles.category} numberOfLines={1}>{categoryLabel}</Text>
                     {item.createdAt && (
                       <Text style={styles.createdAt}>{t("projects.createdAt")}: {formatCreatedAt(item.createdAt)}</Text>
@@ -599,7 +660,7 @@ export function ProjectsScreen() {
                           <View style={styles.nameRow}>
                             <Text style={[styles.name, styles.archivedText]} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
                           </View>
-                          <ProjectBadgesRow isOwner={isOwnerArchived} sharedWithCount={item.sharedWithCount ?? 0} />
+                          <ProjectBadgesRow isOwner={isOwnerArchived} sharedWithCount={item.sharedWithCount ?? 0} isSharedToMe={item.isSharedToMe} />
                           <Text style={[styles.category, styles.archivedText]} numberOfLines={1}>{categoryLabel}</Text>
                           {item.createdAt && (
                             <Text style={[styles.createdAt, styles.archivedText]}>{t("projects.createdAt")}: {formatCreatedAt(item.createdAt)}</Text>
@@ -639,6 +700,7 @@ export function ProjectsScreen() {
             ) : null
           }
         />
+        </>
       )}
       <Modal visible={showMenu} transparent animationType="fade">
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={closeProjectMenu}>
@@ -1096,6 +1158,40 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   centered: { flex: 1, backgroundColor: colors.background, justifyContent: "center", alignItems: "center" },
   list: { padding: spacing.md, paddingBottom: 60 },
+  filterRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+  },
+  filterChip: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  filterChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  filterChipText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  filterChipTextActive: {
+    color: "#fff",
+    fontWeight: "600",
+  },
+  emptyFiltered: {
+    paddingVertical: spacing.xl,
+    alignItems: "center",
+  },
+  emptyFilteredText: {
+    color: colors.textMuted,
+    fontSize: 14,
+  },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius,

@@ -19,6 +19,9 @@
         "NSCameraUsageDescription": "Táto aplikácia potrebuje prístup ku kamere na fotografovanie faktúr a dokumentov.",
         "NSPhotoLibraryUsageDescription": "Táto aplikácia potrebuje prístup k galérii na výber fotiek a videa.",
         "NSPhotoLibraryAddUsageDescription": "Táto aplikácia potrebuje prístup k galérii na ukladanie fotiek.",
+        "UIBackgroundModes": [
+          "remote-notification"
+        ],
         "ITSAppUsesNonExemptEncryption": false
       },
       "bundleIdentifier": "com.staveto.app"
@@ -47,7 +50,8 @@
           "photosPermission": "Aplikácia potrebuje prístup k vašim fotkám na pridanie príloh.",
           "cameraPermission": "Aplikácia potrebuje prístup ku kamere na fotografovanie faktúr a dokumentov."
         }
-      ]
+      ],
+      "@react-native-firebase/messaging"
     ],
     "web": {
       "favicon": "./assets/favicon.png"

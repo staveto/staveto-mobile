@@ -47,6 +47,9 @@ export function NotificationsScreen() {
 
     try {
       const list = await notificationsService.listNotifications(orgId, { limitCount: 50 });
+      if (__DEV__ && list.some((n) => n.type === "PROJECT_INVITED")) {
+        console.log("[NotificationsScreen] Loaded PROJECT_INVITED notifications:", list.filter((n) => n.type === "PROJECT_INVITED").length);
+      }
       setNotifications(list);
     } catch (error: any) {
       console.error("[NotificationsScreen] Error loading notifications:", error);
@@ -150,6 +153,7 @@ export function NotificationsScreen() {
       case "PROJECT_ACTIVITY":
         return "folder-outline";
       case "MEMBER_JOINED":
+      case "PROJECT_INVITED":
         return "person-add-outline";
       case "MEMBER_LEFT":
       case "MEMBER_REMOVED":
@@ -177,6 +181,8 @@ export function NotificationsScreen() {
         return "Zmena v projekte";
       case "MEMBER_JOINED":
         return "Člen vstúpil do projektu";
+      case "PROJECT_INVITED":
+        return t("notifications.type.projectInvited");
       case "MEMBER_LEFT":
         return "Člen opustil projekt";
       case "MEMBER_REMOVED":
@@ -262,6 +268,12 @@ export function NotificationsScreen() {
             projectId: notification.projectId,
             openExpenseId: notification.expenseId,
           });
+        }
+      } else if (notification.type === "PROJECT_INVITED") {
+        // Navigate to ProjectInvites to accept/decline
+        const parentNav = navigation.getParent();
+        if (parentNav) {
+          (parentNav as any).navigate("ProjectInvites");
         }
       } else if (
         (notification.type === "PROJECT_ACTIVITY" ||

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import { View, Text, TextInput, StyleSheet, TouchableOpacity, Alert, ScrollView } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { useI18n } from "../i18n/I18nContext";
+import { useProjectAccess } from "../hooks/useProjectAccess";
 import * as expensesService from "../services/expenses";
 import type { OcrParsed, OcrStatus } from "../services/invoiceOCR";
 import { colors, radius, spacing } from "../theme";
@@ -30,6 +31,22 @@ export function ExpenseReviewScreen() {
   const navigation = useNavigation();
   const route = useRoute();
   const params = route.params as RouteParams;
+  const projectId = params?.projectId ?? "";
+  const access = useProjectAccess(projectId);
+
+  if (projectId && !access.loading && !access.canReadExpenses) {
+    return (
+      <View style={[styles.container, styles.centered]}>
+        <Text style={styles.noAccessTitle}>{t("common.noAccess") || "Nemáš prístup"}</Text>
+        <Text style={styles.noAccessText}>
+          {t("projectOverview.noPermission") || "Nemáš oprávnenie zobraziť túto časť projektu."}
+        </Text>
+        <TouchableOpacity style={styles.backButton} onPress={() => (navigation as { goBack: () => void }).goBack()}>
+          <Text style={styles.backButtonText}>{t("common.back") || "Späť"}</Text>
+        </TouchableOpacity>
+      </View>
+    );
+  }
 
   const parsed = params?.parsed ?? null;
   const [title, setTitle] = useState(parsed?.supplierName || params.defaultTitle || "");
@@ -150,6 +167,16 @@ export function ExpenseReviewScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  centered: { justifyContent: "center", alignItems: "center", padding: spacing.xl },
+  noAccessTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.sm },
+  noAccessText: { fontSize: 14, color: colors.textMuted, textAlign: "center", marginBottom: spacing.lg },
+  backButton: {
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius,
+  },
+  backButtonText: { color: "#fff", fontWeight: "600" },
   content: { padding: spacing.lg, paddingBottom: spacing.xl },
   title: { fontSize: 20, fontWeight: "700", color: colors.text, marginBottom: spacing.sm },
   statusMessage: { color: colors.textMuted, marginBottom: spacing.md },

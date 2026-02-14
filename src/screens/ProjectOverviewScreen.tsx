@@ -51,6 +51,7 @@ import { useRoute, useNavigation, NavigationProp, useFocusEffect } from "@react-
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
+import { useProjectAccess } from "../hooks/useProjectAccess";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
 import { updatePhase, deletePhase, createPhase } from "../services/projects";
@@ -64,6 +65,8 @@ import * as projectMembersService from "../services/projectMembers";
 import * as equipmentService from "../services/equipment";
 import * as weatherService from "../services/weather";
 import { extractInvoiceData, type OcrParsed, type OcrStatus } from "../services/invoiceOCR";
+import { calculateDistanceKm as calculateDistanceKmService } from "../services/distance";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { exportProjectToCsv } from "../services/projectExport";
 import { updateTaskStatus } from "../services/taskService";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
@@ -77,6 +80,7 @@ import type { ProjectDocumentDoc } from "../services/projectDocuments";
 import type { ProjectMemberDoc } from "../services/projectMembers";
 import type { EquipmentDoc } from "../services/equipment";
 import { colors, radius, spacing } from "../theme";
+import { showToast } from "../helpers/toast";
 import { openInMaps } from "../lib/maps";
 import { isFeatureEnabled } from "../services/features";
 import { formatEventSummary } from "../helpers/formatEvent";
@@ -101,6 +105,7 @@ export function ProjectOverviewScreen() {
     diaryInputMode?: "text" | "voice";
     selectedPhaseId?: string | null;
     openExpenseId?: string | null;
+    expandExpensesSection?: boolean;
   }) ?? {};
   const {
     projectId: paramProjectId,
@@ -111,6 +116,7 @@ export function ProjectOverviewScreen() {
     diaryInputMode: paramDiaryInputMode,
     selectedPhaseId: paramSelectedPhaseId,
     openExpenseId: paramOpenExpenseId,
+    expandExpensesSection: paramExpandExpensesSection,
   } = routeParams;
   const projectId = paramProjectId ?? "";
   const projectName = paramProjectName ?? "";
@@ -163,7 +169,14 @@ export function ProjectOverviewScreen() {
   const [expenseAmount, setExpenseAmount] = useState("");
   const [expenseDate, setExpenseDate] = useState(new Date().toISOString().split('T')[0]);
   const [expenseNote, setExpenseNote] = useState("");
-  const [expenseCategory, setExpenseCategory] = useState<'WORK' | 'MATERIAL' | 'OTHER' | undefined>(undefined);
+  const [expenseCategory, setExpenseCategory] = useState<'WORK' | 'MATERIAL' | 'OTHER' | 'TRAVEL' | undefined>(undefined);
+  const [expenseTravelFromAddress, setExpenseTravelFromAddress] = useState("");
+  const [expenseTravelToAddress, setExpenseTravelToAddress] = useState("");
+  const [expenseTravelDistanceKm, setExpenseTravelDistanceKm] = useState("");
+  const [expenseTravelRatePerKm, setExpenseTravelRatePerKm] = useState("0.30");
+  const [expenseTravelRoundTrip, setExpenseTravelRoundTrip] = useState(false);
+  const { isOnline } = useOnlineStatus();
+  const [isLoadingDistance, setIsLoadingDistance] = useState(false);
   const [expenseSupplierName, setExpenseSupplierName] = useState("");
   const [expenseSupplierIco, setExpenseSupplierIco] = useState("");
   const [expensePhaseId, setExpensePhaseId] = useState<string | null>(null);
@@ -202,6 +215,27 @@ export function ProjectOverviewScreen() {
     storagePath?: string;
   } | null>(null);
   const isOwner = !!projectOwnerId && projectOwnerId === user?.id;
+  const access = useProjectAccess(projectId, projectOwnerId);
+
+  // Debug: log access once when loaded (dev only)
+  const hasLoggedAccessRef = React.useRef(false);
+  useEffect(() => {
+    if (__DEV__ && !access.loading && projectId && user?.id && !hasLoggedAccessRef.current) {
+      hasLoggedAccessRef.current = true;
+      console.log("[access]", {
+        uid: user.id,
+        projectId,
+        isOwner: access.isOwner,
+        permissionLevel: access.permissionLevel,
+        sharedItems: access.sharedItems,
+        canReadExpenses: access.canReadExpenses,
+        canReadDiary: access.canReadDiary,
+        canReadDocuments: access.canReadDocuments,
+        canWrite: access.canWrite,
+      });
+    }
+    if (access.loading) hasLoggedAccessRef.current = false;
+  }, [access.loading, access.isOwner, access.permissionLevel, access.sharedItems, access.canReadExpenses, access.canReadDiary, access.canReadDocuments, access.canWrite, projectId, user?.id]);
 
   // MAINTENANCE v2: equipment
   const [equipmentList, setEquipmentList] = useState<EquipmentDoc[]>([]);
@@ -390,68 +424,77 @@ export function ProjectOverviewScreen() {
       const projectTypeForLoad = project?.projectType || projectType;
       const isBuildProject = projectTypeForLoad === 'BUILD' || projectTypeForLoad === 'MANAGEMENT';
       
-      console.log(`[ProjectOverview] Loading data for projectType="${projectTypeForLoad}", isBuildProject=${isBuildProject}...`);
+      // Permission gating: only load what user can read (access from closure)
+      const canReadPhases = access.canReadPhases;
+      const canReadTasks = access.canReadTasks;
+      const canReadExpenses = access.canReadExpenses;
+      const canReadDiary = access.canReadDiary;
+      const canReadDocuments = access.canReadDocuments;
+      
+      console.log(`[ProjectOverview] Loading data for projectType="${projectTypeForLoad}", canRead: phases=${canReadPhases}, tasks=${canReadTasks}, expenses=${canReadExpenses}, diary=${canReadDiary}, documents=${canReadDocuments}...`);
       const loadPromises: Promise<any>[] = [];
       
-      // Only load phases for BUILD projects
-      if (isBuildProject) {
+      // Only load phases for BUILD projects when canReadPhases
+      if (isBuildProject && canReadPhases) {
         loadPromises.push(
           projectsService.listProjectPhases(projectId).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading phases:`, error);
             if (error.code === 'permission-denied') {
               console.error(`[ProjectOverview] PERMISSION DENIED loading phases for project ${projectId}`);
-              console.error(`[ProjectOverview] Firestore rule: projectOwner(${projectId})`);
-              console.error(`[ProjectOverview] Check: get(projects/${projectId}).data.ownerId == ${currentUserUid}`);
-              console.error(`[ProjectOverview] Returning empty phases array`);
+              return [];
             }
-            // Return empty array instead of throwing - allows app to continue
             return [];
           })
         );
       } else {
-        // For TRADE/MAINTENANCE: set empty phases array
         loadPromises.push(Promise.resolve([]));
       }
       
-      loadPromises.push(
-        tasksService.listTasksByProject(projectId).catch((error: any) => {
-          console.error(`[ProjectOverview] Error loading tasks:`, error);
-          if (error.code === 'permission-denied') {
-            console.error(`[ProjectOverview] PERMISSION DENIED loading tasks for project ${projectId}`);
-            console.error(`[ProjectOverview] Firestore rule: projectOwner(${projectId})`);
-            console.error(`[ProjectOverview] Check: get(projects/${projectId}).data.ownerId == ${currentUserUid}`);
-            console.error(`[ProjectOverview] Returning empty tasks array`);
-          }
-          // Return empty array instead of throwing - allows app to continue
-          return [];
-        })
-      );
+      if (canReadTasks) {
+        loadPromises.push(
+          tasksService.listTasksByProject(projectId).catch((error: any) => {
+            console.error(`[ProjectOverview] Error loading tasks:`, error);
+            if (error.code === 'permission-denied') return [];
+            return [];
+          })
+        );
+      } else {
+        loadPromises.push(Promise.resolve([]));
+      }
       
-      loadPromises.push(
-        expensesService.listExpensesByProject(projectId).catch((error: any) => {
-          console.error(`[ProjectOverview] Error loading expenses:`, error);
-          return [];
-        })
-      );
+      if (canReadExpenses) {
+        loadPromises.push(
+          expensesService.listExpensesByProject(projectId).catch((error: any) => {
+            console.error(`[ProjectOverview] Error loading expenses:`, error);
+            return [];
+          })
+        );
+      } else {
+        loadPromises.push(Promise.resolve([]));
+      }
       
       // Diary is available across project types; documents remain BUILD/MANAGEMENT only.
       const hasDiary = projectTypeForLoad === 'BUILD' || projectTypeForLoad === 'MANAGEMENT' || projectTypeForLoad === 'TRADE' || projectTypeForLoad === 'MAINTENANCE' || projectTypeForLoad === 'RESIDENTIAL';
       const hasDocuments = isBuildProject;
-      if (hasDiary) {
+      if (hasDiary && canReadDiary) {
         loadPromises.push(
           constructionDiaryService.listDiaryEntries(projectId).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading diary entries:`, error);
             return [];
           })
         );
+      } else if (hasDiary) {
+        loadPromises.push(Promise.resolve([]));
       }
-      if (hasDocuments) {
+      if (hasDocuments && canReadDocuments) {
         loadPromises.push(
           projectDocumentsService.listProjectDocuments(projectId).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading project documents:`, error);
             return [];
           })
         );
+      } else if (hasDocuments) {
+        loadPromises.push(Promise.resolve([]));
       }
       loadPromises.push(
         projectMembersService.listProjectMembers(projectId).catch((error: any) => {
@@ -560,7 +603,14 @@ export function ProjectOverviewScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [projectId]);
+  }, [
+    projectId,
+    access.canReadPhases,
+    access.canReadTasks,
+    access.canReadExpenses,
+    access.canReadDiary,
+    access.canReadDocuments,
+  ]);
   
   const onRefresh = useCallback(() => {
     load(true);
@@ -569,8 +619,9 @@ export function ProjectOverviewScreen() {
   }, [load, loadActivity, loadWeather]);
 
   useEffect(() => {
+    if (!projectId || access.loading) return;
     load();
-  }, [load]);
+  }, [projectId, access.loading, load]);
 
   useEffect(() => {
     loadActivity();
@@ -596,13 +647,20 @@ export function ProjectOverviewScreen() {
     isFeatureEnabled("contractors", user.id).then(setContractorsEnabled).catch(() => setContractorsEnabled(false));
   }, [user?.id]);
   
-  // Open expense modal if requested from navigation
+  // Open expense modal if requested from navigation (only when user has access)
   useEffect(() => {
-    if (paramOpenExpenseModal && projectId) {
+    if (paramOpenExpenseModal && projectId && access.canReadExpenses && access.canWrite && access.sharedItems?.expenses === true) {
       setExpensePhaseId(paramSelectedPhaseId ?? null);
       setShowExpenseModal(true);
     }
-  }, [paramOpenExpenseModal, projectId, paramSelectedPhaseId]);
+  }, [paramOpenExpenseModal, projectId, paramSelectedPhaseId, access.canReadExpenses, access.canWrite, access.sharedItems?.expenses]);
+
+  // Expand expenses section if requested from navigation (e.g. from ExpensesKpiScreen row click)
+  useEffect(() => {
+    if (paramExpandExpensesSection && projectId && access.canReadExpenses) {
+      setExpandedExpenses(true);
+    }
+  }, [paramExpandExpensesSection, projectId, access.canReadExpenses]);
 
   useEffect(() => {
     if (!paramOpenExpenseId || !projectId) return;
@@ -620,23 +678,40 @@ export function ProjectOverviewScreen() {
     }
   }, [paramOpenExpenseId, projectId, openedExpenseId, expenses]);
 
-  // Open new task modal if requested from navigation
+  // Open new task modal if requested from navigation (only when user has access)
   useEffect(() => {
-    if (paramOpenNewTask && projectId && isOwner) {
+    if (paramOpenNewTask && projectId && access.canWrite && (access.sharedItems.tasks || access.sharedItems.phases)) {
       setSelectedPhaseId(paramSelectedPhaseId ?? null);
       setShowNewTask(true);
     }
-  }, [paramOpenNewTask, projectId, paramSelectedPhaseId, isOwner]);
-
-  useEffect(() => {
-    if (!paramOpenDiaryModal || !projectId) return;
-    // Wait for project owner to be loaded to avoid false "no permission" flash.
-    if (!projectOwnerId) return;
-    openNewDiaryModal(paramDiaryInputMode === "voice" ? "voice" : "text", false);
-  }, [paramOpenDiaryModal, paramDiaryInputMode, projectId, projectOwnerId, openNewDiaryModal]);
+  }, [paramOpenNewTask, projectId, paramSelectedPhaseId, access.canWrite, access.sharedItems.tasks, access.sharedItems.phases]);
 
   const goBack = () => navigation.goBack();
   const goToMembers = () => (navigation as { navigate: (n: string, p?: object) => void }).navigate("ProjectMembers", { projectId, projectName });
+
+  const handleCalculateDistanceKm = useCallback(async () => {
+    const from = expenseTravelFromAddress.trim();
+    const to = expenseTravelToAddress.trim();
+    if (!from || !to || isLoadingDistance || !isOnline) return;
+    setIsLoadingDistance(true);
+    try {
+      const result = await calculateDistanceKmService({ fromAddress: from, toAddress: to, mode: "driving" });
+      setExpenseTravelDistanceKm(String(result.distanceKm));
+    } catch {
+      showToast("Nepodarilo sa vypočítať km. Zadaj km ručne.");
+    } finally {
+      setIsLoadingDistance(false);
+    }
+  }, [expenseTravelFromAddress, expenseTravelToAddress, expenseTravelRatePerKm, expenseTravelRoundTrip, isLoadingDistance, isOnline]);
+
+  useEffect(() => {
+    if (expenseCategory !== "TRAVEL") return;
+    const km = parseFloat(expenseTravelDistanceKm);
+    const rate = parseFloat(expenseTravelRatePerKm) || 0.2;
+    if (!Number.isFinite(km) || km <= 0) return;
+    const mult = expenseTravelRoundTrip ? 2 : 1;
+    setExpenseAmount(String(Math.round(km * rate * mult * 100) / 100));
+  }, [expenseCategory, expenseTravelDistanceKm, expenseTravelRatePerKm, expenseTravelRoundTrip]);
 
   // Helper to validate and format amount input (only numbers and one decimal point/comma)
   const handleAmountChange = (text: string) => {
@@ -723,7 +798,7 @@ export function ProjectOverviewScreen() {
   };
 
   const openNewTaskModal = (phaseId?: string) => {
-    if (!isOwner) {
+    if (!access.canWrite || (!access.sharedItems.tasks && !access.sharedItems.phases)) {
       Alert.alert(t("common.error"), t("projectOverview.noPermission"));
       return;
     }
@@ -732,7 +807,7 @@ export function ProjectOverviewScreen() {
   };
 
   const openNewDiaryModal = useCallback((mode: "text" | "voice" = "text", showPermissionAlert = true) => {
-    if (!isOwner) {
+    if (!access.canWrite || access.sharedItems?.diary !== true) {
       if (!showPermissionAlert) return;
       Alert.alert(t("common.error"), t("projectOverview.noPermission"));
       return;
@@ -750,7 +825,14 @@ export function ProjectOverviewScreen() {
     setDiaryPhaseId(null);
     setDiaryAttachment(null);
     setShowDiaryModal(true);
-  }, [isOwner, t]);
+  }, [access.canWrite, access.sharedItems.diary, t]);
+
+  useEffect(() => {
+    if (!paramOpenDiaryModal || !projectId) return;
+    if (!projectOwnerId && access.loading) return;
+    if (!access.canReadDiary || !access.canWrite || access.sharedItems?.diary !== true) return;
+    openNewDiaryModal(paramDiaryInputMode === "voice" ? "voice" : "text", false);
+  }, [paramOpenDiaryModal, paramDiaryInputMode, projectId, projectOwnerId, access.loading, access.canReadDiary, access.canWrite, access.sharedItems?.diary, openNewDiaryModal]);
 
   const openTaskDetail = (task: TaskDoc) => {
     console.log(`[ProjectOverview] Opening task detail for task ${task.id}`);
@@ -1236,33 +1318,44 @@ export function ProjectOverviewScreen() {
   );
 
   // Expenses handlers
-  const openExpenseModal = (expense?: ExpenseDoc) => {
+  const openExpenseModal = (expense?: ExpenseDoc, initialCategory?: "TRAVEL") => {
     if (expense) {
       setEditingExpense(expense);
       setExpenseTitle(expense.title);
       setExpenseAmount(expense.amount?.toString() || "");
       setExpenseDate(expense.date ? expense.date.split('T')[0] : new Date().toISOString().split('T')[0]);
       setExpenseNote(expense.note || "");
-      setExpenseCategory((expense.category as 'WORK' | 'MATERIAL' | 'OTHER' | undefined) || undefined);
+      setExpenseCategory((expense.category as 'WORK' | 'MATERIAL' | 'OTHER' | 'TRAVEL' | undefined) || undefined);
       setExpenseSupplierName(expense.supplierName || "");
       setExpenseSupplierIco(expense.supplierIco || "");
       setExpensePhaseId(expense.phaseId || null);
-      setExpenseAttachment(null); // Reset attachment - will load from expense.attachmentId if needed
+      setExpenseAttachment(null);
       setExpensePreuploadedAttachment(null);
       setExpenseOcrStatus(null);
+      const t = expense.travel;
+      setExpenseTravelFromAddress(t?.fromAddress ?? "");
+      setExpenseTravelToAddress(t?.toAddress ?? "");
+      setExpenseTravelDistanceKm(t != null ? String(t.distanceKm) : "");
+      setExpenseTravelRatePerKm(t != null ? String(t.ratePerKm) : "0.30");
+      setExpenseTravelRoundTrip(t?.roundTrip ?? false);
     } else {
       setEditingExpense(null);
       setExpenseTitle("");
       setExpenseAmount("");
       setExpenseDate(new Date().toISOString().split('T')[0]);
       setExpenseNote("");
-      setExpenseCategory(undefined);
+      setExpenseCategory(initialCategory ?? undefined);
       setExpenseSupplierName("");
       setExpenseSupplierIco("");
       setExpensePhaseId(null);
       setExpenseAttachment(null);
       setExpensePreuploadedAttachment(null);
       setExpenseOcrStatus(null);
+      setExpenseTravelFromAddress("");
+      setExpenseTravelToAddress("");
+      setExpenseTravelDistanceKm("");
+      setExpenseTravelRatePerKm("0.30");
+      setExpenseTravelRoundTrip(false);
     }
     setShowExpenseModal(true);
   };
@@ -1733,22 +1826,46 @@ export function ProjectOverviewScreen() {
     }
     if (!projectId || !orgId) return;
     const canUseOcrDraft = !editingExpense && expenseAttachment?.kind === "image";
-    const titleValue = expenseTitle.trim() || (canUseOcrDraft ? "Invoice" : "");
-    if (!titleValue) return;
+    const isTravel = expenseCategory === "TRAVEL";
 
+    let titleValue: string;
     let amount: number | null = null;
-    if (expenseAmount.trim()) {
-      amount = parseFloat(expenseAmount);
-      if (isNaN(amount) || amount <= 0) {
+    let travelData: { fromAddress: string; toAddress: string; distanceKm: number; ratePerKm: number; roundTrip: boolean } | undefined;
+
+    if (isTravel) {
+      const from = expenseTravelFromAddress.trim();
+      const to = expenseTravelToAddress.trim();
+      const km = parseFloat(expenseTravelDistanceKm.replace(",", "."));
+      const rate = parseFloat(expenseTravelRatePerKm.replace(",", ".")) || 0.3;
+      if (!from || !to) {
+        Alert.alert(t("common.error"), "Vyplňte adresu A a B.");
+        return;
+      }
+      if (!Number.isFinite(km) || km <= 0) {
+        Alert.alert(t("common.error"), "Zadajte platnú vzdialenosť v km.");
+        return;
+      }
+      const effectiveKm = expenseTravelRoundTrip ? km * 2 : km;
+      amount = Math.round(effectiveKm * rate * 100) / 100;
+      titleValue = `Cestovné: ${from} → ${to}`;
+      travelData = { fromAddress: from, toAddress: to, distanceKm: km, ratePerKm: rate, roundTrip: expenseTravelRoundTrip };
+    } else {
+      titleValue = expenseTitle.trim() || (canUseOcrDraft ? "Invoice" : "");
+      if (!titleValue) return;
+      if (expenseAmount.trim()) {
+        amount = parseFloat(expenseAmount);
+        if (isNaN(amount) || amount <= 0) {
+          Alert.alert(t("common.error"), t("projectOverview.enterValidAmount"));
+          return;
+        }
+      } else if (!canUseOcrDraft) {
         Alert.alert(t("common.error"), t("projectOverview.enterValidAmount"));
         return;
       }
-    } else if (!canUseOcrDraft) {
-      Alert.alert(t("common.error"), t("projectOverview.enterValidAmount"));
-      return;
     }
+
     if (!expenseCategory) {
-      Alert.alert(t("common.error"), "Vyberte typ výdavku (Práca, Materiál alebo Práca + Materiál).");
+      Alert.alert(t("common.error"), "Vyberte typ výdavku (Práca, Materiál, Práca + Materiál alebo Cestovné).");
       return;
     }
     
@@ -1791,6 +1908,7 @@ export function ProjectOverviewScreen() {
           supplierName: expenseSupplierName.trim() || undefined,
           supplierIco: expenseSupplierIco.trim() || undefined,
           attachmentId: attachmentId || editingExpense.attachmentId || undefined,
+          ...(travelData && { travel: travelData }),
         });
         Alert.alert(t("common.success"), t("projectOverview.expenseUpdated"));
       } else {
@@ -1812,6 +1930,7 @@ export function ProjectOverviewScreen() {
             : undefined,
           filePath: expensePreuploadedAttachment?.storagePath ?? null,
           mimeType: expensePreuploadedAttachment?.mimeType ?? expenseAttachment?.mimeType ?? null,
+          ...(travelData && { travel: travelData }),
         });
 
         if (expensePreuploadedAttachment) {
@@ -2785,6 +2904,13 @@ export function ProjectOverviewScreen() {
           <Ionicons name="ellipsis-vertical" size={22} color={colors.textOnDark} />
         </TouchableOpacity>
       </View>
+      {__DEV__ && (
+        <View style={{ paddingHorizontal: spacing.md, paddingVertical: spacing.xs, backgroundColor: '#1a1a2e' }}>
+          <Text style={{ fontSize: 11, color: '#888' }}>
+            [DEV] {access.permissionLevel} | tasks:{access.sharedItems.tasks ? 1 : 0} phases:{access.sharedItems.phases ? 1 : 0} exp:{access.sharedItems.expenses ? 1 : 0} diary:{access.sharedItems.diary ? 1 : 0} docs:{access.sharedItems.documents ? 1 : 0} | canWrite:{access.canWrite ? 1 : 0}
+          </Text>
+        </View>
+      )}
 
       {/* Address section */}
       {(addressText || isOwner) && (
@@ -2925,10 +3051,10 @@ export function ProjectOverviewScreen() {
           </View>
         )}
 
-        {/* Table: Task Name | Assignee */}
+        {/* Table: Task Name | Assignee - only show if user can read tasks or phases */}
         {/* For TRADE/MAINTENANCE: only show table if there are tasks */}
         {/* For BUILD/MANAGEMENT: always show table */}
-        {(!isTradeOrMaintenance || tasks.length > 0) && (
+        {!access.loading && (access.canReadTasks || access.canReadPhases) && (!isTradeOrMaintenance || tasks.length > 0) && (
           <View style={styles.tableContainer}>
             <ScrollView 
               style={styles.tableScroll} 
@@ -2995,7 +3121,7 @@ export function ProjectOverviewScreen() {
                 ? t("projectOverview.noTasksHint")
                 : (t("projectOverview.addPhaseHint") || "Môžeš pridať fázy a úlohy neskôr.")}
             </Text>
-            {isOwner && !isTradeOrMaintenance && !templateId && (projectType === 'MANAGEMENT' || projectType === 'BUILD') && (
+            {access.canWrite && !isTradeOrMaintenance && !templateId && (projectType === 'MANAGEMENT' || projectType === 'BUILD') && (access.canReadPhases || access.canReadTasks) && (
               <TouchableOpacity
                 style={styles.addTemplateButton}
                 onPress={() => setShowNewPhaseModal(true)}
@@ -3205,7 +3331,7 @@ export function ProjectOverviewScreen() {
                     {expanded && (
                       <>
                         {/* Add task button for this phase */}
-                        {isOwner ? (
+                        {access.canWrite && (access.sharedItems.tasks || access.sharedItems.phases) ? (
                           <TouchableOpacity 
                             style={styles.addTaskToPhaseButton}
                             onPress={() => openNewTaskModal(phaseKey)}
@@ -3402,7 +3528,8 @@ export function ProjectOverviewScreen() {
         </View>
         )}
 
-        {/* Expenses Section */}
+        {/* Expenses Section - only show if user can read expenses */}
+        {!access.loading && access.canReadExpenses && (
         <View style={styles.expensesSection}>
         <TouchableOpacity 
           style={styles.expensesHeader}
@@ -3418,12 +3545,37 @@ export function ProjectOverviewScreen() {
             <Text style={styles.expensesHeaderText}>{t("projectOverview.expenses")}</Text>
             <Text style={styles.expensesCount}>({expenses.length})</Text>
           </View>
+          {access.canWrite && access.sharedItems?.expenses === true && (
           <TouchableOpacity
-            onPress={() => openExpenseModal()}
+            onPress={() => {
+              if (Platform.OS === "ios") {
+                ActionSheetIOS.showActionSheetWithOptions(
+                  {
+                    options: [t("common.cancel"), "Normálny výdavok", "Cestovné (A→B)"],
+                    cancelButtonIndex: 0,
+                  },
+                  (i) => {
+                    if (i === 1) openExpenseModal();
+                    if (i === 2) openExpenseModal(undefined, "TRAVEL");
+                  }
+                );
+              } else {
+                Alert.alert(
+                  t("projectOverview.expenses"),
+                  undefined,
+                  [
+                    { text: t("common.cancel"), style: "cancel" },
+                    { text: "Normálny výdavok", onPress: () => openExpenseModal() },
+                    { text: "Cestovné (A→B)", onPress: () => openExpenseModal(undefined, "TRAVEL") },
+                  ]
+                );
+              }
+            }}
             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           >
             <Ionicons name="add-circle" size={24} color={colors.primary} />
           </TouchableOpacity>
+          )}
         </TouchableOpacity>
 
         {expandedExpenses && (
@@ -3431,15 +3583,29 @@ export function ProjectOverviewScreen() {
             {expenses.length === 0 ? (
               <Text style={styles.emptyExpenses}>{t("projectOverview.noExpenses")}</Text>
             ) : (
-              expenses.map((expense) => (
+              expenses.map((expense) => {
+                const isTravel = expense.category === "TRAVEL" && expense.travel;
+                const displayTitle = isTravel
+                  ? `Cestovné: ${expense.travel!.fromAddress} → ${expense.travel!.toAddress}`
+                  : expense.title;
+                const effectiveKm = isTravel
+                  ? (expense.travel!.roundTrip ? expense.travel!.distanceKm * 2 : expense.travel!.distanceKm)
+                  : null;
+                const travelSubtitle = isTravel && effectiveKm != null
+                  ? `${effectiveKm} km × ${expense.travel!.ratePerKm} €/km`
+                  : null;
+                return (
                 <View key={expense.id} style={styles.expenseRow}>
                   <View style={styles.expenseInfo}>
-                    <Text style={styles.expenseTitle}>{expense.title}</Text>
+                    <Text style={styles.expenseTitle}>{displayTitle}</Text>
+                    {travelSubtitle ? (
+                      <Text style={styles.expenseNote} numberOfLines={1}>{travelSubtitle}</Text>
+                    ) : null}
                     <View style={styles.expenseMeta}>
                       <Text style={styles.expenseDate}>{formatDate(expense.date)}</Text>
                       <Text style={styles.expenseAmount}>{formatAmount(expense.amount, expense.currency)}</Text>
                     </View>
-                    {expense.note && (
+                    {expense.note && !isTravel && (
                       <Text style={styles.expenseNote} numberOfLines={2}>{expense.note}</Text>
                     )}
                   </View>
@@ -3455,6 +3621,8 @@ export function ProjectOverviewScreen() {
                         color={(expenseAttachmentsMap.get(expense.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
                       />
                     </TouchableOpacity>
+                    {access.canWrite && access.sharedItems?.expenses === true && (
+                    <>
                     <TouchableOpacity
                       style={styles.expenseActionButton}
                       onPress={() => openExpenseModal(expense)}
@@ -3469,16 +3637,20 @@ export function ProjectOverviewScreen() {
                     >
                       <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
                     </TouchableOpacity>
+                    </>
+                    )}
                   </View>
                 </View>
-              ))
+              );
+              })
             )}
           </View>
         )}
       </View>
+        )}
 
-        {/* Construction Diary Section */}
-        {supportsDiary && (
+        {/* Construction Diary Section - only show if user can read diary */}
+        {!access.loading && supportsDiary && access.canReadDiary && (
           <View style={styles.expensesSection}>
           <TouchableOpacity 
             style={styles.expensesHeader}
@@ -3496,12 +3668,14 @@ export function ProjectOverviewScreen() {
               </Text>
               <Text style={styles.expensesCount}>({diaryEntries.length})</Text>
             </View>
+            {access.canWrite && access.sharedItems?.diary === true && (
             <TouchableOpacity
               onPress={() => openNewDiaryModal("text")}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
             >
               <Ionicons name="add-circle" size={24} color={colors.primary} />
             </TouchableOpacity>
+            )}
           </TouchableOpacity>
 
           {expandedDiary && (
@@ -3534,6 +3708,8 @@ export function ProjectOverviewScreen() {
                       >
                         <Ionicons name="share-outline" size={20} color={colors.primary} />
                       </TouchableOpacity>
+                      {access.canWrite && access.sharedItems?.diary === true && (
+                      <>
                       <TouchableOpacity
                         style={styles.expenseActionButton}
                         onPress={() => {
@@ -3583,6 +3759,8 @@ export function ProjectOverviewScreen() {
                       >
                         <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
                       </TouchableOpacity>
+                      </>
+                      )}
                     </View>
                   </View>
                 ))
@@ -3592,8 +3770,8 @@ export function ProjectOverviewScreen() {
           </View>
         )}
 
-        {/* Project Documents Section - For BUILD and MANAGEMENT projects */}
-        {(projectType === 'BUILD' || projectType === 'MANAGEMENT') && (
+        {/* Project Documents Section - For BUILD and MANAGEMENT projects, only if can read documents */}
+        {!access.loading && (projectType === 'BUILD' || projectType === 'MANAGEMENT') && access.canReadDocuments && (
           <View style={styles.expensesSection}>
           <TouchableOpacity 
             style={styles.expensesHeader}
@@ -3609,6 +3787,7 @@ export function ProjectOverviewScreen() {
               <Text style={styles.expensesHeaderText}>{t("projectOverview.projectDocuments")}</Text>
               <Text style={styles.expensesCount}>({projectDocuments.length})</Text>
             </View>
+            {access.canWrite && access.sharedItems?.documents === true && (
             <TouchableOpacity
               onPress={() => {
                 setEditingDocument(null);
@@ -3623,6 +3802,7 @@ export function ProjectOverviewScreen() {
             >
               <Ionicons name="add-circle" size={24} color={colors.primary} />
             </TouchableOpacity>
+            )}
           </TouchableOpacity>
 
           {expandedDocuments && (
@@ -3657,6 +3837,8 @@ export function ProjectOverviewScreen() {
                       >
                         <Ionicons name="eye-outline" size={20} color={colors.textMuted} />
                       </TouchableOpacity>
+                      {access.canWrite && access.sharedItems?.documents === true && (
+                      <>
                       <TouchableOpacity
                         style={styles.expenseActionButton}
                         onPress={() => {
@@ -3699,6 +3881,8 @@ export function ProjectOverviewScreen() {
                       >
                         <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
                       </TouchableOpacity>
+                      </>
+                      )}
                     </View>
                   </View>
                 ))
@@ -3760,7 +3944,7 @@ export function ProjectOverviewScreen() {
           <Ionicons name="swap-vertical" size={20} color={colors.textOnDark} style={{ marginRight: 6 }} />
           <Text style={styles.listBtnText}>{t("projectOverview.viewList")}</Text>
         </TouchableOpacity>
-        {isOwner ? (
+        {access.canWrite && (access.sharedItems.tasks || access.sharedItems.phases) ? (
           isTradeOrMaintenance ? (
             // For TRADE/RESIDENTIAL: text button; MAINTENANCE shows action menu (úloha + zariadenie + servisný plán)
             projectType === 'MAINTENANCE' ? (
@@ -4044,8 +4228,95 @@ export function ProjectOverviewScreen() {
                     {t("expense.typeWorkMaterial")}
                   </Text>
                 </TouchableOpacity>
+                <TouchableOpacity
+                  style={[
+                    styles.expenseCategoryButton,
+                    expenseCategory === 'TRAVEL' && styles.expenseCategoryButtonActive,
+                  ]}
+                  onPress={() => setExpenseCategory('TRAVEL')}
+                >
+                  {expenseCategory === "TRAVEL" ? (
+                    <Ionicons name="checkmark-circle" size={16} color={colors.primary} />
+                  ) : null}
+                  <Text
+                    style={[
+                      styles.expenseCategoryButtonText,
+                      expenseCategory === 'TRAVEL' && styles.expenseCategoryButtonTextActive,
+                    ]}
+                  >
+                    Cestovné (A→B)
+                  </Text>
+                </TouchableOpacity>
               </View>
             </View>
+
+            {expenseCategory === 'TRAVEL' && (
+              <View style={styles.travelFormSection}>
+                <Text style={styles.travelFormLabel}>Adresa A (odkiaľ)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={expenseTravelFromAddress}
+                  onChangeText={setExpenseTravelFromAddress}
+                  placeholder="napr. Žilina"
+                  placeholderTextColor={colors.textMuted}
+                />
+                <Text style={styles.travelFormLabel}>Adresa B (kam)</Text>
+                <TextInput
+                  style={styles.input}
+                  value={expenseTravelToAddress}
+                  onChangeText={setExpenseTravelToAddress}
+                  placeholder="napr. Bratislava"
+                  placeholderTextColor={colors.textMuted}
+                />
+                <View style={styles.travelDistanceRow}>
+                  <View style={styles.travelDistanceInputWrap}>
+                    <Text style={styles.travelFormLabel}>Vzdialenosť (km)</Text>
+                    <TextInput
+                      style={styles.input}
+                      value={expenseTravelDistanceKm}
+                      onChangeText={(t) => {
+                        setExpenseTravelDistanceKm(t.replace(/[^\d.,]/g, '').replace(',', '.'));
+                      }}
+                      placeholder="0"
+                      placeholderTextColor={colors.textMuted}
+                      keyboardType="decimal-pad"
+                    />
+                  </View>
+                  <TouchableOpacity
+                    style={[
+                      styles.calculateKmButton,
+                      (!isOnline || !expenseTravelFromAddress.trim() || !expenseTravelToAddress.trim() || isLoadingDistance) && styles.calculateKmButtonDisabled,
+                    ]}
+                    onPress={handleCalculateDistanceKm}
+                    disabled={!isOnline || !expenseTravelFromAddress.trim() || !expenseTravelToAddress.trim() || isLoadingDistance}
+                  >
+                    {isLoadingDistance ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.calculateKmButtonText}>Vypočítať km</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+                <View style={styles.travelRateRow}>
+                  <Text style={styles.travelFormLabel}>Sadzba (€/km)</Text>
+                  <TextInput
+                    style={[styles.input, styles.travelRateInput]}
+                    value={expenseTravelRatePerKm}
+                    onChangeText={(t) => setExpenseTravelRatePerKm(t.replace(/[^\d.,]/g, '').replace(',', '.'))}
+                    placeholder="0.20"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="decimal-pad"
+                  />
+                </View>
+                <TouchableOpacity
+                  style={styles.travelRoundTripRow}
+                  onPress={() => setExpenseTravelRoundTrip((v) => !v)}
+                >
+                  <Ionicons name={expenseTravelRoundTrip ? "checkbox" : "square-outline"} size={22} color={colors.primary} />
+                  <Text style={styles.travelRoundTripText}>Tam a späť</Text>
+                </TouchableOpacity>
+              </View>
+            )}
 
             {/* Supplier */}
             <TextInput
@@ -4099,10 +4370,17 @@ export function ProjectOverviewScreen() {
                   setExpenseAmount("");
                   setExpenseDate(new Date().toISOString().split('T')[0]);
                   setExpenseNote("");
+                  setExpenseCategory(undefined);
                   setExpensePhaseId(null);
                   setExpenseSupplierIco("");
+                  setExpenseSupplierName("");
                   setExpenseAttachment(null);
                   setExpensePreuploadedAttachment(null);
+                  setExpenseTravelFromAddress("");
+                  setExpenseTravelToAddress("");
+                  setExpenseTravelDistanceKm("");
+                  setExpenseTravelRatePerKm("0.30");
+                  setExpenseTravelRoundTrip(false);
                 }}
               >
                 <Text style={styles.modalCancelText}>{t("tasks.cancel")}</Text>
@@ -4110,8 +4388,9 @@ export function ProjectOverviewScreen() {
               <TouchableOpacity 
                 style={[
                   styles.modalOk,
-                  (
-                    (!expenseTitle.trim() && !(expenseAttachment?.kind === "image" && !editingExpense))
+                  (expenseCategory === "TRAVEL"
+                    ? (!expenseTravelFromAddress.trim() || !expenseTravelToAddress.trim() || !expenseTravelDistanceKm.trim() || !Number.isFinite(parseFloat(expenseTravelDistanceKm.replace(",", "."))) || parseFloat(expenseTravelDistanceKm.replace(",", ".")) <= 0)
+                    : (!expenseTitle.trim() && !(expenseAttachment?.kind === "image" && !editingExpense))
                     || submitting
                     || uploadingExpenseAttachment
                     || ocrLoading
@@ -4119,7 +4398,9 @@ export function ProjectOverviewScreen() {
                 ]} 
                 onPress={handleSaveExpense} 
                 disabled={
-                  (!expenseTitle.trim() && !(expenseAttachment?.kind === "image" && !editingExpense))
+                  (expenseCategory === "TRAVEL"
+                    ? !expenseTravelFromAddress.trim() || !expenseTravelToAddress.trim() || !expenseTravelDistanceKm.trim() || !Number.isFinite(parseFloat(expenseTravelDistanceKm.replace(",", "."))) || parseFloat(expenseTravelDistanceKm.replace(",", ".")) <= 0
+                    : (!expenseTitle.trim() && !(expenseAttachment?.kind === "image" && !editingExpense)))
                   || submitting
                   || uploadingExpenseAttachment
                   || ocrLoading

@@ -4,7 +4,7 @@ import { doc, setDoc, getDoc, serverTimestamp } from "../lib/rnFirestore";
 import { db } from "../firebase";
 import * as Localization from "expo-localization";
 
-export type AuthUser = { id: string; email: string; name?: string };
+export type AuthUser = { id: string; email: string; name?: string; firstName?: string; lastName?: string; phoneE164?: string };
 
 function toAuthUser(u: { uid: string; email: string | null; displayName: string | null }): AuthUser {
   return {
@@ -34,8 +34,14 @@ async function ensureUserProfile(user: AuthUser): Promise<void> {
   if (!hasField(existing, "displayName")) {
     update.displayName = user.name ?? null;
   }
+  if (!hasField(existing, "firstName")) {
+    update.firstName = user.firstName ?? null;
+  }
+  if (!hasField(existing, "lastName")) {
+    update.lastName = user.lastName ?? null;
+  }
   if (!hasField(existing, "phoneE164")) {
-    update.phoneE164 = null;
+    update.phoneE164 = user.phoneE164 ?? null;
   }
   if (!hasField(existing, "locale")) {
     update.locale = Localization.locale ?? null;
@@ -48,6 +54,44 @@ async function ensureUserProfile(user: AuthUser): Promise<void> {
   }
 
   await setDoc(ref, update, { merge: true });
+}
+
+export type OnboardingProfileData = {
+  firstName: string;
+  lastName: string;
+  displayName: string;
+  phoneE164?: string;
+};
+
+/** Update Firestore user profile from onboarding. Does not overwrite existing values. */
+export async function updateUserProfileFromOnboarding(
+  uid: string,
+  data: OnboardingProfileData
+): Promise<void> {
+  const ref = doc(db, "users", uid);
+  const snap = await getDoc(ref);
+  const existing = (snap.exists() ? snap.data() : {}) as Record<string, unknown>;
+  const update: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+  };
+  if (!hasField(existing, "firstName") || !existing.firstName) {
+    update.firstName = data.firstName;
+  }
+  if (!hasField(existing, "lastName") || !existing.lastName) {
+    update.lastName = data.lastName;
+  }
+  if (!hasField(existing, "displayName") || !existing.displayName) {
+    update.displayName = data.displayName;
+  }
+  if (data.phoneE164 && (!hasField(existing, "phoneE164") || !existing.phoneE164)) {
+    update.phoneE164 = data.phoneE164;
+  }
+  await setDoc(ref, update, { merge: true });
+
+  const currentUser = auth().currentUser;
+  if (currentUser?.uid === uid && data.displayName) {
+    await currentUser.updateProfile({ displayName: data.displayName });
+  }
 }
 
 export async function register(

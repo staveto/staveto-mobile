@@ -54,6 +54,8 @@ try {
 
 const LAST_USED_PROJECT_KEY = "@staveto:lastUsedProjectId";
 const ROLE_FILTER_KEY = "@staveto:lastRoleFilter";
+const PROJECTS_FILTER_KEY = "projects_filter_v1";
+type ProjectFilter = "all" | "mine" | "shared";
 
 type DashboardViewModel = {
   projects: ProjectDoc[];
@@ -106,9 +108,15 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
       : "#7dcea0";
   const statusLabel = status === "OK" ? "OK" : status === "RISK" ? "Riziko" : "Čaká";
 
+  const isSharedToMe = project.isSharedToMe === true;
+
   return (
     <TouchableOpacity
-      style={[styles.compactProjectRow, !isOwner && styles.compactProjectRowMember]}
+      style={[
+        styles.compactProjectRow,
+        !isOwner && styles.compactProjectRowMember,
+        isSharedToMe && styles.compactProjectRowShared,
+      ]}
       onPress={() => onOpen(project.id)}
       activeOpacity={0.8}
     >
@@ -119,7 +127,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
             {project.name}
           </Text>
         </View>
-        <ProjectBadgesRow isOwner={isOwner} sharedWithCount={project.sharedWithCount ?? 0} />
+        <ProjectBadgesRow isOwner={isOwner} sharedWithCount={project.sharedWithCount ?? 0} isSharedToMe={project.isSharedToMe} />
         <Text style={styles.compactProjectSubline} numberOfLines={1}>
           {openTasks} {openTasks === 1 ? "otvorená úloha" : "otvorené úlohy"} • aktivita {lastActivity}
         </Text>
@@ -164,6 +172,7 @@ export function HomeScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [lastUsedProjectId, setLastUsedProjectId] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<RoleKey | "ALL">("ALL");
+  const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
 
   // Load persisted role filter on mount
   useEffect(() => {
@@ -178,6 +187,25 @@ export function HomeScreen() {
       }
     };
     loadPersistedFilter();
+  }, []);
+
+  useEffect(() => {
+    AsyncStorage.getItem(PROJECTS_FILTER_KEY).then((saved) => {
+      if (saved === "mine" || saved === "shared" || saved === "all") {
+        setProjectFilter(saved);
+        if (__DEV__) console.log("[HomeScreen] Loaded filter:", saved);
+      }
+    });
+  }, []);
+
+  const handleProjectFilterChange = useCallback(async (filter: ProjectFilter) => {
+    setProjectFilter(filter);
+    try {
+      await AsyncStorage.setItem(PROJECTS_FILTER_KEY, filter);
+      if (__DEV__) console.log("[HomeScreen] Filter changed:", filter);
+    } catch (e) {
+      console.warn("[HomeScreen] Failed to persist filter:", e);
+    }
   }, []);
 
   // Persist role filter when it changes
@@ -246,12 +274,14 @@ export function HomeScreen() {
       nav = nav.getParent?.();
     }
   }, [navigation]);
+  const [onboardingFirstName, setOnboardingFirstName] = useState<string | null>(null);
   const [onboardingDisplayName, setOnboardingDisplayName] = useState<string | null>(null);
   useEffect(() => {
     AsyncStorage.getItem("pending_onboarding").then((raw) => {
       if (raw) {
         try {
-          const parsed = JSON.parse(raw) as { displayName?: string };
+          const parsed = JSON.parse(raw) as { firstName?: string; displayName?: string };
+          if (parsed?.firstName?.trim()) setOnboardingFirstName(parsed.firstName.trim());
           if (parsed?.displayName?.trim()) setOnboardingDisplayName(parsed.displayName.trim());
         } catch {
           // ignore
@@ -259,7 +289,7 @@ export function HomeScreen() {
       }
     });
   }, []);
-  const displayName = user?.name ?? onboardingDisplayName ?? user?.email ?? t("home.userFallback");
+  const greetingName = user?.firstName ?? onboardingFirstName ?? user?.name ?? onboardingDisplayName ?? user?.email ?? t("home.userFallback");
 
   const formatLastActivity = useCallback((date: Date | null) => {
     if (!date) return "No activity";
@@ -829,17 +859,23 @@ export function HomeScreen() {
     return m;
   }, [liveRows]);
 
+  const filteredProjects = useMemo(() => {
+    if (projectFilter === "mine") return data.projects.filter((p) => p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0);
+    if (projectFilter === "shared") return data.projects.filter((p) => p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0);
+    return data.projects;
+  }, [data.projects, projectFilter]);
+
   const focusProject = useMemo(() => {
     if (lastUsedProjectId) {
-      const selected = data.projects.find((p) => p.id === lastUsedProjectId);
+      const selected = filteredProjects.find((p) => p.id === lastUsedProjectId);
       if (selected) return selected;
     }
-    return data.projects[0] ?? null;
-  }, [data.projects, lastUsedProjectId]);
+    return filteredProjects[0] ?? null;
+  }, [filteredProjects, lastUsedProjectId]);
 
   const otherProjects = useMemo(
-    () => data.projects.filter((p) => p.id !== focusProject?.id),
-    [data.projects, focusProject?.id]
+    () => filteredProjects.filter((p) => p.id !== focusProject?.id),
+    [filteredProjects, focusProject?.id]
   );
 
   const overdueCount = useMemo(
@@ -896,7 +932,7 @@ export function HomeScreen() {
           <>
             <View style={styles.headerRow}>
               <View>
-                <Text style={styles.welcomeTitle}>{t("home.greeting", { name: displayName })}</Text>
+                <Text style={styles.welcomeTitle}>{t("home.greeting", { name: greetingName })}</Text>
                 <Text style={styles.welcomeSubtitle}>Prehľad projektov</Text>
               </View>
               <TouchableOpacity style={styles.searchAction} onPress={goToSearch} accessibilityLabel="Search">
@@ -913,10 +949,7 @@ export function HomeScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.statChip}
-                onPress={() => {
-                  setPendingAction("expense");
-                  setShowProjectSelector(true);
-                }}
+                onPress={() => stackNav.navigate("ExpensesKpiScreen")}
                 activeOpacity={0.8}
               >
                 <Text style={styles.statChipText}>Výdavky {Math.round(data.kpis.expensesTotalSum)}€</Text>
@@ -925,7 +958,14 @@ export function HomeScreen() {
 
             {focusProject ? (
               <View style={styles.focusCard}>
-                <Text style={styles.focusCaption}>Práve robím</Text>
+                <View style={styles.focusCaptionRow}>
+                  <Text style={styles.focusCaption}>Práve robím</Text>
+                  {focusProject.isSharedToMe === true && (
+                    <View style={styles.focusSharedBadge}>
+                      <Text style={styles.focusSharedBadgeText}>Zdieľané</Text>
+                    </View>
+                  )}
+                </View>
                 <Text style={styles.focusTitle} numberOfLines={1}>
                   {focusProject.name}
                 </Text>
@@ -953,6 +993,27 @@ export function HomeScreen() {
                 ))}
               </View>
             ) : null}
+
+            <View style={styles.filterRow}>
+              <TouchableOpacity
+                style={[styles.filterChip, projectFilter === "all" && styles.filterChipActive]}
+                onPress={() => handleProjectFilterChange("all")}
+              >
+                <Text style={[styles.filterChipText, projectFilter === "all" && styles.filterChipTextActive]}>Všetko</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.filterChip, projectFilter === "mine" && styles.filterChipActive]}
+                onPress={() => handleProjectFilterChange("mine")}
+              >
+                <Text style={[styles.filterChipText, projectFilter === "mine" && styles.filterChipTextActive]}>Moje</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.filterChip, projectFilter === "shared" && styles.filterChipActive]}
+                onPress={() => handleProjectFilterChange("shared")}
+              >
+                <Text style={[styles.filterChipText, projectFilter === "shared" && styles.filterChipTextActive]}>Zdieľané</Text>
+              </TouchableOpacity>
+            </View>
 
             <View style={styles.sectionHeaderCompact}>
               <Text style={styles.sectionTitle}>Ostatné projekty</Text>
@@ -1347,12 +1408,28 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.md,
   },
+  focusCaptionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
   focusCaption: {
     color: "#ffb266",
     fontSize: 12,
     fontWeight: "700",
     textTransform: "uppercase",
-    marginBottom: spacing.xs,
+  },
+  focusSharedBadge: {
+    backgroundColor: "rgba(255,159,67,0.25)",
+    paddingHorizontal: spacing.xs,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  focusSharedBadgeText: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: "#ff9f43",
   },
   focusTitle: {
     color: "#111111",
@@ -1403,6 +1480,31 @@ const styles = StyleSheet.create({
   sectionHeaderCompact: {
     marginBottom: spacing.sm,
   },
+  filterRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  filterChip: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  filterChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  filterChipText: {
+    fontSize: 14,
+    color: colors.textSecondary,
+  },
+  filterChipTextActive: {
+    color: "#fff",
+    fontWeight: "600",
+  },
   compactProjectRow: {
     minHeight: 64,
     backgroundColor: colors.card,
@@ -1413,6 +1515,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     overflow: "hidden",
+  },
+  compactProjectRowShared: {
+    borderLeftWidth: 3,
+    borderLeftColor: "#ff9f43",
   },
   compactStripe: {
     width: 4,

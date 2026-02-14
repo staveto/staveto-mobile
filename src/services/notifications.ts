@@ -23,6 +23,7 @@ export type NotificationType =
   | "TASK_OVERDUE"
   | "PROJECT_ACTIVITY"
   | "PROJECT_CREATED"
+  | "PROJECT_INVITED"
   | "EXPENSE_ADDED"
   | "MEMBER_JOINED"
   | "MEMBER_LEFT"

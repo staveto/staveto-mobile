@@ -2,9 +2,12 @@ import React, { createContext, useContext, useEffect, useRef, useState } from "r
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import auth from "@react-native-firebase/auth";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
+import { doc, getDoc } from "../lib/rnFirestore";
+import { db } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
+import { registerForPushNotifications, setupPushNotifications, removePushToken } from "../services/pushNotifications";
 
-type User = { id: string; email: string; name?: string };
+type User = { id: string; email: string; name?: string; firstName?: string; lastName?: string };
 
 type AuthState = {
   token: string | null;
@@ -26,6 +29,7 @@ type AuthContextValue = AuthState & {
   logout: () => Promise<void>;
   loadFromStorage: () => Promise<void>;
   finishOnboarding: () => Promise<void>;
+  refreshUser: () => Promise<void>;
 };
 
 const AuthContext = createContext<AuthContextValue | null>(null);
@@ -70,15 +74,32 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     const unsubscribe = auth().onAuthStateChanged(async (fbUser) => {
       if (!fbUser) {
+        removePushToken().catch(() => {});
         setState((s) => ({ ...s, token: null, user: null, orgId: null, loading: false }));
         return;
       }
       const token = await fbUser.getIdToken();
-      const user = {
+      let user: User = {
         id: fbUser.uid,
         email: fbUser.email ?? "",
         name: fbUser.displayName ?? undefined,
       };
+      try {
+        const snap = await getDoc(doc(db, "users", fbUser.uid));
+        if (snap.exists()) {
+          const d = snap.data() as Record<string, unknown>;
+          const fn = d.firstName as string | undefined;
+          const ln = d.lastName as string | undefined;
+          const dn = d.displayName as string | undefined;
+          if (fn) user = { ...user, firstName: fn };
+          if (ln) user = { ...user, lastName: ln };
+          if (dn && !user.name) user = { ...user, name: dn };
+          if (!user.name && fn && ln) user = { ...user, name: `${fn} ${ln}`.trim() };
+        }
+      } catch {
+        // ignore profile fetch errors
+      }
+      registerForPushNotifications().catch((err) => console.warn("[auth] push register failed:", err));
       if (!claimedInviteSessionsRef.current.has(fbUser.uid)) {
         claimedInviteSessionsRef.current.add(fbUser.uid);
         claimProjectInvites()
@@ -122,9 +143,36 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setState((s) => ({ ...s, onboardingDone: true, onboardingLoaded: true }));
   };
 
+  const refreshUser = async () => {
+    const fbUser = auth().currentUser;
+    if (!fbUser) return;
+    try {
+      const token = await fbUser.getIdToken();
+      let user: User = {
+        id: fbUser.uid,
+        email: fbUser.email ?? "",
+        name: fbUser.displayName ?? undefined,
+      };
+      const snap = await getDoc(doc(db, "users", fbUser.uid));
+      if (snap.exists()) {
+        const d = snap.data() as Record<string, unknown>;
+        const fn = d.firstName as string | undefined;
+        const ln = d.lastName as string | undefined;
+        const dn = d.displayName as string | undefined;
+        if (fn) user = { ...user, firstName: fn };
+        if (ln) user = { ...user, lastName: ln };
+        if (dn && !user.name) user = { ...user, name: dn };
+        if (!user.name && fn && ln) user = { ...user, name: `${fn} ${ln}`.trim() };
+      }
+      setState((s) => ({ ...s, token, user }));
+    } catch {
+      // ignore
+    }
+  };
+
   return (
     <AuthContext.Provider
-      value={{ ...state, login, register, logout, loadFromStorage, finishOnboarding }}
+      value={{ ...state, login, register, logout, loadFromStorage, finishOnboarding, refreshUser }}
     >
       {children}
     </AuthContext.Provider>

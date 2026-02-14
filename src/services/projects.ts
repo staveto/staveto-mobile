@@ -18,6 +18,7 @@ export type ProjectDoc = {
   archivedAt?: unknown; // Timestamp when archived (truthy = archived)
   createdAt?: string; // ISO string when project was created
   sharedWithCount?: number; // Number of non-owner members (for badge)
+  isSharedToMe?: boolean; // True when current user is invited member (not owner)
 };
 
 export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
@@ -264,7 +265,9 @@ async function listAllMyProjectsInternal(ownerId: string): Promise<ProjectDoc[]>
           try {
             const snap = await getDoc(doc(db, COLLECTION, projectId));
             if (!snap.exists()) return null;
-            return toDoc({ id: snap.id, data: snap.data.bind(snap) });
+            const p = toDoc({ id: snap.id, data: snap.data.bind(snap) }) as ProjectDoc;
+            p.isSharedToMe = true;
+            return p;
           } catch (error) {
             console.warn(`[projects] Failed to load member project ${projectId}:`, error);
             return null;

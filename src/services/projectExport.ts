@@ -152,3 +152,77 @@ export async function exportProjectToCsv(projectId: string): Promise<ExportResul
     return { ok: false, error: msg };
   }
 }
+
+/** Expense row for KPI export */
+export type ExpenseExportRow = {
+  projectName: string;
+  date: string;
+  title: string;
+  amount: number | null;
+  currency: string;
+  supplierName?: string;
+  category?: string;
+  note?: string;
+};
+
+export function buildExpensesKpiCsv(rows: ExpenseExportRow[], rangeLabel: string): string {
+  const lines: string[] = [];
+  lines.push(`Výdavky - ${escapeCsv(rangeLabel)}`);
+  lines.push(`Exportované: ${formatDate(new Date().toISOString())}`);
+  lines.push("");
+  lines.push("Projekt,Dátum,Názov,Suma,Mena,Dodávateľ,Kategória,Poznámka");
+  rows.forEach((e) => {
+    lines.push(
+      [
+        escapeCsv(e.projectName),
+        escapeCsv(e.date),
+        escapeCsv(e.title),
+        escapeCsv(e.amount ?? ""),
+        escapeCsv(e.currency ?? "EUR"),
+        escapeCsv(e.supplierName ?? ""),
+        escapeCsv(e.category ?? ""),
+        escapeCsv(e.note ?? ""),
+      ].join(",")
+    );
+  });
+  return lines.join("\n");
+}
+
+export async function exportExpensesKpiToCsv(csv: string, fileName: string): Promise<ExportResult> {
+  try {
+    try {
+      const FileSystem = await import("expo-file-system");
+      const Sharing = await import("expo-sharing");
+      const fs = (FileSystem as any).default ?? FileSystem;
+      const sharing = (Sharing as any).default ?? Sharing;
+      const cacheDir = fs.cacheDirectory;
+      if (cacheDir) {
+        const fileUri = `${cacheDir}${fileName}`;
+        await fs.writeAsStringAsync(fileUri, csv, {
+          encoding: fs.EncodingType?.UTF8 ?? "utf8",
+        });
+
+        const canShare = await sharing.isAvailableAsync();
+        if (canShare) {
+          await sharing.shareAsync(fileUri, {
+            mimeType: "text/csv",
+            dialogTitle: "Export výdavkov",
+          });
+          return { ok: true, shared: true };
+        }
+      }
+    } catch (_fsErr) {
+      // Fallback: share CSV as text
+    }
+
+    await Share.share({
+      message: csv,
+      title: "Export výdavkov",
+    });
+    return { ok: true, shared: true };
+  } catch (err: unknown) {
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error("[projectExport] Expenses KPI export failed:", err);
+    return { ok: false, error: msg };
+  }
+}

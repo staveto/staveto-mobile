@@ -20,7 +20,16 @@ import { addProjectEvent } from "./projectEvents";
 
 export type ExpenseSource = 'MANUAL' | 'DOCUMENT';
 export type ExpenseStatus = 'PROCESSING' | 'READY' | 'FAILED';
-export type ExpenseCategory = 'MATERIAL' | 'WORK' | 'OTHER';
+export type ExpenseCategory = 'MATERIAL' | 'WORK' | 'OTHER' | 'TRAVEL';
+
+export type TravelExpenseData = {
+  fromAddress: string;
+  toAddress: string;
+  distanceKm: number;
+  ratePerKm: number;
+  roundTrip: boolean;
+  billableToClient?: boolean;
+};
 
 export type OcrStatus = "success" | "done" | "failed" | "limit" | "cancelled" | "pending";
 export type UploadStatus = "pending" | "uploaded" | "failed";
@@ -54,6 +63,8 @@ export type ExpenseDoc = {
   ocrCurrency?: string;
   createdAt?: string;
   updatedAt?: string;
+  /** Travel (Jazda A→B) fields when category is TRAVEL */
+  travel?: TravelExpenseData;
 };
 
 function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ExpenseDoc {
@@ -102,6 +113,25 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Ex
     ocrCurrency: (d.ocrCurrency as string) ?? undefined,
     createdAt: convertTimestamp(d.createdAt),
     updatedAt: convertTimestamp(d.updatedAt),
+    travel: parseTravel(d.travel),
+  };
+}
+
+function parseTravel(t: unknown): TravelExpenseData | undefined {
+  if (!t || typeof t !== "object") return undefined;
+  const o = t as Record<string, unknown>;
+  const from = o.fromAddress as string;
+  const to = o.toAddress as string;
+  const km = o.distanceKm as number;
+  const rate = o.ratePerKm as number;
+  const round = o.roundTrip as boolean;
+  if (typeof from !== "string" || typeof to !== "string" || typeof km !== "number") return undefined;
+  return {
+    fromAddress: from,
+    toAddress: to,
+    distanceKm: km,
+    ratePerKm: typeof rate === "number" ? rate : 0.2,
+    roundTrip: !!round,
   };
 }
 
@@ -136,6 +166,7 @@ export async function createExpense(
     ocrTotalAmount?: number | null;
     ocrVatAmount?: number | null;
     ocrCurrency?: string | null;
+    travel?: TravelExpenseData;
   }
 ): Promise<ExpenseDoc> {
   const currentUser = auth.currentUser;
@@ -208,6 +239,7 @@ export async function createExpense(
     ocrTotalAmount: data.ocrTotalAmount ?? null,
     ocrVatAmount: data.ocrVatAmount ?? null,
     ocrCurrency: data.ocrCurrency ?? null,
+    travel: data.travel ?? null,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
@@ -318,6 +350,7 @@ export async function updateExpense(
     ocrTotalAmount?: number | null;
     ocrVatAmount?: number | null;
     ocrCurrency?: string | null;
+    travel?: TravelExpenseData;
   }
 ): Promise<void> {
   const ref = doc(db, paths.projectExpense(projectId, expenseId));
@@ -350,6 +383,7 @@ export async function updateExpense(
   if (data.ocrTotalAmount !== undefined) updateData.ocrTotalAmount = data.ocrTotalAmount ?? null;
   if (data.ocrVatAmount !== undefined) updateData.ocrVatAmount = data.ocrVatAmount ?? null;
   if (data.ocrCurrency !== undefined) updateData.ocrCurrency = data.ocrCurrency ?? null;
+  if (data.travel !== undefined) updateData.travel = data.travel ?? null;
   
   await updateDoc(ref, updateData);
   console.log(`[expenses] Updated expense ${expenseId} in project ${projectId}`);

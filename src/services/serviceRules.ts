@@ -28,6 +28,7 @@ export interface ServiceRuleDoc {
   title: string;
   intervalUnit: 'weeks' | 'months';
   intervalValue: number;
+  startFrom?: string | null; // ISO date when interval starts (base for nextDueAt)
   nextDueAt: string;
   lastServiceAt?: string | null;
   lastGeneratedDueAt?: string | null;
@@ -51,6 +52,7 @@ function toServiceRuleDoc(snap: { id: string; data: () => Record<string, unknown
     title: (d.title as string) ?? '',
     intervalUnit: (d.intervalUnit as 'weeks' | 'months') ?? 'weeks',
     intervalValue: (d.intervalValue as number) ?? 1,
+    startFrom: d.startFrom ? toDate(d.startFrom) : null,
     nextDueAt: toDate(d.nextDueAt),
     lastServiceAt: d.lastServiceAt ? toDate(d.lastServiceAt) : null,
     lastGeneratedDueAt: d.lastGeneratedDueAt ? toDate(d.lastGeneratedDueAt) : null,
@@ -84,6 +86,7 @@ export async function createServiceRule(
     title: data.title.trim(),
     intervalUnit: data.intervalUnit,
     intervalValue: data.intervalValue,
+    startFrom: Timestamp.fromDate(baseDate),
     nextDueAt: Timestamp.fromDate(nextDueAt),
     lastServiceAt: null,
     lastGeneratedDueAt: null,
@@ -131,7 +134,7 @@ export async function getServiceRule(
 export async function updateServiceRule(
   projectId: string,
   ruleId: string,
-  patch: Partial<Pick<ServiceRuleDoc, 'title' | 'intervalUnit' | 'intervalValue' | 'checklistTemplate' | 'status'>>
+  patch: Partial<Pick<ServiceRuleDoc, 'title' | 'intervalUnit' | 'intervalValue' | 'checklistTemplate' | 'status' | 'startFrom'>>
 ): Promise<void> {
   const ref = doc(db, paths.projectServiceRule(projectId, ruleId));
   const updateData: Record<string, unknown> = { updatedAt: serverTimestamp() };
@@ -140,6 +143,32 @@ export async function updateServiceRule(
   if (patch.intervalValue !== undefined) updateData.intervalValue = patch.intervalValue;
   if (patch.checklistTemplate !== undefined) updateData.checklistTemplate = patch.checklistTemplate;
   if (patch.status !== undefined) updateData.status = patch.status;
+  if (patch.startFrom !== undefined) {
+    const d = patch.startFrom instanceof Date ? patch.startFrom : new Date(patch.startFrom);
+    updateData.startFrom = Timestamp.fromDate(d);
+  }
+
+  // Recompute nextDueAt when interval or startFrom changes
+  const needsRecompute = patch.intervalUnit !== undefined || patch.intervalValue !== undefined || patch.startFrom !== undefined;
+  if (needsRecompute) {
+    const snap = await getDoc(ref);
+    if (snap.exists) {
+      const d = snap.data();
+      const intervalUnit = (patch.intervalUnit ?? d.intervalUnit) as 'weeks' | 'months';
+      const intervalValue = (patch.intervalValue ?? d.intervalValue) as number;
+      let baseDate: Date;
+      if (patch.startFrom !== undefined) {
+        baseDate = patch.startFrom instanceof Date ? patch.startFrom : new Date(patch.startFrom);
+      } else if (d.startFrom && typeof d.startFrom === 'object' && 'toDate' in d.startFrom) {
+        baseDate = (d.startFrom as { toDate: () => Date }).toDate();
+      } else {
+        baseDate = new Date();
+      }
+      const nextDueAt = computeNextDueAt(baseDate, intervalUnit, intervalValue);
+      updateData.nextDueAt = Timestamp.fromDate(nextDueAt);
+    }
+  }
+
   await updateDoc(ref, updateData);
 }
 

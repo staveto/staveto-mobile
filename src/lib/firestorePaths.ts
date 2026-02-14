@@ -11,6 +11,9 @@ export const paths = {
   projectMembers: (projectId: string) => `projects/${projectId}/members`,
   projectMember: (projectId: string, userId: string) =>
     `projects/${projectId}/members/${userId}`,
+  projectMembersByUid: (projectId: string) => `projects/${projectId}/membersByUid`,
+  projectMemberByUid: (projectId: string, uid: string) =>
+    `projects/${projectId}/membersByUid/${uid}`,
   projectPhases: (projectId: string) => `projects/${projectId}/phases`,
   projectPhase: (projectId: string, phaseId: string) =>
     `projects/${projectId}/phases/${phaseId}`,

@@ -22,6 +22,14 @@ export function ProjectMembersScreen() {
   const [showAddMember, setShowAddMember] = useState(false);
   const [addMemberEmail, setAddMemberEmail] = useState("");
   const [addMemberName, setAddMemberName] = useState("");
+  const [editingMember, setEditingMember] = useState<ProjectMemberDoc | null>(null);
+  const [editPermissionLevel, setEditPermissionLevel] = useState<'viewer' | 'editor'>('viewer');
+  const [editShareTasks, setEditShareTasks] = useState(true);
+  const [editSharePhases, setEditSharePhases] = useState(true);
+  const [editShareExpenses, setEditShareExpenses] = useState(false);
+  const [editShareDiary, setEditShareDiary] = useState(false);
+  const [editShareDocuments, setEditShareDocuments] = useState(false);
+  const [editSelectedPhaseIds, setEditSelectedPhaseIds] = useState<string[]>([]);
   const [members, setMembers] = useState<ProjectMemberDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
@@ -159,6 +167,61 @@ export function ProjectMembersScreen() {
     }
   };
 
+  const openEditMember = (member: ProjectMemberDoc) => {
+    setEditingMember(member);
+    setEditPermissionLevel((member.permissionLevel as 'viewer' | 'editor') || 'viewer');
+    setEditShareTasks(member.sharedItems?.tasks ?? true);
+    setEditSharePhases(member.sharedItems?.phases ?? true);
+    setEditShareExpenses(member.sharedItems?.expenses ?? false);
+    setEditShareDiary(member.sharedItems?.diary ?? false);
+    setEditShareDocuments(member.sharedItems?.documents ?? false);
+    setEditSelectedPhaseIds(member.sharedPhaseIds ?? []);
+  };
+
+  const closeEditMember = () => {
+    setEditingMember(null);
+  };
+
+  const handleUpdateMemberPermissions = async () => {
+    if (!projectId || !editingMember) return;
+
+    setSubmitting(true);
+    try {
+      await projectMembersService.updateMemberPermissions(
+        projectId,
+        editingMember.id,
+        editPermissionLevel,
+        {
+          tasks: editShareTasks,
+          phases: editSharePhases,
+          expenses: editShareExpenses,
+          diary: editShareDiary,
+          documents: editShareDocuments,
+        },
+        editSharePhases ? editSelectedPhaseIds : []
+      );
+      Alert.alert(
+        t('common.success') || 'Úspech',
+        t('projectMembers.updateSuccess') || 'Oprávnenia boli aktualizované.'
+      );
+      closeEditMember();
+      loadMembers();
+    } catch (error: any) {
+      const msg = error?.message || String(error);
+      const code = error?.code ?? error?.details?.code;
+      console.error('[ProjectMembersScreen] Error updating permissions:', { error, code, msg });
+      const userMsg = code === 'functions/not-found' || msg?.includes('NOT_FOUND')
+        ? (t('projectMembers.functionNotDeployed') || 'Cloud Function nie je nasadená. Spustite: firebase deploy --only functions')
+        : (msg || (t('projectMembers.updateError') || 'Nepodarilo sa aktualizovať oprávnenia.'));
+      Alert.alert(
+        t('common.error') || 'Chyba',
+        userMsg
+      );
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   const handleRemoveMember = (member: ProjectMemberDoc) => {
     if (!projectId) return;
     
@@ -183,6 +246,38 @@ export function ProjectMembersScreen() {
               Alert.alert(
                 t('common.error') || 'Chyba',
                 error.message || (t('projectMembers.removeError') || 'Nepodarilo sa odstrániť člena.')
+              );
+            }
+          },
+        },
+      ]
+    );
+  };
+
+  const handleLeaveProject = (member: ProjectMemberDoc) => {
+    if (!projectId) return;
+    
+    Alert.alert(
+      t('projectMembers.leaveConfirm') || 'Opustiť projekt?',
+      t('projectMembers.leaveConfirmMessage') || 'Naozaj chceš opustiť tento projekt?',
+      [
+        { text: t('common.cancel') || 'Zrušiť', style: 'cancel' },
+        {
+          text: t('projectMembers.leaveProject') || 'Opustiť projekt',
+          style: 'destructive',
+          onPress: async () => {
+            try {
+              await projectMembersService.removeMember(projectId, member.id);
+              Alert.alert(
+                t('common.success') || 'Úspech',
+                t('projectMembers.leaveSuccess') || 'Opustil si projekt.'
+              );
+              goBack();
+            } catch (error: any) {
+              console.error('[ProjectMembersScreen] Error leaving project:', error);
+              Alert.alert(
+                t('common.error') || 'Chyba',
+                error.message || (t('projectMembers.removeError') || 'Nepodarilo sa opustiť projekt.')
               );
             }
           },
@@ -286,15 +381,33 @@ export function ProjectMembersScreen() {
                     </View>
                   )}
                 </View>
-                {projectOwnerId === user?.id && (
+                {projectOwnerId === user?.id ? (
+                  <View style={styles.memberActions}>
+                    <TouchableOpacity
+                      style={styles.editMemberButton}
+                      onPress={() => openEditMember(m)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <Ionicons name="create-outline" size={22} color={colors.primary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.removeMemberButton}
+                      onPress={() => handleRemoveMember(m)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <Ionicons name="close-circle" size={24} color={colors.textMuted} />
+                    </TouchableOpacity>
+                  </View>
+                ) : m.userId === user?.id ? (
                   <TouchableOpacity
-                    style={styles.removeMemberButton}
-                    onPress={() => handleRemoveMember(m)}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    style={styles.leaveProjectButton}
+                    onPress={() => handleLeaveProject(m)}
                   >
-                    <Ionicons name="close-circle" size={24} color={colors.textMuted} />
+                    <Text style={styles.leaveProjectButtonText}>
+                      {t('projectMembers.leaveProject') || 'Opustiť projekt'}
+                    </Text>
                   </TouchableOpacity>
-                )}
+                ) : null}
               </View>
             ))}
           
@@ -348,13 +461,22 @@ export function ProjectMembersScreen() {
                   )}
                 </View>
                 {projectOwnerId === user?.id && (
-                  <TouchableOpacity
-                    style={styles.removeMemberButton}
-                    onPress={() => handleRemoveMember(m)}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  >
-                    <Ionicons name="close-circle" size={24} color={colors.textMuted} />
-                  </TouchableOpacity>
+                  <View style={styles.memberActions}>
+                    <TouchableOpacity
+                      style={styles.editMemberButton}
+                      onPress={() => openEditMember(m)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <Ionicons name="create-outline" size={22} color={colors.primary} />
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.removeMemberButton}
+                      onPress={() => handleRemoveMember(m)}
+                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    >
+                      <Ionicons name="close-circle" size={24} color={colors.textMuted} />
+                    </TouchableOpacity>
+                  </View>
                 )}
               </View>
             ))}
@@ -584,6 +706,190 @@ export function ProjectMembersScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Edit member permissions modal */}
+      <Modal visible={!!editingMember} transparent animationType="slide">
+        <View style={[styles.addMemberOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom + spacing.md }]}>
+          <View style={styles.addMemberContainer}>
+            <View style={styles.addMemberHeader}>
+              <TouchableOpacity onPress={closeEditMember} style={styles.addMemberClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+                <Ionicons name="close" size={26} color={colors.textOnDark} />
+              </TouchableOpacity>
+              <Text style={styles.addMemberTitle}>
+                {t('projectMembers.editMember') || 'Upraviť oprávnenia'} – {editingMember?.name || editingMember?.email || '—'}
+              </Text>
+              <View style={styles.addMemberHeaderRight} />
+            </View>
+            <ScrollView
+              style={styles.addMemberScroll}
+              contentContainerStyle={styles.addMemberScrollContent}
+              showsVerticalScrollIndicator={false}
+              keyboardShouldPersistTaps="handled"
+              nestedScrollEnabled
+            >
+              <Text style={styles.addMemberSectionTitle}>
+                {t('projectMembers.permissionLevel') || 'Úroveň oprávnení'}
+              </Text>
+
+              <View style={styles.permissionLevelContainer}>
+                <TouchableOpacity
+                  style={[styles.permissionOption, editPermissionLevel === 'viewer' && styles.permissionOptionActive]}
+                  onPress={() => setEditPermissionLevel('viewer')}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={editPermissionLevel === 'viewer' ? 'radio-button-on' : 'radio-button-off'}
+                    size={20}
+                    color={editPermissionLevel === 'viewer' ? colors.primary : colors.textMuted}
+                  />
+                  <View style={styles.permissionOptionContent}>
+                    <Text style={[styles.permissionOptionLabel, editPermissionLevel === 'viewer' && styles.permissionOptionLabelActive]}>
+                      {t('projectMembers.viewer') || 'Len čítanie'}
+                    </Text>
+                    <Text style={styles.permissionOptionDescription}>
+                      {t('projectMembers.viewerDescription') || 'Môže len zobrazovať obsah, nemôže upravovať'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.permissionOption, editPermissionLevel === 'editor' && styles.permissionOptionActive]}
+                  onPress={() => setEditPermissionLevel('editor')}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons
+                    name={editPermissionLevel === 'editor' ? 'radio-button-on' : 'radio-button-off'}
+                    size={20}
+                    color={editPermissionLevel === 'editor' ? colors.primary : colors.textMuted}
+                  />
+                  <View style={styles.permissionOptionContent}>
+                    <Text style={[styles.permissionOptionLabel, editPermissionLevel === 'editor' && styles.permissionOptionLabelActive]}>
+                      {t('projectMembers.editor') || 'Úprava'}
+                    </Text>
+                    <Text style={styles.permissionOptionDescription}>
+                      {t('projectMembers.editorDescription') || 'Môže zobrazovať aj upravovať obsah'}
+                    </Text>
+                  </View>
+                </TouchableOpacity>
+              </View>
+
+              <Text style={styles.addMemberSectionTitle}>
+                {t('projectMembers.shareWhat') || 'Čo chceš zdieľať?'}
+              </Text>
+
+              <View style={styles.shareOptionsContainer}>
+                <TouchableOpacity
+                  style={styles.shareOption}
+                  onPress={() => setEditShareTasks(!editShareTasks)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.checkbox, editShareTasks && styles.checkboxChecked]}>
+                    {editShareTasks && <Ionicons name="checkmark" size={16} color="#fff" />}
+                  </View>
+                  <Text style={styles.shareOptionLabel}>{t('projectMembers.shareTasks') || 'Úlohy'}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.shareOption}
+                  onPress={() => setEditSharePhases(!editSharePhases)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.checkbox, editSharePhases && styles.checkboxChecked]}>
+                    {editSharePhases && <Ionicons name="checkmark" size={16} color="#fff" />}
+                  </View>
+                  <Text style={styles.shareOptionLabel}>{t('projectMembers.sharePhases') || 'Fázy'}</Text>
+                </TouchableOpacity>
+
+                {editSharePhases && phases.length > 0 && (
+                  <View style={styles.phaseSelectionContainer}>
+                    <Text style={styles.phaseSelectionLabel}>
+                      {t('projectMembers.selectPhases') || 'Vyber konkrétne fázy (voliteľné):'}
+                    </Text>
+                    <ScrollView style={styles.phaseSelectionList} nestedScrollEnabled>
+                      {phases.map((phase) => {
+                        const isSelected = editSelectedPhaseIds.includes(phase.id);
+                        return (
+                          <TouchableOpacity
+                            key={phase.id}
+                            style={styles.phaseOption}
+                            onPress={() => {
+                              if (isSelected) {
+                                setEditSelectedPhaseIds(editSelectedPhaseIds.filter(id => id !== phase.id));
+                              } else {
+                                setEditSelectedPhaseIds([...editSelectedPhaseIds, phase.id]);
+                              }
+                            }}
+                            activeOpacity={0.7}
+                          >
+                            <View style={[styles.checkbox, styles.checkboxSmall, isSelected && styles.checkboxChecked]}>
+                              {isSelected && <Ionicons name="checkmark" size={14} color="#fff" />}
+                            </View>
+                            <Text style={styles.phaseOptionLabel}>{phase.name}</Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </ScrollView>
+                  </View>
+                )}
+
+                <TouchableOpacity
+                  style={styles.shareOption}
+                  onPress={() => setEditShareExpenses(!editShareExpenses)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.checkbox, editShareExpenses && styles.checkboxChecked]}>
+                    {editShareExpenses && <Ionicons name="checkmark" size={16} color="#fff" />}
+                  </View>
+                  <Text style={styles.shareOptionLabel}>{t('projectMembers.shareExpenses') || 'Výdavky'}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.shareOption}
+                  onPress={() => setEditShareDiary(!editShareDiary)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.checkbox, editShareDiary && styles.checkboxChecked]}>
+                    {editShareDiary && <Ionicons name="checkmark" size={16} color="#fff" />}
+                  </View>
+                  <Text style={styles.shareOptionLabel}>{t('projectMembers.shareDiary') || 'Denník stavby'}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={styles.shareOption}
+                  onPress={() => setEditShareDocuments(!editShareDocuments)}
+                  activeOpacity={0.7}
+                >
+                  <View style={[styles.checkbox, editShareDocuments && styles.checkboxChecked]}>
+                    {editShareDocuments && <Ionicons name="checkmark" size={16} color="#fff" />}
+                  </View>
+                  <Text style={styles.shareOptionLabel}>{t('projectMembers.shareDocuments') || 'Dokumenty'}</Text>
+                </TouchableOpacity>
+              </View>
+
+              <View style={styles.addMemberButtons}>
+                <TouchableOpacity
+                  style={styles.addMemberCancel}
+                  onPress={closeEditMember}
+                  disabled={submitting}
+                >
+                  <Text style={styles.addMemberCancelText}>{t('common.cancel') || 'Zrušiť'}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.addMemberInvite, (submitting || !user) && styles.addMemberInviteDisabled]}
+                  onPress={handleUpdateMemberPermissions}
+                  disabled={submitting || !user}
+                >
+                  {submitting ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Text style={styles.addMemberInviteText}>{t('projectMembers.savePermissions') || 'Uložiť'}</Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </ScrollView>
+          </View>
+        </View>
+      </Modal>
     </View>
   );
 }
@@ -808,8 +1114,29 @@ const styles = StyleSheet.create({
   invitedMemberRow: {
     opacity: 0.7,
   },
+  memberActions: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  editMemberButton: {
+    padding: spacing.xs,
+  },
   removeMemberButton: {
     padding: spacing.xs,
+  },
+  leaveProjectButton: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.error,
+    backgroundColor: colors.error + "15",
+  },
+  leaveProjectButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.error,
   },
   sharedItemsContainer: {
     flexDirection: "row",

@@ -23,6 +23,7 @@ import type { PhaseCustomization, PhaseStatus } from "../services/projectFactory
 import type { CatalogPhase } from "../lib/types";
 import type { ProjectDoc } from "../services/projects";
 import { colors, radius, spacing } from "../theme";
+import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
 import { openInMaps } from "../lib/maps";
 
 type Project = ProjectDoc;
@@ -47,7 +48,7 @@ export function ProjectsScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const { t } = useI18n();
-  const { orgId } = useAuth();
+  const { orgId, user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -113,6 +114,7 @@ export function ProjectsScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      load(true);
       if ((route.params as { openNew?: boolean })?.openNew) {
         setShowNew(true);
         setNewStep(1);
@@ -121,7 +123,7 @@ export function ProjectsScreen() {
         setError(null);
         (navigation as { setParams?: (params: Record<string, unknown>) => void }).setParams?.({ openNew: false });
       }
-    }, [navigation, route.params])
+    }, [load, navigation, route.params])
   );
 
   const closeNewModal = () => {
@@ -505,9 +507,10 @@ export function ProjectsScreen() {
               ? t("projectType.maintenance")
               : t("projectType.MANAGEMENT"); // MANAGEMENT or undefined = Vedenie výstavby
             
+            const isOwner = !!item.ownerId && item.ownerId === user?.id;
             return (
               <TouchableOpacity
-                style={styles.card}
+                style={[styles.card, !isOwner && styles.cardMember]}
                 onPress={() => {
                   // Navigate to ProjectOverview screen
                   (navigation as any).navigate('ProjectOverview', {
@@ -519,7 +522,10 @@ export function ProjectsScreen() {
               >
                 <View style={styles.cardContent}>
                   <View style={styles.cardMain}>
-                    <Text style={styles.name} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
+                    <View style={styles.nameRow}>
+                      <Text style={styles.name} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
+                    </View>
+                    <ProjectBadgesRow isOwner={isOwner} sharedWithCount={item.sharedWithCount ?? 0} />
                     <Text style={styles.category} numberOfLines={1}>{categoryLabel}</Text>
                     {item.createdAt && (
                       <Text style={styles.createdAt}>{t("projects.createdAt")}: {formatCreatedAt(item.createdAt)}</Text>
@@ -575,10 +581,11 @@ export function ProjectsScreen() {
                     : projectType === "MAINTENANCE"
                     ? t("projectType.maintenance")
                     : t("projectType.MANAGEMENT");
+                  const isOwnerArchived = !!item.ownerId && item.ownerId === user?.id;
                   return (
                     <TouchableOpacity
                       key={item.id}
-                      style={[styles.card, styles.archivedCard]}
+                      style={[styles.card, styles.archivedCard, !isOwnerArchived && styles.cardMember]}
                       onPress={() => {
                         (navigation as any).navigate('ProjectOverview', {
                           projectId: item.id,
@@ -589,7 +596,10 @@ export function ProjectsScreen() {
                     >
                       <View style={styles.cardContent}>
                         <View style={styles.cardMain}>
-                          <Text style={[styles.name, styles.archivedText]} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
+                          <View style={styles.nameRow}>
+                            <Text style={[styles.name, styles.archivedText]} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
+                          </View>
+                          <ProjectBadgesRow isOwner={isOwnerArchived} sharedWithCount={item.sharedWithCount ?? 0} />
                           <Text style={[styles.category, styles.archivedText]} numberOfLines={1}>{categoryLabel}</Text>
                           {item.createdAt && (
                             <Text style={[styles.createdAt, styles.archivedText]}>{t("projects.createdAt")}: {formatCreatedAt(item.createdAt)}</Text>
@@ -1160,8 +1170,13 @@ const styles = StyleSheet.create({
   cardMapButton: {
     padding: spacing.xs,
   },
-  name: { fontSize: 16, fontWeight: "600", color: colors.text, marginBottom: 4 },
+  nameRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
+  name: { fontSize: 16, fontWeight: "600", color: colors.text, flex: 1 },
   category: { fontSize: 13, color: colors.textMuted },
+  cardMember: {
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary + "99",
+  },
   createdAt: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   cardMenu: { padding: spacing.xs ?? 4 },
   cardMenuText: { fontSize: 18, color: colors.textMuted, fontWeight: "600" },

@@ -38,6 +38,14 @@ service firebase.storage {
         && request.resource.size < 50 * 1024 * 1024;
     }
     
+    // Equipment photos (MAINTENANCE): projects/{projectId}/equipment/{equipmentId}/photo_*.jpg|png
+    match /projects/{projectId}/equipment/{equipmentId}/{filename} {
+      allow read: if projectOwner(projectId);
+      
+      allow write: if projectOwner(projectId)
+        && request.resource.size < 10 * 1024 * 1024; // Max 10MB per photo
+    }
+    
     // Deny all other paths
     match /{allPaths=**} {
       allow read, write: if false;

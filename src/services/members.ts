@@ -1,5 +1,5 @@
 import { collection, getDocs, Timestamp } from "../lib/rnFirestore";
-import { db, functions } from "../firebase";
+import { db, getFns } from "../firebase";
 
 export type ProjectMemberDoc = {
   id: string;
@@ -31,8 +31,7 @@ export async function addMemberByEmail(projectId: string, email: string): Promis
   displayName?: string | null;
   emailLower: string;
 }> {
-  const fn = functions().httpsCallable("addProjectMemberByEmail");
-  const result = await fn({ projectId, email });
+  const result = await getFns().httpsCallable("addProjectMemberByEmail")({ projectId, email });
   return result.data as {
     ok: boolean;
     memberUid: string;
@@ -42,8 +41,7 @@ export async function addMemberByEmail(projectId: string, email: string): Promis
 }
 
 export async function removeMember(projectId: string, memberUid: string): Promise<{ ok: boolean }> {
-  const fn = functions().httpsCallable("removeProjectMember");
-  const result = await fn({ projectId, memberUid });
+  const result = await getFns().httpsCallable("removeProjectMember")({ projectId, memberUid });
   return result.data as { ok: boolean };
 }
 

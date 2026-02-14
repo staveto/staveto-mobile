@@ -8,7 +8,7 @@
  */
 
 import { doc, getDoc, onSnapshot, Unsubscribe } from "../lib/rnFirestore";
-import { db, functions } from "../firebase";
+import { db, getFns } from "../firebase";
 
 export type SubscriptionTier = "FREE" | "BASIC" | "PRO" | "ENTERPRISE";
 export type SubscriptionStatus = "trialing" | "active" | "past_due" | "canceled";
@@ -111,9 +111,8 @@ export function subscribeToSubscription(
  * Returns checkout URL that should be opened in browser/webview.
  */
 export async function createCheckoutSession(priceId: string): Promise<{ url: string; sessionId: string }> {
-  const createCheckoutSessionFn = functions().httpsCallable("createCheckoutSession");
-  const result = await createCheckoutSessionFn({ priceId });
-  return result.data;
+  const result = await getFns().httpsCallable("createCheckoutSession")({ priceId });
+  return result.data as { url: string; sessionId: string };
 }
 
 /**
@@ -122,9 +121,8 @@ export async function createCheckoutSession(priceId: string): Promise<{ url: str
  * Returns billing portal URL for managing subscription.
  */
 export async function createBillingPortalSession(): Promise<{ url: string }> {
-  const createBillingPortalSessionFn = functions().httpsCallable("createBillingPortalSession");
-  const result = await createBillingPortalSessionFn();
-  return result.data;
+  const result = await getFns().httpsCallable("createBillingPortalSession")();
+  return result.data as { url: string };
 }
 
 /**

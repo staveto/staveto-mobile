@@ -1,8 +1,9 @@
-import { collection, addDoc, query, getDocs, deleteDoc, doc, serverTimestamp, where } from "../lib/rnFirestore";
-import { db, auth } from "../firebase";
+import { collection, addDoc, query, getDocs, deleteDoc, doc, serverTimestamp, where, getDoc, writeBatch } from "../lib/rnFirestore";
+import { db, auth, getFns } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import firestore from "@react-native-firebase/firestore";
 import { addProjectEvent } from "./projectEvents";
+import * as projectsService from "./projects";
 
 export type ProjectMemberDoc = {
   id: string;
@@ -158,7 +159,8 @@ export async function inviteMemberByEmail(
 }
 
 /**
- * Remove a member from a project
+ * Remove a member from a project (or leave if self).
+ * Uses Cloud Function to delete member, membersByUid mirror, sharedWithCount, events, notifications, unassign tasks.
  */
 export async function removeMember(projectId: string, memberId: string): Promise<void> {
   const currentUser = auth.currentUser;
@@ -166,13 +168,62 @@ export async function removeMember(projectId: string, memberId: string): Promise
     throw new Error('Musíte byť prihlásený na odstránenie člena.');
   }
 
-  try {
-    const memberRef = doc(db, paths.projectMember(projectId, memberId));
-    await deleteDoc(memberRef);
-    
-    console.log(`[projectMembers] Removed member ${memberId} from project ${projectId}`);
-  } catch (error: any) {
-    console.error(`[projectMembers] Error removing member:`, error);
-    throw new Error(`Nepodarilo sa odstrániť člena: ${error.message}`);
+  await currentUser.getIdToken(true);
+  const fns = getFns();
+  const res = await fns.httpsCallable("removeProjectMember")({ projectId, memberId });
+  const data = res?.data as { ok?: boolean };
+  if (!data?.ok) {
+    throw new Error('Nepodarilo sa odstrániť člena.');
   }
+  console.log(`[projectMembers] Removed member ${memberId} from project ${projectId}`);
+}
+
+/**
+ * Update a member's permission level and shared items (owner only).
+ * Uses Cloud Function to also update the member's projectRef.
+ */
+export async function updateMemberPermissions(
+  projectId: string,
+  memberId: string,
+  permissionLevel: "viewer" | "editor",
+  sharedItems: {
+    tasks?: boolean;
+    phases?: boolean;
+    expenses?: boolean;
+    diary?: boolean;
+    documents?: boolean;
+  },
+  sharedPhaseIds?: string[]
+): Promise<void> {
+  const u = auth.currentUser;
+  console.log("[perm] currentUser", !!u, u?.uid, u?.email);
+  if (!u) {
+    throw new Error("NO_AUTH_USER");
+  }
+
+  const token = await u.getIdToken(true);
+  console.log("[perm] tokenLen", token?.length);
+
+  const payload = {
+    projectId,
+    memberId,
+    permissionLevel,
+    sharedItems: sharedItems || {
+      tasks: true,
+      phases: true,
+      expenses: false,
+      diary: false,
+      documents: false,
+    },
+    sharedPhaseIds: sharedPhaseIds || [],
+  };
+
+  const fn = getFns().httpsCallable("updateMemberPermissions");
+  const res = await fn(payload);
+  const data = res?.data as { ok?: boolean };
+  if (!data?.ok) {
+    throw new Error("Nepodarilo sa aktualizovať oprávnenia.");
+  }
+
+  console.log(`[projectMembers] Updated permissions for member ${memberId} in project ${projectId}`);
 }

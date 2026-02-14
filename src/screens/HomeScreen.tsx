@@ -16,7 +16,7 @@ import {
   Platform,
   Image,
 } from "react-native";
-import { TabActions, useNavigation } from "@react-navigation/native";
+import { TabActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -33,6 +33,7 @@ import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
 import { openInMaps } from "../lib/maps";
 import { RoleChip } from "../components/RoleChip";
+import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
 import { ProjectTypeChip } from "../components/ProjectTypeChip";
 import { normalizeRoleKey } from "../helpers/role";
 import type { RoleKey } from "../helpers/role";
@@ -78,6 +79,7 @@ type LiveProjectRow = {
 type CompactProjectItemProps = {
   project: ProjectDoc;
   openTasks: number;
+  currentUserId?: string | null;
   lastActivity: string;
   status: "OK" | "RISK" | "PROBLEM";
   onOpen: (projectId: string) => void;
@@ -93,7 +95,9 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
   onOpen,
   onPhoto,
   onTask,
+  currentUserId,
 }: CompactProjectItemProps) {
+  const isOwner = !!project.ownerId && project.ownerId === currentUserId;
   const stripeColor =
     project.projectType === "BUILD" || project.projectType === "MANAGEMENT"
       ? "#ff9f43"
@@ -104,15 +108,18 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
 
   return (
     <TouchableOpacity
-      style={styles.compactProjectRow}
+      style={[styles.compactProjectRow, !isOwner && styles.compactProjectRowMember]}
       onPress={() => onOpen(project.id)}
       activeOpacity={0.8}
     >
       <View style={[styles.compactStripe, { backgroundColor: stripeColor }]} />
       <View style={styles.compactProjectBody}>
-        <Text style={styles.compactProjectTitle} numberOfLines={1}>
-          {project.name}
-        </Text>
+        <View style={styles.compactProjectTitleRow}>
+          <Text style={styles.compactProjectTitle} numberOfLines={1}>
+            {project.name}
+          </Text>
+        </View>
+        <ProjectBadgesRow isOwner={isOwner} sharedWithCount={project.sharedWithCount ?? 0} />
         <Text style={styles.compactProjectSubline} numberOfLines={1}>
           {openTasks} {openTasks === 1 ? "otvorená úloha" : "otvorené úlohy"} • aktivita {lastActivity}
         </Text>
@@ -419,6 +426,12 @@ export function HomeScreen() {
   useEffect(() => {
     loadLiveActivity();
   }, [loadLiveActivity]);
+
+  useFocusEffect(
+    useCallback(() => {
+      loadDashboard(true);
+    }, [loadDashboard])
+  );
 
   // Save last used project ID
   const saveLastUsedProject = useCallback(async (projectId: string) => {
@@ -958,6 +971,7 @@ export function HomeScreen() {
               onOpen={handleProjectClick}
               onPhoto={(projectId) => runContextAction("photo", projectId)}
               onTask={(projectId) => runContextAction("task", projectId)}
+              currentUserId={user?.id}
             />
           );
         }}
@@ -1409,10 +1423,20 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
   },
+  compactProjectTitleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
   compactProjectTitle: {
     color: "#111111",
     fontSize: 15,
     fontWeight: "700",
+    flex: 1,
+  },
+  compactProjectRowMember: {
+    borderLeftWidth: 3,
+    borderLeftColor: colors.primary + "99",
   },
   compactProjectSubline: {
     marginTop: 2,

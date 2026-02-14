@@ -184,10 +184,30 @@ export function EquipmentDetailScreen() {
             <Text style={styles.emptyText}>Žiadne servisné plány</Text>
           ) : (
             rules.map((r) => (
-              <View key={r.id} style={styles.ruleRow}>
-                <Text style={styles.ruleTitle}>{r.title}</Text>
-                <Text style={styles.ruleMeta}>Každých {r.intervalValue} {r.intervalUnit === "weeks" ? "týždňov" : "mesiacov"}</Text>
-              </View>
+              <TouchableOpacity
+                key={r.id}
+                style={styles.ruleRow}
+                onPress={() =>
+                  (navigation as any).navigate("ServiceRuleForm", {
+                    projectId,
+                    projectName,
+                    equipmentId,
+                    equipmentName: equipment.name,
+                    ruleId: r.id,
+                    rule: r,
+                  })
+                }
+                activeOpacity={0.7}
+              >
+                <View style={styles.ruleRowContent}>
+                  <Text style={styles.ruleTitle}>{r.title}</Text>
+                  <Text style={styles.ruleMeta}>Každých {r.intervalValue} {r.intervalUnit === "weeks" ? "týždňov" : "mesiacov"}</Text>
+                  {r.startFrom && (
+                    <Text style={styles.ruleMeta}>Od: {new Date(r.startFrom).toLocaleDateString("sk-SK", { day: "numeric", month: "numeric", year: "numeric" })}</Text>
+                  )}
+                </View>
+                <Ionicons name="pencil" size={20} color={colors.textMuted} />
+              </TouchableOpacity>
             ))
           )}
         </View>
@@ -262,11 +282,15 @@ const styles = StyleSheet.create({
   sectionTitle: { fontSize: 16, fontWeight: "600", color: colors.textOnDark, marginBottom: spacing.sm },
   emptyText: { fontSize: 14, color: colors.textMuted },
   ruleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     backgroundColor: colors.card,
     borderRadius: radius,
     padding: spacing.md,
     marginBottom: spacing.sm,
   },
+  ruleRowContent: { flex: 1 },
   ruleTitle: { fontSize: 15, fontWeight: "500", color: colors.text },
   ruleMeta: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
   taskRow: {

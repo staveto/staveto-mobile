@@ -8,6 +8,8 @@ export const colors = {
   border: "#3a5280",
   /** Text na modrom pozadí (header, status) – kvôli čitateľnosti */
   textOnDark: "#ffffff",
+  /** Error/destructive actions (e.g. leave project, remove) */
+  error: "#dc3545",
 };
 
 export const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 };

@@ -2,7 +2,7 @@
   "expo": {
     "name": "Staveto",
     "slug": "stavetoapp",
-    "version": "1.2.0",
+    "version": "1.2.1",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -18,12 +18,14 @@
       "infoPlist": {
         "NSCameraUsageDescription": "Táto aplikácia potrebuje prístup ku kamere na fotografovanie faktúr a dokumentov.",
         "NSPhotoLibraryUsageDescription": "Táto aplikácia potrebuje prístup k galérii na výber fotiek a videa.",
-        "NSPhotoLibraryAddUsageDescription": "Táto aplikácia potrebuje prístup k galérii na ukladanie fotiek."
-      }
+        "NSPhotoLibraryAddUsageDescription": "Táto aplikácia potrebuje prístup k galérii na ukladanie fotiek.",
+        "ITSAppUsesNonExemptEncryption": false
+      },
+      "bundleIdentifier": "com.staveto.app"
     },
     "android": {
       "package": "com.staveto.app",
-      "versionCode": 4,
+      "versionCode": 5,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

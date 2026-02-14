@@ -20,6 +20,7 @@ function formatAmount(value: unknown): string {
 export function formatEventSummary(t: TranslateFn, event: ProjectEvent): string {
   const payload = event.payload ?? {};
   const actor = event.actorName ?? payload.actorName ?? t("events.systemActor");
+  const target = payload.targetName ?? payload.targetEmail ?? "";
   const task = payload.taskTitle ?? "";
   const amount = formatAmount(payload.amount);
   const currency = payload.currency ?? "EUR";
@@ -33,6 +34,7 @@ export function formatEventSummary(t: TranslateFn, event: ProjectEvent): string 
   const template = normalizeTemplate(t(`events.${event.type}`));
   const replacements: Record<string, string> = {
     actor,
+    target,
     task,
     amount,
     currency,

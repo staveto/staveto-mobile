@@ -31,6 +31,7 @@ import { ContractorDetailScreen } from "../screens/contractors/ContractorDetailS
 import { ProjectSuppliersScreen } from "../screens/projects/ProjectSuppliersScreen";
 import { UpdatesScreen } from "../screens/projects/UpdatesScreen";
 import { ProjectTeamScreen } from "../screens/projects/ProjectTeamScreen";
+import { ProjectInvitesScreen } from "../screens/ProjectInvitesScreen";
 import { AppTabs } from "./AppTabs";
 import { colors, spacing } from "../theme";
 import { db } from "../firebase";
@@ -173,6 +174,11 @@ export function RootNavigator() {
         name="ProjectMembers"
         component={ProjectMembersScreen}
         options={{ headerShown: true, title: t("nav.projectMembers") || "Členovia projektu" }}
+      />
+      <Stack.Screen
+        name="ProjectInvites"
+        component={ProjectInvitesScreen}
+        options={{ headerShown: true, title: t("projectInvites.title") || "Pozvánky do projektov" }}
       />
       <Stack.Screen
         name="Subscription"

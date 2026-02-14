@@ -16,10 +16,15 @@ service cloud.firestore {
       return projectOwner(projectId);
     }
 
+    function hasProjectRef(projectId) {
+      return signedIn()
+        && exists(/databases/$(database)/documents/users/$(uid())/projectRefs/$(projectId));
+    }
+
     function isMember(projectId) {
       return signedIn()
         && (
-          exists(/databases/$(database)/documents/users/$(uid())/projectRefs/$(projectId))
+          hasProjectRef(projectId)
           || (
             exists(/databases/$(database)/documents/projects/$(projectId)/members/$(uid()))
             && (
@@ -41,6 +46,31 @@ service cloud.firestore {
         "startedAt",
         "lastPhotoAt"
       ]);
+    }
+
+    function hasAccessDoc(projectId) {
+      return exists(/databases/$(database)/documents/projects/$(projectId)/membersByUid/$(uid()));
+    }
+    function access(projectId) {
+      return get(/databases/$(database)/documents/projects/$(projectId)/membersByUid/$(uid())).data;
+    }
+    function canReadTasks(projectId) {
+      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.tasks == true) || (isMember(projectId) && !hasAccessDoc(projectId));
+    }
+    function canReadPhases(projectId) {
+      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.phases == true) || (isMember(projectId) && !hasAccessDoc(projectId));
+    }
+    function canReadExpenses(projectId) {
+      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.expenses == true) || (isMember(projectId) && !hasAccessDoc(projectId));
+    }
+    function canReadDiary(projectId) {
+      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.diary == true) || (isMember(projectId) && !hasAccessDoc(projectId));
+    }
+    function canReadDocuments(projectId) {
+      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.documents == true) || (isMember(projectId) && !hasAccessDoc(projectId));
+    }
+    function canWriteAsEditor(projectId) {
+      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).permissionLevel == 'editor');
     }
 
     // Users (každý len svoj)
@@ -73,21 +103,18 @@ service cloud.firestore {
           (!('subscription' in resource.data) && request.resource.data.subscription.tier == "FREE" && request.resource.data.subscription.status == "active")
         );
 
-      match /ocrCache/{hash} {
-        allow read, write: if signedIn() && uid() == userId;
-      }
-
-      match /contractors/{contractorId} {
-        allow read, write: if signedIn() && uid() == userId;
-      }
-
-      match /projectState/{projectId} {
-        allow read, write: if signedIn() && uid() == userId;
-      }
-
+      // projectRefs: read-only for client (CF writes via admin SDK)
       match /projectRefs/{projectId} {
         allow read: if signedIn() && uid() == userId;
         allow write: if false;
+      }
+
+      // all other user subcollections: self-only read/write (projectRefs excluded from write above)
+      match /{subcol}/{docId} {
+        allow read, write: if signedIn() && uid() == userId && subcol != 'projectRefs';
+      }
+      match /{subcol}/{docId}/{rest=**} {
+        allow read, write: if signedIn() && uid() == userId && subcol != 'projectRefs';
       }
     }
     
@@ -132,12 +159,48 @@ service cloud.firestore {
         allow create, update, delete: if isOwner(projectId);
       }
 
-      // tasks: members can update limited fields
+      // tasks: enforce sharedItems.tasks
       match /tasks/{taskId} {
-        allow read: if isOwner(projectId) || isMember(projectId);
-        allow create, delete: if isOwner(projectId);
-        allow update: if isOwner(projectId)
-          || (isMember(projectId) && memberTaskUpdateAllowed());
+        allow read: if canReadTasks(projectId);
+        allow create, delete: if canWriteAsEditor(projectId);
+        allow update: if canWriteAsEditor(projectId)
+          || (canReadTasks(projectId) && memberTaskUpdateAllowed());
+      }
+
+      // phases: enforce sharedItems.phases
+      match /phases/{phaseId} {
+        allow read: if canReadPhases(projectId);
+        allow write: if canWriteAsEditor(projectId);
+      }
+
+      // expenses: enforce sharedItems.expenses
+      match /expenses/{expenseId} {
+        allow read: if canReadExpenses(projectId);
+        allow write: if canWriteAsEditor(projectId);
+      }
+
+      // constructionDiary: enforce sharedItems.diary
+      match /constructionDiary/{entryId} {
+        allow read: if canReadDiary(projectId);
+        allow write: if canWriteAsEditor(projectId);
+      }
+
+      // documents: enforce sharedItems.documents
+      match /documents/{docId} {
+        allow read: if canReadDocuments(projectId);
+        allow write: if canWriteAsEditor(projectId);
+      }
+
+      // attachments: enforce sharedItems.documents
+      match /attachments/{attachmentId} {
+        allow read: if canReadDocuments(projectId);
+        allow write: if canWriteAsEditor(projectId);
+      }
+
+      // membersByUid: read for self (rules check), write by CF only
+      match /membersByUid/{memberUid} {
+        allow read: if signedIn() && uid() == memberUid;
+        allow write: if false;
       }
 
       // project activity events ticker
@@ -145,7 +208,7 @@ service cloud.firestore {
         allow read, write: if isOwner(projectId) || isMember(projectId);
       }
 
-      // subkolekcie (phases/tasks/expenses/attachments...)
+      // other subcollections (stats, phaseStats, equipment, serviceRules...)
       match /{subcol}/{docId} {
         allow read: if signedIn()
           && exists(/databases/$(database)/documents/projects/$(projectId))
@@ -159,7 +222,6 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
       }
 
-      // hlbšie subkolekcie (napr. tasks/{id}/attachments/{fileId})
       match /{subcol}/{docId}/{subsub=**} {
         allow read: if signedIn()
           && exists(/databases/$(database)/documents/projects/$(projectId))

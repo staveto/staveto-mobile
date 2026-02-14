@@ -24,7 +24,7 @@ import { colors, radius, spacing } from "../theme";
 import { PRIVACY_URL, SUPPORT_EMAIL, TERMS_URL } from "../constants/consent";
 import { requestAccountDeletion } from "../services/account";
 import { isFeatureEnabled } from "../services/features";
-import { db, storage } from "../firebase";
+import { db, storage, getFns } from "../firebase";
 import { doc, getDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import * as ImagePicker from "expo-image-picker";
 
@@ -300,6 +300,11 @@ export function AccountScreen() {
             <Text style={styles.inviteBtnText}>{t("account.invite")}</Text>
           </TouchableOpacity>
         </View>
+        <Row
+          icon="mail-open-outline"
+          label={t("projectInvites.title") || "Pozvánky do projektov"}
+          onPress={() => nav.navigate("ProjectInvites")}
+        />
       </View>
 
       {/* Plán */}
@@ -331,6 +336,24 @@ export function AccountScreen() {
           icon="notifications-outline"
           label={t("account.pushNotifications")}
           onPress={() => Alert.alert(t("account.manage"), t("account.comingSoon"))}
+        />
+      </View>
+
+      {/* Údržba - obnovenie sharedWithCount pre existujúce projekty */}
+      <SectionTitle title="Údržba" />
+      <View style={styles.card}>
+        <Row
+          icon="refresh-outline"
+          label="Obnoviť počty zdieľaní"
+          onPress={async () => {
+            try {
+              const res = await getFns().httpsCallable("backfillProjectSharedCounts")({});
+              const data = res?.data as { ok?: boolean; updated?: number };
+              Alert.alert("Hotovo", `Aktualizovaných projektov: ${data?.updated ?? 0}. Obnovte zoznam projektov.`);
+            } catch (e: any) {
+              Alert.alert("Chyba", e?.message ?? "Nepodarilo sa obnoviť.");
+            }
+          }}
         />
       </View>
 

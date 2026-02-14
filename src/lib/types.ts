@@ -221,6 +221,9 @@ export type ProjectEventType =
   | "task_created"
   | "task_done"
   | "member_invited"
+  | "member_joined"
+  | "member_left"
+  | "member_removed"
   | "diary_added";
 
 export interface ProjectEvent {
@@ -239,6 +242,10 @@ export interface ProjectEvent {
     supplier?: string;
     count?: number;
     email?: string;
+    targetUserId?: string;
+    targetEmail?: string;
+    targetName?: string;
+    text?: string;
   };
   ref?: {
     kind?: string;

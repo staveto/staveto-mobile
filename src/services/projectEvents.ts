@@ -25,6 +25,10 @@ type ProjectEventPayload = {
   supplier?: string;
   count?: number;
   email?: string;
+  targetUserId?: string;
+  targetEmail?: string;
+  targetName?: string;
+  text?: string;
 };
 
 type ProjectEventRef = {

@@ -1,14 +1,6 @@
 import auth from "@react-native-firebase/auth";
-import functions from "@react-native-firebase/functions";
+import { getFns } from "../firebase";
 import { addProjectEvent } from "./projectEvents";
-
-function getRegionalFunctions(region: string) {
-  try {
-    return (functions as unknown as (region: string) => ReturnType<typeof functions>)(region);
-  } catch {
-    return (functions as (app: unknown, region?: string) => ReturnType<typeof functions>)(undefined, region);
-  }
-}
 
 export type OcrStatus = "success" | "failed" | "limit";
 
@@ -47,9 +39,8 @@ export async function runInvoiceOCR(payload: {
     console.log("[invoiceOCR] PRE token refreshed in ms:", Date.now() - t0);
   }
 
-  const fns = getRegionalFunctions("europe-west1");
-  const fn = fns.httpsCallable("extractInvoiceData");
-  console.log("[invoiceOCR] region=europe-west1, calling callable, ts:", Date.now());
+  const fn = getFns().httpsCallable("extractInvoiceData");
+  console.log("[invoiceOCR] calling callable, ts:", Date.now());
   console.log("[invoiceOCR] PAYLOAD:", JSON.stringify(payload));
 
   const watchdog = setTimeout(() => {

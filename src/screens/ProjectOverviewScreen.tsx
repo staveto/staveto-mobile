@@ -1218,7 +1218,10 @@ export function ProjectOverviewScreen() {
     (candidate: { key: string; assigneeId: string | null; assigneeName: string | null; label: string }) => {
       if (!orgId || !projectId || !assigneeTask) return;
       tasksService
-        .updateTaskAssignee(orgId, projectId, assigneeTask.id, candidate.assigneeId, candidate.assigneeName)
+        .updateTaskAssignee(orgId, projectId, assigneeTask.id, candidate.assigneeId, candidate.assigneeName, {
+          taskTitle: assigneeTask.title ?? null,
+          projectName: projectName || null,
+        })
         .then(() => load())
         .catch((error) => {
           console.error("[ProjectOverview] Failed to update assignee:", error);
@@ -2899,6 +2902,13 @@ export function ProjectOverviewScreen() {
                         );
                       }}
                     >
+                      {eq.photoUrl ? (
+                        <Image
+                          source={{ uri: eq.photoUrl }}
+                          style={styles.equipmentChipImage}
+                          resizeMode="cover"
+                        />
+                      ) : null}
                       <Text style={styles.equipmentChipText} numberOfLines={1}>{eq.labelCode || eq.name}</Text>
                     </TouchableOpacity>
                   ))}
@@ -5702,15 +5712,25 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   equipmentChip: {
-    paddingHorizontal: spacing.md,
+    flexDirection: "row",
+    alignItems: "center",
+    paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
     borderRadius: radius,
     backgroundColor: colors.card,
     borderWidth: 1,
     borderColor: colors.border,
-    maxWidth: 120,
+    maxWidth: 160,
+    gap: spacing.sm,
+  },
+  equipmentChipImage: {
+    width: 36,
+    height: 36,
+    borderRadius: 6,
+    backgroundColor: colors.border,
   },
   equipmentChipText: {
+    flex: 1,
     fontSize: 13,
     color: colors.text,
     fontWeight: "500",

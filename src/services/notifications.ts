@@ -18,11 +18,15 @@ import {
 import { db, auth } from "../firebase";
 
 export type NotificationType =
+  | "TASK_ASSIGNED"
   | "TASK_DUE_TODAY"
   | "TASK_OVERDUE"
   | "PROJECT_ACTIVITY"
   | "PROJECT_CREATED"
   | "EXPENSE_ADDED"
+  | "MEMBER_JOINED"
+  | "MEMBER_LEFT"
+  | "MEMBER_REMOVED"
   | "SYNC_ISSUE";
 
 export type NotificationSeverity = "info" | "warning" | "error";
@@ -44,6 +48,19 @@ export type NotificationDoc = {
   severity?: NotificationSeverity;
   deepLink?: { screen: string; params?: Record<string, unknown> };
   message?: string;
+  fromUserId?: string | null;
+  fromUserName?: string | null;
+  /** @deprecated Use message. Kept for NotificationRow compat. */
+  title?: string | null;
+  /** @deprecated Use fromUserName. Kept for NotificationRow compat. */
+  actorName?: string | null;
+  /** @deprecated Inferred from type. Kept for NotificationRow compat. */
+  entityType?: "task" | "project" | "expense" | "document";
+  meta?: Record<string, unknown>;
+  /** Deduplication key for TASK_ASSIGNED anti-spam (e.g. TASK_ASSIGNED_projectId_taskId_assigneeId) */
+  dedupeKey?: string | null;
+  /** Client timestamp for dedupe queries (reliable immediately; createdAt is serverTimestamp) */
+  createdAtClient?: string | null;
   isLocal?: boolean;
 };
 
@@ -67,15 +84,23 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
     return undefined;
   };
 
+  const type = (d.type as NotificationType) ?? "PROJECT_ACTIVITY";
+  const message = (d.message as string) ?? undefined;
+  const fromUserName = (d.fromUserName as string) ?? undefined;
+  const entityType = inferEntityType(type, d);
+
+  const meta = (d.meta as Record<string, unknown>) ?? undefined;
+  const taskIdFromMeta = meta?.taskId as string | undefined;
+
   return {
     id: docSnap.id,
     userId: (d.userId as string) ?? "",
-    type: (d.type as NotificationType) ?? "PROJECT_ACTIVITY",
+    type,
     createdAt: convertTimestamp(d.createdAt) ?? new Date().toISOString(),
     readAt: convertTimestamp(d.readAt) ?? null,
     projectId: (d.projectId as string) ?? null,
     projectName: (d.projectName as string) ?? null,
-    taskId: (d.taskId as string) ?? null,
+    taskId: (d.taskId as string) ?? taskIdFromMeta ?? null,
     taskTitle: (d.taskTitle as string) ?? null,
     dueDate: convertTimestamp(d.dueDate) ?? (d.dueDate as string | null) ?? null,
     expenseId: (d.expenseId as string) ?? null,
@@ -83,8 +108,29 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
     currency: (d.currency as string) ?? "EUR",
     severity: (d.severity as NotificationSeverity) ?? "info",
     deepLink: (d.deepLink as { screen: string; params?: Record<string, unknown> }) ?? undefined,
-    message: (d.message as string) ?? undefined,
+    message,
+    fromUserId: (d.fromUserId as string) ?? undefined,
+    fromUserName,
+    title: message ?? null,
+    actorName: fromUserName ?? null,
+    entityType,
+    meta,
+    dedupeKey: (d.dedupeKey as string) ?? null,
+    createdAtClient: convertTimestamp(d.createdAtClient) ?? null,
   };
+}
+
+function inferEntityType(
+  type: NotificationType,
+  d: Record<string, unknown>
+): "task" | "project" | "expense" | "document" {
+  if (d.entityType && ["task", "project", "expense", "document"].includes(d.entityType as string)) {
+    return d.entityType as "task" | "project" | "expense" | "document";
+  }
+  if (type.includes("TASK")) return "task";
+  if (type.includes("PROJECT") || type.includes("MEMBER")) return "project";
+  if (type.includes("EXPENSE")) return "expense";
+  return "project";
 }
 
 const parseDateOnly = (dateStr?: string | null) => {
@@ -373,6 +419,128 @@ export async function createProjectCreatedNotification(data: {
     projectName: data.projectName ?? null,
     severity: "info",
   });
+}
+
+export type CreateNotificationInput = {
+  userId: string;
+  type?: NotificationType;
+  projectId?: string | null;
+  projectName?: string | null;
+  message?: string;
+  fromUserId?: string;
+  fromUserName?: string;
+  /** @deprecated Use message */
+  title?: string;
+  entityType?: string;
+  entityId?: string;
+  eventType?: string;
+  actorId?: string;
+  actorName?: string;
+};
+
+/**
+ * Generic notification creator. Writes to flat notifications collection.
+ * Caller must be authenticated. Recipient (userId) can be any user (e.g. project owner).
+ */
+export async function createNotification(data: CreateNotificationInput): Promise<{ id: string }> {
+  if (!auth.currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+
+  const c = collection(db, "notifications");
+  const ref = await addDoc(c, {
+    userId: data.userId,
+    type: data.type ?? "PROJECT_ACTIVITY",
+    createdAt: serverTimestamp(),
+    readAt: null,
+    projectId: data.projectId ?? null,
+    projectName: data.projectName ?? null,
+    message: data.message ?? data.title ?? null,
+    fromUserId: data.fromUserId ?? null,
+    fromUserName: data.fromUserName ?? null,
+    severity: "info",
+  });
+  return { id: ref.id };
+}
+
+export async function createTaskAssignedNotification(data: {
+  userId: string;
+  projectId: string;
+  taskId: string;
+  taskTitle?: string | null;
+  projectName?: string | null;
+  message?: string;
+  fromUserId?: string;
+  fromUserName?: string;
+}): Promise<{ id: string } | null> {
+  if (!auth.currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+
+  const dedupeKey = `TASK_ASSIGNED_${data.projectId}_${data.taskId}_${data.userId}`;
+  const cutoff = Timestamp.fromDate(new Date(Date.now() - 5 * 60 * 1000));
+
+  const c = collection(db, "notifications");
+  const dedupeQ = query(
+    c,
+    where("userId", "==", data.userId),
+    where("dedupeKey", "==", dedupeKey),
+    where("createdAtClient", ">", cutoff),
+    orderBy("createdAtClient", "desc"),
+    limit(1)
+  );
+  const dedupeSnap = await getDocs(dedupeQ);
+  if (!dedupeSnap.empty) {
+    return null;
+  }
+
+  const nowClient = Timestamp.now();
+  const ref = await addDoc(c, {
+    userId: data.userId,
+    type: "TASK_ASSIGNED",
+    projectId: data.projectId,
+    taskId: data.taskId,
+    taskTitle: data.taskTitle ?? null,
+    projectName: data.projectName ?? null,
+    message: data.message ?? `Bola ti priradená úloha${data.taskTitle ? ` "${data.taskTitle}"` : ""}.`,
+    fromUserId: data.fromUserId ?? null,
+    fromUserName: data.fromUserName ?? null,
+    meta: { taskId: data.taskId },
+    entityType: "task",
+    dedupeKey,
+    createdAtClient: nowClient,
+    createdAt: serverTimestamp(),
+    readAt: null,
+    severity: "info",
+  });
+  return { id: ref.id };
+}
+
+export async function createMemberLifecycleNotification(data: {
+  userId: string;
+  type: "MEMBER_JOINED" | "MEMBER_LEFT" | "MEMBER_REMOVED";
+  projectId: string;
+  projectName?: string | null;
+  message: string;
+  fromUserId?: string;
+  fromUserName?: string;
+}): Promise<{ id: string }> {
+  if (!auth.currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+
+  const c = collection(db, "notifications");
+  const ref = await addDoc(c, {
+    userId: data.userId,
+    type: data.type,
+    createdAt: serverTimestamp(),
+    readAt: null,
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    message: data.message,
+    severity: "info",
+  });
+  return { id: ref.id };
 }
 
 export async function createProjectActivityNotification(data: {

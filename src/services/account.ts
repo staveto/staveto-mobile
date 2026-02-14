@@ -1,7 +1,6 @@
-import { functions } from "../firebase";
+import { getFns } from "../firebase";
 
 export async function requestAccountDeletion(reason?: string): Promise<{ status: string }> {
-  const fn = functions().httpsCallable("requestAccountDeletion");
-  const result = await fn({ reason });
-  return result.data;
+  const result = await getFns().httpsCallable("requestAccountDeletion")({ reason });
+  return result.data as { status: string };
 }

@@ -9,7 +9,7 @@
 ## 2. Identifikácia typu v kóde
 
 | Súbor | Použitie |
-|-------|----------|
+|-------|----------|np
 | `src/lib/types.ts` | `ProjectType = 'BUILD' \| 'MAINTENANCE' \| 'TRADE' \| 'RESIDENTIAL' \| 'MANAGEMENT'` |
 | `src/helpers/role.ts` | MAINTENANCE → rola **SPRÁVCA** (administrator) |
 | `src/components/ProjectTypeChip.tsx` | Ikona `construct-outline` |

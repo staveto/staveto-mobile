@@ -471,7 +471,8 @@ export async function updateTaskAssignee(
   projectId: string,
   taskId: string,
   assigneeId: string | null,
-  assigneeName?: string | null
+  assigneeName?: string | null,
+  opts?: { taskTitle?: string | null; projectName?: string | null }
 ): Promise<void> {
   const ref = doc(db, paths.projectTask(projectId, taskId));
   await updateDoc(ref, {
@@ -479,6 +480,27 @@ export async function updateTaskAssignee(
     assigneeName: assigneeName ?? null, // Use assigneeName (consistent with types)
     updatedAt: serverTimestamp(), // Use serverTimestamp()
   });
+
+  if (assigneeId) {
+    try {
+      const { createTaskAssignedNotification } = await import("./notifications");
+      const { auth } = await import("../firebase");
+      const currentUser = auth.currentUser;
+      if (currentUser?.uid && currentUser.uid !== assigneeId) {
+        await createTaskAssignedNotification({
+          userId: assigneeId,
+          projectId,
+          taskId,
+          taskTitle: opts?.taskTitle ?? null,
+          projectName: opts?.projectName ?? null,
+          fromUserId: currentUser.uid,
+          fromUserName: currentUser.displayName ?? currentUser.email ?? undefined,
+        });
+      }
+    } catch (error) {
+      console.warn("[tasks] Failed to create TASK_ASSIGNED notification:", error);
+    }
+  }
 }
 
 /**

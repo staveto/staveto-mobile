@@ -17,6 +17,7 @@ export type ProjectDoc = {
   ownerId?: string; // Read-only: included from existing DB field, no schema change
   archivedAt?: unknown; // Timestamp when archived (truthy = archived)
   createdAt?: string; // ISO string when project was created
+  sharedWithCount?: number; // Number of non-owner members (for badge)
 };
 
 export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
@@ -40,6 +41,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     ownerId: (d.ownerId as string) || undefined, // Read-only: read from existing DB field
     archivedAt: d.archivedAt ?? undefined,
     createdAt,
+    sharedWithCount: typeof d.sharedWithCount === "number" ? d.sharedWithCount : undefined,
   };
 }
 

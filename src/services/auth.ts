@@ -93,6 +93,15 @@ export async function logout(): Promise<void> {
   await auth().signOut();
 }
 
+/** Send password reset email to the given address. */
+export async function sendPasswordResetEmail(email: string): Promise<void> {
+  const trimEmail = email.trim().toLowerCase();
+  if (!trimEmail || !trimEmail.includes("@")) {
+    throw new Error("Zadajte platný email.");
+  }
+  await auth().sendPasswordResetEmail(trimEmail);
+}
+
 /** Maps Firebase auth/ error codes to user-friendly messages. */
 export function getAuthErrorMessage(code: string): string {
   const m: Record<string, string> = {

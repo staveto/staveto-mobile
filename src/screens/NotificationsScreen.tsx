@@ -10,6 +10,7 @@ import {
   Modal,
   Alert,
 } from "react-native";
+import { showToast } from "../helpers/toast";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
@@ -140,12 +141,19 @@ export function NotificationsScreen() {
         return "time-outline";
       case "TASK_OVERDUE":
         return "warning-outline";
+      case "TASK_ASSIGNED":
+        return "checkmark-circle-outline";
       case "EXPENSE_ADDED":
         return "cash-outline";
       case "PROJECT_CREATED":
         return "add-circle-outline";
       case "PROJECT_ACTIVITY":
         return "folder-outline";
+      case "MEMBER_JOINED":
+        return "person-add-outline";
+      case "MEMBER_LEFT":
+      case "MEMBER_REMOVED":
+        return "person-remove-outline";
       case "SYNC_ISSUE":
         return "cloud-offline-outline";
       default:
@@ -159,12 +167,20 @@ export function NotificationsScreen() {
         return "Úloha dnes";
       case "TASK_OVERDUE":
         return "Po termíne";
+      case "TASK_ASSIGNED":
+        return "Priradená úloha";
       case "EXPENSE_ADDED":
         return "Nový výdavok";
       case "PROJECT_CREATED":
         return "Nový projekt";
       case "PROJECT_ACTIVITY":
         return "Zmena v projekte";
+      case "MEMBER_JOINED":
+        return "Člen vstúpil do projektu";
+      case "MEMBER_LEFT":
+        return "Člen opustil projekt";
+      case "MEMBER_REMOVED":
+        return "Člen bol odstránený";
       case "SYNC_ISSUE":
         return "Problém so sync";
       default:
@@ -184,6 +200,37 @@ export function NotificationsScreen() {
   const handleNotificationPress = useCallback(
     async (notification: NotificationDoc) => {
       await markAsRead(notification);
+
+      const taskIdForDetail =
+        notification.taskId ?? (notification.meta?.taskId as string | undefined);
+
+      if (notification.type === "TASK_ASSIGNED" && notification.projectId) {
+        if (!taskIdForDetail) {
+          const parentNav = navigation.getParent();
+          if (parentNav) {
+            (parentNav as any).navigate("ProjectOverview", { projectId: notification.projectId });
+          }
+          return;
+        }
+        try {
+          const task = await tasksService.getTaskById(notification.projectId, taskIdForDetail);
+          if (task) {
+            const parentNav = navigation.getParent();
+            if (parentNav) {
+              (parentNav as any).navigate("TaskDetail", { task });
+            }
+            return;
+          }
+        } catch (error) {
+          console.error("[NotificationsScreen] Error loading task for TASK_ASSIGNED:", error);
+        }
+        const parentNav = navigation.getParent();
+        if (parentNav) {
+          (parentNav as any).navigate("ProjectOverview", { projectId: notification.projectId });
+        }
+        showToast("K projektu už nemáš prístup.");
+        return;
+      }
 
       if (notification.type === "TASK_DUE_TODAY" || notification.type === "TASK_OVERDUE") {
         if (notification.taskId && notification.projectId) {
@@ -216,7 +263,14 @@ export function NotificationsScreen() {
             openExpenseId: notification.expenseId,
           });
         }
-      } else if ((notification.type === "PROJECT_ACTIVITY" || notification.type === "PROJECT_CREATED") && notification.projectId) {
+      } else if (
+        (notification.type === "PROJECT_ACTIVITY" ||
+          notification.type === "PROJECT_CREATED" ||
+          notification.type === "MEMBER_JOINED" ||
+          notification.type === "MEMBER_LEFT" ||
+          notification.type === "MEMBER_REMOVED") &&
+        notification.projectId
+      ) {
         // Navigate to root stack ProjectOverview screen
         const parentNav = navigation.getParent();
         if (parentNav) {

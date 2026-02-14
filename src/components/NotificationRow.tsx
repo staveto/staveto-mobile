@@ -10,7 +10,7 @@ type Props = {
   timeLabel: string;
 };
 
-const entityIcons: Record<NotificationDoc["entityType"], React.ComponentProps<typeof Ionicons>["name"]> = {
+const entityIcons: Record<string, React.ComponentProps<typeof Ionicons>["name"]> = {
   task: "checkbox-outline",
   project: "folder-outline",
   expense: "cash-outline",
@@ -19,6 +19,9 @@ const entityIcons: Record<NotificationDoc["entityType"], React.ComponentProps<ty
 
 export function NotificationRow({ notification, onPress, timeLabel }: Props) {
   const isUnread = !notification.readAt;
+  const iconName = (notification.entityType && entityIcons[notification.entityType]) ?? "notifications-outline";
+  const displayTitle = notification.title ?? notification.message ?? "Notifikácia";
+  const displayActor = notification.actorName ?? notification.fromUserName;
   return (
     <TouchableOpacity
       style={[styles.row, isUnread && styles.rowUnread]}
@@ -26,23 +29,25 @@ export function NotificationRow({ notification, onPress, timeLabel }: Props) {
       activeOpacity={0.7}
     >
       <View style={styles.iconWrap}>
-        <Ionicons name={entityIcons[notification.entityType]} size={22} color={colors.primary} />
+        <Ionicons name={iconName} size={22} color={colors.primary} />
       </View>
       <View style={styles.content}>
         <View style={styles.titleRow}>
           <Text style={[styles.title, isUnread && styles.titleUnread]} numberOfLines={1}>
-            {notification.title ?? "Notifikácia"}
+            {displayTitle}
           </Text>
           {isUnread && <View style={styles.unreadDot} />}
         </View>
-        {notification.actorName ? (
+        {displayActor ? (
           <Text style={styles.actor} numberOfLines={1}>
-            {notification.actorName}
+            {displayActor}
           </Text>
         ) : null}
-        <Text style={styles.message} numberOfLines={2}>
-          {notification.message}
-        </Text>
+        {notification.message ? (
+          <Text style={styles.message} numberOfLines={2}>
+            {notification.message}
+          </Text>
+        ) : null}
         <Text style={styles.meta} numberOfLines={1}>
           {notification.projectId ? `Projekt • ${timeLabel}` : timeLabel}
         </Text>

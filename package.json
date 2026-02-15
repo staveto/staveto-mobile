@@ -10,7 +10,9 @@
     "dev:android": "expo run:android",
     "ios": "expo run:ios",
     "web": "expo start --web",
-    "build:android": "eas build --platform android --profile production"
+    "build:android": "eas build --platform android --profile production",
+    "i18n:audit": "node scripts/i18n-audit.js",
+    "i18n:add-missing": "node scripts/i18n-add-missing.js"
   },
   "dependencies": {
     "@google-cloud/vision": "^5.3.4",

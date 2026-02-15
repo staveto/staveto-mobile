@@ -1,7 +1,7 @@
 import { collection, addDoc, query, getDocs, deleteDoc, doc, serverTimestamp, where, getDoc, writeBatch } from "../lib/rnFirestore";
+import firestore from "@react-native-firebase/firestore";
 import { db, auth, getFns } from "../firebase";
 import { paths } from "../lib/firestorePaths";
-import firestore from "@react-native-firebase/firestore";
 import { addProjectEvent } from "./projectEvents";
 import * as projectsService from "./projects";
 
@@ -30,16 +30,25 @@ export type ProjectMemberDoc = {
 
 /**
  * List all members of a project
+ * @param forceFromServer - When true, bypasses cache to get fresh data (use after add/remove member)
  */
-export async function listProjectMembers(projectId: string): Promise<ProjectMemberDoc[]> {
+export async function listProjectMembers(
+  projectId: string,
+  forceFromServer?: boolean
+): Promise<ProjectMemberDoc[]> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
     throw new Error('Musíte byť prihlásený na načítanie členov projektu.');
   }
 
   try {
-    const membersRef = collection(db, paths.projectMembers(projectId));
-    const snapshot = await getDocs(membersRef);
+    const membersRef = firestore()
+      .collection("projects")
+      .doc(projectId)
+      .collection("members");
+    const snapshot = forceFromServer
+      ? await membersRef.get({ source: "server" })
+      : await membersRef.get();
     
     return snapshot.docs.map(doc => {
       const data = doc.data();
@@ -161,21 +170,48 @@ export async function inviteMemberByEmail(
 /**
  * Remove a member from a project (or leave if self).
  * Uses Cloud Function to delete member, membersByUid mirror, sharedWithCount, events, notifications, unassign tasks.
+ * @param memberUid - Optional: user ID (for backward compatibility with backends expecting memberUid)
  */
-export async function removeMember(projectId: string, memberId: string): Promise<void> {
+export async function removeMember(
+  projectId: string,
+  memberId: string,
+  memberUid?: string
+): Promise<void> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
     throw new Error('Musíte byť prihlásený na odstránenie člena.');
   }
 
-  await currentUser.getIdToken(true);
-  const fns = getFns();
-  const res = await fns.httpsCallable("removeProjectMember")({ projectId, memberId });
-  const data = res?.data as { ok?: boolean };
-  if (!data?.ok) {
-    throw new Error('Nepodarilo sa odstrániť člena.');
+  const callRemove = async (payload: { projectId: string; memberId: string; memberUid?: string }) => {
+    await currentUser.getIdToken(true);
+    const fns = getFns();
+    return fns.httpsCallable("removeProjectMember")(payload);
+  };
+
+  const payload = { projectId, memberId, ...(memberUid && { memberUid }) };
+  console.log("[projectMembers] removeMember", { projectId, memberId, memberUid });
+  try {
+    const res = await callRemove(payload);
+    const data = res?.data as { ok?: boolean };
+    if (!data?.ok) {
+      throw new Error('Nepodarilo sa odstrániť člena.');
+    }
+    console.log(`[projectMembers] Removed member ${memberId} from project ${projectId}`);
+  } catch (err: any) {
+    const code = String(err?.code ?? "").toLowerCase();
+    const msg = String(err?.message ?? "");
+    if (code === "unauthenticated" || msg.includes("UNAUTHENTICATED")) {
+      await currentUser.reload();
+      const res = await callRemove(payload);
+      const data = res?.data as { ok?: boolean };
+      if (!data?.ok) {
+        throw new Error('Nepodarilo sa odstrániť člena.');
+      }
+      console.log(`[projectMembers] Removed member ${memberId} (retry ok)`);
+    } else {
+      throw err;
+    }
   }
-  console.log(`[projectMembers] Removed member ${memberId} from project ${projectId}`);
 }
 
 /**

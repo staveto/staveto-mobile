@@ -12,6 +12,7 @@ import {
 import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useI18n } from "../../i18n/I18nContext";
 import { colors, radius, spacing } from "../../theme";
 import * as equipmentService from "../../services/equipment";
 import * as serviceRulesService from "../../services/serviceRules";
@@ -24,6 +25,7 @@ export function EquipmentDetailScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const { t } = useI18n();
   const { projectId, projectName, equipmentId } = (route.params as {
     projectId?: string;
     projectName?: string;
@@ -54,7 +56,7 @@ export function EquipmentDetailScreen() {
       setOpenTasks(serviceTasks);
     } catch (e: any) {
       console.error("[EquipmentDetail] Error:", e);
-      Alert.alert("Chyba", e.message || "Nepodarilo sa načítať zariadenie.");
+      Alert.alert(t("common.error"), e.message || t("equipment.loadFailed"));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -75,7 +77,7 @@ export function EquipmentDetailScreen() {
       "Archivovať zariadenie",
       `Naozaj chcete archivovať "${equipment?.name}"? Zariadenie sa skryje zo zoznamu, ale zostane v databáze.`,
       [
-        { text: "Zrušiť", style: "cancel" },
+        { text: t("common.cancel"), style: "cancel" },
         {
           text: "Archivovať",
           style: "destructive",
@@ -84,7 +86,7 @@ export function EquipmentDetailScreen() {
               await equipmentService.archiveEquipment(projectId, equipmentId);
               goBack();
             } catch (e: any) {
-              Alert.alert("Chyba", e.message || "Nepodarilo sa archivovať zariadenie.");
+              Alert.alert(t("common.error"), e.message || t("equipment.archiveFailed"));
             }
           },
         },
@@ -215,7 +217,7 @@ export function EquipmentDetailScreen() {
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>Otvorené servisné úlohy</Text>
           {openTasks.length === 0 ? (
-            <Text style={styles.emptyText}>Žiadne otvorené úlohy</Text>
+            <Text style={styles.emptyText}>{t("equipment.noOpenTasks")}</Text>
           ) : (
             openTasks.map((t) => (
               <TouchableOpacity

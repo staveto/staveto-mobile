@@ -136,6 +136,15 @@ export function ProjectsScreen() {
     load();
   }, [load]);
 
+  const filterProjects = useCallback(
+    (list: Project[]) => {
+      if (projectFilter === "mine") return list.filter((p) => p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0);
+      if (projectFilter === "shared") return list.filter((p) => p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0);
+      return list;
+    },
+    [projectFilter]
+  );
+
   useFocusEffect(
     useCallback(() => {
       load(true);
@@ -478,6 +487,9 @@ export function ProjectsScreen() {
     }
   };
 
+  const activeProjects = filterProjects(projects.filter((p) => !p.archivedAt));
+  const archivedProjects = filterProjects(projects.filter((p) => !!p.archivedAt));
+
   if (loading) {
     return (
       <View style={styles.centered}>
@@ -485,18 +497,6 @@ export function ProjectsScreen() {
       </View>
     );
   }
-
-  const filterProjects = useCallback(
-    (list: Project[]) => {
-      if (projectFilter === "mine") return list.filter((p) => p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0);
-      if (projectFilter === "shared") return list.filter((p) => p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0);
-      return list;
-    },
-    [projectFilter]
-  );
-
-  const activeProjects = filterProjects(projects.filter((p) => !p.archivedAt));
-  const archivedProjects = filterProjects(projects.filter((p) => !!p.archivedAt));
 
   return (
     <View style={styles.container}>
@@ -523,19 +523,19 @@ export function ProjectsScreen() {
             style={[styles.filterChip, projectFilter === "all" && styles.filterChipActive]}
             onPress={() => handleFilterChange("all")}
           >
-            <Text style={[styles.filterChipText, projectFilter === "all" && styles.filterChipTextActive]}>Všetko</Text>
+            <Text style={[styles.filterChipText, projectFilter === "all" && styles.filterChipTextActive]}>{t("home.filterAll")}</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.filterChip, projectFilter === "mine" && styles.filterChipActive]}
             onPress={() => handleFilterChange("mine")}
           >
-            <Text style={[styles.filterChipText, projectFilter === "mine" && styles.filterChipTextActive]}>Moje</Text>
+            <Text style={[styles.filterChipText, projectFilter === "mine" && styles.filterChipTextActive]}>{t("home.filterMine")}</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.filterChip, projectFilter === "shared" && styles.filterChipActive]}
             onPress={() => handleFilterChange("shared")}
           >
-            <Text style={[styles.filterChipText, projectFilter === "shared" && styles.filterChipTextActive]}>Zdieľané</Text>
+            <Text style={[styles.filterChipText, projectFilter === "shared" && styles.filterChipTextActive]}>{t("home.filterShared")}</Text>
           </TouchableOpacity>
         </View>
         <FlatList

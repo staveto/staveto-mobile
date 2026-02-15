@@ -240,7 +240,7 @@ export function SubscriptionScreen() {
           <Text style={styles.usageTitle}>{t("subscription.usageLimits") || 'Využitie limitov'}</Text>
           
           <View style={styles.usageItem}>
-            <Text style={styles.usageLabel}>{t("subscription.projects") || 'Projekty'}</Text>
+            <Text style={styles.usageLabel}>{t("subscription.projects")}</Text>
             <View style={styles.usageBarContainer}>
               <View
                 style={[
@@ -258,7 +258,7 @@ export function SubscriptionScreen() {
           </View>
 
           <View style={styles.usageItem}>
-            <Text style={styles.usageLabel}>{t("subscription.expensesThisMonth") || 'Výdavky tento mesiac'}</Text>
+            <Text style={styles.usageLabel}>{t("subscription.expensesThisMonth")}</Text>
             <View style={styles.usageBarContainer}>
               <View
                 style={[

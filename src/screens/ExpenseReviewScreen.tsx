@@ -4,6 +4,7 @@ import { useNavigation, useRoute } from "@react-navigation/native";
 import { useI18n } from "../i18n/I18nContext";
 import { useProjectAccess } from "../hooks/useProjectAccess";
 import * as expensesService from "../services/expenses";
+import { parseMoneyToNumber } from "../helpers/parseMoney";
 import type { OcrParsed, OcrStatus } from "../services/invoiceOCR";
 import { colors, radius, spacing } from "../theme";
 
@@ -49,10 +50,19 @@ export function ExpenseReviewScreen() {
   }
 
   const parsed = params?.parsed ?? null;
+  const ocr = parsed as Record<string, unknown> | null;
+  const amountCandidate = ocr?.totalAmount ?? ocr?.total ?? ocr?.grandTotal ?? ocr?.amount ?? ocr?.sum ?? ocr?.amountCents;
+  const isCents = amountCandidate === ocr?.amountCents;
+  let parsedAmount: number | null =
+    typeof amountCandidate === "number" && Number.isFinite(amountCandidate)
+      ? isCents ? (amountCandidate as number) / 100 : (amountCandidate as number)
+      : parseMoneyToNumber(amountCandidate);
+  if (parsedAmount == null && typeof ocr?.amountCents === "number" && ocr.amountCents > 0) {
+    parsedAmount = (ocr.amountCents as number) / 100;
+  }
+  const validAmount = parsedAmount != null && parsedAmount > 0 && parsedAmount <= 999_999.99;
   const [title, setTitle] = useState(parsed?.supplierName || params.defaultTitle || "");
-  const [amount, setAmount] = useState(
-    parsed?.totalAmount != null ? String(parsed.totalAmount) : params.defaultAmount || ""
-  );
+  const [amount, setAmount] = useState(validAmount ? String(parsedAmount) : params.defaultAmount || "");
   const [date, setDate] = useState(parsed?.issueDate || params.defaultDate || "");
   const [supplierName, setSupplierName] = useState(parsed?.supplierName || params.defaultSupplierName || "");
   const [invoiceNumber, setInvoiceNumber] = useState(parsed?.invoiceNumber || "");
@@ -60,11 +70,11 @@ export function ExpenseReviewScreen() {
   const [saving, setSaving] = useState(false);
 
   const statusMessage = useMemo(() => {
-    if (params.status === "limit") return "Denný limit OCR bol dosiahnutý. Vyplňte údaje manuálne.";
-    if (params.status === "failed") return "OCR zlyhalo. Vyplňte údaje manuálne.";
-    if (params.status === "cancelled") return "OCR bolo zrušené. Vyplňte údaje manuálne.";
+    if (params.status === "limit") return t("expense.ocrLimit");
+    if (params.status === "failed") return t("expense.ocrFailed");
+    if (params.status === "cancelled") return t("expense.ocrCancelled");
     return null;
-  }, [params.status]);
+  }, [params.status, t]);
 
   const handleSave = async () => {
     if (!title.trim() || !amount.trim()) {

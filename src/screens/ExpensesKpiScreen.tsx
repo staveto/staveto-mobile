@@ -13,6 +13,7 @@ import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
+import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
 import * as expensesService from "../services/expenses";
 import type { ProjectDoc } from "../services/projects";
@@ -85,6 +86,7 @@ function filterExpensesByRange(expenses: ExpenseDoc[], rangeKey: RangeKey): Expe
 export function ExpensesKpiScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const { t } = useI18n();
   const { user, orgId } = useAuth();
   const [rangeKey, setRangeKey] = useState<RangeKey>("30d");
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
@@ -275,7 +277,7 @@ export function ExpensesKpiScreen() {
           <TouchableOpacity onPress={() => (navigation as { goBack: () => void }).goBack()} style={styles.backButton} hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}>
             <Ionicons name="arrow-back" size={24} color={colors.textOnDark} />
           </TouchableOpacity>
-          <Text style={styles.headerTitle}>Výdavky</Text>
+          <Text style={styles.headerTitle}>{t("projectOverview.expenses")}</Text>
           <TouchableOpacity
             onPress={handleExport}
             disabled={exporting || exportRows.length === 0}
@@ -310,7 +312,7 @@ export function ExpensesKpiScreen() {
               onPress={() => setProjectFilter(f)}
             >
               <Text style={[styles.filterChipText, projectFilter === f && styles.filterChipTextActive]}>
-                {f === "all" ? "Všetko" : f === "mine" ? "Moje" : "Zdieľané"}
+                {f === "all" ? t("home.filterAll") : f === "mine" ? t("home.filterMine") : t("home.filterShared")}
               </Text>
             </TouchableOpacity>
           ))}
@@ -324,11 +326,11 @@ export function ExpensesKpiScreen() {
           {travelSum > 0 || otherSum > 0 ? (
             <>
               <View style={styles.kpiCard}>
-                <Text style={styles.kpiLabel}>Cestovné</Text>
+                <Text style={styles.kpiLabel}>{t("expenses.travel")}</Text>
                 <Text style={styles.kpiValue}>{travelSum.toFixed(2)}€</Text>
               </View>
               <View style={styles.kpiCard}>
-                <Text style={styles.kpiLabel}>Ostatné</Text>
+                <Text style={styles.kpiLabel}>{t("expenses.other")}</Text>
                 <Text style={styles.kpiValue}>{otherSum.toFixed(2)}€</Text>
               </View>
             </>
@@ -336,7 +338,7 @@ export function ExpensesKpiScreen() {
         </View>
 
         <View style={styles.sectionHeader}>
-          <Text style={styles.sectionTitle}>Podľa projektov</Text>
+          <Text style={styles.sectionTitle}>{t("expenses.byProjects")}</Text>
         </View>
 
         {filteredRows.length === 0 ? (
@@ -357,7 +359,7 @@ export function ExpensesKpiScreen() {
                 </Text>
                 {row.isShared && (
                   <View style={styles.sharedBadge}>
-                    <Text style={styles.sharedBadgeText}>👥 Zdieľané</Text>
+                    <Text style={styles.sharedBadgeText}>👥 {t("home.sharedBadge")}</Text>
                   </View>
                 )}
               </View>

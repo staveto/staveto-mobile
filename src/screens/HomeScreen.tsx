@@ -99,6 +99,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
   onTask,
   currentUserId,
 }: CompactProjectItemProps) {
+  const { t } = useI18n();
   const isOwner = !!project.ownerId && project.ownerId === currentUserId;
   const stripeColor =
     project.projectType === "BUILD" || project.projectType === "MANAGEMENT"
@@ -106,7 +107,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
       : project.projectType === "TRADE"
       ? "#5dade2"
       : "#7dcea0";
-  const statusLabel = status === "OK" ? "OK" : status === "RISK" ? "Riziko" : "Čaká";
+  const statusLabel = status === "OK" ? "OK" : status === "RISK" ? t("home.statusRisk") : t("home.statusWaiting");
 
   const isSharedToMe = project.isSharedToMe === true;
 
@@ -129,7 +130,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
         </View>
         <ProjectBadgesRow isOwner={isOwner} sharedWithCount={project.sharedWithCount ?? 0} isSharedToMe={project.isSharedToMe} />
         <Text style={styles.compactProjectSubline} numberOfLines={1}>
-          {openTasks} {openTasks === 1 ? "otvorená úloha" : "otvorené úlohy"} • aktivita {lastActivity}
+          {openTasks} {openTasks === 1 ? t("home.openTask_one") : t("home.openTask_other")} • {t("home.activityLabel")} {lastActivity}
         </Text>
       </View>
       <View style={styles.compactActions}>
@@ -291,17 +292,20 @@ export function HomeScreen() {
   }, []);
   const greetingName = user?.firstName ?? onboardingFirstName ?? user?.name ?? onboardingDisplayName ?? user?.email ?? t("home.userFallback");
 
-  const formatLastActivity = useCallback((date: Date | null) => {
-    if (!date) return "No activity";
-    const diffMs = Date.now() - date.getTime();
-    const diffMin = Math.floor(diffMs / 60000);
-    if (diffMin < 1) return "just now";
-    if (diffMin < 60) return `${diffMin}m ago`;
-    const diffH = Math.floor(diffMin / 60);
-    if (diffH < 24) return `${diffH}h ago`;
-    const diffD = Math.floor(diffH / 24);
-    return `${diffD}d ago`;
-  }, []);
+  const formatLastActivity = useCallback(
+    (date: Date | null) => {
+      if (!date) return t("home.noRecentActivity");
+      const diffMs = Date.now() - date.getTime();
+      const diffMin = Math.floor(diffMs / 60000);
+      if (diffMin < 1) return t("events.justNow");
+      if (diffMin < 60) return `${diffMin}m ago`;
+      const diffH = Math.floor(diffMin / 60);
+      if (diffH < 24) return `${diffH}h ago`;
+      const diffD = Math.floor(diffH / 24);
+      return `${diffD}d ago`;
+    },
+    [t]
+  );
 
   const getLiveStatus = useCallback((lastEventDate: Date | null, projectCreatedAt?: string) => {
     const now = Date.now();
@@ -933,7 +937,7 @@ export function HomeScreen() {
             <View style={styles.headerRow}>
               <View>
                 <Text style={styles.welcomeTitle}>{t("home.greeting", { name: greetingName })}</Text>
-                <Text style={styles.welcomeSubtitle}>Prehľad projektov</Text>
+                <Text style={styles.welcomeSubtitle}>{t("home.projectsOverviewTitle")}</Text>
               </View>
               <TouchableOpacity style={styles.searchAction} onPress={goToSearch} accessibilityLabel="Search">
                 <Ionicons name="search" size={22} color={colors.textOnDark} />
@@ -945,24 +949,24 @@ export function HomeScreen() {
                 <Text style={styles.statChipText}>{t("home.openTasksChip")} {data.kpis.openCount}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.statChip} onPress={() => goToProjects()} activeOpacity={0.8}>
-                <Text style={styles.statChipText}>Projekty {data.projects.length}</Text>
+                <Text style={styles.statChipText}>{t("home.projectsCount", { count: String(data.projects.length) })}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.statChip}
                 onPress={() => stackNav.navigate("ExpensesKpiScreen")}
                 activeOpacity={0.8}
               >
-                <Text style={styles.statChipText}>Výdavky {Math.round(data.kpis.expensesTotalSum)}€</Text>
+                <Text style={styles.statChipText}>{t("home.expensesCount", { amount: String(Math.round(data.kpis.expensesTotalSum)) })}</Text>
               </TouchableOpacity>
             </ScrollView>
 
             {focusProject ? (
               <View style={styles.focusCard}>
                 <View style={styles.focusCaptionRow}>
-                  <Text style={styles.focusCaption}>Práve robím</Text>
+                  <Text style={styles.focusCaption}>{t("home.currentlyWorkingOn")}</Text>
                   {focusProject.isSharedToMe === true && (
                     <View style={styles.focusSharedBadge}>
-                      <Text style={styles.focusSharedBadgeText}>Zdieľané</Text>
+                      <Text style={styles.focusSharedBadgeText}>{t("home.filterShared")}</Text>
                     </View>
                   )}
                 </View>
@@ -970,7 +974,11 @@ export function HomeScreen() {
                   {focusProject.name}
                 </Text>
                 <Text style={styles.focusSubline}>
-                  {(data.projectStats.get(focusProject.id)?.openCount ?? 0)} otvorené úlohy • posledná aktivita pred{" "}
+                  {(data.projectStats.get(focusProject.id)?.openCount ?? 0)}{" "}
+                  {(data.projectStats.get(focusProject.id)?.openCount ?? 0) === 1
+                    ? t("home.openTask_one")
+                    : t("home.openTask_other")}{" "}
+                  • {t("home.lastActivityBefore")}{" "}
                   {liveMap.get(focusProject.id)?.lastActivityLabel ?? "—"}
                 </Text>
                 <TouchableOpacity
@@ -978,7 +986,7 @@ export function HomeScreen() {
                   onPress={() => handleProjectClick(focusProject.id)}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.focusCtaText}>Pokračovať v práci</Text>
+                  <Text style={styles.focusCtaText}>{t("home.continueWorking")}</Text>
                 </TouchableOpacity>
               </View>
             ) : null}
@@ -999,24 +1007,24 @@ export function HomeScreen() {
                 style={[styles.filterChip, projectFilter === "all" && styles.filterChipActive]}
                 onPress={() => handleProjectFilterChange("all")}
               >
-                <Text style={[styles.filterChipText, projectFilter === "all" && styles.filterChipTextActive]}>Všetko</Text>
+                <Text style={[styles.filterChipText, projectFilter === "all" && styles.filterChipTextActive]}>{t("home.filterAll")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.filterChip, projectFilter === "mine" && styles.filterChipActive]}
                 onPress={() => handleProjectFilterChange("mine")}
               >
-                <Text style={[styles.filterChipText, projectFilter === "mine" && styles.filterChipTextActive]}>Moje</Text>
+                <Text style={[styles.filterChipText, projectFilter === "mine" && styles.filterChipTextActive]}>{t("home.filterMine")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.filterChip, projectFilter === "shared" && styles.filterChipActive]}
                 onPress={() => handleProjectFilterChange("shared")}
               >
-                <Text style={[styles.filterChipText, projectFilter === "shared" && styles.filterChipTextActive]}>Zdieľané</Text>
+                <Text style={[styles.filterChipText, projectFilter === "shared" && styles.filterChipTextActive]}>{t("home.filterShared")}</Text>
               </TouchableOpacity>
             </View>
 
             <View style={styles.sectionHeaderCompact}>
-              <Text style={styles.sectionTitle}>Ostatné projekty</Text>
+              <Text style={styles.sectionTitle}>{t("home.otherProjects")}</Text>
             </View>
           </>
         }
@@ -1038,7 +1046,7 @@ export function HomeScreen() {
         }}
         ListFooterComponent={
           <TouchableOpacity style={styles.showAllButton} onPress={() => goToProjects()}>
-            <Text style={styles.showAllButtonText}>Zobraziť všetky projekty</Text>
+            <Text style={styles.showAllButtonText}>{t("home.showAllProjects")}</Text>
           </TouchableOpacity>
         }
       />
@@ -1048,7 +1056,7 @@ export function HomeScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>Vyberte projekt</Text>
+              <Text style={styles.modalTitle}>{t("home.selectProjectModal")}</Text>
               <TouchableOpacity onPress={() => {
                 setShowProjectSelector(false);
                 setPendingAction(null);

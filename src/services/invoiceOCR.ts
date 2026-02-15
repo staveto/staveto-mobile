@@ -1,5 +1,6 @@
 import auth from "@react-native-firebase/auth";
 import { getFns } from "../firebase";
+import { extractTotalFromRawText, parseMoneyToNumber } from "../helpers/parseMoney";
 import { addProjectEvent } from "./projectEvents";
 
 export type OcrStatus = "success" | "failed" | "limit";
@@ -13,6 +14,48 @@ export type OcrParsed = {
   vatAmount: number | null;
   currency: "EUR";
 };
+
+/** Normalize backend parsed object: map various amount field names and parse string values (e.g. "65,19"). */
+function normalizeToOcrParsed(
+  raw: Record<string, unknown> | null | undefined,
+  rawText?: string | null
+): OcrParsed {
+  if (!raw || typeof raw !== "object") {
+    return { supplierName: null, invoiceNumber: null, issueDate: null, totalAmount: null, vatAmount: null, currency: "EUR" };
+  }
+  const ocr = raw as Record<string, unknown>;
+  const candidate =
+    ocr.totalAmount ?? ocr.total ?? ocr.grandTotal ?? ocr.amount ?? ocr.sum ?? ocr.amountCents;
+  const isFromCents = candidate === ocr.amountCents;
+  let totalAmount: number | null = null;
+  if (typeof candidate === "number" && Number.isFinite(candidate)) {
+    totalAmount = isFromCents ? candidate / 100 : candidate;
+  } else {
+    totalAmount = parseMoneyToNumber(candidate);
+    if (totalAmount == null && typeof ocr.amountCents === "number" && ocr.amountCents > 0) {
+      totalAmount = ocr.amountCents / 100;
+    }
+  }
+  const MAX = 999_999.99;
+  if (totalAmount != null && (totalAmount <= 0 || totalAmount > MAX)) totalAmount = null;
+  if (totalAmount == null && rawText) totalAmount = extractTotalFromRawText(rawText);
+
+  let vatAmount: number | null = null;
+  const vatRaw = ocr.vatAmount ?? ocr.vat ?? ocr.vatAmountCents;
+  if (typeof vatRaw === "number" && Number.isFinite(vatRaw)) vatAmount = vatRaw >= 10000 ? vatRaw / 100 : vatRaw;
+  else vatAmount = parseMoneyToNumber(vatRaw);
+  if (vatAmount != null && (vatAmount <= 0 || vatAmount > MAX)) vatAmount = null;
+
+  return {
+    supplierName: typeof ocr.supplierName === "string" ? ocr.supplierName : null,
+    supplierTaxId: typeof ocr.supplierTaxId === "string" ? ocr.supplierTaxId : null,
+    invoiceNumber: typeof ocr.invoiceNumber === "string" ? ocr.invoiceNumber : null,
+    issueDate: typeof ocr.issueDate === "string" ? ocr.issueDate : null,
+    totalAmount,
+    vatAmount,
+    currency: "EUR",
+  };
+}
 
 export type OcrResult = {
   status: OcrStatus;
@@ -51,9 +94,12 @@ export async function runInvoiceOCR(payload: {
     const t1 = Date.now();
     const result = await fn(payload);
     clearTimeout(watchdog);
+    const res = result as { data?: Record<string, unknown> } | undefined;
+    const data = res?.data ?? null;
     console.log("[invoiceOCR] POST result ms:", Date.now() - t1);
-    console.log("[invoiceOCR] POST data:", JSON.stringify(result?.data ?? null));
-    return result?.data;
+    console.log("[invoiceOCR] response keys", Object.keys(data || {}));
+    console.log("[invoiceOCR] response data", JSON.stringify(data ?? null, null, 2));
+    return data;
   } catch (err: any) {
     clearTimeout(watchdog);
     console.error("[invoiceOCR] POST error code =", err?.code, "message =", err?.message, "details =", err?.details ?? null);
@@ -98,33 +144,47 @@ export async function extractInvoiceData(input: {
       return { status: "failed", parsed: null };
     }
     if ("ok" in result && result.ok === true && !("status" in result)) {
-      const parsed = (result as OcrResult).parsed ?? {
-        supplierName: null,
-        invoiceNumber: null,
-        issueDate: null,
-        totalAmount: null,
-        vatAmount: null,
-        currency: "EUR" as const,
-      };
+      const rawParsed = (result as OcrResult).parsed as Record<string, unknown> | null;
+      const rawText = (result as { rawText?: string }).rawText ?? (result as { extractedText?: string }).extractedText;
+      console.log("[expense autofill] amount candidates (raw, ok-branch)", {
+        total: rawParsed?.total,
+        totalAmount: rawParsed?.totalAmount,
+        grandTotal: rawParsed?.grandTotal,
+        amount: rawParsed?.amount,
+        sum: rawParsed?.sum,
+        amountCents: rawParsed?.amountCents,
+      });
+      const parsed = normalizeToOcrParsed(rawParsed, rawText);
       return { status: "success" as const, parsed };
     }
     if (!("status" in result) || !(result as OcrResult).status) {
       return { status: "failed", parsed: null };
     }
     const ocrResult = result as OcrResult;
+    const rawParsed = ocrResult.parsed as Record<string, unknown> | null;
+    const rawText = ocrResult.rawText ?? (result as { extractedText?: string }).extractedText;
+    console.log("[expense autofill] amount candidates (raw)", {
+      total: rawParsed?.total,
+      totalAmount: rawParsed?.totalAmount,
+      grandTotal: rawParsed?.grandTotal,
+      amount: rawParsed?.amount,
+      sum: rawParsed?.sum,
+      amountCents: rawParsed?.amountCents,
+    });
+    const parsed = normalizeToOcrParsed(rawParsed, rawText);
     if (ocrResult.status === "success" && input.projectId) {
       try {
         await addProjectEvent(
           input.projectId,
           "ocr_completed",
-          { supplier: ocrResult.parsed?.supplierName ?? undefined },
+          { supplier: parsed.supplierName ?? undefined },
           input.attachmentId ? { kind: "attachment", id: input.attachmentId } : { kind: "ocr" }
         );
       } catch (eventError) {
         console.warn("[invoiceOCR] Failed to create project event:", eventError);
       }
     }
-    return ocrResult;
+    return { ...ocrResult, parsed };
   } catch (error: any) {
     const errStr = error != null
       ? `code=${error?.code ?? "?"} msg=${error?.message ?? "?"} details=${JSON.stringify(error?.details ?? error)}`

@@ -4,6 +4,7 @@ import { useRoute, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
+import { useProjectAccess } from "../hooks/useProjectAccess";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import * as projectMembersService from "../services/projectMembers";
@@ -18,6 +19,7 @@ export function ProjectMembersScreen() {
   const { t } = useI18n();
   const { user } = useAuth();
   const { projectId, projectName } = (route.params as { projectId?: string; projectName?: string }) ?? {};
+  const access = useProjectAccess(projectId ?? "");
 
   const [showAddMember, setShowAddMember] = useState(false);
   const [addMemberEmail, setAddMemberEmail] = useState("");
@@ -49,7 +51,7 @@ export function ProjectMembersScreen() {
 
   const goBack = () => navigation.goBack();
 
-  const loadMembers = async () => {
+  const loadMembers = async (forceRefresh?: boolean) => {
     if (!projectId) return;
     
     setLoading(true);
@@ -69,12 +71,12 @@ export function ProjectMembersScreen() {
         setPhases([]);
       }
 
-      // Load members
-      const membersList = await projectMembersService.listProjectMembers(projectId);
+      // Load members (force from server after add/remove to bypass cache)
+      const membersList = await projectMembersService.listProjectMembers(projectId, forceRefresh);
       setMembers(membersList);
     } catch (error: any) {
       console.error('[ProjectMembersScreen] Error loading members:', error);
-      Alert.alert('Chyba', error.message || 'Nepodarilo sa načítať členov projektu.');
+      Alert.alert(t("common.error"), error?.message?.startsWith("errors.") ? t(error.message) : (error?.message || t("projectMembers.loadFailed")));
     } finally {
       setLoading(false);
     }
@@ -151,7 +153,7 @@ export function ProjectMembersScreen() {
             text: 'OK',
             onPress: () => {
               closeAddMember();
-              loadMembers();
+              loadMembers(true);
             },
           },
         ]
@@ -159,8 +161,8 @@ export function ProjectMembersScreen() {
     } catch (error: any) {
       console.error('[ProjectMembersScreen] Error inviting member:', error);
       Alert.alert(
-        t('common.error') || 'Chyba',
-        error.message || (t('projectMembers.inviteError') || 'Nepodarilo sa pozvať člena.')
+        t('common.error'),
+        error?.message?.startsWith("errors.") ? t(error.message) : (error?.message || t('projectMembers.inviteError'))
       );
     } finally {
       setSubmitting(false);
@@ -211,12 +213,9 @@ export function ProjectMembersScreen() {
       const code = error?.code ?? error?.details?.code;
       console.error('[ProjectMembersScreen] Error updating permissions:', { error, code, msg });
       const userMsg = code === 'functions/not-found' || msg?.includes('NOT_FOUND')
-        ? (t('projectMembers.functionNotDeployed') || 'Cloud Function nie je nasadená. Spustite: firebase deploy --only functions')
-        : (msg || (t('projectMembers.updateError') || 'Nepodarilo sa aktualizovať oprávnenia.'));
-      Alert.alert(
-        t('common.error') || 'Chyba',
-        userMsg
-      );
+        ? t('projectMembers.functionNotDeployed')
+        : (msg?.startsWith("errors.") ? t(msg) : (msg || t('projectMembers.updateError')));
+      Alert.alert(t('common.error'), userMsg);
     } finally {
       setSubmitting(false);
     }
@@ -229,23 +228,23 @@ export function ProjectMembersScreen() {
       t('projectMembers.removeConfirm') || 'Odstrániť člena?',
       t('projectMembers.removeConfirmMessage', { name: member.name || member.email || '' }) || `Naozaj chceš odstrániť ${member.name || member.email} z projektu?`,
       [
-        { text: t('common.cancel') || 'Zrušiť', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
           text: t('projectMembers.remove') || 'Odstrániť',
           style: 'destructive',
           onPress: async () => {
             try {
-              await projectMembersService.removeMember(projectId, member.id);
+              await projectMembersService.removeMember(projectId, member.id, member.userId);
+              await loadMembers(true);
               Alert.alert(
                 t('common.success') || 'Úspech',
                 t('projectMembers.removeSuccess') || 'Člen bol odstránený z projektu.'
               );
-              loadMembers();
             } catch (error: any) {
               console.error('[ProjectMembersScreen] Error removing member:', error);
               Alert.alert(
-                t('common.error') || 'Chyba',
-                error.message || (t('projectMembers.removeError') || 'Nepodarilo sa odstrániť člena.')
+                t('common.error'),
+                error?.message?.startsWith("errors.") ? t(error.message) : (error?.message || t('projectMembers.removeError'))
               );
             }
           },
@@ -261,13 +260,13 @@ export function ProjectMembersScreen() {
       t('projectMembers.leaveConfirm') || 'Opustiť projekt?',
       t('projectMembers.leaveConfirmMessage') || 'Naozaj chceš opustiť tento projekt?',
       [
-        { text: t('common.cancel') || 'Zrušiť', style: 'cancel' },
+        { text: t('common.cancel'), style: 'cancel' },
         {
           text: t('projectMembers.leaveProject') || 'Opustiť projekt',
           style: 'destructive',
           onPress: async () => {
             try {
-              await projectMembersService.removeMember(projectId, member.id);
+              await projectMembersService.removeMember(projectId, member.id, member.userId);
               Alert.alert(
                 t('common.success') || 'Úspech',
                 t('projectMembers.leaveSuccess') || 'Opustil si projekt.'
@@ -277,7 +276,7 @@ export function ProjectMembersScreen() {
               console.error('[ProjectMembersScreen] Error leaving project:', error);
               Alert.alert(
                 t('common.error') || 'Chyba',
-                error.message || (t('projectMembers.removeError') || 'Nepodarilo sa opustiť projekt.')
+                error.message || t('projectMembers.leaveError')
               );
             }
           },
@@ -370,7 +369,7 @@ export function ProjectMembersScreen() {
                         <Text style={styles.sharedItemTag}>{t('projectMembers.sharePhases') || 'Fázy'}</Text>
                       )}
                       {m.sharedItems.expenses && (
-                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareExpenses') || 'Výdavky'}</Text>
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareExpenses')}</Text>
                       )}
                       {m.sharedItems.diary && (
                         <Text style={styles.sharedItemTag}>{t('projectMembers.shareDiary') || 'Denník'}</Text>
@@ -381,15 +380,17 @@ export function ProjectMembersScreen() {
                     </View>
                   )}
                 </View>
-                {projectOwnerId === user?.id ? (
+                {(access.isOwner || access.permissionLevel === "editor") ? (
                   <View style={styles.memberActions}>
-                    <TouchableOpacity
-                      style={styles.editMemberButton}
-                      onPress={() => openEditMember(m)}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    >
-                      <Ionicons name="create-outline" size={22} color={colors.primary} />
-                    </TouchableOpacity>
+                    {access.isOwner && (
+                      <TouchableOpacity
+                        style={styles.editMemberButton}
+                        onPress={() => openEditMember(m)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      >
+                        <Ionicons name="create-outline" size={22} color={colors.primary} />
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                       style={styles.removeMemberButton}
                       onPress={() => handleRemoveMember(m)}
@@ -449,7 +450,7 @@ export function ProjectMembersScreen() {
                         <Text style={styles.sharedItemTag}>{t('projectMembers.sharePhases') || 'Fázy'}</Text>
                       )}
                       {m.sharedItems.expenses && (
-                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareExpenses') || 'Výdavky'}</Text>
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareExpenses')}</Text>
                       )}
                       {m.sharedItems.diary && (
                         <Text style={styles.sharedItemTag}>{t('projectMembers.shareDiary') || 'Denník'}</Text>
@@ -460,15 +461,17 @@ export function ProjectMembersScreen() {
                     </View>
                   )}
                 </View>
-                {projectOwnerId === user?.id && (
+                {(access.isOwner || access.permissionLevel === "editor") && (
                   <View style={styles.memberActions}>
-                    <TouchableOpacity
-                      style={styles.editMemberButton}
-                      onPress={() => openEditMember(m)}
-                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    >
-                      <Ionicons name="create-outline" size={22} color={colors.primary} />
-                    </TouchableOpacity>
+                    {access.isOwner && (
+                      <TouchableOpacity
+                        style={styles.editMemberButton}
+                        onPress={() => openEditMember(m)}
+                        hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                      >
+                        <Ionicons name="create-outline" size={22} color={colors.primary} />
+                      </TouchableOpacity>
+                    )}
                     <TouchableOpacity
                       style={styles.removeMemberButton}
                       onPress={() => handleRemoveMember(m)}
@@ -647,7 +650,7 @@ export function ProjectMembersScreen() {
                   {shareExpenses && <Ionicons name="checkmark" size={16} color="#fff" />}
                 </View>
                 <Text style={styles.shareOptionLabel}>
-                  {t('projectMembers.shareExpenses') || 'Výdavky'}
+                  {t('projectMembers.shareExpenses')}
                 </Text>
               </TouchableOpacity>
 
@@ -688,7 +691,7 @@ export function ProjectMembersScreen() {
                 onPress={closeAddMember}
                 disabled={submitting}
               >
-                <Text style={styles.addMemberCancelText}>{t('common.cancel') || 'Zrušiť'}</Text>
+                <Text style={styles.addMemberCancelText}>{t('common.cancel')}</Text>
               </TouchableOpacity>
               <TouchableOpacity 
                 style={[styles.addMemberInvite, submitting && styles.addMemberInviteDisabled]} 
@@ -840,7 +843,7 @@ export function ProjectMembersScreen() {
                   <View style={[styles.checkbox, editShareExpenses && styles.checkboxChecked]}>
                     {editShareExpenses && <Ionicons name="checkmark" size={16} color="#fff" />}
                   </View>
-                  <Text style={styles.shareOptionLabel}>{t('projectMembers.shareExpenses') || 'Výdavky'}</Text>
+                  <Text style={styles.shareOptionLabel}>{t('projectMembers.shareExpenses')}</Text>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -872,7 +875,7 @@ export function ProjectMembersScreen() {
                   onPress={closeEditMember}
                   disabled={submitting}
                 >
-                  <Text style={styles.addMemberCancelText}>{t('common.cancel') || 'Zrušiť'}</Text>
+                  <Text style={styles.addMemberCancelText}>{t('common.cancel')}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.addMemberInvite, (submitting || !user) && styles.addMemberInviteDisabled]}

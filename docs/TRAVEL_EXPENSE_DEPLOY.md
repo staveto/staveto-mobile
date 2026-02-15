@@ -34,7 +34,14 @@ npm run build
 firebase deploy --only functions:calculateDistanceKm
 ```
 
-### 4. Client
+### 4. Client (dve možnosti)
 
+**A) Client-side (aktuálne):** `src/services/mapsDistance.ts`
+- Volá Google Directions API priamo z mobilnej aplikácie.
+- API key: `EXPO_PUBLIC_GOOGLE_MAPS_API_KEY` v `.env` / EAS env.
+- V Google Cloud Console zapni **Directions API**.
+- Obmedz kľúč: Application restrictions (Android/iOS bundle ID) + API restrictions (len Directions API).
+
+**B) Cloud Function (alternatíva):** `src/services/distance.ts`
 - Uses `getFns().httpsCallable("calculateDistanceKm")` (europe-west1).
 - No API key in mobile bundle; key stays in Secret Manager.

@@ -1,0 +1,8 @@
+Windows Registry Editor Version 5.00
+
+; Povoli dlhe cesty (>260 znakov) - riesi chybu "Filename longer than 260 characters"
+; Spust: pravym klikom -> Spustit ako spravca
+; Po zmene reštartuj PC
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\FileSystem]
+"LongPathsEnabled"=dword:00000001

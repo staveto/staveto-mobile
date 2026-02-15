@@ -52,6 +52,9 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
     (key: string, params?: Record<string, string>) => {
       const dict = translations[locale] ?? translations.en;
       const raw = dict[key] ?? translations.en[key] ?? key;
+      if (__DEV__ && raw === key && !key.startsWith("errors.")) {
+        console.warn(`[i18n] Missing key: ${locale} -> "${key}"`);
+      }
       return interpolate(raw, params);
     },
     [locale]

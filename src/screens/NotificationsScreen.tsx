@@ -90,7 +90,7 @@ export function NotificationsScreen() {
       setShowMenu(false);
     } catch (error: any) {
       console.error("[NotificationsScreen] Error marking all as read:", error);
-      Alert.alert("Chyba", "Nepodarilo sa označiť všetky notifikácie ako prečítané.");
+      Alert.alert(t("common.error"), t("notifications.markAllReadFailed"));
     }
   }, [orgId]);
 
@@ -425,10 +425,10 @@ export function NotificationsScreen() {
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={() => setShowMenu(false)}>
           <View style={styles.menuCard}>
             <TouchableOpacity style={styles.menuItem} onPress={handleMarkAllAsRead}>
-              <Text style={styles.menuItemText}>Označiť všetko ako prečítané</Text>
+              <Text style={styles.menuItemText}>{t("notifications.markAllRead")}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.menuItem} onPress={() => setShowMenu(false)}>
-              <Text style={styles.menuItemText}>Zrušiť</Text>
+              <Text style={styles.menuItemText}>{t("common.cancel")}</Text>
             </TouchableOpacity>
           </View>
         </TouchableOpacity>

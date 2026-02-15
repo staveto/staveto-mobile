@@ -15,6 +15,7 @@ import { useRoute, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { format } from "date-fns";
+import { useI18n } from "../../i18n/I18nContext";
 import { colors, radius, spacing } from "../../theme";
 
 let DateTimePicker: any = null;
@@ -34,6 +35,7 @@ export function ServiceRuleFormScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const { t } = useI18n();
   const { projectId, projectName, equipmentId, equipmentName, ruleId, rule: ruleParam } = (route.params as {
     projectId?: string;
     projectName?: string;
@@ -72,7 +74,7 @@ export function ServiceRuleFormScreen() {
           );
         }
       } catch (e: any) {
-        Alert.alert("Chyba", e.message || "Nepodarilo sa načítať servisný plán.");
+        Alert.alert(t("common.error"), e.message || t("equipment.loadServiceRuleFailed"));
       } finally {
         setLoading(false);
       }
@@ -128,7 +130,7 @@ export function ServiceRuleFormScreen() {
         goBack();
       }
     } catch (e: any) {
-      Alert.alert("Chyba", e.message || "Nepodarilo sa uložiť servisný plán.");
+      Alert.alert(t("common.error"), e.message || t("equipment.saveServiceRuleFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -249,7 +251,7 @@ export function ServiceRuleFormScreen() {
                   </View>
                   <View style={styles.datePickerButtons}>
                     <TouchableOpacity style={styles.datePickerCancel} onPress={() => setShowStartDatePicker(false)}>
-                      <Text style={styles.datePickerCancelText}>Zrušiť</Text>
+                      <Text style={styles.datePickerCancelText}>{t("common.cancel")}</Text>
                     </TouchableOpacity>
                     <TouchableOpacity
                       style={styles.datePickerOk}

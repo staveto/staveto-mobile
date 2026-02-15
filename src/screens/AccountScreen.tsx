@@ -257,7 +257,7 @@ export function AccountScreen() {
       setProfilePhotoURL(url);
     } catch (error) {
       console.error("[account] Failed to pick profile photo:", error);
-      Alert.alert("Chyba", "Nepodarilo sa nahrať fotku.");
+      Alert.alert(t("common.error"), t("account.uploadPhotoFailed"));
     } finally {
       setUploadingPhoto(false);
     }
@@ -287,7 +287,7 @@ export function AccountScreen() {
       setProfilePhotoURL(url);
     } catch (error) {
       console.error("[account] Failed to take profile photo:", error);
-      Alert.alert("Chyba", "Nepodarilo sa odfotiť fotku.");
+      Alert.alert(t("common.error"), t("account.takePhotoFailed"));
     } finally {
       setUploadingPhoto(false);
     }
@@ -406,7 +406,7 @@ export function AccountScreen() {
               const data = res?.data as { ok?: boolean; updated?: number };
               Alert.alert("Hotovo", `Aktualizovaných projektov: ${data?.updated ?? 0}. Obnovte zoznam projektov.`);
             } catch (e: any) {
-              Alert.alert("Chyba", e?.message ?? "Nepodarilo sa obnoviť.");
+              Alert.alert(t("common.error"), e?.message ?? t("account.refreshFailed"));
             }
           }}
         />
@@ -493,7 +493,7 @@ export function AccountScreen() {
             if (supported) {
               await Linking.openURL(url);
             } else {
-              Alert.alert('Chyba', 'Nepodarilo sa otvoriť odkaz.');
+              Alert.alert(t("common.error"), t("account.linkOpenFailed"));
             }
           }}
         />
@@ -506,7 +506,7 @@ export function AccountScreen() {
             if (supported) {
               await Linking.openURL(url);
             } else {
-              Alert.alert('Chyba', 'Nepodarilo sa otvoriť odkaz.');
+              Alert.alert(t("common.error"), t("account.linkOpenFailed"));
             }
           }}
         />
@@ -628,7 +628,7 @@ export function AccountScreen() {
             />
             <View style={styles.profileModalActions}>
               <TouchableOpacity style={styles.profileCancel} onPress={() => setShowProfileModal(false)}>
-                <Text style={styles.profileCancelText}>Zrušiť</Text>
+                <Text style={styles.profileCancelText}>{t("common.cancel")}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.profileSave} onPress={saveProfile} disabled={savingProfile}>
                 <Text style={styles.profileSaveText}>{savingProfile ? "Ukladám…" : "Uložiť"}</Text>

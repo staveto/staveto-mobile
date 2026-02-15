@@ -14,6 +14,7 @@ import {
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { useI18n } from "../../i18n/I18nContext";
 import { colors, radius, spacing } from "../../theme";
 import * as equipmentService from "../../services/equipment";
 import type { EquipmentCategory, EquipmentDoc } from "../../services/equipment";
@@ -99,6 +100,7 @@ export function EquipmentFormScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const { t } = useI18n();
   const { projectId, projectName, equipmentId, equipment: initialEquipment } = (route.params as {
     projectId?: string;
     projectName?: string;
@@ -146,7 +148,7 @@ export function EquipmentFormScreen() {
           if (eq.photoUrl) setPhotoUri(eq.photoUrl);
         }
       } catch (e: any) {
-        Alert.alert("Chyba", e.message || "Nepodarilo sa načítať zariadenie.");
+        Alert.alert(t("common.error"), e.message || t("equipment.loadFailed"));
       } finally {
         setLoading(false);
       }
@@ -200,7 +202,7 @@ export function EquipmentFormScreen() {
         }
       }
     } catch (e: any) {
-      Alert.alert("Chyba", e.message || "Nepodarilo sa vybrať foto.");
+      Alert.alert(t("common.error"), e.message || t("equipment.selectPhotoFailed"));
     }
   };
 
@@ -261,7 +263,7 @@ export function EquipmentFormScreen() {
 
       goBack();
     } catch (e: any) {
-      Alert.alert("Chyba", e.message || "Nepodarilo sa uložiť zariadenie.");
+      Alert.alert(t("common.error"), e.message || t("equipment.saveFailed"));
     } finally {
       setSubmitting(false);
     }
@@ -269,7 +271,7 @@ export function EquipmentFormScreen() {
 
   const showPhotoOptions = () => {
     Alert.alert("Pridať foto zariadenia", "", [
-      { text: "Zrušiť", style: "cancel" },
+      { text: t("common.cancel"), style: "cancel" },
       { text: "Odfotiť", onPress: () => pickPhoto("camera") },
       { text: "Vybrať z galérie", onPress: () => pickPhoto("gallery") },
     ]);

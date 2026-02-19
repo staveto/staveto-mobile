@@ -1,4 +1,4 @@
-import { getFns } from "../firebase";
+import { getCallable } from "../firebase";
 
 export type CalculateDistanceInput = {
   fromAddress: string;
@@ -17,8 +17,7 @@ export type CalculateDistanceResult = {
  * Requires auth. Throws on API/network errors.
  */
 export async function calculateDistanceKm(input: CalculateDistanceInput): Promise<CalculateDistanceResult> {
-  const fns = getFns();
-  const result = await fns.httpsCallable("calculateDistanceKm")({
+  const result = await getCallable("calculateDistanceKm")({
     fromAddress: input.fromAddress.trim(),
     toAddress: input.toAddress.trim(),
     mode: input.mode ?? "driving",

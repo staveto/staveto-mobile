@@ -8,6 +8,7 @@ import { I18nProvider, useI18n } from "./src/i18n/I18nContext";
 import { AuthProvider } from "./src/context/AuthContext";
 import { RootNavigator } from "./src/navigation/RootNavigator";
 import { PushNotificationHandler, navigationRef } from "./src/components/PushNotificationHandler";
+import { configurePurchases } from "./src/services/billing";
 import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity } from "react-native";
 import { colors } from "./src/theme";
 
@@ -49,6 +50,9 @@ class AppErrorBoundary extends React.Component<
 }
 
 function AppContent() {
+  React.useEffect(() => {
+    configurePurchases().catch(() => {});
+  }, []);
   const { loaded } = useI18n();
 
   if (!loaded) {

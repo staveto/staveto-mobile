@@ -1,7 +1,7 @@
 import React, { useMemo, useState, useEffect, useCallback } from "react";
-import { View, Text, StyleSheet, ScrollView } from "react-native";
+import { View, Text, StyleSheet, Dimensions } from "react-native";
 import { TouchableOpacity } from "react-native-gesture-handler";
-import { BottomSheetModal, BottomSheetBackdrop, BottomSheetView } from "@gorhom/bottom-sheet";
+import { BottomSheetModal, BottomSheetBackdrop, BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
 import {
   addMonths,
@@ -16,8 +16,18 @@ import {
   format,
   isToday,
 } from "date-fns";
-import { sk } from "date-fns/locale";
+import {
+  sk,
+  enUS,
+  de,
+  cs,
+  es,
+  it,
+  pl,
+  type Locale as DateFnsLocale,
+} from "date-fns/locale";
 import { useI18n } from "../i18n/I18nContext";
+import type { Locale } from "../i18n/translations";
 import { useAuth } from "../context/AuthContext";
 import { colors, spacing } from "../theme";
 import { toYmd, ymdToDate } from "../utils/date";
@@ -28,16 +38,45 @@ const SHEET_BG = "#1e2530";
 const SHEET_TEXT = "#ffffff";
 const SHEET_ACTION = "#7dd3fc";
 
+/** Servisné úlohy (MAINTENANCE, equipment) – modrá */
+const COLOR_SERVICE = "#60a5fa";
+/** Výstavba (BUILD, projekty) – oranžová */
+const COLOR_CONSTRUCTION = colors.primary;
+
+const CALENDAR_PADDING = spacing.md * 2;
+const DAY_CELL_SIZE = Math.max(36, Math.floor((Dimensions.get("window").width - CALENDAR_PADDING) / 7));
+
 type Props = {
   sheetRef: React.RefObject<BottomSheetModal | null>;
   onTaskPress?: (task: TaskWithProject) => void;
   onSeeAllForDate?: (dueDateYmd: string) => void;
 };
 
-const WEEKDAYS = ["Po", "Ut", "St", "Št", "Pi", "So", "Ne"];
+const LOCALE_MAP: Record<Locale, DateFnsLocale> = {
+  en: enUS,
+  sk,
+  de,
+  cs,
+  es,
+  it,
+  pl,
+};
+
+/** Skratky dní v týždni (Po–Ne) podľa jazyka */
+const WEEKDAYS_BY_LOCALE: Record<Locale, string[]> = {
+  en: ["Mo", "Tu", "We", "Th", "Fr", "Sa", "Su"],
+  sk: ["Po", "Ut", "St", "Št", "Pi", "So", "Ne"],
+  de: ["Mo", "Di", "Mi", "Do", "Fr", "Sa", "So"],
+  cs: ["Po", "Út", "St", "Čt", "Pá", "So", "Ne"],
+  es: ["Lu", "Ma", "Mi", "Ju", "Vi", "Sa", "Do"],
+  it: ["Lu", "Ma", "Me", "Gi", "Ve", "Sa", "Do"],
+  pl: ["Pn", "Wt", "Śr", "Cz", "Pt", "So", "Nd"],
+};
 
 export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
+  const dateFnsLocale = LOCALE_MAP[locale] ?? enUS;
+  const weekdays = WEEKDAYS_BY_LOCALE[locale] ?? WEEKDAYS_BY_LOCALE.en;
   const { user } = useAuth();
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
@@ -95,7 +134,12 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
 
   const selectedYmd = selectedDate ? toYmd(selectedDate) : null;
   const tasksForSelected = selectedYmd ? (tasksByYmd.get(selectedYmd) ?? []) : [];
-  const taskCountForDay = (day: Date) => tasksByYmd.get(toYmd(day))?.length ?? 0;
+
+  const isServiceTask = (t: TaskWithProject) =>
+    t.projectType === "MAINTENANCE" || !!t.equipmentId || !!t.serviceRuleId;
+  const getTasksForDay = (day: Date) => tasksByYmd.get(toYmd(day)) ?? [];
+  const hasServiceOnDay = (day: Date) => getTasksForDay(day).some(isServiceTask);
+  const hasConstructionOnDay = (day: Date) => getTasksForDay(day).some((t) => !isServiceTask(t));
 
   const handleTaskPress = useCallback(
     (task: TaskWithProject) => {
@@ -116,13 +160,17 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
     <BottomSheetModal
       ref={sheetRef}
       enablePanDownToClose
-      enableContentPanningGesture={false}
+      enableContentPanningGesture
       snapPoints={["65%", "92%"]}
       backdropComponent={renderBackdrop}
       handleIndicatorStyle={{ backgroundColor: "rgba(255,255,255,0.5)" }}
       backgroundStyle={styles.sheet}
     >
-      <BottomSheetView style={styles.contentContainer}>
+      <BottomSheetScrollView
+        style={styles.scrollContainer}
+        contentContainerStyle={styles.scrollContent}
+        showsVerticalScrollIndicator
+      >
         <View style={styles.header}>
           <Text style={styles.title}>{t("home.sectionCalendar")}</Text>
           <TouchableOpacity
@@ -134,8 +182,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
           </TouchableOpacity>
         </View>
 
-        <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
-          <View style={styles.calendarWrap}>
+        <View style={styles.calendarWrap}>
             <View style={styles.monthNav}>
               <TouchableOpacity
                 onPress={() => setCurrentMonth((m) => subMonths(m, 1))}
@@ -145,7 +192,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
                 <Ionicons name="chevron-back" size={24} color={SHEET_ACTION} />
               </TouchableOpacity>
               <Text style={styles.monthTitle}>
-                {format(currentMonth, "LLLL yyyy", { locale: sk })}
+                {format(currentMonth, "LLLL yyyy", { locale: dateFnsLocale })}
               </Text>
               <TouchableOpacity
                 onPress={() => setCurrentMonth((m) => addMonths(m, 1))}
@@ -156,7 +203,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
               </TouchableOpacity>
             </View>
             <View style={styles.weekdayRow}>
-              {WEEKDAYS.map((d) => (
+              {weekdays.map((d) => (
                 <Text key={d} style={styles.weekday}>
                   {d}
                 </Text>
@@ -167,7 +214,8 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
                 const inMonth = isSameMonth(day, currentMonth);
                 const selected = selectedDate && isSameDay(day, selectedDate);
                 const today = isToday(day);
-                const hasTasks = taskCountForDay(day) > 0;
+                const hasService = hasServiceOnDay(day);
+                const hasConstruction = hasConstructionOnDay(day);
                 return (
                   <TouchableOpacity
                     key={day.toISOString()}
@@ -190,10 +238,24 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
                     >
                       {format(day, "d")}
                     </Text>
-                    {hasTasks && <View style={styles.dayDot} />}
+                    <View style={styles.dayDotsRow}>
+                      {hasService && <View style={[styles.dayDot, { backgroundColor: COLOR_SERVICE }]} />}
+                      {hasConstruction && <View style={[styles.dayDot, { backgroundColor: COLOR_CONSTRUCTION }]} />}
+                    </View>
                   </TouchableOpacity>
                 );
               })}
+            </View>
+        </View>
+
+        <View style={styles.legendRow}>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: COLOR_SERVICE }]} />
+              <Text style={styles.legendText}>{t("home.legendService")}</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, { backgroundColor: COLOR_CONSTRUCTION }]} />
+              <Text style={styles.legendText}>{t("home.legendConstruction")}</Text>
             </View>
           </View>
 
@@ -240,9 +302,8 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
                 )}
               </>
             )}
-          </View>
-        </ScrollView>
-      </BottomSheetView>
+        </View>
+      </BottomSheetScrollView>
     </BottomSheetModal>
   );
 }
@@ -253,11 +314,12 @@ const styles = StyleSheet.create({
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
   },
-  contentContainer: {
+  scrollContainer: {
     flex: 1,
   },
-  scroll: {
-    flex: 1,
+  scrollContent: {
+    flexGrow: 1,
+    paddingBottom: spacing.xl,
   },
   header: {
     flexDirection: "row",
@@ -315,10 +377,11 @@ const styles = StyleSheet.create({
   daysGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
+    minHeight: DAY_CELL_SIZE * 6,
   },
   dayCell: {
-    width: "14.28%",
-    aspectRatio: 1,
+    width: DAY_CELL_SIZE,
+    height: DAY_CELL_SIZE,
     alignItems: "center",
     justifyContent: "center",
     borderRadius: 8,
@@ -348,13 +411,42 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontWeight: "600",
   },
-  dayDot: {
+  dayDotsRow: {
     position: "absolute",
     bottom: 4,
-    width: 4,
-    height: 4,
-    borderRadius: 2,
-    backgroundColor: colors.primary,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 3,
+  },
+  dayDot: {
+    width: 5,
+    height: 5,
+    borderRadius: 2.5,
+  },
+  legendRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.lg,
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.8)",
   },
   taskListSection: {
     paddingHorizontal: spacing.lg,

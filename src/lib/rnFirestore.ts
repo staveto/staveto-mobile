@@ -1,4 +1,5 @@
 import firestore from "@react-native-firebase/firestore";
+import { getDoc as getDocModular, getDocs as getDocsModular } from "@react-native-firebase/firestore";
 
 type CollectionRef = FirebaseFirestore.CollectionReference<FirebaseFirestore.DocumentData>;
 type DocumentRef = FirebaseFirestore.DocumentReference<FirebaseFirestore.DocumentData>;
@@ -72,11 +73,11 @@ export function query(base: CollectionRef | QueryRef, ...constraints: QueryConst
 }
 
 export function getDoc(ref: DocumentRef) {
-  return ref.get();
+  return getDocModular(ref);
 }
 
 export function getDocs(ref: QueryRef | CollectionRef) {
-  return ref.get();
+  return getDocsModular(ref);
 }
 
 export function addDoc(ref: CollectionRef, data: FirebaseFirestore.DocumentData) {

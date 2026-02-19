@@ -41,7 +41,7 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO"
+        "android.permission.RECORD_AUDIO","com.android.vending.BILLING"
       ]
     },
     "plugins": [
@@ -58,6 +58,7 @@
           "microphonePermission": "Táto aplikácia potrebuje prístup k mikrofónu na nahrávanie hlasových správ a zápisov do denníka."
         }
       ],
+      "expo-speech-recognition",
       "@react-native-firebase/messaging"
     ],
     "web": {

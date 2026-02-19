@@ -17,6 +17,7 @@ import { TaskDetailScreen } from "../screens/TaskDetailScreen";
 import { ProjectOverviewScreen } from "../screens/ProjectOverviewScreen";
 import { ProjectMembersScreen } from "../screens/ProjectMembersScreen";
 import { SubscriptionScreen } from "../screens/SubscriptionScreen";
+import { PaywallScreen } from "../screens/PaywallScreen";
 import { ExpenseReviewScreen } from "../screens/ExpenseReviewScreen";
 import { EquipmentListScreen } from "../screens/equipment/EquipmentListScreen";
 import { EquipmentDetailScreen } from "../screens/equipment/EquipmentDetailScreen";
@@ -184,6 +185,11 @@ export function RootNavigator() {
         name="Subscription"
         component={SubscriptionScreen}
         options={{ headerShown: true, title: t("nav.subscription") }}
+      />
+      <Stack.Screen
+        name="Paywall"
+        component={PaywallScreen}
+        options={{ headerShown: true, title: t("paywall.title"), presentation: "modal" }}
       />
       <Stack.Screen
         name="ContractorsList"

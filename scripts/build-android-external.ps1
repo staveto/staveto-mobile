@@ -41,9 +41,8 @@ Write-Host ""
 Write-Host "Step 1: Setting environment variables..." -ForegroundColor Yellow
 
 # Use shorter Gradle cache paths (JVM options only - no -P properties here)
-$env:GRADLE_USER_HOME = "C:\gradle-home"
-$env:GRADLE_CACHE_DIR = "C:\gradle-cache"
-$env:GRADLE_OPTS = "-Dorg.gradle.cache.dir=C:\gradle-cache -Dorg.gradle.user.home=C:\gradle-home"
+$env:GRADLE_USER_HOME = "C:\g"
+$env:GRADLE_OPTS = "-Dorg.gradle.user.home=C:\g"
 
 # Set Android architecture to x86_64 ONLY (for emulator, avoids arm64 path issues)
 # CRITICAL: These must be set BEFORE Expo CLI runs to prevent default architectures
@@ -71,9 +70,9 @@ Write-Host "  [OK] REACT_NATIVE_ARCHITECTURES = $env:REACT_NATIVE_ARCHITECTURES"
 Write-Host "  [OK] ORG_GRADLE_PROJECT_reactNativeArchitectures = $env:ORG_GRADLE_PROJECT_reactNativeArchitectures" -ForegroundColor Green
 Write-Host ""
 
-# Step 2: Create cache directories if they don't exist
-Write-Host "Step 2: Creating cache directories..." -ForegroundColor Yellow
-$cacheDirs = @("C:\gradle-home", "C:\gradle-cache")
+# Step 2: Create cache directory if it doesn't exist
+Write-Host "Step 2: Creating cache directory..." -ForegroundColor Yellow
+$cacheDirs = @("C:\g", "C:\t")
 foreach ($dir in $cacheDirs) {
     if (-not (Test-Path $dir)) {
         New-Item -ItemType Directory -Path $dir -Force | Out-Null
@@ -137,13 +136,13 @@ Write-Host "  REACT_NATIVE_ARCHITECTURES = $env:REACT_NATIVE_ARCHITECTURES" -For
 Write-Host "  ORG_GRADLE_PROJECT_reactNativeArchitectures = $env:ORG_GRADLE_PROJECT_reactNativeArchitectures" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Step 6: Building Android app..." -ForegroundColor Yellow
-Write-Host "  Command: npx expo run:android" -ForegroundColor Gray
-Write-Host "  Expected: -PreactNativeArchitectures=x86_64 (NOT x86_64,arm64-v8a)" -ForegroundColor Gray
+Write-Host "  Command: npx expo run:android --all-arch" -ForegroundColor Gray
+Write-Host "  --all-arch = use gradle.properties (x86_64 only), avoids arm64 path limit" -ForegroundColor Gray
 Write-Host ""
 
 # Capture build output for arm64 verification (fail-fast)
 $buildLogPath = Join-Path $env:TEMP "expo-android-build-$(Get-Date -Format 'yyyyMMddHHmmss').log"
-npx expo run:android 2>&1 | Tee-Object -FilePath $buildLogPath
+npx expo run:android --all-arch 2>&1 | Tee-Object -FilePath $buildLogPath
 $buildExitCode = $LASTEXITCODE
 
 # Hard verification: FAIL FAST if arm64 appears in build output

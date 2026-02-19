@@ -20,6 +20,7 @@ import {
   Pressable,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
+import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import {
   getUserSubscription,
@@ -27,7 +28,7 @@ import {
   subscribeToSubscription,
   type Subscription,
 } from "../services/subscription";
-import { getEntitlement, type Entitlement } from "../services/billing";
+import { getEntitlement, DEFAULT_ENTITLEMENT, type Entitlement } from "../services/billing";
 import { colors, radius, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
 import { showToast } from "../helpers/toast";
@@ -35,6 +36,7 @@ import { showToast } from "../helpers/toast";
 export function SubscriptionScreen() {
   const { t } = useI18n();
   const { user } = useAuth();
+  const navigation = useNavigation();
   const [entitlement, setEntitlement] = useState<Entitlement | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
@@ -54,6 +56,8 @@ export function SubscriptionScreen() {
       setSubscription(sub);
     } catch (error) {
       console.error("[SubscriptionScreen] Error loading:", error);
+      setEntitlement(DEFAULT_ENTITLEMENT);
+      setSubscription(null);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -138,7 +142,16 @@ export function SubscriptionScreen() {
     >
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{t("subscription.currentPlan")}</Text>
-        <View style={styles.currentPlanCard}>
+        <TouchableOpacity
+          style={styles.currentPlanCard}
+          onPress={() => {
+            if (!entitlement?.entitlement) {
+              (navigation as any).navigate("Paywall");
+            }
+          }}
+          activeOpacity={entitlement?.entitlement ? 1 : 0.7}
+          disabled={!!entitlement?.entitlement}
+        >
           <View style={styles.currentPlanHeader}>
             <Text style={styles.currentPlanName}>{t("subscription.planSingle")}</Text>
             <Text style={styles.currentPlanPrice}>14.99 €</Text>
@@ -149,7 +162,13 @@ export function SubscriptionScreen() {
               {statusLabel}
             </Text>
           </View>
-        </View>
+          {!entitlement?.entitlement && (
+            <View style={styles.upgradeHint}>
+              <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+              <Text style={styles.upgradeHintText}>{t("paywall.selectPlan")}</Text>
+            </View>
+          )}
+        </TouchableOpacity>
 
         <View style={styles.usageSection}>
           <Text style={styles.usageTitle}>{t("subscription.ocrUsed")}</Text>
@@ -285,6 +304,17 @@ const styles = StyleSheet.create({
   },
   statusBadgeTextExpired: {
     color: "#FF5722",
+  },
+  upgradeHint: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginTop: spacing.sm,
+  },
+  upgradeHintText: {
+    fontSize: 12,
+    color: colors.primary,
+    fontWeight: "500",
   },
   usageSection: {
     backgroundColor: colors.card,

@@ -395,7 +395,11 @@ export async function listMyTasks(ownerId: string): Promise<TaskDoc[]> {
   return activeTasks;
 }
 
-export type TaskWithProject = TaskDoc & { projectId: string; projectName?: string };
+export type TaskWithProject = TaskDoc & {
+  projectId: string;
+  projectName?: string;
+  projectType?: "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE";
+};
 
 /** Load tasks with dueDate in range [startYmd, endYmd] (inclusive). Uses local YYYY-MM-DD. */
 export async function listTasksWithDueDateInRange(
@@ -409,7 +413,12 @@ export async function listTasksWithDueDateInRange(
   const allTasksPromises = projects.map(async (project) => {
     try {
       const tasks = await listTasksByProject(project.id);
-      return tasks.map((task) => ({ ...task, projectId: project.id, projectName: project.name }));
+      return tasks.map((task) => ({
+        ...task,
+        projectId: project.id,
+        projectName: project.name,
+        projectType: project.projectType,
+      }));
     } catch (error: any) {
       console.warn(`[tasks] Error loading tasks for project ${project.id}:`, error);
       return [];

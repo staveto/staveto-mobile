@@ -90,6 +90,9 @@ import { isFeatureEnabled } from "../services/features";
 import { formatEventSummary } from "../helpers/formatEvent";
 import type { ProjectEvent } from "../lib/types";
 import type { ProjectWeatherSnapshot } from "../services/weather";
+import { DescriptionInputModal } from "../components/DescriptionInputModal";
+import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
+import { getEntitlement } from "../services/billing";
 
 const DONE_COLOR = "#2e7d32";
 
@@ -135,6 +138,7 @@ export function ProjectOverviewScreen() {
   const [expandedDiary, setExpandedDiary] = useState(false);
   const [expandedDocuments, setExpandedDocuments] = useState(false);
   const [showNewTask, setShowNewTask] = useState(false);
+  const [showTaskDescriptionModal, setShowTaskDescriptionModal] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [selectedPhaseId, setSelectedPhaseId] = useState<string | null>(null); // Phase for new task
   const [showNewPhaseModal, setShowNewPhaseModal] = useState(false);
@@ -144,10 +148,7 @@ export function ProjectOverviewScreen() {
   const [showEditPhaseModal, setShowEditPhaseModal] = useState(false);
   const [movingTask, setMovingTask] = useState<TaskDoc | null>(null);
   const [showMoveTaskModal, setShowMoveTaskModal] = useState(false);
-  const [showVoiceRecord, setShowVoiceRecord] = useState(false);
-  const [isRecording, setIsRecording] = useState(false);
   const [recordingUri, setRecordingUri] = useState<string | null>(null);
-  const [recording, setRecording] = useState<any>(null);
   const [submitting, setSubmitting] = useState(false);
   const [editingTask, setEditingTask] = useState<TaskDoc | null>(null);
   const [editTaskTitle, setEditTaskTitle] = useState("");
@@ -261,10 +262,8 @@ export function ProjectOverviewScreen() {
   const [diaryWeather, setDiaryWeather] = useState("");
   const [diaryWorkers, setDiaryWorkers] = useState("");
   const [diaryWorkDescription, setDiaryWorkDescription] = useState("");
-  const [diaryWorkDescriptionMode, setDiaryWorkDescriptionMode] = useState<'text' | 'voice'>('text');
   const [diaryWorkDescriptionRecordingUri, setDiaryWorkDescriptionRecordingUri] = useState<string | null>(null);
-  const [diaryWorkDescriptionIsRecording, setDiaryWorkDescriptionIsRecording] = useState(false);
-  const [diaryWorkDescriptionRecording, setDiaryWorkDescriptionRecording] = useState<any>(null);
+  const [showDiaryDescriptionModal, setShowDiaryDescriptionModal] = useState(false);
   const [diaryMaterials, setDiaryMaterials] = useState("");
   const [diaryPhaseId, setDiaryPhaseId] = useState<string | null>(null);
   const [diaryAttachment, setDiaryAttachment] = useState<{ uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' } | null>(null);
@@ -831,12 +830,15 @@ export function ProjectOverviewScreen() {
       
       setShowNewTask(false);
       setNewTitle("");
+      setNewTaskDueDate("");
       setSelectedPhaseId(null);
-      setShowVoiceRecord(false);
-      setIsRecording(false);
       setRecordingUri(null);
+      setShowTaskDescriptionModal(false);
       await load(true); // Reload with refresh
       console.log(`[ProjectOverview] Custom task created successfully`);
+      trackPaywallEvent("task_created").then(() =>
+        getEntitlement().then((ent) => checkAndShowPaywall(!!ent?.entitlement, navigation))
+      );
     } catch (e: unknown) {
       console.error(`[ProjectOverview] Error creating task:`, e);
       const c = (e as { code?: string }).code;
@@ -866,10 +868,8 @@ export function ProjectOverviewScreen() {
     setDiaryWeather("");
     setDiaryWorkers("");
     setDiaryWorkDescription("");
-    setDiaryWorkDescriptionMode(mode);
     setDiaryWorkDescriptionRecordingUri(null);
-    setDiaryWorkDescriptionIsRecording(false);
-    setDiaryWorkDescriptionRecording(null);
+    setShowDiaryDescriptionModal(false);
     setDiaryMaterials("");
     setDiaryPhaseId(null);
     setDiaryAttachment(null);
@@ -2241,13 +2241,9 @@ export function ProjectOverviewScreen() {
   const handleSaveDiaryEntry = async () => {
     if (!projectId || !orgId) return;
     
-    // Validate: either text mode with text, or voice mode with recording
-    if (diaryWorkDescriptionMode === 'text' && !diaryWorkDescription.trim()) {
+    // Validate: need either text or voice recording
+    if (!diaryWorkDescription.trim() && !diaryWorkDescriptionRecordingUri) {
       Alert.alert(t("common.error"), t("projectOverview.fillWorkDescription"));
-      return;
-    }
-    if (diaryWorkDescriptionMode === 'voice' && !diaryWorkDescriptionRecordingUri) {
-      Alert.alert(t("common.error"), t("projectOverview.uploadVoiceOrSwitchToText"));
       return;
     }
     
@@ -2284,7 +2280,7 @@ export function ProjectOverviewScreen() {
       
       // Upload voice recording if provided
       let workDescriptionText = diaryWorkDescription.trim() || undefined;
-      if (diaryWorkDescriptionMode === 'voice' && diaryWorkDescriptionRecordingUri) {
+      if (diaryWorkDescriptionRecordingUri) {
         try {
           setUploadingDiaryAttachment(true);
           const voiceAttachment = await attachmentsService.uploadAttachment(projectId, {
@@ -2349,10 +2345,8 @@ export function ProjectOverviewScreen() {
       setDiaryWeather("");
       setDiaryWorkers("");
       setDiaryWorkDescription("");
-      setDiaryWorkDescriptionMode('text');
       setDiaryWorkDescriptionRecordingUri(null);
-      setDiaryWorkDescriptionIsRecording(false);
-      setDiaryWorkDescriptionRecording(null);
+      setShowDiaryDescriptionModal(false);
       setDiaryMaterials("");
       setDiaryPhaseId(null);
       setDiaryAttachment(null);
@@ -3808,10 +3802,7 @@ export function ProjectOverviewScreen() {
                           setDiaryWeather(entry.weather || "");
                           setDiaryWorkers(entry.workers || "");
                           setDiaryWorkDescription(entry.workDescription || "");
-                          setDiaryWorkDescriptionMode('text');
                           setDiaryWorkDescriptionRecordingUri(null);
-                          setDiaryWorkDescriptionIsRecording(false);
-                          setDiaryWorkDescriptionRecording(null);
                           setDiaryMaterials(entry.materials || "");
                           setDiaryPhaseId(entry.phaseId || null);
                           setDiaryAttachment(null); // Reset attachment when editing (existing attachments are already saved)
@@ -5022,157 +5013,33 @@ export function ProjectOverviewScreen() {
               </View>
             )}
             
-            {/* For TRADE/MAINTENANCE: Voice or Text options */}
-            {isTradeOrMaintenance && (
-              <View style={styles.taskInputOptions}>
-                <TouchableOpacity
-                  style={[styles.inputOptionButton, showVoiceRecord && styles.inputOptionButtonActive]}
-                  onPress={() => {
-                    setShowVoiceRecord(true);
-                    setNewTitle("");
-                  }}
-                >
-                  <Ionicons name="mic" size={24} color={showVoiceRecord ? colors.primary : colors.textMuted} />
-                  <Text style={[styles.inputOptionText, showVoiceRecord && styles.inputOptionTextActive]}>
-                    {t("projectOverview.voiceRecording")}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.inputOptionButton, !showVoiceRecord && styles.inputOptionButtonActive]}
-                  onPress={() => {
-                    setShowVoiceRecord(false);
-                    setRecordingUri(null);
-                  }}
-                >
-                  <Ionicons name="create-outline" size={24} color={!showVoiceRecord ? colors.primary : colors.textMuted} />
-                  <Text style={[styles.inputOptionText, !showVoiceRecord && styles.inputOptionTextActive]}>
-                    Napísať popis
-                  </Text>
-                </TouchableOpacity>
-              </View>
-            )}
-            
-            {showVoiceRecord && isTradeOrMaintenance ? (
-              // Voice recording interface
-              <View style={styles.voiceRecordingContainer}>
-                {isRecording ? (
-                  <>
-                    <View style={styles.recordingIndicator}>
-                      <View style={styles.recordingDot} />
-                      <Text style={styles.recordingText}>{t("projectOverview.recording")}</Text>
-                    </View>
-                    <TouchableOpacity
-                      style={styles.stopRecordingButton}
-                      onPress={async () => {
-                        if (!recording) return;
-                        
-                        try {
-                          console.log('[ProjectOverview] Stopping recording...');
-                          await recording.stopAndUnloadAsync();
-                          const uri = recording.getURI();
-                          console.log('[ProjectOverview] Recording stopped, URI:', uri);
-                          
-                          setRecordingUri(uri);
-                          setIsRecording(false);
-                          setRecording(null);
-                        } catch (error: any) {
-                          console.error('[ProjectOverview] Error stopping recording:', error);
-                          Alert.alert(t("common.error"), t("projectOverview.failedToStopRecording", { error: error.message || t("common.unknown") }));
-                        }
-                      }}
-                    >
-                      <Ionicons name="stop-circle" size={48} color="#FF3B30" />
-                      <Text style={styles.stopRecordingText}>{t("projectOverview.stopRecording")}</Text>
-                    </TouchableOpacity>
-                  </>
-                ) : recordingUri ? (
-                  <>
-                    <View style={styles.recordingPlayback}>
-                      <Ionicons name="play-circle" size={48} color={colors.primary} />
-                      <Text style={styles.recordingInfo}>{t("projectOverview.recordingReady")}</Text>
-                      <TouchableOpacity
-                        style={styles.rerecordButton}
-                        onPress={async () => {
-                          if (recording) {
-                            try {
-                              await recording.stopAndUnloadAsync();
-                            } catch (e) {
-                              // Ignore errors when stopping
-                            }
-                          }
-                          setRecordingUri(null);
-                          setIsRecording(false);
-                          setRecording(null);
-                        }}
-                      >
-                        <Text style={styles.rerecordText}>{t("projectOverview.rerecord")}</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </>
-                ) : (
-                  <TouchableOpacity
-                    style={styles.startRecordingButton}
-                    onPress={async () => {
-                      if (!AudioModule) {
-                        Alert.alert(t("common.error"), t("projectOverview.voiceRecordingNotAvailable"));
-                        return;
-                      }
-                      
-                      try {
-                        // Request permissions
-                        const { status } = await AudioModule.Audio.requestPermissionsAsync();
-                        if (status !== 'granted') {
-                          Alert.alert(t("common.error"), t("projectOverview.audioPermissionRequired"));
-                          return;
-                        }
-                        // Unload any previous recording to avoid "recorder not prepared" conflict
-                        if (recording) {
-                          try {
-                            await recording.stopAndUnloadAsync();
-                          } catch (e) { /* ignore */ }
-                          setRecording(null);
-                        }
-                        // Configure audio mode (staysActiveInBackground helps avoid "recorder not prepared" on some devices)
-                        await AudioModule.Audio.setAudioModeAsync({
-                          allowsRecordingIOS: true,
-                          playsInSilentModeIOS: true,
-                          staysActiveInBackground: false,
-                          interruptionModeAndroid: 2, // DuckOthers
-                          shouldDuckAndroid: true,
-                        });
-                        // Brief delay lets native audio session initialize (fixes "recorder not prepared" on first use)
-                        await new Promise((r) => setTimeout(r, 400));
-                        // Start recording
-                        const { recording: newRecording } = await AudioModule.Audio.Recording.createAsync(
-                          AudioModule.Audio.RecordingOptionsPresets.HIGH_QUALITY
-                        );
-                        setRecording(newRecording);
-                        setIsRecording(true);
-                        console.log('[ProjectOverview] Recording started');
-                      } catch (error: any) {
-                        console.error('[ProjectOverview] Error starting recording:', error);
-                        Alert.alert(t("common.error"), t("projectOverview.failedToStartRecording", { error: error.message || t("common.unknown") }));
-                      }
-                    }}
-                  >
-                    <Ionicons name="mic-circle" size={64} color={colors.primary} />
-                    <Text style={styles.startRecordingText}>{t("projectOverview.startRecording")}</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            ) : (
-              // Text input
-              <TextInput
-                style={[styles.input, { backgroundColor: colors.card, color: colors.text }]}
-                value={newTitle}
-                onChangeText={setNewTitle}
-                placeholder={isTradeOrMaintenance ? "Popis úlohy..." : t("tasks.taskPlaceholder")}
-                placeholderTextColor="#000000"
-                multiline={isTradeOrMaintenance}
-                numberOfLines={isTradeOrMaintenance ? 4 : 1}
-                textAlignVertical={isTradeOrMaintenance ? "top" : "center"}
-              />
-            )}
+            {/* Task description - same two-step flow as diary (Add description → modal) */}
+            <Text style={styles.modalLabel}>{isTradeOrMaintenance ? t("projectOverview.workDescriptionLabel") : t("tasks.taskPlaceholder")}</Text>
+            <TouchableOpacity
+              style={styles.addDescriptionButton}
+              onPress={() => setShowTaskDescriptionModal(true)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add-circle-outline" size={24} color={colors.primary} />
+              <Text style={styles.addDescriptionButtonText}>
+                {newTitle.trim() || recordingUri
+                  ? (newTitle.trim() ? newTitle.slice(0, 50) + (newTitle.length > 50 ? "…" : "") : t("projectOverview.recordingReady"))
+                  : t("projectOverview.addDescription")}
+              </Text>
+            </TouchableOpacity>
+
+            <DescriptionInputModal
+              visible={showTaskDescriptionModal}
+              onClose={() => setShowTaskDescriptionModal(false)}
+              onConfirm={(text, recUri) => {
+                setNewTitle(text);
+                setRecordingUri(recUri ?? null);
+              }}
+              initialText={newTitle}
+              initialRecordingUri={recordingUri}
+              placeholder={isTradeOrMaintenance ? t("projectOverview.descriptionPlaceholder") : t("tasks.taskPlaceholder")}
+              title={isTradeOrMaintenance ? t("projectOverview.workDescriptionLabel") : t("projectOverview.addTask")}
+            />
             
             <Text style={styles.modalLabel}>{t("projectOverview.plannedDueDate") || 'Plánovaný termín ukončenia (voliteľné)'}</Text>
             <TouchableOpacity
@@ -5193,24 +5060,13 @@ export function ProjectOverviewScreen() {
             <View style={styles.modalButtons}>
               <TouchableOpacity 
                 style={styles.modalCancel} 
-                onPress={async () => { 
-                  // Stop recording if active
-                  if (recording) {
-                    try {
-                      await recording.stopAndUnloadAsync();
-                    } catch (e) {
-                      // Ignore errors
-                    }
-                  }
-                  
-      setShowNewTask(false);
-      setNewTitle("");
-      setNewTaskDueDate("");
-      setSelectedPhaseId(null);
-      setShowVoiceRecord(false);
-      setIsRecording(false);
-      setRecordingUri(null);
-      setRecording(null);
+                onPress={() => { 
+                  setShowNewTask(false);
+                  setNewTitle("");
+                  setNewTaskDueDate("");
+                  setSelectedPhaseId(null);
+                  setRecordingUri(null);
+                  setShowTaskDescriptionModal(false);
                 }}
               >
                 <Text style={styles.modalCancelText}>{t("tasks.cancel")}</Text>
@@ -5265,210 +5121,33 @@ export function ProjectOverviewScreen() {
               placeholder={t("projectOverview.workersPlaceholder")}
               placeholderTextColor={colors.textMuted}
             />
-            {/* Work Description Input Mode Selector */}
+            {/* Work Description - two-step like Mobility-Work */}
             <Text style={styles.modalLabel}>{t("projectOverview.workDescriptionLabel")}:</Text>
-            <View style={styles.inputOptionContainer}>
-              <TouchableOpacity
-                style={[styles.inputOptionButton, diaryWorkDescriptionMode === 'text' && styles.inputOptionButtonActive]}
-                onPress={() => {
-                  setDiaryWorkDescriptionMode('text');
-                  if (diaryWorkDescriptionRecording) {
-                    try {
-                      diaryWorkDescriptionRecording.stopAndUnloadAsync();
-                    } catch (e) {
-                      // Ignore
-                    }
-                  }
-                  setDiaryWorkDescriptionRecordingUri(null);
-                  setDiaryWorkDescriptionIsRecording(false);
-                  setDiaryWorkDescriptionRecording(null);
-                }}
-              >
-                <Ionicons name="create-outline" size={24} color={diaryWorkDescriptionMode === 'text' ? colors.primary : colors.textMuted} />
-                <Text style={[styles.inputOptionText, diaryWorkDescriptionMode === 'text' && styles.inputOptionTextActive]}>
-                  {t("projectOverview.writeText")}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.inputOptionButton, diaryWorkDescriptionMode === 'voice' && styles.inputOptionButtonActive]}
-                onPress={() => {
-                  setDiaryWorkDescriptionMode('voice');
-                  setDiaryWorkDescription('');
-                }}
-              >
-                <Ionicons name="mic" size={24} color={diaryWorkDescriptionMode === 'voice' ? colors.primary : colors.textMuted} />
-                <Text style={[styles.inputOptionText, diaryWorkDescriptionMode === 'voice' && styles.inputOptionTextActive]}>
-                  {t("projectOverview.recordVoice")}
-                </Text>
-              </TouchableOpacity>
-            </View>
+            <TouchableOpacity
+              style={styles.addDescriptionButton}
+              onPress={() => setShowDiaryDescriptionModal(true)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="add-circle-outline" size={24} color={colors.primary} />
+              <Text style={styles.addDescriptionButtonText}>
+                {diaryWorkDescription.trim() || diaryWorkDescriptionRecordingUri
+                  ? (diaryWorkDescription.trim() ? diaryWorkDescription.slice(0, 50) + (diaryWorkDescription.length > 50 ? "…" : "") : t("projectOverview.recordingReady"))
+                  : t("projectOverview.addDescription")}
+              </Text>
+            </TouchableOpacity>
 
-            {diaryWorkDescriptionMode === 'voice' ? (
-              <View style={styles.voiceRecordingContainer}>
-                {diaryWorkDescriptionIsRecording ? (
-                  <>
-                    <View style={styles.recordingIndicator}>
-                      <View style={styles.recordingDot} />
-                      <Text style={styles.recordingText}>{t("projectOverview.recording")}</Text>
-                    </View>
-                    <TouchableOpacity
-                      style={styles.stopRecordingButton}
-                      onPress={async () => {
-                        if (!diaryWorkDescriptionRecording) return;
-                        
-                        try {
-                          console.log('[ProjectOverview] Stopping diary work description recording...');
-                          await diaryWorkDescriptionRecording.stopAndUnloadAsync();
-                          const uri = diaryWorkDescriptionRecording.getURI();
-                          console.log('[ProjectOverview] Diary work description recording stopped, URI:', uri);
-                          
-                          setDiaryWorkDescriptionRecordingUri(uri);
-                          setDiaryWorkDescriptionIsRecording(false);
-                          setDiaryWorkDescriptionRecording(null);
-                        } catch (error: any) {
-                          console.error('[ProjectOverview] Error stopping diary work description recording:', error);
-                          Alert.alert(t("common.error"), t("projectOverview.failedToStopRecording", { error: error.message || t("common.unknown") }));
-                        }
-                      }}
-                    >
-                      <Ionicons name="stop-circle" size={48} color="#FF3B30" />
-                      <Text style={styles.stopRecordingText}>{t("projectOverview.stopRecording")}</Text>
-                    </TouchableOpacity>
-                  </>
-                ) : diaryWorkDescriptionRecordingUri ? (
-                  <>
-                    <View style={styles.recordingPlayback}>
-                      <Ionicons name="play-circle" size={48} color={colors.primary} />
-                      <Text style={styles.recordingInfo}>{t("projectOverview.recordingReady")}</Text>
-                      <View style={styles.recordingActions}>
-                        <TouchableOpacity
-                          style={styles.convertToTextButton}
-                          onPress={async () => {
-                            if (!diaryWorkDescriptionRecordingUri) return;
-                            
-                            try {
-                              // TODO: Implement speech-to-text conversion
-                              // This would require a backend API or service like Google Speech-to-Text
-                              // For now, show a placeholder message
-                              Alert.alert(
-                                t("projectOverview.convertToTextTitle"),
-                                t("projectOverview.convertToTextMessage"),
-                                [
-                                  {
-                                    text: t("projectOverview.switchToText"),
-                                    onPress: () => {
-                                      setDiaryWorkDescriptionMode('text');
-                                      setDiaryWorkDescriptionRecordingUri(null);
-                                    },
-                                  },
-                                  { text: t("common.ok") },
-                                ]
-                              );
-                            } catch (error: any) {
-                              console.error('[ProjectOverview] Error converting speech to text:', error);
-                              Alert.alert(t("common.error"), t("projectOverview.failedToConvertSpeech"));
-                            }
-                          }}
-                        >
-                          <Ionicons name="text-outline" size={20} color={colors.primary} />
-                          <Text style={styles.convertToTextText}>{t("projectOverview.convertToText")}</Text>
-                        </TouchableOpacity>
-                        <TouchableOpacity
-                          style={styles.rerecordButton}
-                          onPress={async () => {
-                            if (diaryWorkDescriptionRecording) {
-                              try {
-                                await diaryWorkDescriptionRecording.stopAndUnloadAsync();
-                              } catch (e) {
-                                // Ignore errors when stopping
-                              }
-                            }
-                            setDiaryWorkDescriptionRecordingUri(null);
-                            setDiaryWorkDescriptionIsRecording(false);
-                            setDiaryWorkDescriptionRecording(null);
-                          }}
-                        >
-                          <Text style={styles.rerecordText}>{t("projectOverview.rerecord")}</Text>
-                        </TouchableOpacity>
-                      </View>
-                    </View>
-                    <TextInput
-                      style={[styles.input, styles.textArea, { marginTop: spacing.md }]}
-                      value={diaryWorkDescription}
-                      onChangeText={setDiaryWorkDescription}
-                      placeholder={t("projectOverview.transcriptionPlaceholder")}
-                      placeholderTextColor={colors.textMuted}
-                      multiline
-                      numberOfLines={3}
-                    />
-                  </>
-                ) : (
-                  <TouchableOpacity
-                    style={styles.startRecordingButton}
-                    onPress={async () => {
-                      if (!AudioModule) {
-                        Alert.alert(t("common.error"), t("projectOverview.voiceRecordingNotAvailable"));
-                        return;
-                      }
-                      
-                      try {
-                        // Request permissions
-                        const { status } = await AudioModule.Audio.requestPermissionsAsync();
-                        if (status !== 'granted') {
-                          Alert.alert(t("common.error"), t("projectOverview.audioPermissionRequired"));
-                          return;
-                        }
-                        // Unload any previous recording to avoid "recorder not prepared" conflict
-                        if (diaryWorkDescriptionRecording) {
-                          try {
-                            await diaryWorkDescriptionRecording.stopAndUnloadAsync();
-                          } catch (e) { /* ignore */ }
-                          setDiaryWorkDescriptionRecording(null);
-                        }
-                        // Configure audio mode (staysActiveInBackground helps avoid "recorder not prepared" on some devices)
-                        await AudioModule.Audio.setAudioModeAsync({
-                          allowsRecordingIOS: true,
-                          playsInSilentModeIOS: true,
-                          staysActiveInBackground: false,
-                          interruptionModeAndroid: 2, // DuckOthers
-                          shouldDuckAndroid: true,
-                        });
-                        // Brief delay lets native audio session initialize (fixes "recorder not prepared" on first use)
-                        await new Promise((r) => setTimeout(r, 400));
-                        // Start recording
-                        const { recording: newRecording } = await AudioModule.Audio.Recording.createAsync(
-                          AudioModule.Audio.RecordingOptionsPresets.HIGH_QUALITY
-                        );
-                        setDiaryWorkDescriptionRecording(newRecording);
-                        setDiaryWorkDescriptionIsRecording(true);
-                        console.log('[ProjectOverview] Diary work description recording started');
-                      } catch (error: any) {
-                        console.error('[ProjectOverview] Error starting diary work description recording:', error);
-                        Alert.alert(t("common.error"), t("projectOverview.failedToStartRecording", { error: error.message || t("common.unknown") }));
-                      }
-                    }}
-                  >
-                    <Ionicons name="mic-circle" size={64} color={colors.primary} />
-                    <Text style={styles.startRecordingText}>{t("projectOverview.startRecording")}</Text>
-                  </TouchableOpacity>
-                )}
-              </View>
-            ) : (
-              <View style={styles.textInputContainer}>
-                <View style={styles.textInputIconContainer}>
-                  <Ionicons name="create-outline" size={20} color={colors.textMuted} />
-                </View>
-                <TextInput
-                  style={[styles.input, styles.textArea, styles.textInputWithIcon]}
-                  value={diaryWorkDescription}
-                  onChangeText={setDiaryWorkDescription}
-                  placeholder={t("projectOverview.workDescriptionLabel")}
-                  placeholderTextColor={colors.textMuted}
-                  multiline
-                  numberOfLines={4}
-                />
-              </View>
-            )}
+            <DescriptionInputModal
+              visible={showDiaryDescriptionModal}
+              onClose={() => setShowDiaryDescriptionModal(false)}
+              onConfirm={(text, recordingUri) => {
+                setDiaryWorkDescription(text);
+                setDiaryWorkDescriptionRecordingUri(recordingUri ?? null);
+              }}
+              initialText={diaryWorkDescription}
+              initialRecordingUri={diaryWorkDescriptionRecordingUri}
+              placeholder={t("projectOverview.descriptionPlaceholder")}
+              title={t("projectOverview.workDescriptionLabel")}
+            />
             <TextInput
               style={styles.input}
               value={diaryMaterials}
@@ -5570,8 +5249,7 @@ export function ProjectOverviewScreen() {
                 onPress={handleSaveDiaryEntry} 
                 disabled={
                   submitting || 
-                  (diaryWorkDescriptionMode === 'text' && !diaryWorkDescription.trim()) ||
-                  (diaryWorkDescriptionMode === 'voice' && !diaryWorkDescriptionRecordingUri)
+                  (!diaryWorkDescription.trim() && !diaryWorkDescriptionRecordingUri)
                 }
               >
                 <Text style={styles.modalOkText}>
@@ -6362,6 +6040,24 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     gap: spacing.md,
     marginBottom: spacing.md,
+  },
+  addDescriptionButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.card,
+    borderRadius: 8,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    borderStyle: "dashed",
+  },
+  addDescriptionButtonText: {
+    fontSize: 15,
+    color: colors.textMuted,
+    flex: 1,
   },
   inputOptionContainer: {
     flexDirection: "row",

@@ -1,6 +1,6 @@
 import { collection, addDoc, query, getDocs, deleteDoc, doc, serverTimestamp, where, getDoc, writeBatch } from "../lib/rnFirestore";
 import firestore from "@react-native-firebase/firestore";
-import { db, auth, getFns } from "../firebase";
+import { db, auth, getCallable } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { addProjectEvent } from "./projectEvents";
 import * as projectsService from "./projects";
@@ -184,8 +184,7 @@ export async function removeMember(
 
   const callRemove = async (payload: { projectId: string; memberId: string; memberUid?: string }) => {
     await currentUser.getIdToken(true);
-    const fns = getFns();
-    return fns.httpsCallable("removeProjectMember")(payload);
+    return getCallable("removeProjectMember")(payload);
   };
 
   const payload = { projectId, memberId, ...(memberUid && { memberUid }) };
@@ -254,8 +253,7 @@ export async function updateMemberPermissions(
     sharedPhaseIds: sharedPhaseIds || [],
   };
 
-  const fn = getFns().httpsCallable("updateMemberPermissions");
-  const res = await fn(payload);
+  const res = await getCallable("updateMemberPermissions")(payload);
   const data = res?.data as { ok?: boolean };
   if (!data?.ok) {
     throw new Error("Nepodarilo sa aktualizovať oprávnenia.");

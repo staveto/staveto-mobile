@@ -357,6 +357,11 @@ export function ProjectsScreen() {
       console.log(`${selectedType} project created successfully`);
       closeNewModal();
       load();
+      const { trackPaywallEvent, checkAndShowPaywall } = await import("../services/paywallTrigger");
+      const { getEntitlement } = await import("../services/billing");
+      await trackPaywallEvent("project_created");
+      const ent = await getEntitlement();
+      await checkAndShowPaywall(!!ent?.entitlement, navigation);
     } catch (e: unknown) {
       console.error('Error creating project:', e);
       const error = e as { code?: string; message?: string };
@@ -744,85 +749,85 @@ export function ProjectsScreen() {
               <>
                 {/* Krok 1: Základ - Typ projektu */}
                 <Text style={styles.modalLabel}>{t("projects.selectType")}</Text>
-                <View style={styles.typeColumn}>
-                  <TouchableOpacity
-                    style={[styles.typeCard, selectedType === "MANAGEMENT" && styles.typeCardActive]}
-                    onPress={() => {
-                      setSelectedType("MANAGEMENT");
-                      setUseTemplate(null);
-                      setError(null);
-                    }}
-                  >
-                    <View style={styles.typeIconContainer}>
-                      <Ionicons
-                        name="clipboard-outline"
-                        size={28}
-                        color={selectedType === "MANAGEMENT" ? colors.primary : colors.textMuted}
-                      />
-                    </View>
-                    <Text style={[styles.typeCardText, selectedType === "MANAGEMENT" && styles.typeCardTextActive]}>
-                      {t("projectType.MANAGEMENT")}
-                    </Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity
-                    style={[styles.typeCard, selectedType === "RESIDENTIAL" && styles.typeCardActive]}
-                    onPress={() => {
-                      setSelectedType("RESIDENTIAL");
-                      setError(null);
-                    }}
-                  >
-                    <View style={styles.typeIconContainer}>
-                      <Ionicons
-                        name="home-outline"
-                        size={28}
-                        color={selectedType === "RESIDENTIAL" ? colors.primary : colors.textMuted}
-                      />
-                    </View>
-                    <Text style={[styles.typeCardText, selectedType === "RESIDENTIAL" && styles.typeCardTextActive]}>
-                      {t("projectType.RESIDENTIAL")}
-                    </Text>
-                  </TouchableOpacity>
-                  
-                  <TouchableOpacity
-                    style={[styles.typeCard, selectedType === "TRADE" && styles.typeCardActive]}
-                    onPress={() => {
-                      setSelectedType("TRADE");
-                      setUseTemplate(null);
-                      setError(null);
-                    }}
-                  >
-                    <View style={styles.typeIconContainer}>
-                      <Ionicons
-                        name="person-outline"
-                        size={28}
-                        color={selectedType === "TRADE" ? colors.primary : colors.textMuted}
-                      />
-                    </View>
-                    <Text style={[styles.typeCardText, selectedType === "TRADE" && styles.typeCardTextActive]}>
-                      {t("projectType.TRADE")}
-                    </Text>
-                  </TouchableOpacity>
-
-                  <TouchableOpacity
-                    style={[styles.typeCard, selectedType === "MAINTENANCE" && styles.typeCardActive]}
-                    onPress={() => {
-                      setSelectedType("MAINTENANCE");
-                      setError(null);
-                    }}
-                  >
-                    <View style={styles.typeIconContainer}>
-                      <Ionicons
-                        name="construct-outline"
-                        size={28}
-                        color={selectedType === "MAINTENANCE" ? colors.primary : colors.textMuted}
-                      />
-                    </View>
-                    <Text style={[styles.typeCardText, selectedType === "MAINTENANCE" && styles.typeCardTextActive]}>
-                      {t("projectType.maintenance")}
-                    </Text>
-                  </TouchableOpacity>
-
+                <View style={styles.typeGrid}>
+                  <View style={styles.typeRow}>
+                    <TouchableOpacity
+                      style={[styles.typeCard, selectedType === "MANAGEMENT" && styles.typeCardActive]}
+                      onPress={() => {
+                        setSelectedType("MANAGEMENT");
+                        setUseTemplate(null);
+                        setError(null);
+                      }}
+                    >
+                      <View style={styles.typeIconContainer}>
+                        <Ionicons
+                          name="clipboard-outline"
+                          size={28}
+                          color={selectedType === "MANAGEMENT" ? colors.primary : colors.textMuted}
+                        />
+                      </View>
+                      <Text style={[styles.typeCardText, selectedType === "MANAGEMENT" && styles.typeCardTextActive]} numberOfLines={2}>
+                        {t("projectType.MANAGEMENT")}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.typeCard, selectedType === "RESIDENTIAL" && styles.typeCardActive]}
+                      onPress={() => {
+                        setSelectedType("RESIDENTIAL");
+                        setError(null);
+                      }}
+                    >
+                      <View style={styles.typeIconContainer}>
+                        <Ionicons
+                          name="home-outline"
+                          size={28}
+                          color={selectedType === "RESIDENTIAL" ? colors.primary : colors.textMuted}
+                        />
+                      </View>
+                      <Text style={[styles.typeCardText, selectedType === "RESIDENTIAL" && styles.typeCardTextActive]} numberOfLines={2}>
+                        {t("projectType.RESIDENTIAL")}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
+                  <View style={styles.typeRow}>
+                    <TouchableOpacity
+                      style={[styles.typeCard, selectedType === "TRADE" && styles.typeCardActive]}
+                      onPress={() => {
+                        setSelectedType("TRADE");
+                        setUseTemplate(null);
+                        setError(null);
+                      }}
+                    >
+                      <View style={styles.typeIconContainer}>
+                        <Ionicons
+                          name="person-outline"
+                          size={28}
+                          color={selectedType === "TRADE" ? colors.primary : colors.textMuted}
+                        />
+                      </View>
+                      <Text style={[styles.typeCardText, selectedType === "TRADE" && styles.typeCardTextActive]} numberOfLines={2}>
+                        {t("projectType.TRADE")}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.typeCard, selectedType === "MAINTENANCE" && styles.typeCardActive]}
+                      onPress={() => {
+                        setSelectedType("MAINTENANCE");
+                        setError(null);
+                      }}
+                    >
+                      <View style={styles.typeIconContainer}>
+                        <Ionicons
+                          name="construct-outline"
+                          size={28}
+                          color={selectedType === "MAINTENANCE" ? colors.primary : colors.textMuted}
+                        />
+                      </View>
+                      <Text style={[styles.typeCardText, selectedType === "MAINTENANCE" && styles.typeCardTextActive]} numberOfLines={2}>
+                        {t("projectType.maintenance")}
+                      </Text>
+                    </TouchableOpacity>
+                  </View>
                   {selectedType === "BUILD" && (
                     <View style={styles.templateInfo}>
                       <Ionicons name="information-circle-outline" size={16} color={colors.textMuted} />
@@ -1338,21 +1343,27 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
     justifyContent: "space-between",
   },
-  typeColumn: {
+  typeGrid: {
     flexDirection: "column",
     gap: spacing.md,
     marginBottom: spacing.lg,
   },
-  typeCard: {
+  typeRow: {
     flexDirection: "row",
+    gap: spacing.md,
+  },
+  typeCard: {
+    flex: 1,
+    flexDirection: "column",
     alignItems: "center",
-    paddingVertical: spacing.lg,
-    paddingHorizontal: spacing.md,
+    justifyContent: "center",
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
     borderRadius: radius,
     borderWidth: 2,
     borderColor: colors.border,
     backgroundColor: colors.card,
-    minHeight: 70,
+    minHeight: 80,
   },
   typeCardActive: {
     backgroundColor: colors.primary,
@@ -1363,16 +1374,15 @@ const styles = StyleSheet.create({
     marginRight: spacing.md,
   },
   typeIconContainer: {
-    marginRight: spacing.md,
-    alignItems: 'center',
-    justifyContent: 'center',
-    width: 32,
+    marginBottom: spacing.xs,
+    alignItems: "center",
+    justifyContent: "center",
   },
   typeCardText: {
-    fontSize: 16,
+    fontSize: 12,
     fontWeight: "600",
     color: colors.text,
-    flex: 1,
+    textAlign: "center",
   },
   typeCardTextActive: {
     color: "#fff",

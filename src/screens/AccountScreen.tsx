@@ -24,7 +24,7 @@ import { colors, radius, spacing } from "../theme";
 import { PRIVACY_URL, SUPPORT_EMAIL, TERMS_URL } from "../constants/consent";
 import { requestAccountDeletion } from "../services/account";
 import { isFeatureEnabled } from "../services/features";
-import { db, storage, getFns } from "../firebase";
+import { db, storage, getCallable } from "../firebase";
 import { doc, getDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import * as ImagePicker from "expo-image-picker";
 import { getDeviceRegionCode } from "../utils/countries";
@@ -402,7 +402,7 @@ export function AccountScreen() {
           label={t("account.refreshSharedCounts")}
           onPress={async () => {
             try {
-              const res = await getFns().httpsCallable("backfillProjectSharedCounts")({});
+              const res = await getCallable("backfillProjectSharedCounts")({});
               const data = res?.data as { ok?: boolean; updated?: number };
               Alert.alert(t("account.done"), t("account.refreshSuccess", { count: String(data?.updated ?? 0) }));
             } catch (e: any) {

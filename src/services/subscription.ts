@@ -8,7 +8,7 @@
  */
 
 import { doc, getDoc, onSnapshot, Unsubscribe } from "../lib/rnFirestore";
-import { db, getFns } from "../firebase";
+import { db, getCallable } from "../firebase";
 
 export type SubscriptionTier = "FREE" | "BASIC" | "PRO" | "ENTERPRISE";
 export type SubscriptionStatus = "trialing" | "active" | "past_due" | "canceled";
@@ -128,7 +128,7 @@ export function subscribeToSubscription(
  * Returns checkout URL that should be opened in browser/webview.
  */
 export async function createCheckoutSession(priceId: string): Promise<{ url: string; sessionId: string }> {
-  const result = await getFns().httpsCallable("createCheckoutSession")({ priceId });
+  const result = await getCallable("createCheckoutSession")({ priceId });
   return result.data as { url: string; sessionId: string };
 }
 
@@ -138,7 +138,7 @@ export async function createCheckoutSession(priceId: string): Promise<{ url: str
  * Returns billing portal URL for managing subscription.
  */
 export async function createBillingPortalSession(): Promise<{ url: string }> {
-  const result = await getFns().httpsCallable("createBillingPortalSession")();
+  const result = await getCallable("createBillingPortalSession")();
   return result.data as { url: string };
 }
 
@@ -149,7 +149,7 @@ export async function createBillingPortalSession(): Promise<{ url: string }> {
  * Throws with code: INVALID_CODE | EXPIRED | LIMIT_REACHED | ALREADY_REDEEMED | UNAUTHENTICATED
  */
 export async function redeemPromoCode(code: string): Promise<{ ok: boolean; tier: string; currentPeriodEnd: string }> {
-  const result = await getFns().httpsCallable("redeemPromoCode")({ code });
+  const result = await getCallable("redeemPromoCode")({ code });
   return result.data as { ok: boolean; tier: string; currentPeriodEnd: string };
 }
 

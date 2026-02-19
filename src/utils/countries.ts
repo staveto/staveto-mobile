@@ -70,6 +70,16 @@ export const COUNTRY_NAMES: Record<string, string> = {
   CA: "Kanada",
 };
 
+/** Country calling codes for phone input dropdown. Uses libphonenumber-js. */
+export function getCountryCallingCode(countryCode: string): string {
+  try {
+    const { getCountryCallingCode } = require("libphonenumber-js");
+    return getCountryCallingCode(countryCode as any) || "";
+  } catch {
+    return "";
+  }
+}
+
 /** Get device region code (ISO 3166-1 alpha-2, e.g. SK, PL). Uses expo-localization getLocales() - Localization.region was removed in v17. */
 export function getDeviceRegionCode(): string {
   try {

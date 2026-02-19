@@ -44,6 +44,8 @@ import { ProjectTypeChip } from "../components/ProjectTypeChip";
 import { normalizeRoleKey } from "../helpers/role";
 import type { RoleKey } from "../helpers/role";
 import { getKpiCardsWithTasks } from "../helpers/kpi/getKpiCards";
+import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
+import { getEntitlement } from "../services/billing";
 import { KpiCardComponent } from "../components/KpiCard";
 import type { KpiCard } from "../helpers/kpi/getKpiCards";
 
@@ -506,7 +508,16 @@ export function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       loadDashboard(true);
-    }, [loadDashboard])
+      (async () => {
+        await trackPaywallEvent("app_opened");
+        try {
+          const ent = await getEntitlement();
+          await checkAndShowPaywall(!!ent?.entitlement, navigation);
+        } catch {
+          // ignore
+        }
+      })();
+    }, [loadDashboard, navigation])
   );
 
   // Save last used project ID

@@ -5,6 +5,7 @@ import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import { doc, getDoc } from "../lib/rnFirestore";
 import { db } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
+import { configurePurchases } from "../services/billing";
 import { registerForPushNotifications, setupPushNotifications, removePushToken } from "../services/pushNotifications";
 
 type User = { id: string; email: string; name?: string; firstName?: string; lastName?: string };
@@ -100,6 +101,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // ignore profile fetch errors
       }
       registerForPushNotifications().catch((err) => console.warn("[auth] push register failed:", err));
+      configurePurchases(fbUser.uid).catch(() => {});
       if (!claimedInviteSessionsRef.current.has(fbUser.uid)) {
         claimedInviteSessionsRef.current.add(fbUser.uid);
         claimProjectInvites()

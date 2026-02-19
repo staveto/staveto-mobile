@@ -1,5 +1,5 @@
 import auth from "@react-native-firebase/auth";
-import { getFns } from "../firebase";
+import { getCallable } from "../firebase";
 import { extractTotalFromRawText, parseMoneyToNumber } from "../helpers/parseMoney";
 import { addProjectEvent } from "./projectEvents";
 
@@ -83,7 +83,7 @@ export async function runInvoiceOCR(payload: {
     console.log("[invoiceOCR] PRE token refreshed in ms:", Date.now() - t0);
   }
 
-  const fn = getFns().httpsCallable("extractInvoiceData");
+  const fn = getCallable("extractInvoiceData");
   console.log("[invoiceOCR] calling callable, ts:", Date.now());
   console.log("[invoiceOCR] PAYLOAD:", JSON.stringify(payload));
 

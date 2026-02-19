@@ -1,5 +1,5 @@
 import auth from "@react-native-firebase/auth";
-import { getFns } from "../firebase";
+import { getCallable } from "../firebase";
 
 type ClaimInvitesResult = {
   claimedCount: number;
@@ -43,8 +43,8 @@ async function ensureAuthAndCall<T>(
   }
   const doCall = async () => {
     await user.getIdToken(true);
-    const fns = getFns();
-    const res = await fns.httpsCallable(callableName)(data);
+    const callable = getCallable(callableName);
+    const res = await callable(data);
     return parse(res?.data);
   };
   try {
@@ -66,7 +66,8 @@ export async function claimProjectInvites(): Promise<ClaimInvitesResult> {
     const data = await ensureAuthAndCall(
       "claimProjectInvites",
       {},
-      (d) => (d ?? {}) as Partial<ClaimInvitesResult>
+      (d) => (d ?? {}) as Partial<ClaimInvitesResult>,
+      true
     );
     return {
       claimedCount: typeof data.claimedCount === "number" ? data.claimedCount : 0,

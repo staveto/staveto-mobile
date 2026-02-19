@@ -1,11 +1,12 @@
-import React, { useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, ScrollView } from "react-native";
+import React, { useState, useEffect } from "react";
+import { View, Text, TouchableOpacity, StyleSheet, TextInput, ActivityIndicator, ScrollView, Modal, Pressable } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { colors, radius, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
 import { useAuth } from "../context/AuthContext";
 import { updateUserProfileFromOnboarding } from "../services/auth";
-import { COUNTRY_CODES, COUNTRY_NAMES, getDeviceTimezone, getDeviceRegionCode } from "../utils/countries";
+import { COUNTRY_CODES, COUNTRY_NAMES, getCountryCallingCode, getDeviceTimezone, getDeviceRegionCode } from "../utils/countries";
 
 type Props = {
   onFinished: () => void;
@@ -14,18 +15,18 @@ type Props = {
 type Mode = "build" | "trade" | "maintenance";
 const PENDING_ONBOARDING_KEY = "pending_onboarding";
 
-function normalizePhoneE164(input: string): string | null {
-  const raw = input.trim().replace(/\s/g, "");
-  if (!raw) return null;
+function buildPhoneE164(countryCode: string, nationalNumber: string): string | null {
+  const raw = nationalNumber.trim().replace(/\s/g, "").replace(/[^\d]/g, "");
+  if (!raw || raw.length < 6) return null;
   try {
     const { parsePhoneNumberFromString } = require("libphonenumber-js");
-    const region = getDeviceRegionCode();
-    const parsed = parsePhoneNumberFromString(raw, region);
+    const prefix = getCountryCallingCode(countryCode);
+    const full = `+${prefix}${raw}`;
+    const parsed = parsePhoneNumberFromString(full, countryCode as any);
     if (parsed?.isValid()) return parsed.number;
   } catch {
-    // fallback: keep digits and +
-    const digits = raw.replace(/[^\d+]/g, "");
-    if (digits.length >= 9) return digits.startsWith("+") ? digits : `+${digits}`;
+    const prefix = getCountryCallingCode(countryCode);
+    if (prefix && raw.length >= 6) return `+${prefix}${raw}`;
   }
   return null;
 }
@@ -43,9 +44,18 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
   });
   const [firstName, setFirstName] = useState("");
   const [lastName, setLastName] = useState("");
-  const [phone, setPhone] = useState("");
+  const [phoneCountryCode, setPhoneCountryCode] = useState<string>(() => {
+    const region = getDeviceRegionCode();
+    return region && COUNTRY_CODES.includes(region as any) ? region : DEFAULT_COUNTRY;
+  });
+  const [phoneNational, setPhoneNational] = useState("");
+  const [showPhoneCountryModal, setShowPhoneCountryModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  useEffect(() => {
+    if (step === 4) setPhoneCountryCode(primaryCountry);
+  }, [step, primaryCountry]);
 
   const saveCountryStep = () => {
     if (!primaryCountry) return;
@@ -75,8 +85,8 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
     setError("");
     try {
       const displayName = `${firstName.trim()} ${lastName.trim()}`.trim();
-      const phoneE164 = skipPhone ? null : normalizePhoneE164(phone);
-      if (!skipPhone && phone.trim() && !phoneE164) {
+      const phoneE164 = skipPhone ? null : buildPhoneE164(phoneCountryCode, phoneNational);
+      if (!skipPhone && phoneNational.trim() && !phoneE164) {
         setError(t("onboardingMvp.errorPhoneInvalid"));
         setSaving(false);
         return;
@@ -207,14 +217,56 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
       ) : (
         <>
           <Text style={styles.title}>{t("onboardingMvp.step3Title")}</Text>
-          <TextInput
-            style={styles.input}
-            placeholder={t("onboardingMvp.placeholderPhone")}
-            placeholderTextColor={colors.textMuted}
-            value={phone}
-            onChangeText={setPhone}
-            keyboardType="phone-pad"
-          />
+          <View style={styles.phoneRow}>
+            <TouchableOpacity
+              style={styles.phoneCountryBtn}
+              onPress={() => setShowPhoneCountryModal(true)}
+            >
+              <Text style={styles.phoneCountryText}>
+                {phoneCountryCode} +{getCountryCallingCode(phoneCountryCode)}
+              </Text>
+              <Ionicons name="chevron-down" size={18} color={colors.text} />
+            </TouchableOpacity>
+            <TextInput
+              style={[styles.input, styles.phoneInput]}
+              placeholder={t("onboardingMvp.placeholderPhone")}
+              placeholderTextColor={colors.textMuted}
+              value={phoneNational}
+              onChangeText={setPhoneNational}
+              keyboardType="phone-pad"
+            />
+          </View>
+          <Modal
+            visible={showPhoneCountryModal}
+            transparent
+            animationType="fade"
+            onRequestClose={() => setShowPhoneCountryModal(false)}
+          >
+            <Pressable style={styles.modalOverlay} onPress={() => setShowPhoneCountryModal(false)}>
+              <Pressable style={styles.modalContent} onPress={(e) => e.stopPropagation()}>
+                <Text style={styles.modalTitle}>{t("onboardingMvp.stepCountryTitle")}</Text>
+                <ScrollView style={styles.countryList} showsVerticalScrollIndicator>
+                  {COUNTRY_CODES.map((code) => (
+                    <TouchableOpacity
+                      key={code}
+                      style={[styles.countryOption, phoneCountryCode === code && styles.optionActive]}
+                      onPress={() => {
+                        setPhoneCountryCode(code);
+                        setShowPhoneCountryModal(false);
+                      }}
+                    >
+                      <Text style={[styles.countryOptionText, phoneCountryCode === code && styles.optionTextActive]}>
+                        {COUNTRY_NAMES[code] ?? code} (+{getCountryCallingCode(code)})
+                      </Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                <TouchableOpacity style={styles.secondaryBtn} onPress={() => setShowPhoneCountryModal(false)}>
+                  <Text style={styles.secondaryText}>{t("onboardingMvp.back")}</Text>
+                </TouchableOpacity>
+              </Pressable>
+            </Pressable>
+          </Modal>
           {error ? <Text style={styles.error}>{error}</Text> : null}
           <View style={styles.actions}>
             <TouchableOpacity style={styles.secondaryBtn} onPress={() => { setError(""); setStep(3); }} disabled={saving}>
@@ -281,6 +333,44 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.text,
     marginBottom: spacing.md,
+  },
+  phoneRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  phoneCountryBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    minWidth: 100,
+  },
+  phoneCountryText: { color: colors.text, fontSize: 16 },
+  phoneInput: { flex: 1, marginBottom: 0 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    padding: spacing.lg,
+  },
+  modalContent: {
+    backgroundColor: colors.background,
+    borderRadius: radius,
+    padding: spacing.lg,
+    maxHeight: "70%",
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: spacing.md,
+    textAlign: "center",
   },
   error: { color: colors.accent, marginBottom: spacing.sm, textAlign: "center" },
   button: {

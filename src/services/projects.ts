@@ -14,6 +14,8 @@ export type ProjectDoc = {
   projectType?: "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE"; // Support both old and new types
   templateId?: string;
   addressText?: string; // Project address for navigation
+  countryCode?: string; // ISO 3166-1 alpha-2 (e.g. SK, AT)
+  city?: string;
   ownerId?: string; // Read-only: included from existing DB field, no schema change
   archivedAt?: unknown; // Timestamp when archived (truthy = archived)
   createdAt?: string; // ISO string when project was created
@@ -37,6 +39,8 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     id: docSnap.id,
     name: (d.name as string) ?? "",
     addressText: (d.addressText as string) || undefined,
+    countryCode: (d.countryCode as string) || undefined,
+    city: (d.city as string) || undefined,
     projectType: d.projectType as "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE" | undefined,
     templateId: d.templateId as string | undefined,
     ownerId: (d.ownerId as string) || undefined, // Read-only: read from existing DB field
@@ -335,24 +339,26 @@ export async function updateProject(
   _ownerId: string,
   projectId: string,
   name: string,
-  addressText?: string | null
+  addressText?: string | null,
+  countryCode?: string | null,
+  city?: string | null
 ): Promise<void> {
   // CRITICAL FIX: Always use auth.currentUser.uid for verification
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
     throw new Error('Musíte byť prihlásený na úpravu projektu.');
   }
-  
-  const normalizedAddress = (addressText ?? "").trim();
+
   const ref = doc(db, COLLECTION, projectId);
-  await updateDoc(ref, { 
-    name: name.trim(), 
-    addressText: normalizedAddress || null,
-    updatedAt: serverTimestamp() // Use serverTimestamp()
-  });
-  console.log(
-    `[projects] Updated project ${projectId}: name="${name.trim()}", address="${normalizedAddress}"`
-  );
+  const update: Record<string, unknown> = {
+    name: name.trim(),
+    updatedAt: serverTimestamp(),
+  };
+  if (addressText !== undefined) update.addressText = (addressText ?? "").trim() || null;
+  if (countryCode !== undefined) update.countryCode = (countryCode ?? "").trim() || null;
+  if (city !== undefined) update.city = (city ?? "").trim() || null;
+  await updateDoc(ref, update);
+  console.log(`[projects] Updated project ${projectId}: name="${name.trim()}"`);
 }
 
 export async function deleteProject(_ownerId: string, projectId: string): Promise<void> {

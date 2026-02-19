@@ -25,6 +25,8 @@ export interface CreateProjectFromTemplateParams {
   templateId: string;
   name: string;
   addressText?: string; // Optional: project address
+  countryCode?: string; // ISO 3166-1 alpha-2
+  city?: string;
   phaseCustomizations?: PhaseCustomization[]; // Optional: customize phases
 }
 
@@ -115,6 +117,12 @@ export async function instantiateTemplate(
   // Add addressText if provided
   if (params.addressText && params.addressText.trim()) {
     projectData.addressText = params.addressText.trim();
+  }
+  if (params.countryCode && params.countryCode.trim()) {
+    projectData.countryCode = params.countryCode.trim();
+  }
+  if (params.city && params.city.trim()) {
+    projectData.city = params.city.trim();
   }
   
   // Final verification before write

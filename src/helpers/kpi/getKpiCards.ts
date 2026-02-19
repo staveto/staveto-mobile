@@ -137,7 +137,7 @@ export function getKpiCards(data: DashboardViewModel): KpiCard[] {
       id: "overdue",
       type: "overdue",
       value: 0, // Will be computed if we have task data
-      label: t("kpi.overdue"),
+      label: "OVERDUE",
       icon: "time-outline",
       iconColor: "#FF5722",
       navigationTarget: {

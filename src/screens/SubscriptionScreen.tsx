@@ -1,7 +1,8 @@
 /**
  * Subscription Management Screen
- * 
- * Shows current subscription tier, limits, and allows upgrade via Stripe Checkout.
+ *
+ * Single plan: 14-day trial then €14.99/month.
+ * Shows entitlement status and OCR usage.
  */
 
 import React, { useState, useEffect } from "react";
@@ -13,186 +14,105 @@ import {
   TouchableOpacity,
   ActivityIndicator,
   Alert,
-  Linking,
   RefreshControl,
+  Modal,
+  TextInput,
+  Pressable,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { Ionicons } from "@expo/vector-icons";
 import {
   getUserSubscription,
-  createCheckoutSession,
-  createBillingPortalSession,
-  getSubscriptionLimits,
+  redeemPromoCode as redeemPromoCodeService,
   subscribeToSubscription,
   type Subscription,
-  type SubscriptionTier,
 } from "../services/subscription";
+import { getEntitlement, type Entitlement } from "../services/billing";
 import { colors, radius, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
-import * as projectsService from "../services/projects";
-import * as tasksService from "../services/tasks";
-import * as expensesService from "../services/expenses";
-
-// Stripe Price IDs - REPLACE WITH YOUR ACTUAL STRIPE PRICE IDs
-const STRIPE_PRICE_IDS = {
-  BASIC_MONTHLY: "price_basic_monthly", // TODO: Replace with actual Stripe Price ID
-  BASIC_YEARLY: "price_basic_yearly", // TODO: Replace with actual Stripe Price ID
-  PRO_MONTHLY: "price_pro_monthly", // TODO: Replace with actual Stripe Price ID
-  PRO_YEARLY: "price_pro_yearly", // TODO: Replace with actual Stripe Price ID
-};
-
-const SUBSCRIPTION_PLANS = [
-  {
-    tier: "FREE" as SubscriptionTier,
-    name: "Bezplatná verzia",
-    price: "0 €",
-    period: "navždy",
-    features: ["1 projekt", "10 úloh na projekt", "5 výdavkov mesačne", "10 MB úložného priestoru"],
-    priceId: null,
-  },
-  {
-    tier: "BASIC" as SubscriptionTier,
-    name: "Základné predplatné",
-    price: "9.99 €",
-    period: "mesačne",
-    features: ["5 projektov", "50 úloh na projekt", "50 výdavkov mesačne", "100 MB úložného priestoru", "Export dát"],
-    priceId: STRIPE_PRICE_IDS.BASIC_MONTHLY,
-  },
-  {
-    tier: "PRO" as SubscriptionTier,
-    name: "Profesionálne predplatné",
-    price: "29.99 €",
-    period: "mesačne",
-    features: [
-      "20 projektov",
-      "Neobmedzené úlohy",
-      "Neobmedzené výdavky",
-      "1 GB úložného priestoru",
-      "Pokročilé reporty",
-      "Prioritná podpora",
-    ],
-    priceId: STRIPE_PRICE_IDS.PRO_MONTHLY,
-  },
-];
+import { showToast } from "../helpers/toast";
 
 export function SubscriptionScreen() {
   const { t } = useI18n();
-  const { user, orgId } = useAuth();
+  const { user } = useAuth();
+  const [entitlement, setEntitlement] = useState<Entitlement | null>(null);
   const [subscription, setSubscription] = useState<Subscription | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
-  const [upgrading, setUpgrading] = useState<string | null>(null); // priceId being upgraded to
-  
-  // Usage stats
-  const [projectCount, setProjectCount] = useState(0);
-  const [expenseCount, setExpenseCount] = useState(0);
+  const [showPromoModal, setShowPromoModal] = useState(false);
+  const [promoCodeInput, setPromoCodeInput] = useState("");
+  const [promoRedeeming, setPromoRedeeming] = useState(false);
 
-  useEffect(() => {
-    if (!user?.id) return;
-    
-    loadSubscription();
-    loadUsageStats();
-    
-    // Subscribe to real-time subscription updates
-    const unsubscribe = subscribeToSubscription(user.id, (sub) => {
-      setSubscription(sub);
-    });
-    
-    return () => unsubscribe();
-  }, [user?.id, orgId]);
-
-  const loadSubscription = async () => {
+  const loadData = async () => {
     if (!user?.id) return;
     try {
-      const sub = await getUserSubscription(user.id);
+      const [ent, sub] = await Promise.all([
+        getEntitlement(),
+        getUserSubscription(user.id),
+      ]);
+      setEntitlement(ent);
       setSubscription(sub);
     } catch (error) {
-      console.error("[SubscriptionScreen] Error loading subscription:", error);
+      console.error("[SubscriptionScreen] Error loading:", error);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   };
 
-  const loadUsageStats = async () => {
-    if (!orgId) return;
-    try {
-      // Count projects
-      const projects = await projectsService.listMyProjects(orgId);
-      setProjectCount(projects.length);
-      
-      // Count expenses this month
-      const now = new Date();
-      const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
-      let expenseCountTotal = 0;
-      
-      for (const project of projects) {
-        try {
-          const expenses = await expensesService.listExpensesByProject(project.id);
-          const monthlyExpenses = expenses.filter((exp) => {
-            if (!exp.date || exp.status !== "READY") return false;
-            const expenseDate = new Date(exp.date);
-            return expenseDate >= firstDayOfMonth;
-          });
-          expenseCountTotal += monthlyExpenses.length;
-        } catch (error) {
-          // Skip projects with expense loading errors
-        }
-      }
-      
-      setExpenseCount(expenseCountTotal);
-    } catch (error) {
-      console.error("[SubscriptionScreen] Error loading usage stats:", error);
-    }
-  };
+  useEffect(() => {
+    if (!user?.id) return;
+    loadData();
+    const unsubscribe = subscribeToSubscription(user.id, (sub) => {
+      setSubscription(sub);
+    });
+    return () => unsubscribe();
+  }, [user?.id]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadSubscription();
-    await loadUsageStats();
+    await loadData();
   };
 
-  const handleUpgrade = async (priceId: string) => {
-    if (!priceId) {
-      Alert.alert(t("common.error"), t("subscription.cannotStartPayment") || "Nie je možné spustiť platobný proces.");
-      return;
+  const getPromoErrorMessage = (code: string): string => {
+    switch (code) {
+      case "INVALID_CODE":
+        return t("subscription.promoInvalidCode");
+      case "EXPIRED":
+        return t("subscription.promoExpired");
+      case "LIMIT_REACHED":
+        return t("subscription.promoLimitReached");
+      case "ALREADY_REDEEMED":
+        return t("subscription.promoAlreadyRedeemed");
+      case "UNAUTHENTICATED":
+        return t("subscription.promoUnauthenticated");
+      default:
+        return t("common.error") + ": " + (code || "Unknown error");
     }
-    
-    setUpgrading(priceId);
+  };
+
+  const handleRedeemPromoCode = async () => {
+    const code = promoCodeInput.trim();
+    if (!code) return;
+    setPromoRedeeming(true);
     try {
-      const { url } = await createCheckoutSession(priceId);
-      
-      // Open Stripe Checkout in browser/webview
-      const supported = await Linking.canOpenURL(url);
-      if (supported) {
-        await Linking.openURL(url);
-        Alert.alert(
-          t("subscription.paymentTitle"),
-          t("subscription.paymentInfo")
-        );
-      } else {
-        Alert.alert(t("common.error"), t("subscription.failedToOpenPaymentPage") || "Nepodarilo sa otvoriť platobnú stránku.");
-      }
+      const result = await redeemPromoCodeService(code);
+      showToast(t("subscription.promoCodeSuccess"));
+      setShowPromoModal(false);
+      setPromoCodeInput("");
+      setSubscription({
+        tier: "PRO",
+        status: "active",
+        currentPeriodEnd: result.currentPeriodEnd,
+        source: "promo",
+        promoCode: code.toUpperCase(),
+      });
+      await loadData();
     } catch (error: any) {
-      console.error("[SubscriptionScreen] Error creating checkout:", error);
-      Alert.alert(t("common.error"), error.message || t("subscription.failedToStartPayment") || "Nepodarilo sa spustiť platobný proces.");
+      const code = error?.message || error?.details || "";
+      Alert.alert(t("common.error"), getPromoErrorMessage(code));
     } finally {
-      setUpgrading(null);
-    }
-  };
-
-  const handleManageBilling = async () => {
-    try {
-      const { url } = await createBillingPortalSession();
-      const supported = await Linking.canOpenURL(url);
-      if (supported) {
-        await Linking.openURL(url);
-      } else {
-        Alert.alert(t("common.error"), t("subscription.failedToOpenManager") || "Nepodarilo sa otvoriť správcu predplatného.");
-      }
-    } catch (error: any) {
-      console.error("[SubscriptionScreen] Error creating billing portal:", error);
-      Alert.alert(t("common.error"), error.message || t("subscription.failedToOpenManager") || "Nepodarilo sa otvoriť správcu predplatného.");
+      setPromoRedeeming(false);
     }
   };
 
@@ -204,144 +124,103 @@ export function SubscriptionScreen() {
     );
   }
 
-  const currentTier = subscription?.tier || "FREE";
-  const currentPlan = SUBSCRIPTION_PLANS.find((p) => p.tier === currentTier)!;
-  const limits = getSubscriptionLimits(currentTier);
+  const statusLabel =
+    entitlement?.status === "trial"
+      ? t("subscription.statusTrial")
+      : entitlement?.status === "active"
+        ? t("subscription.statusActive")
+        : t("subscription.statusExpired");
 
   return (
     <ScrollView
       style={styles.container}
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
-      {/* Current Plan */}
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{t("subscription.currentPlan") || 'Aktuálne predplatné'}</Text>
+        <Text style={styles.sectionTitle}>{t("subscription.currentPlan")}</Text>
         <View style={styles.currentPlanCard}>
           <View style={styles.currentPlanHeader}>
-            <Text style={styles.currentPlanName}>{currentPlan.name}</Text>
-            <Text style={styles.currentPlanPrice}>{currentPlan.price}</Text>
+            <Text style={styles.currentPlanName}>{t("subscription.planSingle")}</Text>
+            <Text style={styles.currentPlanPrice}>14.99 €</Text>
           </View>
-          <Text style={styles.currentPlanPeriod}>/{currentPlan.period}</Text>
-          {subscription?.status === "past_due" && (
-            <View style={styles.warningBadge}>
-              <Ionicons name="warning" size={16} color="#FF9800" />
-              <Text style={styles.warningText}>{t("subscription.paymentFailed") || 'Platba neúspešná'}</Text>
-            </View>
-          )}
-          {subscription?.status === "trialing" && (
-            <View style={styles.trialBadge}>
-              <Text style={styles.trialText}>{t("subscription.trialPeriod") || 'Skúšobné obdobie'}</Text>
-            </View>
-          )}
+          <Text style={styles.currentPlanPeriod}>/{t("subscription.planSingleDescription")}</Text>
+          <View style={[styles.statusBadge, !entitlement?.entitlement && styles.statusBadgeExpired]}>
+            <Text style={[styles.statusBadgeText, !entitlement?.entitlement && styles.statusBadgeTextExpired]}>
+              {statusLabel}
+            </Text>
+          </View>
         </View>
 
-        {/* Usage Stats */}
         <View style={styles.usageSection}>
-          <Text style={styles.usageTitle}>{t("subscription.usageLimits") || 'Využitie limitov'}</Text>
-          
+          <Text style={styles.usageTitle}>{t("subscription.ocrUsed")}</Text>
           <View style={styles.usageItem}>
-            <Text style={styles.usageLabel}>{t("subscription.projects")}</Text>
             <View style={styles.usageBarContainer}>
               <View
                 style={[
                   styles.usageBar,
                   {
-                    width: `${Math.min(100, (projectCount / (limits.maxProjects === -1 ? 1 : limits.maxProjects)) * 100)}%`,
-                    backgroundColor: projectCount >= limits.maxProjects && limits.maxProjects !== -1 ? "#FF5722" : colors.primary,
+                    width: `${Math.min(100, ((entitlement?.ocrUsed ?? 0) / (entitlement?.ocrLimit || 1)) * 100)}%`,
+                    backgroundColor:
+                      (entitlement?.ocrUsed ?? 0) >= (entitlement?.ocrLimit ?? 0)
+                        ? "#FF5722"
+                        : colors.primary,
                   },
                 ]}
               />
             </View>
             <Text style={styles.usageValue}>
-              {projectCount} / {limits.maxProjects === -1 ? "∞" : limits.maxProjects}
-            </Text>
-          </View>
-
-          <View style={styles.usageItem}>
-            <Text style={styles.usageLabel}>{t("subscription.expensesThisMonth")}</Text>
-            <View style={styles.usageBarContainer}>
-              <View
-                style={[
-                  styles.usageBar,
-                  {
-                    width: `${Math.min(100, (expenseCount / (limits.maxExpensesPerMonth === -1 ? 1 : limits.maxExpensesPerMonth)) * 100)}%`,
-                    backgroundColor: expenseCount >= limits.maxExpensesPerMonth && limits.maxExpensesPerMonth !== -1 ? "#FF5722" : colors.primary,
-                  },
-                ]}
-              />
-            </View>
-            <Text style={styles.usageValue}>
-              {expenseCount} / {limits.maxExpensesPerMonth === -1 ? "∞" : limits.maxExpensesPerMonth}
+              {entitlement?.ocrUsed ?? 0} / {entitlement?.ocrLimit ?? 0}
             </Text>
           </View>
         </View>
 
-        {/* Manage Billing */}
-        {subscription?.status === "active" && subscription.tier !== "FREE" && (
-          <TouchableOpacity style={styles.manageButton} onPress={handleManageBilling}>
-            <Ionicons name="card-outline" size={20} color={colors.primary} />
-            <Text style={styles.manageButtonText}>{t("subscription.managePayment") || 'Spravovať platbu a faktúry'}</Text>
-          </TouchableOpacity>
-        )}
-      </View>
-
-      {/* Available Plans */}
-      <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{t("subscription.availablePlans") || 'Dostupné plány'}</Text>
-        {SUBSCRIPTION_PLANS.map((plan) => {
-          const isCurrent = plan.tier === currentTier;
-          const isUpgrading = upgrading === plan.priceId;
-          
-          return (
-            <View key={plan.tier} style={[styles.planCard, isCurrent && styles.planCardCurrent]}>
-              <View style={styles.planHeader}>
-                <Text style={styles.planName}>{plan.name}</Text>
-                <View style={styles.planPriceContainer}>
-                  <Text style={styles.planPrice}>{plan.price}</Text>
-                  <Text style={styles.planPeriod}>/{plan.period}</Text>
-                </View>
-              </View>
-              
-              <View style={styles.planFeatures}>
-                {plan.features.map((feature, idx) => (
-                  <View key={idx} style={styles.planFeature}>
-                    <Ionicons name="checkmark-circle" size={16} color={colors.primary} />
-                    <Text style={styles.planFeatureText}>{feature}</Text>
-                  </View>
-                ))}
-              </View>
-
-              {isCurrent ? (
-                <View style={styles.currentBadge}>
-                  <Text style={styles.currentBadgeText}>{t("subscription.currentPlanBadge") || 'Aktuálny plán'}</Text>
-                </View>
-              ) : (
-                <TouchableOpacity
-                  style={[styles.upgradeButton, isUpgrading && styles.upgradeButtonDisabled]}
-                  onPress={() => plan.priceId && handleUpgrade(plan.priceId)}
-                  disabled={!plan.priceId || isUpgrading}
-                >
-                  {isUpgrading ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <>
-                      <Text style={styles.upgradeButtonText}>
-                        {plan.tier === "FREE" ? t("subscription.switchTo") || "Prepnut sa na" : t("subscription.upgradeTo") || "Upgrade na"} {plan.name}
-                      </Text>
-                    </>
-                  )}
-                </TouchableOpacity>
-              )}
-            </View>
-          );
-        })}
+        <TouchableOpacity style={styles.promoButton} onPress={() => setShowPromoModal(true)}>
+          <Ionicons name="pricetag-outline" size={20} color={colors.primary} />
+          <Text style={styles.promoButtonText}>{t("subscription.havePromoCode")}</Text>
+        </TouchableOpacity>
       </View>
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>
-          {t("subscription.footerText")}
-        </Text>
+        <Text style={styles.footerText}>{t("subscription.footerText")}</Text>
       </View>
+
+      <Modal visible={showPromoModal} transparent animationType="fade">
+        <Pressable style={styles.modalOverlay} onPress={() => !promoRedeeming && setShowPromoModal(false)}>
+          <Pressable style={styles.promoModal} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.promoModalTitle}>{t("subscription.havePromoCode")}</Text>
+            <TextInput
+              style={styles.promoInput}
+              placeholder={t("subscription.promoCodePlaceholder")}
+              placeholderTextColor={colors.textMuted}
+              value={promoCodeInput}
+              onChangeText={setPromoCodeInput}
+              autoCapitalize="characters"
+              autoCorrect={false}
+              editable={!promoRedeeming}
+            />
+            <View style={styles.promoModalActions}>
+              <TouchableOpacity
+                style={styles.promoCancelButton}
+                onPress={() => !promoRedeeming && setShowPromoModal(false)}
+                disabled={promoRedeeming}
+              >
+                <Text style={styles.promoCancelText}>{t("common.cancel")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.promoApplyButton, promoRedeeming && styles.upgradeButtonDisabled]}
+                onPress={handleRedeemPromoCode}
+                disabled={!promoCodeInput.trim() || promoRedeeming}
+              >
+                {promoRedeeming ? (
+                  <ActivityIndicator size="small" color="#fff" />
+                ) : (
+                  <Text style={styles.promoApplyText}>{t("subscription.promoCodeApply")}</Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
     </ScrollView>
   );
 }
@@ -388,32 +267,24 @@ const styles = StyleSheet.create({
   currentPlanPeriod: {
     fontSize: 14,
     color: colors.textMuted,
+    marginBottom: spacing.sm,
   },
-  warningBadge: {
-    flexDirection: "row",
-    alignItems: "center",
-    backgroundColor: "#FFF3E0",
-    padding: spacing.sm,
-    borderRadius: radius,
-    marginTop: spacing.sm,
-    gap: spacing.xs,
-  },
-  warningText: {
-    color: "#FF9800",
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  trialBadge: {
+  statusBadge: {
     backgroundColor: colors.primary + "20",
     padding: spacing.sm,
     borderRadius: radius,
-    marginTop: spacing.sm,
+    alignSelf: "flex-start",
   },
-  trialText: {
+  statusBadgeExpired: {
+    backgroundColor: "#FF572220",
+  },
+  statusBadgeText: {
     color: colors.primary,
     fontSize: 12,
     fontWeight: "500",
-    textAlign: "center",
+  },
+  statusBadgeTextExpired: {
+    color: "#FF5722",
   },
   usageSection: {
     backgroundColor: colors.card,
@@ -430,11 +301,6 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   usageItem: {
-    marginBottom: spacing.md,
-  },
-  usageLabel: {
-    fontSize: 12,
-    color: colors.textMuted,
     marginBottom: spacing.xs,
   },
   usageBarContainer: {
@@ -453,7 +319,7 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontWeight: "500",
   },
-  manageButton: {
+  promoButton: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
@@ -464,86 +330,68 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     gap: spacing.sm,
   },
-  manageButtonText: {
+  promoButtonText: {
     color: colors.primary,
     fontSize: 14,
     fontWeight: "500",
   },
-  planCard: {
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+    padding: spacing.lg,
+  },
+  promoModal: {
     backgroundColor: colors.card,
     borderRadius: radius,
     padding: spacing.lg,
-    borderWidth: 1,
-    borderColor: colors.border,
-    marginBottom: spacing.md,
+    width: "100%",
+    maxWidth: 340,
   },
-  planCardCurrent: {
-    borderColor: colors.primary,
-    borderWidth: 2,
-  },
-  planHeader: {
-    flexDirection: "row",
-    justifyContent: "space-between",
-    alignItems: "center",
-    marginBottom: spacing.md,
-  },
-  planName: {
+  promoModalTitle: {
     fontSize: 18,
     fontWeight: "600",
     color: colors.text,
-  },
-  planPriceContainer: {
-    flexDirection: "row",
-    alignItems: "baseline",
-  },
-  planPrice: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: colors.primary,
-  },
-  planPeriod: {
-    fontSize: 14,
-    color: colors.textMuted,
-    marginLeft: spacing.xs,
-  },
-  planFeatures: {
     marginBottom: spacing.md,
   },
-  planFeature: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginBottom: spacing.xs,
-    gap: spacing.xs,
-  },
-  planFeatureText: {
-    fontSize: 14,
-    color: colors.text,
-    flex: 1,
-  },
-  currentBadge: {
-    backgroundColor: colors.primary + "20",
-    padding: spacing.sm,
-    borderRadius: radius,
-    alignItems: "center",
-  },
-  currentBadgeText: {
-    color: colors.primary,
-    fontSize: 12,
-    fontWeight: "500",
-  },
-  upgradeButton: {
-    backgroundColor: colors.primary,
+  promoInput: {
+    borderWidth: 1,
+    borderColor: colors.border,
     borderRadius: radius,
     padding: spacing.md,
+    fontSize: 16,
+    color: colors.text,
+    marginBottom: spacing.md,
+  },
+  promoModalActions: {
+    flexDirection: "row",
+    gap: spacing.md,
+    justifyContent: "flex-end",
+  },
+  promoCancelButton: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  promoCancelText: {
+    color: colors.textMuted,
+    fontSize: 14,
+  },
+  promoApplyButton: {
+    backgroundColor: colors.primary,
+    borderRadius: radius,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    minWidth: 80,
     alignItems: "center",
+  },
+  promoApplyText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
   },
   upgradeButtonDisabled: {
     opacity: 0.6,
-  },
-  upgradeButtonText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
   },
   footer: {
     padding: spacing.lg,

@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import {
   Platform,
   Image,
 } from "react-native";
-import { TabActions, useFocusEffect, useNavigation } from "@react-navigation/native";
+import { DrawerActions, TabActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -31,6 +31,12 @@ import * as projectEventsService from "../services/projectEvents";
 import type { ProjectDoc } from "../services/projects";
 import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
+import { db } from "../firebase";
+import { doc, getDoc } from "../lib/rnFirestore";
+import { loadHomeLayout, getDefaultLayout, type HomeSectionConfig } from "../services/homeLayout";
+import { HomeCustomizeSheet } from "../components/HomeCustomizeSheet";
+import { HomeCalendarSheet } from "../components/HomeCalendarSheet";
+import { BottomSheetModal } from "@gorhom/bottom-sheet";
 import { openInMaps } from "../lib/maps";
 import { RoleChip } from "../components/RoleChip";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
@@ -235,6 +241,42 @@ export function HomeScreen() {
   const [uploadingExpenseAttachment, setUploadingExpenseAttachment] = useState(false);
   const [submittingExpense, setSubmittingExpense] = useState(false);
   const [showActionSheet, setShowActionSheet] = useState(false);
+  const [homeLayout, setHomeLayout] = useState<{ sections: HomeSectionConfig[] } | null>(null);
+  const [photoURL, setPhotoURL] = useState<string | null>(null);
+  const customizeSheetRef = useRef<BottomSheetModal | null>(null);
+  const calendarSheetRef = useRef<BottomSheetModal | null>(null);
+
+  useEffect(() => {
+    loadHomeLayout().then((layout) => setHomeLayout(layout));
+  }, []);
+
+  useEffect(() => {
+    if (!user?.id) return;
+    getDoc(doc(db, "users", user.id)).then((snap) => {
+      if (snap.exists()) {
+        const d = snap.data() as { photoURL?: string | null };
+        setPhotoURL(d.photoURL ?? null);
+      }
+    });
+  }, [user?.id]);
+
+  const openDrawer = useCallback(() => {
+    navigation.dispatch(DrawerActions.openDrawer());
+  }, [navigation]);
+
+  const openCustomizeSheet = useCallback(() => {
+    customizeSheetRef.current?.present();
+  }, []);
+
+  const openCalendarSheet = useCallback(() => {
+    calendarSheetRef.current?.present();
+  }, []);
+
+  const effectiveLayout = homeLayout ?? getDefaultLayout();
+  const enabledSectionIds = useMemo(
+    () => new Set(effectiveLayout.sections.filter((s) => s.enabled).map((s) => s.id)),
+    [effectiveLayout]
+  );
 
   const stackNav = navigation as { navigate: (name: string, params?: object) => void };
   const goToProjects = useCallback(
@@ -924,26 +966,56 @@ export function HomeScreen() {
   }
 
   return (
-    <View style={styles.container}>
+    <View style={styles.container} pointerEvents="box-none">
+      {/* Fixed header outside FlatList for reliable touch handling */}
+      <View style={[styles.headerRow, { paddingTop: insets.top + spacing.lg, paddingHorizontal: spacing.lg }]}>
+        <TouchableOpacity
+          style={styles.headerAvatarBtn}
+          onPress={openDrawer}
+          accessibilityLabel="Open menu"
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          activeOpacity={0.7}
+        >
+          {photoURL ? (
+            <Image source={{ uri: photoURL }} style={styles.headerAvatar} />
+          ) : (
+            <View style={styles.headerAvatarPlaceholder}>
+              <Text style={styles.headerAvatarText}>
+                {(greetingName || "?").slice(0, 2).toUpperCase()}
+              </Text>
+            </View>
+          )}
+        </TouchableOpacity>
+        <View style={styles.headerCenter}>
+          <Text style={styles.welcomeTitle} numberOfLines={1}>{t("home.greeting", { name: greetingName })}</Text>
+          <Text style={styles.welcomeSubtitle}>{t("home.projectsOverviewTitle")}</Text>
+        </View>
+        <TouchableOpacity
+          style={styles.headerCustomizeBtn}
+          onPress={openCustomizeSheet}
+          accessibilityLabel={t("home.customizeHome")}
+          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+          activeOpacity={0.7}
+        >
+          <Ionicons name="grid-outline" size={20} color={colors.textOnDark} />
+          <Ionicons name="add" size={16} color={colors.textOnDark} style={{ marginLeft: 2 }} />
+        </TouchableOpacity>
+      </View>
+
       <FlatList
-        data={otherProjects}
+        data={enabledSectionIds.has("other_projects") ? otherProjects : []}
         keyExtractor={(item) => item.id}
-        contentContainerStyle={[styles.content, { paddingTop: insets.top + spacing.lg, paddingBottom: insets.bottom + 120 }]}
+        contentContainerStyle={[styles.content, { paddingTop: spacing.md, paddingBottom: insets.bottom + 120 }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
         }
         ListHeaderComponent={
           <>
-            <View style={styles.headerRow}>
-              <View>
-                <Text style={styles.welcomeTitle}>{t("home.greeting", { name: greetingName })}</Text>
-                <Text style={styles.welcomeSubtitle}>{t("home.projectsOverviewTitle")}</Text>
-              </View>
-              <TouchableOpacity style={styles.searchAction} onPress={goToSearch} accessibilityLabel="Search">
-                <Ionicons name="search" size={22} color={colors.textOnDark} />
-              </TouchableOpacity>
-            </View>
-
+            {(() => {
+              const enabledSections = effectiveLayout.sections.filter((s) => s.enabled);
+              return (
+                <>
+                  {enabledSectionIds.has("kpis") && (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
               <TouchableOpacity style={styles.statChip} onPress={() => stackNav.navigate("Tasks")} activeOpacity={0.8}>
                 <Text style={styles.statChipText}>{t("home.openTasksChip")} {data.kpis.openCount}</Text>
@@ -959,8 +1031,8 @@ export function HomeScreen() {
                 <Text style={styles.statChipText}>{t("home.expensesCount", { amount: String(Math.round(data.kpis.expensesTotalSum)) })}</Text>
               </TouchableOpacity>
             </ScrollView>
-
-            {focusProject ? (
+                  )}
+                  {enabledSectionIds.has("current_work") && focusProject ? (
               <View style={styles.focusCard}>
                 <View style={styles.focusCaptionRow}>
                   <Text style={styles.focusCaption}>{t("home.currentlyWorkingOn")}</Text>
@@ -990,8 +1062,7 @@ export function HomeScreen() {
                 </TouchableOpacity>
               </View>
             ) : null}
-
-            {alerts.length > 0 ? (
+                  {enabledSectionIds.has("current_work") && alerts.length > 0 ? (
               <View style={styles.alertsSection}>
                 {alerts.map((row) => (
                   <TouchableOpacity key={row.id} style={styles.alertRow} onPress={row.onPress} activeOpacity={0.8}>
@@ -1001,7 +1072,7 @@ export function HomeScreen() {
                 ))}
               </View>
             ) : null}
-
+                  {enabledSectionIds.has("project_filters") && (
             <View style={styles.filterRow}>
               <TouchableOpacity
                 style={[styles.filterChip, projectFilter === "all" && styles.filterChipActive]}
@@ -1022,10 +1093,15 @@ export function HomeScreen() {
                 <Text style={[styles.filterChipText, projectFilter === "shared" && styles.filterChipTextActive]}>{t("home.filterShared")}</Text>
               </TouchableOpacity>
             </View>
-
+                  )}
+                  {enabledSectionIds.has("other_projects") && (
             <View style={styles.sectionHeaderCompact}>
               <Text style={styles.sectionTitle}>{t("home.otherProjects")}</Text>
             </View>
+                  )}
+                </>
+              );
+            })()}
           </>
         }
         renderItem={({ item }) => {
@@ -1045,9 +1121,11 @@ export function HomeScreen() {
           );
         }}
         ListFooterComponent={
-          <TouchableOpacity style={styles.showAllButton} onPress={() => goToProjects()}>
-            <Text style={styles.showAllButtonText}>{t("home.showAllProjects")}</Text>
-          </TouchableOpacity>
+          enabledSectionIds.has("other_projects") ? (
+            <TouchableOpacity style={styles.showAllButton} onPress={() => goToProjects()}>
+              <Text style={styles.showAllButtonText}>{t("home.showAllProjects")}</Text>
+            </TouchableOpacity>
+          ) : null
         }
       />
 
@@ -1100,6 +1178,17 @@ export function HomeScreen() {
         <Text style={styles.fabText}>+</Text>
       </TouchableOpacity>
 
+      {/* Semi-circular calendar button on right edge - minimal hitbox (28x64) */}
+      {enabledSectionIds.has("calendar") && (
+        <TouchableOpacity
+          style={[styles.calendarFab, { bottom: insets.bottom + spacing.md }]}
+          onPress={openCalendarSheet}
+          activeOpacity={0.8}
+        >
+          <Ionicons name="calendar-outline" size={22} color="#fff" />
+        </TouchableOpacity>
+      )}
+
       <Modal
         visible={showActionSheet}
         transparent
@@ -1116,7 +1205,7 @@ export function HomeScreen() {
               }}
             >
               <Text style={styles.sheetActionIcon}>📷</Text>
-              <Text style={styles.sheetActionText}>Pridať zápis do denníka</Text>
+              <Text style={styles.sheetActionText}>{t("home.addDiaryEntry")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.sheetActionRow}
@@ -1126,7 +1215,7 @@ export function HomeScreen() {
               }}
             >
               <Text style={styles.sheetActionIcon}>✅</Text>
-              <Text style={styles.sheetActionText}>Nová úloha</Text>
+              <Text style={styles.sheetActionText}>{t("home.newTask")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={styles.sheetActionRow}
@@ -1136,7 +1225,7 @@ export function HomeScreen() {
               }}
             >
               <Text style={styles.sheetActionIcon}>€</Text>
-              <Text style={styles.sheetActionText}>Zapísať výdavok</Text>
+              <Text style={styles.sheetActionText}>{t("home.recordExpense")}</Text>
             </TouchableOpacity>
           </Pressable>
         </Pressable>
@@ -1339,6 +1428,25 @@ export function HomeScreen() {
           </View>
         </View>
       </Modal>
+
+      <HomeCustomizeSheet
+        sheetRef={customizeSheetRef}
+        onLayoutChanged={(layout) => setHomeLayout(layout)}
+      />
+      <HomeCalendarSheet
+        sheetRef={calendarSheetRef}
+        onTaskPress={(task) => {
+          calendarSheetRef.current?.dismiss();
+          (navigation.getParent() as { getParent: () => { navigate: (n: string, p: object) => void } } | undefined)
+            ?.getParent()
+            ?.getParent()
+            ?.navigate("TaskDetail", { task });
+        }}
+        onSeeAllForDate={(dueDateYmd) => {
+          calendarSheetRef.current?.dismiss();
+          navigation.navigate("Tasks", { dueDateYmd });
+        }}
+      />
     </View>
   );
 }
@@ -1375,9 +1483,47 @@ const styles = StyleSheet.create({
   },
   headerRow: {
     flexDirection: "row",
-    justifyContent: "space-between",
     alignItems: "center",
     marginBottom: spacing.md,
+  },
+  headerAvatarBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.sm,
+  },
+  headerAvatar: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+  },
+  headerAvatarPlaceholder: {
+    width: 38,
+    height: 38,
+    borderRadius: 19,
+    backgroundColor: "rgba(255,255,255,0.25)",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  headerAvatarText: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: colors.textOnDark,
+  },
+  headerCenter: {
+    flex: 1,
+    minWidth: 0,
+  },
+  headerCustomizeBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "row",
+    backgroundColor: "rgba(255,255,255,0.15)",
   },
   searchAction: {
     width: 44,
@@ -2054,6 +2200,22 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: "bold",
     color: "#FFFFFF",
+  },
+  calendarFab: {
+    position: "absolute",
+    right: 0,
+    width: 28,
+    height: 64,
+    borderTopLeftRadius: 32,
+    borderBottomLeftRadius: 32,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: -2, height: 0 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
   },
   actionSheetOverlay: {
     flex: 1,

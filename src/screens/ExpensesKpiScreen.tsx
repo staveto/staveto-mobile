@@ -219,20 +219,20 @@ export function ExpensesKpiScreen() {
   const [exporting, setExporting] = useState(false);
   const handleExport = useCallback(async () => {
     if (exportRows.length === 0) {
-      Alert.alert("Export", "Žiadne výdavky na export v vybranom období.");
+      Alert.alert(t("expensesKpi.export"), t("expensesKpi.noExpensesInPeriod"));
       return;
     }
     setExporting(true);
     try {
-      const rangeLabel = rangeLabels.find((r) => r.key === rangeKey)?.label ?? "30 dní";
+      const rangeLabel = rangeLabels.find((r) => r.key === rangeKey)?.label ?? t("expensesKpi.days30");
       const csv = buildExpensesKpiCsv(exportRows, rangeLabel);
       const fileName = `staveto_vydavky_${new Date().toISOString().slice(0, 10)}.csv`;
       const result = await exportExpensesKpiToCsv(csv, fileName);
       if (!result.ok) {
-        Alert.alert("Export", result.error ?? "Export zlyhal.");
+        Alert.alert(t("expensesKpi.export"), result.error ?? t("expensesKpi.exportFailed"));
       }
     } catch (err) {
-      Alert.alert("Export", err instanceof Error ? err.message : "Export zlyhal.");
+      Alert.alert(t("expensesKpi.export"), err instanceof Error ? err.message : t("expensesKpi.exportFailed"));
     } finally {
       setExporting(false);
     }
@@ -250,10 +250,10 @@ export function ExpensesKpiScreen() {
   );
 
   const rangeLabels: { key: RangeKey; label: string }[] = [
-    { key: "today", label: "Dnes" },
-    { key: "7d", label: "7 dní" },
-    { key: "30d", label: "30 dní" },
-    { key: "month", label: "Tento mesiac" },
+    { key: "today", label: t("expensesKpi.today") },
+    { key: "7d", label: t("expensesKpi.days7") },
+    { key: "30d", label: t("expensesKpi.days30") },
+    { key: "month", label: t("expensesKpi.thisMonth") },
   ];
 
   if (loading && !projectExpensesData.length) {
@@ -320,7 +320,7 @@ export function ExpensesKpiScreen() {
 
         <View style={styles.kpiRow}>
           <View style={styles.kpiCard}>
-            <Text style={styles.kpiLabel}>Spolu</Text>
+            <Text style={styles.kpiLabel}>{t("expenses.total")}</Text>
             <Text style={styles.kpiValue}>{totalSum.toFixed(2)}€</Text>
           </View>
           {travelSum > 0 || otherSum > 0 ? (
@@ -343,7 +343,7 @@ export function ExpensesKpiScreen() {
 
         {filteredRows.length === 0 ? (
           <View style={styles.emptyContainer}>
-            <Text style={styles.emptyText}>Žiadne výdavky v vybranom období</Text>
+            <Text style={styles.emptyText}>{t("expenses.emptyPeriod")}</Text>
           </View>
         ) : (
           filteredRows.map((row) => (

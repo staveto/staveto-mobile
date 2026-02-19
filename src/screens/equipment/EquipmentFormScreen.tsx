@@ -168,14 +168,14 @@ export function EquipmentFormScreen() {
 
   const pickPhoto = async (source: "camera" | "gallery") => {
     if (!ImagePicker) {
-      Alert.alert("Chyba", "Fotografia nie je k dispozícii.");
+      Alert.alert(t("common.error"), t("equipment.photoNotAvailable"));
       return;
     }
     try {
       if (source === "camera") {
         const { status } = await ImagePicker.requestCameraPermissionsAsync();
         if (status !== "granted") {
-          Alert.alert("Chyba", "Potrebujeme povolenie kamery.");
+          Alert.alert(t("common.error"), t("equipment.cameraPermission"));
           return;
         }
         const result = await ImagePicker.launchCameraAsync({
@@ -189,7 +189,7 @@ export function EquipmentFormScreen() {
       } else {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
         if (status !== "granted") {
-          Alert.alert("Chyba", "Potrebujeme povolenie galérie.");
+          Alert.alert(t("common.error"), t("equipment.galleryPermission"));
           return;
         }
         const result = await ImagePicker.launchImageLibraryAsync({
@@ -209,7 +209,7 @@ export function EquipmentFormScreen() {
   const onSave = async () => {
     if (!projectId) return;
     if (!name.trim()) {
-      Alert.alert("Chyba", "Názov je povinný.");
+      Alert.alert(t("common.error"), t("equipment.nameRequired"));
       return;
     }
     setSubmitting(true);
@@ -270,10 +270,10 @@ export function EquipmentFormScreen() {
   };
 
   const showPhotoOptions = () => {
-    Alert.alert("Pridať foto zariadenia", "", [
+    Alert.alert(t("equipment.addEquipmentPhoto"), "", [
       { text: t("common.cancel"), style: "cancel" },
-      { text: "Odfotiť", onPress: () => pickPhoto("camera") },
-      { text: "Vybrať z galérie", onPress: () => pickPhoto("gallery") },
+      { text: t("equipment.takePhoto"), onPress: () => pickPhoto("camera") },
+      { text: t("equipment.selectFromGallery"), onPress: () => pickPhoto("gallery") },
     ]);
   };
 
@@ -291,7 +291,7 @@ export function EquipmentFormScreen() {
         <TouchableOpacity onPress={goBack} style={styles.backBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
           <Ionicons name="arrow-back" size={24} color={colors.textOnDark} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{isEdit ? "Upraviť zariadenie" : "Pridať zariadenie"}</Text>
+        <Text style={styles.headerTitle}>{isEdit ? t("equipment.editEquipment") : t("equipment.addEquipmentTitle")}</Text>
       </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + spacing.lg }]}>
@@ -309,7 +309,7 @@ export function EquipmentFormScreen() {
                   }}
                 >
                   <Ionicons name="camera" size={20} color="#fff" />
-                  <Text style={styles.photoChangeText}>Zmeniť foto</Text>
+                  <Text style={styles.photoChangeText}>{t("equipment.changePhoto")}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={styles.photoRemoveBtn}

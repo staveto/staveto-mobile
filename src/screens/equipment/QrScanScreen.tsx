@@ -4,6 +4,7 @@ import { useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, spacing } from "../../theme";
+import { useI18n } from "../../i18n/I18nContext";
 import * as equipmentService from "../../services/equipment";
 
 let Camera: React.ComponentType<any> | null = null;
@@ -15,6 +16,7 @@ try {
 }
 
 export function QrScanScreen() {
+  const { t } = useI18n();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const [hasPermission, setHasPermission] = useState<boolean | null>(null);
@@ -42,12 +44,12 @@ export function QrScanScreen() {
             equipmentId: r.equipmentId,
           });
         } else {
-          Alert.alert("Nenájdené", "Zariadenie s týmto QR kódom nebolo nájdené.");
+          Alert.alert(t("common.error"), t("qr.notFound"));
           setScanned(false);
         }
       })
       .catch(() => {
-        Alert.alert("Chyba", "Nepodarilo sa načítať zariadenie.");
+        Alert.alert(t("common.error"), t("qr.loadFailed"));
         setScanned(false);
       });
   };
@@ -57,9 +59,9 @@ export function QrScanScreen() {
   if (!Camera) {
     return (
       <View style={[styles.container, { paddingTop: insets.top }]}>
-        <Text style={styles.error}>Kamera nie je k dispozícii</Text>
+        <Text style={styles.error}>{t("qr.cameraNotAvailable")}</Text>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
-          <Text style={styles.backBtnText}>Späť</Text>
+          <Text style={styles.backBtnText}>{t("common.back")}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -68,7 +70,7 @@ export function QrScanScreen() {
   if (hasPermission === null) {
     return (
       <View style={[styles.container, styles.centered, { paddingTop: insets.top }]}>
-        <Text style={styles.message}>Žiadam o povolenie kamery...</Text>
+        <Text style={styles.message}>{t("qr.requestingPermission")}</Text>
       </View>
     );
   }
@@ -76,9 +78,9 @@ export function QrScanScreen() {
   if (hasPermission === false) {
     return (
       <View style={[styles.container, styles.centered, { paddingTop: insets.top }]}>
-        <Text style={styles.message}>Prístup ku kamere bol odopretý</Text>
+        <Text style={styles.message}>{t("qr.permissionDenied")}</Text>
         <TouchableOpacity style={styles.backBtn} onPress={goBack}>
-          <Text style={styles.backBtnText}>Späť</Text>
+          <Text style={styles.backBtnText}>{t("common.back")}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -90,7 +92,7 @@ export function QrScanScreen() {
         <TouchableOpacity onPress={goBack} style={styles.backBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
           <Ionicons name="arrow-back" size={24} color={colors.textOnDark} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>Skenovať QR</Text>
+        <Text style={styles.headerTitle}>{t("qr.scanTitle")}</Text>
       </View>
       <View style={styles.cameraWrap}>
         <Camera
@@ -102,7 +104,7 @@ export function QrScanScreen() {
           onBarcodeScanned={scanned ? undefined : handleBarCodeScanned}
         />
       </View>
-      <Text style={styles.hint}>Naskenujte QR kód na zariadení</Text>
+      <Text style={styles.hint}>{t("qr.scanHint")}</Text>
     </View>
   );
 }

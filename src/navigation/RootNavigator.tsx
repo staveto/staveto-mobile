@@ -32,7 +32,7 @@ import { ProjectSuppliersScreen } from "../screens/projects/ProjectSuppliersScre
 import { UpdatesScreen } from "../screens/projects/UpdatesScreen";
 import { ProjectTeamScreen } from "../screens/projects/ProjectTeamScreen";
 import { ProjectInvitesScreen } from "../screens/ProjectInvitesScreen";
-import { AppTabs } from "./AppTabs";
+import { AppDrawer } from "./AppDrawer";
 import { colors, spacing } from "../theme";
 import { db } from "../firebase";
 import { doc, getDoc } from "../lib/rnFirestore";
@@ -152,7 +152,7 @@ export function RootNavigator() {
         headerTintColor: colors.text,
       }}
     >
-      <Stack.Screen name="AppTabs" component={AppTabs} />
+      <Stack.Screen name="AppTabs" component={AppDrawer} />
       <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: true, title: t("nav.home") }} />
       <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: true, title: t("nav.notifications") }} />
       <Stack.Screen
@@ -183,27 +183,27 @@ export function RootNavigator() {
       <Stack.Screen
         name="Subscription"
         component={SubscriptionScreen}
-        options={{ headerShown: true, title: "Predplatné" }}
+        options={{ headerShown: true, title: t("nav.subscription") }}
       />
       <Stack.Screen
         name="ContractorsList"
         component={ContractorsListScreen}
-        options={{ headerShown: true, title: "Moji dodávatelia" }}
+        options={{ headerShown: true, title: t("nav.contractors") }}
       />
       <Stack.Screen
         name="ContractorForm"
         component={ContractorFormScreen}
-        options={{ headerShown: true, title: "Dodávateľ" }}
+        options={{ headerShown: true, title: t("nav.contractor") }}
       />
       <Stack.Screen
         name="ContractorDetail"
         component={ContractorDetailScreen}
-        options={{ headerShown: true, title: "Dodávateľ" }}
+        options={{ headerShown: true, title: t("nav.contractor") }}
       />
       <Stack.Screen
         name="ProjectSuppliers"
         component={ProjectSuppliersScreen}
-        options={{ headerShown: true, title: "Dodávatelia" }}
+        options={{ headerShown: true, title: t("nav.contractorsList") }}
       />
       <Stack.Screen
         name="ProjectTeam"
@@ -213,12 +213,12 @@ export function RootNavigator() {
       <Stack.Screen
         name="Updates"
         component={UpdatesScreen}
-        options={{ headerShown: true, title: "Aktualizácie" }}
+        options={{ headerShown: true, title: t("nav.updates") }}
       />
       <Stack.Screen
         name="ExpenseReview"
         component={ExpenseReviewScreen}
-        options={{ headerShown: true, title: "Kontrola faktúry" }}
+        options={{ headerShown: true, title: t("nav.invoiceReview") }}
       />
       <Stack.Screen
         name="EquipmentList"

@@ -86,9 +86,8 @@ service cloud.firestore {
           || (request.resource.data.phoneVerified == true && hasPhone())
         );
       
-      // Users can update their own document EXCEPT subscription field
-      // Subscription field can ONLY be written by server (Cloud Functions)
-      // Allow initial subscription write during registration (if subscription doesn't exist and is FREE)
+      // Users can update their own document EXCEPT subscription/billing fields
+      // subscription, subscriptionStatus, trialStartAt, trialEndAt, planId, entitlement, currentPeriodStartAt, currentPeriodEndAt: server-only
       allow update: if signedIn() && uid() == userId
         && (
           !("phoneVerified" in request.resource.data)
@@ -96,12 +95,13 @@ service cloud.firestore {
           || (request.resource.data.phoneVerified == true && hasPhone())
         )
         && (
-          // If subscription field is not being changed, allow update
           (!('subscription' in request.resource.data) || !('subscription' in resource.data) || request.resource.data.subscription == resource.data.subscription)
           ||
-          // Allow initial FREE subscription creation (during registration)
           (!('subscription' in resource.data) && request.resource.data.subscription.tier == "FREE" && request.resource.data.subscription.status == "active")
-        );
+        )
+        && !request.resource.data.diff(resource.data).affectedKeys().hasAny([
+          'subscriptionStatus', 'trialStartAt', 'trialEndAt', 'planId', 'entitlement', 'currentPeriodStartAt', 'currentPeriodEndAt'
+        ]);
 
       // projectRefs: read-only for client (CF writes via admin SDK)
       match /projectRefs/{projectId} {
@@ -109,13 +109,29 @@ service cloud.firestore {
         allow write: if false;
       }
 
-      // all other user subcollections: self-only read/write (projectRefs excluded from write above)
+      // limits, usage: read-only for client (CF writes via admin SDK)
+      match /limits/{docId} {
+        allow read: if signedIn() && uid() == userId;
+        allow write: if false;
+      }
+      match /usage/{docId} {
+        allow read: if signedIn() && uid() == userId;
+        allow write: if false;
+      }
+
+      // all other user subcollections: self-only read/write (projectRefs, limits, usage excluded)
       match /{subcol}/{docId} {
-        allow read, write: if signedIn() && uid() == userId && subcol != 'projectRefs';
+        allow read, write: if signedIn() && uid() == userId && subcol != 'projectRefs' && subcol != 'limits' && subcol != 'usage';
       }
       match /{subcol}/{docId}/{rest=**} {
-        allow read, write: if signedIn() && uid() == userId && subcol != 'projectRefs';
+        allow read, write: if signedIn() && uid() == userId && subcol != 'projectRefs' && subcol != 'limits' && subcol != 'usage';
       }
+    }
+
+    // Config (limits): read-only for signed-in users, write by CF only
+    match /config/{docId} {
+      allow read: if signedIn();
+      allow write: if false;
     }
     
     // Billing events (read-only for users, write-only for server)

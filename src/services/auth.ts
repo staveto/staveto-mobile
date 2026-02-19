@@ -2,7 +2,7 @@ import auth from "@react-native-firebase/auth";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import { doc, setDoc, getDoc, serverTimestamp } from "../lib/rnFirestore";
 import { db } from "../firebase";
-import * as Localization from "expo-localization";
+import { getDeviceRegionCode } from "../utils/countries";
 
 export type AuthUser = { id: string; email: string; name?: string; firstName?: string; lastName?: string; phoneE164?: string };
 
@@ -44,10 +44,17 @@ async function ensureUserProfile(user: AuthUser): Promise<void> {
     update.phoneE164 = user.phoneE164 ?? null;
   }
   if (!hasField(existing, "locale")) {
-    update.locale = Localization.locale ?? null;
+    try {
+      const { getLocales } = require("expo-localization");
+      const locales = getLocales?.();
+      const tag = locales?.[0]?.languageTag;
+      update.locale = (tag && typeof tag === "string") ? tag : null;
+    } catch {
+      update.locale = null;
+    }
   }
   if (!hasField(existing, "countryCode")) {
-    update.countryCode = Localization.region ?? null;
+    update.countryCode = getDeviceRegionCode() ?? null;
   }
   if (!hasField(existing, "createdAt")) {
     update.createdAt = serverTimestamp();
@@ -61,6 +68,8 @@ export type OnboardingProfileData = {
   lastName: string;
   displayName: string;
   phoneE164?: string;
+  primaryCountry?: string;
+  timezone?: string;
 };
 
 /** Update Firestore user profile from onboarding. Does not overwrite existing values. */
@@ -85,6 +94,12 @@ export async function updateUserProfileFromOnboarding(
   }
   if (data.phoneE164 && (!hasField(existing, "phoneE164") || !existing.phoneE164)) {
     update.phoneE164 = data.phoneE164;
+  }
+  if (data.primaryCountry && (!hasField(existing, "primaryCountry") || !existing.primaryCountry)) {
+    update.primaryCountry = data.primaryCountry;
+  }
+  if (data.timezone && (!hasField(existing, "timezone") || !existing.timezone)) {
+    update.timezone = data.timezone;
   }
   await setDoc(ref, update, { merge: true });
 

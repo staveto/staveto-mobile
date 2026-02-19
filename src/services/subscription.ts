@@ -18,8 +18,10 @@ export interface Subscription {
   status: SubscriptionStatus;
   stripeCustomerId?: string;
   stripeSubscriptionId?: string;
-  currentPeriodEnd?: string; // ISO date string
+  currentPeriodEnd?: string; // ISO date string or Firestore Timestamp
   updatedAt?: string; // ISO date string
+  source?: string; // "promo" | "stripe"
+  promoCode?: string;
 }
 
 export interface SubscriptionLimits {
@@ -74,6 +76,14 @@ export async function getUserSubscription(userId: string): Promise<Subscription 
   }
 }
 
+/** Helper: convert Firestore Timestamp or ISO string to milliseconds */
+function toMillis(ts: unknown): number {
+  if (!ts) return 0;
+  if (typeof ts === "string") return new Date(ts).getTime();
+  const t = ts as { toMillis?: () => number };
+  return typeof t.toMillis === "function" ? t.toMillis() : 0;
+}
+
 /**
  * Get user's current subscription tier (defaults to FREE if not set)
  */
@@ -81,6 +91,13 @@ export async function getUserTier(userId: string): Promise<SubscriptionTier> {
   const subscription = await getUserSubscription(userId);
   if (!subscription || subscription.status === "canceled") {
     return "FREE";
+  }
+  // Promo subscriptions expire when currentPeriodEnd passes
+  if (subscription.source === "promo" && subscription.currentPeriodEnd) {
+    const endMs = toMillis(subscription.currentPeriodEnd);
+    if (endMs > 0 && endMs <= Date.now()) {
+      return "FREE";
+    }
   }
   return subscription.tier;
 }
@@ -123,6 +140,17 @@ export async function createCheckoutSession(priceId: string): Promise<{ url: str
 export async function createBillingPortalSession(): Promise<{ url: string }> {
   const result = await getFns().httpsCallable("createBillingPortalSession")();
   return result.data as { url: string };
+}
+
+/**
+ * Redeem promo code (calls Cloud Function)
+ * 
+ * Returns { ok, tier, currentPeriodEnd } on success.
+ * Throws with code: INVALID_CODE | EXPIRED | LIMIT_REACHED | ALREADY_REDEEMED | UNAUTHENTICATED
+ */
+export async function redeemPromoCode(code: string): Promise<{ ok: boolean; tier: string; currentPeriodEnd: string }> {
+  const result = await getFns().httpsCallable("redeemPromoCode")({ code });
+  return result.data as { ok: boolean; tier: string; currentPeriodEnd: string };
 }
 
 /**

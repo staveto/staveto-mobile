@@ -19,14 +19,14 @@ import { colors, radius, spacing } from "../theme";
 import * as invitesService from "../services/invites";
 import type { PendingInvite } from "../services/invites";
 
-function sharedItemsSummary(shared?: Record<string, boolean>): string {
+function sharedItemsSummary(shared: Record<string, boolean> | undefined, t: (k: string) => string): string {
   if (!shared || typeof shared !== "object") return "";
   const parts: string[] = [];
-  if (shared.tasks) parts.push("Úlohy");
-  if (shared.phases) parts.push("Fázy");
-  if (shared.expenses) parts.push("Náklady");
-  if (shared.diary) parts.push("Denník");
-  if (shared.documents) parts.push("Dokumenty");
+  if (shared.tasks) parts.push(t("projectInvites.sharedTasks"));
+  if (shared.phases) parts.push(t("projectInvites.sharedPhases"));
+  if (shared.expenses) parts.push(t("projectInvites.sharedExpenses"));
+  if (shared.diary) parts.push(t("projectInvites.sharedDiary"));
+  if (shared.documents) parts.push(t("projectInvites.sharedDocuments"));
   return parts.length > 0 ? parts.join(", ") : "";
 }
 
@@ -152,7 +152,7 @@ export function ProjectInvitesScreen() {
 
   const renderItem = useCallback(
     ({ item }: { item: PendingInvite }) => {
-      const summary = sharedItemsSummary(item.sharedItems);
+      const summary = sharedItemsSummary(item.sharedItems, t);
       const isBusy = actionProjectId === item.projectId;
 
       return (

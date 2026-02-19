@@ -16,8 +16,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { colors, radius, spacing } from "../../theme";
 import * as equipmentService from "../../services/equipment";
 import type { EquipmentDoc } from "../../services/equipment";
+import { useI18n } from "../../i18n/I18nContext";
 
 export function EquipmentListScreen() {
+  const { t } = useI18n();
   const route = useRoute();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
@@ -41,7 +43,7 @@ export function EquipmentListScreen() {
       setList(eq);
     } catch (e: any) {
       console.error("[EquipmentList] Error:", e);
-      Alert.alert("Chyba", e.message || "Nepodarilo sa načítať zariadenia.");
+      Alert.alert(t("common.error"), e.message || t("equipment.loadListFailed"));
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -60,9 +62,9 @@ export function EquipmentListScreen() {
     (navigation as any).setParams?.({ openServiceRule: false });
     if (list.length === 0) {
       Alert.alert(
-        "Žiadne zariadenia",
-        "Pridajte najprv zariadenie a potom vytvorte servisný plán.",
-        [{ text: "OK" }]
+        t("equipment.noEquipment"),
+        t("equipment.addEquipmentFirst"),
+        [{ text: t("common.ok") }]
       );
       return;
     }
@@ -78,10 +80,10 @@ export function EquipmentListScreen() {
     // >1 equipment: show picker
     const options = list.map((eq) => eq.labelCode || eq.name);
     Alert.alert(
-      "Vyberte zariadenie",
-      "Pre ktoré zariadenie chcete vytvoriť servisný plán?",
+      t("equipment.selectEquipment"),
+      t("equipment.selectEquipmentForPlan"),
       [
-        { text: "Zrušiť", style: "cancel" },
+        { text: t("common.cancel"), style: "cancel" },
         ...options.map((label, idx) => ({
           text: label,
           onPress: () =>
@@ -113,7 +115,7 @@ export function EquipmentListScreen() {
         <TouchableOpacity onPress={goBack} style={styles.backBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
           <Ionicons name="arrow-back" size={24} color={colors.textOnDark} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle} numberOfLines={1}>{projectName || "Zariadenia"}</Text>
+        <Text style={styles.headerTitle} numberOfLines={1}>{projectName || t("equipment.title")}</Text>
         <TouchableOpacity
           style={styles.scanBtn}
           onPress={() => (navigation as any).navigate("QrScan")}
@@ -126,7 +128,7 @@ export function EquipmentListScreen() {
         <Ionicons name="search" size={20} color={colors.textMuted} />
         <TextInput
           style={styles.searchInput}
-          placeholder="Hľadať (názov, kód, model...)"
+          placeholder={t("equipment.searchPlaceholder")}
           placeholderTextColor={colors.textMuted}
           value={search}
           onChangeText={setSearch}
@@ -147,8 +149,8 @@ export function EquipmentListScreen() {
           }
           ListEmptyComponent={
             <View style={styles.empty}>
-              <Text style={styles.emptyText}>Žiadne zariadenia</Text>
-              <Text style={styles.emptySubtext}>Pridajte zariadenie tlačidlom nižšie</Text>
+              <Text style={styles.emptyText}>{t("equipment.noEquipment")}</Text>
+              <Text style={styles.emptySubtext}>{t("equipment.emptySubtext")}</Text>
             </View>
           }
           renderItem={({ item }) => (
@@ -163,19 +165,19 @@ export function EquipmentListScreen() {
               }
               onLongPress={() => {
                 Alert.alert(
-                  "Archivovať zariadenie",
-                  `Naozaj chcete archivovať "${item.name}"?`,
+                  t("equipment.archiveEquipment"),
+                  t("equipment.archiveConfirm", { name: item.name }),
                   [
-                    { text: "Zrušiť", style: "cancel" },
+                    { text: t("common.cancel"), style: "cancel" },
                     {
-                      text: "Archivovať",
+                      text: t("common.archive"),
                       style: "destructive",
                       onPress: async () => {
                         try {
                           await equipmentService.archiveEquipment(projectId!, item.id);
                           load(true);
                         } catch (e: any) {
-                          Alert.alert("Chyba", e.message || "Nepodarilo sa archivovať.");
+                          Alert.alert(t("common.error"), e.message || t("equipment.archiveFailedShort"));
                         }
                       },
                     },

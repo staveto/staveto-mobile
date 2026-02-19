@@ -69,7 +69,7 @@ import * as weatherService from "../services/weather";
 import { extractInvoiceData, type OcrParsed, type OcrStatus } from "../services/invoiceOCR";
 import { calculateRouteDistanceKm } from "../services/mapsDistance";
 import { EUROPEAN_COUNTRIES, buildAddressWithCountry, parseCountryFromAddress } from "../utils/europeanCountries";
-import * as Localization from "expo-localization";
+import { COUNTRY_CODES, getDeviceRegionCode } from "../utils/countries";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { exportProjectToCsv } from "../services/projectExport";
 import { updateTaskStatus } from "../services/taskService";
@@ -160,11 +160,15 @@ export function ProjectOverviewScreen() {
   const [projectType, setProjectType] = useState<string | undefined>(undefined);
   const [templateId, setTemplateId] = useState<string | undefined>(undefined);
   const [addressText, setAddressText] = useState<string | undefined>(undefined);
+  const [projectCountryCode, setProjectCountryCode] = useState<string | undefined>(undefined);
+  const [projectCity, setProjectCity] = useState<string | undefined>(undefined);
   const [projectOwnerId, setProjectOwnerId] = useState<string | null>(null);
   const [addingPhases, setAddingPhases] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editProjectName, setEditProjectName] = useState("");
   const [editProjectAddress, setEditProjectAddress] = useState("");
+  const [editProjectCountry, setEditProjectCountry] = useState("");
+  const [editProjectCity, setEditProjectCity] = useState("");
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [editingExpense, setEditingExpense] = useState<ExpenseDoc | null>(null);
   const [openedExpenseId, setOpenedExpenseId] = useState<string | null>(null);
@@ -175,7 +179,7 @@ export function ProjectOverviewScreen() {
   const [expenseCategory, setExpenseCategory] = useState<'WORK' | 'MATERIAL' | 'OTHER' | 'TRAVEL' | undefined>(undefined);
   const [expenseTravelFromAddress, setExpenseTravelFromAddress] = useState("");
   const [expenseTravelToAddress, setExpenseTravelToAddress] = useState("");
-  const defaultCountry = (Localization.region ?? "SK") as string;
+  const defaultCountry = getDeviceRegionCode();
   const [expenseTravelFromCountry, setExpenseTravelFromCountry] = useState(defaultCountry);
   const [expenseTravelToCountry, setExpenseTravelToCountry] = useState(defaultCountry);
   const [showCountryPicker, setShowCountryPicker] = useState<'from' | 'to' | null>(null);
@@ -294,17 +298,27 @@ export function ProjectOverviewScreen() {
   const [activityExpanded, setActivityExpanded] = useState(false);
 
   const getOcrFallbackMessage = useCallback(
-    (errorCode?: string) => {
-      const code = String(errorCode || "").toLowerCase();
+    (errorCode?: string, cooldownSeconds?: number) => {
+      const code = String(errorCode || "").toUpperCase();
+      if (code === "ENTITLEMENT_REQUIRED") {
+        return t("subscription.entitlementRequired");
+      }
+      if (code === "LIMIT_REACHED") {
+        return t("expense.ocrLimit");
+      }
+      if (code === "COOLDOWN" && typeof cooldownSeconds === "number") {
+        return t("subscription.tryAgainIn", { seconds: String(cooldownSeconds) });
+      }
+      const codeLower = code.toLowerCase();
       if (
-        code.includes("not_found") ||
-        code.includes("not-found") ||
-        code.includes("functions/not-found") ||
-        code.includes("unimplemented")
+        codeLower.includes("not_found") ||
+        codeLower.includes("not-found") ||
+        codeLower.includes("functions/not-found") ||
+        codeLower.includes("unimplemented")
       ) {
         return t("ocr.backendNotDeployed");
       }
-      if (code.includes("unauthenticated") || code.includes("permission-denied")) {
+      if (codeLower.includes("unauthenticated") || codeLower.includes("permission-denied")) {
         return t("ocr.noPermission");
       }
       return t("ocr.manualFallback");
@@ -427,6 +441,8 @@ export function ProjectOverviewScreen() {
         setProjectType(project.projectType);
         setTemplateId(project.templateId);
         setAddressText(project.addressText);
+        setProjectCountryCode(project.countryCode);
+        setProjectCity(project.city);
         setProjectOwnerId(project.ownerId ?? null);
       } else {
         console.warn(`[ProjectOverview] Project ${projectId} not found or no access - continuing without project metadata`);
@@ -1089,6 +1105,8 @@ export function ProjectOverviewScreen() {
   const handleEditProject = () => {
     setEditProjectName(projectName || "");
     setEditProjectAddress(addressText || "");
+    setEditProjectCountry(projectCountryCode || "SK");
+    setEditProjectCity(projectCity || "");
     setShowEditModal(true);
   };
 
@@ -1103,11 +1121,15 @@ export function ProjectOverviewScreen() {
         orgId,
         projectId,
         editProjectName.trim(),
-        editProjectAddress.trim()
+        editProjectAddress.trim(),
+        editProjectCountry.trim() || null,
+        editProjectCity.trim() || null
       );
       setShowEditModal(false);
       setEditProjectName("");
       setEditProjectAddress("");
+      setEditProjectCountry("");
+      setEditProjectCity("");
       // Reload project data
       await load(true);
       // Update route params if needed
@@ -1510,7 +1532,7 @@ export function ProjectOverviewScreen() {
         applyOcrPrefill(result.parsed);
       } else {
         console.log("[OCR UI] error.code =", result.errorCode, "message=", result.errorCode);
-        Alert.alert(t("common.warning"), getOcrFallbackMessage(result.errorCode));
+        Alert.alert(t("common.warning"), getOcrFallbackMessage(result.errorCode, result.cooldownSeconds));
       }
     } catch (error: any) {
       console.error("[ProjectOverview] Auto OCR after pick failed:", error);
@@ -1841,7 +1863,7 @@ export function ProjectOverviewScreen() {
       });
       if (result.status !== "success") {
         console.log("[OCR UI] error.code =", result.errorCode, "message=", result.errorCode);
-        Alert.alert(t("common.warning"), getOcrFallbackMessage(result.errorCode));
+        Alert.alert(t("common.warning"), getOcrFallbackMessage(result.errorCode, result.cooldownSeconds));
       }
       navigateToExpenseReview({
         ...input,
@@ -2959,7 +2981,7 @@ export function ProjectOverviewScreen() {
             <View style={styles.addressContent}>
               <Ionicons name="location" size={20} color={colors.primary} />
               <Text style={styles.addressText} numberOfLines={1}>
-                {addressText?.trim() || "Adresa projektu nie je zadaná"}
+                {addressText?.trim() || t("projectOverview.noAddress")}
               </Text>
               {isOwner ? (
                 <TouchableOpacity
@@ -2993,7 +3015,7 @@ export function ProjectOverviewScreen() {
                   onPress={() => Linking.openURL(weatherSnapshot.detailUrl)}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.weatherDayLabel}>{day.label}</Text>
+                  <Text style={styles.weatherDayLabel}>{day.label === "ZAJTRA" ? t("weather.tomorrow") : day.label === "POZAJTRA" ? t("weather.dayAfterTomorrow") : t("weather.today")}</Text>
                   <View style={styles.weatherInlineRow}>
                     <Ionicons name={weatherTypeIcon(day.type)} size={18} color={weatherBadgeColor(day.level)} />
                     <Text style={styles.weatherDayTemp}>
@@ -3029,14 +3051,14 @@ export function ProjectOverviewScreen() {
         {/* MAINTENANCE v2: Equipment section only for MAINTENANCE projects */}
         {projectType === 'MAINTENANCE' && (
           <View style={styles.equipmentSection}>
-            <Text style={styles.equipmentSectionTitle}>Zariadenia</Text>
+            <Text style={styles.equipmentSectionTitle}>{t("equipment.title")}</Text>
             {equipmentList.length === 0 ? (
               <TouchableOpacity
                 style={styles.equipmentCta}
                 onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
               >
                 <Ionicons name="add-circle-outline" size={24} color={colors.primary} />
-                <Text style={styles.equipmentCtaText}>Pridať zariadenie</Text>
+                <Text style={styles.equipmentCtaText}>{t("equipment.addEquipment")}</Text>
               </TouchableOpacity>
             ) : (
               <>
@@ -3048,12 +3070,12 @@ export function ProjectOverviewScreen() {
                       onPress={() => (navigation as any).navigate('EquipmentDetail', { projectId, projectName, equipmentId: eq.id })}
                       onLongPress={() => {
                         Alert.alert(
-                          "Archivovať zariadenie",
-                          `Naozaj chcete archivovať "${eq.name}"?`,
+                          t("equipment.archiveEquipment"),
+                          t("equipment.archiveConfirm", { name: eq.name }),
                           [
                             { text: t("common.cancel"), style: "cancel" },
                             {
-                              text: "Archivovať",
+                              text: t("common.archive"),
                               style: "destructive",
                               onPress: async () => {
                                 try {
@@ -3732,7 +3754,7 @@ export function ProjectOverviewScreen() {
                 style={{ marginRight: spacing.sm }}
               />
               <Text style={styles.expensesHeaderText}>
-                {(projectType === 'MANAGEMENT' || isTradeOrMaintenance) ? 'Denník' : 'Stavebný denník'}
+                {(projectType === 'MANAGEMENT' || isTradeOrMaintenance) ? t("projectOverview.diary") : t("projectOverview.constructionDiary")}
               </Text>
               <Text style={styles.expensesCount}>({diaryEntries.length})</Text>
             </View>
@@ -4131,11 +4153,32 @@ export function ProjectOverviewScreen() {
               placeholderTextColor={colors.textMuted}
               autoFocus
             />
+            <Text style={styles.modalLabel}>{t("projects.country")}</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.sm }}>
+              {COUNTRY_CODES.slice(0, 12).map((code) => (
+                <TouchableOpacity
+                  key={code}
+                  style={[styles.editCountryChip, editProjectCountry === code && styles.editCountryChipActive]}
+                  onPress={() => setEditProjectCountry(code)}
+                >
+                  <Text style={[styles.editCountryChipText, editProjectCountry === code && styles.editCountryChipTextActive]}>{code}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <Text style={styles.modalLabel}>{t("projects.city")}</Text>
+            <TextInput
+              style={styles.input}
+              value={editProjectCity}
+              onChangeText={setEditProjectCity}
+              placeholder={t("projects.cityPlaceholder")}
+              placeholderTextColor={colors.textMuted}
+            />
+            <Text style={styles.modalLabel}>{t("projects.address")}</Text>
             <TextInput
               style={styles.input}
               value={editProjectAddress}
               onChangeText={setEditProjectAddress}
-              placeholder="Adresa projektu"
+              placeholder={t("projectOverview.projectAddressPlaceholder")}
               placeholderTextColor={colors.textMuted}
             />
             <View style={styles.modalButtons}>
@@ -4145,6 +4188,8 @@ export function ProjectOverviewScreen() {
                   setShowEditModal(false);
                   setEditProjectName("");
                   setEditProjectAddress("");
+                  setEditProjectCountry("");
+                  setEditProjectCity("");
                 }}
               >
                 <Text style={styles.modalCancelText}>{t("tasks.cancel")}</Text>
@@ -4840,7 +4885,7 @@ export function ProjectOverviewScreen() {
               }}
             >
               <Text style={styles.dateInputText}>
-                {editTaskDueDate || "Vybrať dátum"}
+                {editTaskDueDate || t("projectOverview.selectDate")}
               </Text>
               <Ionicons name="calendar-outline" size={20} color={colors.primary} />
             </TouchableOpacity>
@@ -4858,11 +4903,11 @@ export function ProjectOverviewScreen() {
                 <Text style={styles.modalCancelText}>{t("tasks.cancel")}</Text>
               </TouchableOpacity>
               <TouchableOpacity 
-                style={styles.modalOk} 
+                style={[styles.modalOk, (submitting || !editTaskTitle.trim()) && styles.modalOkDisabled]} 
                 onPress={handleSaveEditTask} 
                 disabled={submitting || !editTaskTitle.trim()}
               >
-                <Text style={styles.modalOkText}>{submitting ? "…" : "Uložiť"}</Text>
+                <Text style={styles.modalOkText}>{submitting ? "…" : t("projectOverview.saveTask")}</Text>
               </TouchableOpacity>
             </View>
           </View>
@@ -5014,7 +5059,7 @@ export function ProjectOverviewScreen() {
                   <>
                     <View style={styles.recordingIndicator}>
                       <View style={styles.recordingDot} />
-                      <Text style={styles.recordingText}>Nahrávam...</Text>
+                      <Text style={styles.recordingText}>{t("projectOverview.recording")}</Text>
                     </View>
                     <TouchableOpacity
                       style={styles.stopRecordingButton}
@@ -5037,7 +5082,7 @@ export function ProjectOverviewScreen() {
                       }}
                     >
                       <Ionicons name="stop-circle" size={48} color="#FF3B30" />
-                      <Text style={styles.stopRecordingText}>Zastaviť nahrávanie</Text>
+                      <Text style={styles.stopRecordingText}>{t("projectOverview.stopRecording")}</Text>
                     </TouchableOpacity>
                   </>
                 ) : recordingUri ? (
@@ -5060,7 +5105,7 @@ export function ProjectOverviewScreen() {
                           setRecording(null);
                         }}
                       >
-                        <Text style={styles.rerecordText}>Nahrať znova</Text>
+                        <Text style={styles.rerecordText}>{t("projectOverview.rerecord")}</Text>
                       </TouchableOpacity>
                     </View>
                   </>
@@ -5080,18 +5125,27 @@ export function ProjectOverviewScreen() {
                           Alert.alert(t("common.error"), t("projectOverview.audioPermissionRequired"));
                           return;
                         }
-                        
-                        // Configure audio mode
+                        // Unload any previous recording to avoid "recorder not prepared" conflict
+                        if (recording) {
+                          try {
+                            await recording.stopAndUnloadAsync();
+                          } catch (e) { /* ignore */ }
+                          setRecording(null);
+                        }
+                        // Configure audio mode (staysActiveInBackground helps avoid "recorder not prepared" on some devices)
                         await AudioModule.Audio.setAudioModeAsync({
                           allowsRecordingIOS: true,
                           playsInSilentModeIOS: true,
+                          staysActiveInBackground: false,
+                          interruptionModeAndroid: 2, // DuckOthers
+                          shouldDuckAndroid: true,
                         });
-                        
+                        // Brief delay lets native audio session initialize (fixes "recorder not prepared" on first use)
+                        await new Promise((r) => setTimeout(r, 400));
                         // Start recording
                         const { recording: newRecording } = await AudioModule.Audio.Recording.createAsync(
                           AudioModule.Audio.RecordingOptionsPresets.HIGH_QUALITY
                         );
-                        
                         setRecording(newRecording);
                         setIsRecording(true);
                         console.log('[ProjectOverview] Recording started');
@@ -5102,7 +5156,7 @@ export function ProjectOverviewScreen() {
                     }}
                   >
                     <Ionicons name="mic-circle" size={64} color={colors.primary} />
-                    <Text style={styles.startRecordingText}>Začať nahrávanie</Text>
+                    <Text style={styles.startRecordingText}>{t("projectOverview.startRecording")}</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -5131,7 +5185,7 @@ export function ProjectOverviewScreen() {
               }}
             >
               <Text style={styles.dateInputText}>
-                {newTaskDueDate || "Vybrať dátum"}
+                {newTaskDueDate || t("projectOverview.selectDate")}
               </Text>
               <Ionicons name="calendar-outline" size={20} color={colors.primary} />
             </TouchableOpacity>
@@ -5175,11 +5229,21 @@ export function ProjectOverviewScreen() {
 
       {/* Construction Diary Modal */}
       <Modal visible={showDiaryModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+        >
+          <View style={[styles.modal, styles.diaryModal]}>
             <Text style={styles.modalTitle}>
-              {editingDiaryEntry ? 'Upraviť zápis do denníka' : 'Pridať zápis do denníka'}
+              {editingDiaryEntry ? t("projectOverview.editDiaryEntry") : t("projectOverview.addDiaryEntry")}
             </Text>
+            <ScrollView
+              style={styles.diaryModalScroll}
+              contentContainerStyle={styles.diaryModalScrollContent}
+              showsVerticalScrollIndicator={true}
+              keyboardShouldPersistTaps="handled"
+            >
             <TextInput
               style={styles.input}
               value={diaryDate}
@@ -5198,11 +5262,11 @@ export function ProjectOverviewScreen() {
               style={styles.input}
               value={diaryWorkers}
               onChangeText={setDiaryWorkers}
-              placeholder="Pracovníci"
+              placeholder={t("projectOverview.workersPlaceholder")}
               placeholderTextColor={colors.textMuted}
             />
             {/* Work Description Input Mode Selector */}
-            <Text style={styles.modalLabel}>Popis práce *:</Text>
+            <Text style={styles.modalLabel}>{t("projectOverview.workDescriptionLabel")}:</Text>
             <View style={styles.inputOptionContainer}>
               <TouchableOpacity
                 style={[styles.inputOptionButton, diaryWorkDescriptionMode === 'text' && styles.inputOptionButtonActive]}
@@ -5222,7 +5286,7 @@ export function ProjectOverviewScreen() {
               >
                 <Ionicons name="create-outline" size={24} color={diaryWorkDescriptionMode === 'text' ? colors.primary : colors.textMuted} />
                 <Text style={[styles.inputOptionText, diaryWorkDescriptionMode === 'text' && styles.inputOptionTextActive]}>
-                  Písať text
+                  {t("projectOverview.writeText")}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -5234,7 +5298,7 @@ export function ProjectOverviewScreen() {
               >
                 <Ionicons name="mic" size={24} color={diaryWorkDescriptionMode === 'voice' ? colors.primary : colors.textMuted} />
                 <Text style={[styles.inputOptionText, diaryWorkDescriptionMode === 'voice' && styles.inputOptionTextActive]}>
-                  Nahrávať hlas
+                  {t("projectOverview.recordVoice")}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -5245,7 +5309,7 @@ export function ProjectOverviewScreen() {
                   <>
                     <View style={styles.recordingIndicator}>
                       <View style={styles.recordingDot} />
-                      <Text style={styles.recordingText}>Nahrávam...</Text>
+                      <Text style={styles.recordingText}>{t("projectOverview.recording")}</Text>
                     </View>
                     <TouchableOpacity
                       style={styles.stopRecordingButton}
@@ -5268,7 +5332,7 @@ export function ProjectOverviewScreen() {
                       }}
                     >
                       <Ionicons name="stop-circle" size={48} color="#FF3B30" />
-                      <Text style={styles.stopRecordingText}>Zastaviť nahrávanie</Text>
+                      <Text style={styles.stopRecordingText}>{t("projectOverview.stopRecording")}</Text>
                     </TouchableOpacity>
                   </>
                 ) : diaryWorkDescriptionRecordingUri ? (
@@ -5287,11 +5351,11 @@ export function ProjectOverviewScreen() {
                               // This would require a backend API or service like Google Speech-to-Text
                               // For now, show a placeholder message
                               Alert.alert(
-                                'Konverzia na text',
-                                'Konverzia hlasu na text bude dostupná v budúcej verzii. Pre teraz môžete použiť hlasovú správu alebo prepnúť na textový režim.',
+                                t("projectOverview.convertToTextTitle"),
+                                t("projectOverview.convertToTextMessage"),
                                 [
                                   {
-                                    text: 'Prepnut na text',
+                                    text: t("projectOverview.switchToText"),
                                     onPress: () => {
                                       setDiaryWorkDescriptionMode('text');
                                       setDiaryWorkDescriptionRecordingUri(null);
@@ -5324,10 +5388,19 @@ export function ProjectOverviewScreen() {
                             setDiaryWorkDescriptionRecording(null);
                           }}
                         >
-                          <Text style={styles.rerecordText}>Nahrať znova</Text>
+                          <Text style={styles.rerecordText}>{t("projectOverview.rerecord")}</Text>
                         </TouchableOpacity>
                       </View>
                     </View>
+                    <TextInput
+                      style={[styles.input, styles.textArea, { marginTop: spacing.md }]}
+                      value={diaryWorkDescription}
+                      onChangeText={setDiaryWorkDescription}
+                      placeholder={t("projectOverview.transcriptionPlaceholder")}
+                      placeholderTextColor={colors.textMuted}
+                      multiline
+                      numberOfLines={3}
+                    />
                   </>
                 ) : (
                   <TouchableOpacity
@@ -5345,18 +5418,27 @@ export function ProjectOverviewScreen() {
                           Alert.alert(t("common.error"), t("projectOverview.audioPermissionRequired"));
                           return;
                         }
-                        
-                        // Configure audio mode
+                        // Unload any previous recording to avoid "recorder not prepared" conflict
+                        if (diaryWorkDescriptionRecording) {
+                          try {
+                            await diaryWorkDescriptionRecording.stopAndUnloadAsync();
+                          } catch (e) { /* ignore */ }
+                          setDiaryWorkDescriptionRecording(null);
+                        }
+                        // Configure audio mode (staysActiveInBackground helps avoid "recorder not prepared" on some devices)
                         await AudioModule.Audio.setAudioModeAsync({
                           allowsRecordingIOS: true,
                           playsInSilentModeIOS: true,
+                          staysActiveInBackground: false,
+                          interruptionModeAndroid: 2, // DuckOthers
+                          shouldDuckAndroid: true,
                         });
-                        
+                        // Brief delay lets native audio session initialize (fixes "recorder not prepared" on first use)
+                        await new Promise((r) => setTimeout(r, 400));
                         // Start recording
                         const { recording: newRecording } = await AudioModule.Audio.Recording.createAsync(
                           AudioModule.Audio.RecordingOptionsPresets.HIGH_QUALITY
                         );
-                        
                         setDiaryWorkDescriptionRecording(newRecording);
                         setDiaryWorkDescriptionIsRecording(true);
                         console.log('[ProjectOverview] Diary work description recording started');
@@ -5367,7 +5449,7 @@ export function ProjectOverviewScreen() {
                     }}
                   >
                     <Ionicons name="mic-circle" size={64} color={colors.primary} />
-                    <Text style={styles.startRecordingText}>Začať nahrávanie</Text>
+                    <Text style={styles.startRecordingText}>{t("projectOverview.startRecording")}</Text>
                   </TouchableOpacity>
                 )}
               </View>
@@ -5380,7 +5462,7 @@ export function ProjectOverviewScreen() {
                   style={[styles.input, styles.textArea, styles.textInputWithIcon]}
                   value={diaryWorkDescription}
                   onChangeText={setDiaryWorkDescription}
-                  placeholder="Popis práce *"
+                  placeholder={t("projectOverview.workDescriptionLabel")}
                   placeholderTextColor={colors.textMuted}
                   multiline
                   numberOfLines={4}
@@ -5391,19 +5473,19 @@ export function ProjectOverviewScreen() {
               style={styles.input}
               value={diaryMaterials}
               onChangeText={setDiaryMaterials}
-              placeholder="Materiály"
+              placeholder={t("projectOverview.materialsPlaceholder")}
               placeholderTextColor={colors.textMuted}
             />
             {phases.length > 0 && (
               <View style={styles.phaseSelector}>
-                <Text style={styles.phaseSelectorLabel}>Fáza (voliteľné):</Text>
+                <Text style={styles.phaseSelectorLabel}>{t("projectOverview.phaseOptional")}</Text>
                 <ScrollView style={styles.phaseSelectorScroll} horizontal>
                   <TouchableOpacity
                     style={[styles.phaseChip, diaryPhaseId === null && styles.phaseChipSelected]}
                     onPress={() => setDiaryPhaseId(null)}
                   >
                     <Text style={[styles.phaseChipText, diaryPhaseId === null && styles.phaseChipTextSelected]}>
-                      Žiadna
+                      {t("projectOverview.phaseNone")}
                     </Text>
                   </TouchableOpacity>
                   {phases.map((phase) => (
@@ -5423,7 +5505,7 @@ export function ProjectOverviewScreen() {
             
             {/* Diary Photo Attachment */}
             <View style={styles.expenseAttachmentSection}>
-              <Text style={styles.expenseAttachmentLabel}>Fotka (voliteľné)</Text>
+              <Text style={styles.expenseAttachmentLabel}>{t("projectOverview.photoOptional")}</Text>
               <View style={styles.expenseAttachmentButtons}>
                 <TouchableOpacity
                   style={[styles.expenseAttachmentButton, (uploadingDiaryAttachment || submitting) && styles.expenseAttachmentButtonDisabled]}
@@ -5431,7 +5513,7 @@ export function ProjectOverviewScreen() {
                   disabled={uploadingDiaryAttachment || submitting}
                 >
                   <Ionicons name="image-outline" size={20} color={colors.primary} />
-                  <Text style={styles.expenseAttachmentButtonText}>Pridať fotku</Text>
+                  <Text style={styles.expenseAttachmentButtonText}>{t("projectOverview.addPhoto")}</Text>
                 </TouchableOpacity>
               </View>
               {diaryAttachment && (
@@ -5460,6 +5542,7 @@ export function ProjectOverviewScreen() {
                 </View>
               )}
             </View>
+            </ScrollView>
             
             <View style={styles.modalButtons}>
               <TouchableOpacity 
@@ -5492,12 +5575,12 @@ export function ProjectOverviewScreen() {
                 }
               >
                 <Text style={styles.modalOkText}>
-                  {submitting ? 'Ukladá sa...' : (editingDiaryEntry ? 'Uložiť' : 'Pridať')}
+                  {submitting ? t("common.saving") : (editingDiaryEntry ? t("common.save") : t("common.add"))}
                 </Text>
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Project Document Modal */}
@@ -6416,6 +6499,12 @@ const styles = StyleSheet.create({
   },
   expenseModalScroll: { flex: 1, minHeight: 0 },
   expenseModalScrollContent: { paddingBottom: spacing.md },
+  diaryModal: {
+    height: Dimensions.get("window").height * 0.9,
+    alignSelf: "stretch",
+  },
+  diaryModalScroll: { flex: 1, minHeight: 0 },
+  diaryModalScrollContent: { paddingBottom: spacing.md },
   ocrModal: {
     backgroundColor: colors.card,
     borderRadius: radius,
@@ -6450,6 +6539,21 @@ const styles = StyleSheet.create({
   assigneePickerLabel: { fontSize: 15, color: colors.text, fontWeight: "500" },
   assigneePickerLabelActive: { color: colors.primary, fontWeight: "700" },
   modalLabel: { fontSize: 14, fontWeight: "500", color: colors.text, marginBottom: spacing.xs, marginTop: spacing.sm },
+  editCountryChip: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginRight: spacing.sm,
+    borderRadius: radius,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  editCountryChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  editCountryChipText: { fontSize: 14, color: colors.text, fontWeight: "500" },
+  editCountryChipTextActive: { color: "#FFFFFF", fontWeight: "600" },
   input: {
     backgroundColor: colors.card,
     borderWidth: 1,
@@ -6487,7 +6591,7 @@ const styles = StyleSheet.create({
   modalButtons: { flexDirection: "row", justifyContent: "flex-end", gap: spacing.md },
   modalCancel: { padding: spacing.sm },
   modalCancelText: { color: colors.textMuted },
-  modalOk: { backgroundColor: colors.primary, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radius },
+  modalOk: { backgroundColor: colors.primary, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radius, minWidth: 80 },
   modalOkDisabled: { backgroundColor: colors.textMuted, opacity: 0.5 },
   modalOkText: { color: "#fff", fontWeight: "600" },
 

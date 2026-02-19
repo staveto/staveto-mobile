@@ -26,6 +26,7 @@ import type { ProjectDoc } from "../services/projects";
 import { colors, radius, spacing } from "../theme";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
 import { openInMaps } from "../lib/maps";
+import { COUNTRY_CODES, COUNTRY_NAMES } from "../utils/countries";
 
 type Project = ProjectDoc;
 
@@ -62,6 +63,8 @@ export function ProjectsScreen() {
   const [useTemplate, setUseTemplate] = useState<boolean | null>(null); // null = not chosen, true = with template, false = from scratch
   const [newName, setNewName] = useState("");
   const [newAddress, setNewAddress] = useState("");
+  const [newCountry, setNewCountry] = useState<string>("SK");
+  const [newCity, setNewCity] = useState("");
   const [templateId, setTemplateId] = useState<string>("");
   const [templatePhases, setTemplatePhases] = useState<CatalogPhase[]>([]);
   const [phaseCustomizations, setPhaseCustomizations] = useState<Map<string, PhaseCustomization>>(new Map());
@@ -162,6 +165,8 @@ export function ProjectsScreen() {
   const closeNewModal = () => {
     setShowNew(false);
     setNewStep(1);
+    setNewCountry("SK");
+    setNewCity("");
     setSelectedType(null);
     setUseTemplate(null);
     setNewName("");
@@ -344,6 +349,8 @@ export function ProjectsScreen() {
         templateId: templateId,
         name: newName.trim(),
         addressText: newAddress.trim() || undefined,
+        countryCode: newCountry.trim() || undefined,
+        city: newCity.trim() || undefined,
         phaseCustomizations: customizationsArray,
       });
       
@@ -512,7 +519,7 @@ export function ProjectsScreen() {
             disabled={refreshing}
           >
             <Text style={styles.refreshButtonText}>
-              {refreshing ? "Obnovujem..." : "Obnoviť"}
+              {refreshing ? t("common.refreshing") : t("common.refresh")}
             </Text>
           </TouchableOpacity>
         </View>
@@ -545,7 +552,7 @@ export function ProjectsScreen() {
           ListEmptyComponent={
             projects.length > 0 && activeProjects.length === 0 && archivedProjects.length === 0 ? (
               <View style={styles.emptyFiltered}>
-                <Text style={styles.emptyFilteredText}>Žiadne projekty v tejto kategórii</Text>
+                <Text style={styles.emptyFilteredText}>{t("projects.noProjectsInCategory")}</Text>
               </View>
             ) : null
           }
@@ -600,7 +607,7 @@ export function ProjectsScreen() {
                           e.stopPropagation(); // Prevent card click
                           openInMaps(item.addressText!);
                         }}
-                        accessibilityLabel="Otvoriť v mapách"
+                        accessibilityLabel={t("maps.openInMaps")}
                         hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                       >
                         <Ionicons name="location" size={18} color={colors.primary} />
@@ -674,7 +681,7 @@ export function ProjectsScreen() {
                                 e.stopPropagation();
                                 openInMaps(item.addressText!);
                               }}
-                              accessibilityLabel="Otvoriť v mapách"
+                              accessibilityLabel={t("maps.openInMaps")}
                               hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                             >
                               <Ionicons name="location" size={18} color={colors.textMuted} />
@@ -909,7 +916,28 @@ export function ProjectsScreen() {
                   autoFocus={true}
                 />
 
-                <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>Adresa projektu</Text>
+                <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.country")}</Text>
+                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.sm }}>
+                  {COUNTRY_CODES.slice(0, 12).map((code) => (
+                    <TouchableOpacity
+                      key={code}
+                      style={[styles.countryChip, newCountry === code && styles.countryChipActive]}
+                      onPress={() => setNewCountry(code)}
+                    >
+                      <Text style={[styles.countryChipText, newCountry === code && styles.countryChipTextActive]}>{code}</Text>
+                    </TouchableOpacity>
+                  ))}
+                </ScrollView>
+                <Text style={[styles.modalLabel, { marginTop: spacing.xs }]}>{t("projects.city")}</Text>
+                <TextInput
+                  style={styles.inputWhite}
+                  value={newCity}
+                  onChangeText={(text) => { setNewCity(text); setError(null); }}
+                  placeholder={t("projects.cityPlaceholder")}
+                  placeholderTextColor="rgba(255, 255, 255, 0.7)"
+                  editable={!submitting && !loadingPhases}
+                />
+                <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.address")}</Text>
                 <TextInput
                   style={styles.inputWhite}
                   value={newAddress}
@@ -1026,7 +1054,7 @@ export function ProjectsScreen() {
                     <View style={styles.summaryRow}>
                       <Text style={styles.summaryLabel}>Spôsob vytvorenia:</Text>
                       <Text style={styles.summaryValue}>
-                        {useTemplate ? "So šablónou Staveto" : "Od nuly"}
+                        {useTemplate ? t("account.withTemplate") : t("account.fromScratch")}
                       </Text>
                     </View>
                   )}
@@ -1522,6 +1550,28 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   statusButtonTextActive: {
+    color: "#FFFFFF",
+    fontWeight: "600",
+  },
+  countryChip: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginRight: spacing.sm,
+    borderRadius: radius,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  countryChipActive: {
+    backgroundColor: colors.primary,
+    borderColor: colors.primary,
+  },
+  countryChipText: {
+    fontSize: 14,
+    color: colors.text,
+    fontWeight: "500",
+  },
+  countryChipTextActive: {
     color: "#FFFFFF",
     fontWeight: "600",
   },

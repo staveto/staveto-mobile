@@ -1,12 +1,52 @@
+import React from "react";
 import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { NavigationContainer } from "@react-navigation/native";
+import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { I18nProvider, useI18n } from "./src/i18n/I18nContext";
 import { AuthProvider } from "./src/context/AuthContext";
 import { RootNavigator } from "./src/navigation/RootNavigator";
 import { PushNotificationHandler, navigationRef } from "./src/components/PushNotificationHandler";
-import { View, ActivityIndicator, StyleSheet } from "react-native";
-import { colors, spacing } from "./src/theme";
+import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity } from "react-native";
+import { colors } from "./src/theme";
+
+class AppErrorBoundary extends React.Component<
+  { children: React.ReactNode },
+  { hasError: boolean; error: Error | null }
+> {
+  state = { hasError: false, error: null as Error | null };
+
+  static getDerivedStateFromError(error: Error) {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error) {
+    if (__DEV__) console.error("[App] ErrorBoundary caught:", error);
+  }
+
+  render() {
+    if (this.state.hasError && this.state.error) {
+      if (__DEV__) {
+        return (
+          <View style={[styles.loading, { padding: 24 }]}>
+            <Text style={{ color: "#fff", fontSize: 16, marginBottom: 16 }}>Chyba aplikácie</Text>
+            <Text style={{ color: "rgba(255,255,255,0.9)", fontSize: 12, marginBottom: 24 }}>
+              {this.state.error.message}
+            </Text>
+            <TouchableOpacity
+              style={{ backgroundColor: colors.primary, padding: 12, borderRadius: 8 }}
+              onPress={() => this.setState({ hasError: false, error: null })}
+            >
+              <Text style={{ color: "#fff", fontWeight: "600" }}>Skúsiť znova</Text>
+            </TouchableOpacity>
+          </View>
+        );
+      }
+    }
+    return this.props.children;
+  }
+}
 
 function AppContent() {
   const { loaded } = useI18n();
@@ -29,23 +69,29 @@ function AppContent() {
   };
 
   return (
-    <NavigationContainer ref={navigationRef} linking={linking}>
-      <AuthProvider>
-        <PushNotificationHandler />
-        <StatusBar style="light" />
-        <RootNavigator />
-      </AuthProvider>
-    </NavigationContainer>
+    <GestureHandlerRootView style={{ flex: 1 }}>
+      <BottomSheetModalProvider>
+        <NavigationContainer ref={navigationRef} linking={linking}>
+          <AuthProvider>
+            <PushNotificationHandler />
+            <StatusBar style="light" />
+            <RootNavigator />
+          </AuthProvider>
+        </NavigationContainer>
+      </BottomSheetModalProvider>
+    </GestureHandlerRootView>
   );
 }
 
 export default function App() {
   return (
-    <SafeAreaProvider>
-      <I18nProvider>
-        <AppContent />
-      </I18nProvider>
-    </SafeAreaProvider>
+    <AppErrorBoundary>
+      <SafeAreaProvider>
+        <I18nProvider>
+          <AppContent />
+        </I18nProvider>
+      </SafeAreaProvider>
+    </AppErrorBoundary>
   );
 }
 

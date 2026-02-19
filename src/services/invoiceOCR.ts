@@ -62,6 +62,7 @@ export type OcrResult = {
   parsed: OcrParsed | null;
   rawText?: string;
   errorCode?: string;
+  cooldownSeconds?: number;
 };
 
 export async function runInvoiceOCR(payload: {
@@ -160,9 +161,17 @@ export async function extractInvoiceData(input: {
     if (!("status" in result) || !(result as OcrResult).status) {
       return { status: "failed", parsed: null };
     }
-    const ocrResult = result as OcrResult;
+    const ocrResult = result as OcrResult & { cooldownSeconds?: number };
     const rawParsed = ocrResult.parsed as Record<string, unknown> | null;
     const rawText = ocrResult.rawText ?? (result as { extractedText?: string }).extractedText;
+    if (ocrResult.status === "limit") {
+      return {
+        status: "limit",
+        parsed: null,
+        errorCode: ocrResult.errorCode ?? "LIMIT_REACHED",
+        cooldownSeconds: ocrResult.cooldownSeconds,
+      };
+    }
     console.log("[expense autofill] amount candidates (raw)", {
       total: rawParsed?.total,
       totalAmount: rawParsed?.totalAmount,

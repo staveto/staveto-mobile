@@ -288,7 +288,7 @@ export function ProjectMembersScreen() {
   const memberStatusLabel = (member: ProjectMemberDoc): string => {
     const status = (member.status || "").toLowerCase();
     if (status === "invited" || !member.userId) return t("projectMembers.invited") || "Pozvaný";
-    return "Aktívny";
+    return t("projectMembers.active");
   };
 
   return (

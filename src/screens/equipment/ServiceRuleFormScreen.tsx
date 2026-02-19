@@ -97,12 +97,12 @@ export function ServiceRuleFormScreen() {
   const onSave = async () => {
     if (!projectId || !equipmentId) return;
     if (!title.trim()) {
-      Alert.alert("Chyba", "Názov servisného plánu je povinný.");
+      Alert.alert(t("common.error"), t("equipment.servicePlanNameRequired"));
       return;
     }
     const val = parseInt(intervalValue, 10);
     if (isNaN(val) || val < 1) {
-      Alert.alert("Chyba", "Interval musí byť kladné číslo.");
+      Alert.alert(t("common.error"), t("equipment.intervalMustBePositive"));
       return;
     }
     setSubmitting(true);
@@ -150,24 +150,24 @@ export function ServiceRuleFormScreen() {
         <TouchableOpacity onPress={goBack} style={styles.backBtn} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
           <Ionicons name="arrow-back" size={24} color={colors.textOnDark} />
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{isEdit ? "Upraviť servisný plán" : "Pridať servisný plán"}</Text>
+        <Text style={styles.headerTitle}>{isEdit ? t("equipment.editServicePlan") : t("equipment.addServicePlanTitle")}</Text>
       </View>
 
       <ScrollView style={styles.scroll} contentContainerStyle={[styles.scrollContent, { paddingBottom: insets.bottom + spacing.lg }]}>
         {equipmentName && (
-          <Text style={styles.equipmentLabel}>Zariadenie: {equipmentName}</Text>
+          <Text style={styles.equipmentLabel}>{t("equipment.serviceRuleEquipmentLabel")}: {equipmentName}</Text>
         )}
 
-        <Text style={styles.label}>Názov *</Text>
+        <Text style={styles.label}>{t("equipment.serviceRuleNameLabel")}</Text>
         <TextInput
           style={styles.input}
-          placeholder="Napr. Výmena oleja"
+          placeholder={t("equipment.serviceRuleNamePlaceholder")}
           placeholderTextColor={colors.textMuted}
           value={title}
           onChangeText={setTitle}
         />
 
-        <Text style={styles.label}>Interval</Text>
+        <Text style={styles.label}>{t("equipment.intervalLabel")}</Text>
         <View style={styles.intervalRow}>
           <TextInput
             style={[styles.input, styles.intervalInput]}
@@ -182,18 +182,18 @@ export function ServiceRuleFormScreen() {
               style={[styles.unitChip, intervalUnit === "weeks" && styles.unitChipActive]}
               onPress={() => setIntervalUnit("weeks")}
             >
-              <Text style={[styles.unitChipText, intervalUnit === "weeks" && styles.unitChipTextActive]}>týždne</Text>
+              <Text style={[styles.unitChipText, intervalUnit === "weeks" && styles.unitChipTextActive]}>{t("equipment.weeks")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.unitChip, intervalUnit === "months" && styles.unitChipActive]}
               onPress={() => setIntervalUnit("months")}
             >
-              <Text style={[styles.unitChipText, intervalUnit === "months" && styles.unitChipTextActive]}>mesiace</Text>
+              <Text style={[styles.unitChipText, intervalUnit === "months" && styles.unitChipTextActive]}>{t("equipment.months")}</Text>
             </TouchableOpacity>
           </View>
         </View>
 
-        <Text style={styles.label}>Začiatok intervalu</Text>
+        <Text style={styles.label}>{t("equipment.intervalStart")}</Text>
         <TouchableOpacity
           style={styles.dateButton}
           onPress={() => setShowStartDatePicker(true)}
@@ -203,15 +203,15 @@ export function ServiceRuleFormScreen() {
           <Ionicons name="chevron-down" size={18} color={colors.textMuted} />
         </TouchableOpacity>
 
-        <Text style={styles.label}>Checklist (voliteľné)</Text>
+        <Text style={styles.label}>{t("equipment.checklistOptional")}</Text>
         {checklistItems.map((item) => (
           <View key={item.id} style={styles.checklistRow}>
             <TextInput
               style={[styles.input, styles.checklistInput]}
-              placeholder="Položka"
+              placeholder={t("equipment.itemPlaceholder")}
               placeholderTextColor={colors.textMuted}
               value={item.title}
-              onChangeText={(t) => updateChecklistItem(item.id, t)}
+              onChangeText={(text) => updateChecklistItem(item.id, text)}
             />
             <TouchableOpacity onPress={() => removeChecklistItem(item.id)}>
               <Ionicons name="trash-outline" size={22} color={colors.textMuted} />

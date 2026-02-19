@@ -132,7 +132,7 @@ export function NotificationsScreen() {
 
     if (diffMinutes < 60) return `${Math.max(diffMinutes, 1)} min`;
     if (diffHours < 24) return `${diffHours} h`;
-    if (diffDays === 1) return "Včera";
+    if (diffDays === 1) return t("notifications.yesterday");
     if (diffDays < 7) return `${diffDays} d`;
     if (diffDays < 30) return `${Math.floor(diffDays / 7)} t`;
     return `${Math.floor(diffDays / 30)} m`;
@@ -168,39 +168,39 @@ export function NotificationsScreen() {
   const getNotificationTitle = (n: NotificationDoc): string => {
     switch (n.type) {
       case "TASK_DUE_TODAY":
-        return "Úloha dnes";
+        return t("notifications.taskToday");
       case "TASK_OVERDUE":
-        return "Po termíne";
+        return t("notifications.overdue");
       case "TASK_ASSIGNED":
-        return "Priradená úloha";
+        return t("notifications.assignedTask");
       case "EXPENSE_ADDED":
-        return "Nový výdavok";
+        return t("notifications.newExpense");
       case "PROJECT_CREATED":
-        return "Nový projekt";
+        return t("notifications.newProject");
       case "PROJECT_ACTIVITY":
-        return "Zmena v projekte";
+        return t("notifications.projectChange");
       case "MEMBER_JOINED":
-        return "Člen vstúpil do projektu";
+        return t("notifications.memberJoined");
       case "PROJECT_INVITED":
         return t("notifications.type.projectInvited");
       case "MEMBER_LEFT":
-        return "Člen opustil projekt";
+        return t("notifications.memberLeft");
       case "MEMBER_REMOVED":
-        return "Člen bol odstránený";
+        return t("notifications.memberRemoved");
       case "SYNC_ISSUE":
-        return "Problém so sync";
+        return t("notifications.syncError");
       default:
-        return "Notifikácia";
+        return t("notifications.default");
     }
   };
 
   const getNotificationSubtitle = (n: NotificationDoc): string => {
     const parts: string[] = [];
-    if (n.projectName) parts.push(`Projekt: ${n.projectName}`);
+    if (n.projectName) parts.push(`${t("notifications.projectLabel")}: ${n.projectName}`);
     if (n.taskTitle) parts.push(n.taskTitle);
     if (n.amount != null) parts.push(`${n.amount} ${n.currency || "EUR"}`);
     if (n.message) parts.push(n.message);
-    return parts.join(" • ") || "Bez popisu";
+    return parts.join(" • ") || t("notifications.noDescription");
   };
 
   const handleNotificationPress = useCallback(
@@ -291,7 +291,7 @@ export function NotificationsScreen() {
           });
         }
       } else if (notification.type === "SYNC_ISSUE") {
-        Alert.alert("Problém so synchronizáciou", notification.message || "Skontrolujte pripojenie k internetu.");
+        Alert.alert(t("notifications.syncErrorTitle"), notification.message || t("notifications.syncError"));
       }
     },
     [navigation, markAsRead]
@@ -356,14 +356,14 @@ export function NotificationsScreen() {
           style={[styles.filterChip, filter === "all" && styles.filterChipActive, { marginRight: spacing.sm }]}
           onPress={() => setFilter("all")}
         >
-          <Text style={[styles.filterChipText, filter === "all" && styles.filterChipTextActive]}>Všetky</Text>
+          <Text style={[styles.filterChipText, filter === "all" && styles.filterChipTextActive]}>{t("projectOverview.allTasksFilter")}</Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.filterChip, filter === "today" && styles.filterChipActive, { marginRight: spacing.sm }]}
           onPress={() => setFilter("today")}
         >
           <Text style={[styles.filterChipText, filter === "today" && styles.filterChipTextActive]}>
-            Dnes {todayCount > 0 && `(${todayCount})`}
+            {t("notifications.today")} {todayCount > 0 && `(${todayCount})`}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
@@ -371,7 +371,7 @@ export function NotificationsScreen() {
           onPress={() => setFilter("overdue")}
         >
           <Text style={[styles.filterChipText, filter === "overdue" && styles.filterChipTextActive]}>
-            Po termíne {overdueCount > 0 && `(${overdueCount})`}
+            {t("notifications.overdue")} {overdueCount > 0 && `(${overdueCount})`}
           </Text>
         </TouchableOpacity>
       </View>
@@ -381,7 +381,7 @@ export function NotificationsScreen() {
         <View style={styles.emptyContainer}>
           <Ionicons name="notifications-off-outline" size={64} color={colors.textMuted} />
           <Text style={styles.emptyText}>
-            {filter === "unread" ? "Žiadne neprečítané notifikácie" : "Žiadne notifikácie"}
+            {filter === "unread" ? t("notifications.noUnread") : t("notifications.none")}
           </Text>
         </View>
       ) : (

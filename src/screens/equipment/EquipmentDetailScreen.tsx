@@ -74,12 +74,12 @@ export function EquipmentDetailScreen() {
   const onArchive = () => {
     if (!projectId || !equipmentId) return;
     Alert.alert(
-      "Archivovať zariadenie",
-      `Naozaj chcete archivovať "${equipment?.name}"? Zariadenie sa skryje zo zoznamu, ale zostane v databáze.`,
+      t("equipment.archiveEquipment"),
+      t("equipment.archiveConfirm", { name: equipment?.name ?? "" }),
       [
         { text: t("common.cancel"), style: "cancel" },
         {
-          text: "Archivovať",
+          text: t("common.archive"),
           style: "destructive",
           onPress: async () => {
             try {
@@ -105,9 +105,9 @@ export function EquipmentDetailScreen() {
   if (!equipment) {
     return (
       <View style={[styles.container, styles.centered, { paddingTop: insets.top }]}>
-        <Text style={styles.notFound}>Zariadenie nebolo nájdené</Text>
+        <Text style={styles.notFound}>{t("equipment.notFound")}</Text>
         <TouchableOpacity style={styles.backButton} onPress={goBack}>
-          <Text style={styles.backButtonText}>Späť</Text>
+          <Text style={styles.backButtonText}>{t("common.back")}</Text>
         </TouchableOpacity>
       </View>
     );
@@ -158,11 +158,11 @@ export function EquipmentDetailScreen() {
         }
       >
         <View style={styles.card}>
-          <Text style={styles.cardTitle}>Informácie</Text>
-          {equipment.labelCode && <Text style={styles.infoRow}><Text style={styles.infoLabel}>Kód:</Text> {equipment.labelCode}</Text>}
-          {equipment.model && <Text style={styles.infoRow}><Text style={styles.infoLabel}>Model:</Text> {equipment.model}</Text>}
-          {equipment.serialNumber && <Text style={styles.infoRow}><Text style={styles.infoLabel}>Sériové č.</Text> {equipment.serialNumber}</Text>}
-          {equipment.location && <Text style={styles.infoRow}><Text style={styles.infoLabel}>Umiestnenie:</Text> {equipment.location}</Text>}
+          <Text style={styles.cardTitle}>{t("equipment.info")}</Text>
+          {equipment.labelCode && <Text style={styles.infoRow}><Text style={styles.infoLabel}>{t("equipment.code")}:</Text> {equipment.labelCode}</Text>}
+          {equipment.model && <Text style={styles.infoRow}><Text style={styles.infoLabel}>{t("equipment.model")}:</Text> {equipment.model}</Text>}
+          {equipment.serialNumber && <Text style={styles.infoRow}><Text style={styles.infoLabel}>{t("equipment.serialNumber")}:</Text> {equipment.serialNumber}</Text>}
+          {equipment.location && <Text style={styles.infoRow}><Text style={styles.infoLabel}>{t("equipment.location")}:</Text> {equipment.location}</Text>}
         </View>
 
         <TouchableOpacity
@@ -177,13 +177,13 @@ export function EquipmentDetailScreen() {
           }
         >
           <Ionicons name="add-circle" size={24} color={colors.primary} />
-          <Text style={styles.servicePlanCtaText}>+ Servisný plán</Text>
+          <Text style={styles.servicePlanCtaText}>{t("equipment.addServicePlanCta")}</Text>
         </TouchableOpacity>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Servisné plány</Text>
+          <Text style={styles.sectionTitle}>{t("equipment.servicePlans")}</Text>
           {rules.length === 0 ? (
-            <Text style={styles.emptyText}>Žiadne servisné plány</Text>
+            <Text style={styles.emptyText}>{t("equipment.noServicePlans")}</Text>
           ) : (
             rules.map((r) => (
               <TouchableOpacity
@@ -203,9 +203,9 @@ export function EquipmentDetailScreen() {
               >
                 <View style={styles.ruleRowContent}>
                   <Text style={styles.ruleTitle}>{r.title}</Text>
-                  <Text style={styles.ruleMeta}>Každých {r.intervalValue} {r.intervalUnit === "weeks" ? "týždňov" : "mesiacov"}</Text>
+                  <Text style={styles.ruleMeta}>{r.intervalUnit === "weeks" ? t("equipment.everyWeeks", { count: String(r.intervalValue) }) : t("equipment.everyMonths", { count: String(r.intervalValue) })}</Text>
                   {r.startFrom && (
-                    <Text style={styles.ruleMeta}>Od: {new Date(r.startFrom).toLocaleDateString("sk-SK", { day: "numeric", month: "numeric", year: "numeric" })}</Text>
+                    <Text style={styles.ruleMeta}>{t("equipment.from")}: {new Date(r.startFrom).toLocaleDateString("sk-SK", { day: "numeric", month: "numeric", year: "numeric" })}</Text>
                   )}
                 </View>
                 <Ionicons name="pencil" size={20} color={colors.textMuted} />
@@ -215,7 +215,7 @@ export function EquipmentDetailScreen() {
         </View>
 
         <View style={styles.section}>
-          <Text style={styles.sectionTitle}>Otvorené servisné úlohy</Text>
+          <Text style={styles.sectionTitle}>{t("equipment.openServiceTasks")}</Text>
           {openTasks.length === 0 ? (
             <Text style={styles.emptyText}>{t("equipment.noOpenTasks")}</Text>
           ) : (

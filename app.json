@@ -17,6 +17,7 @@
       "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
         "NSCameraUsageDescription": "Táto aplikácia potrebuje prístup ku kamere na fotografovanie faktúr a dokumentov.",
+        "NSMicrophoneUsageDescription": "Táto aplikácia potrebuje prístup k mikrofónu na nahrávanie hlasových správ a zápisov do denníka.",
         "NSPhotoLibraryUsageDescription": "Táto aplikácia potrebuje prístup k galérii na výber fotiek a videa.",
         "NSPhotoLibraryAddUsageDescription": "Táto aplikácia potrebuje prístup k galérii na ukladanie fotiek.",
         "UIBackgroundModes": [
@@ -49,6 +50,12 @@
         {
           "photosPermission": "Aplikácia potrebuje prístup k vašim fotkám na pridanie príloh.",
           "cameraPermission": "Aplikácia potrebuje prístup ku kamere na fotografovanie faktúr a dokumentov."
+        }
+      ],
+      [
+        "expo-av",
+        {
+          "microphonePermission": "Táto aplikácia potrebuje prístup k mikrofónu na nahrávanie hlasových správ a zápisov do denníka."
         }
       ],
       "@react-native-firebase/messaging"

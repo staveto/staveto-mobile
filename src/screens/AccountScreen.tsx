@@ -27,7 +27,7 @@ import { isFeatureEnabled } from "../services/features";
 import { db, storage, getFns } from "../firebase";
 import { doc, getDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import * as ImagePicker from "expo-image-picker";
-import * as Localization from "expo-localization";
+import { getDeviceRegionCode } from "../utils/countries";
 import auth from "@react-native-firebase/auth";
 
 function Row({
@@ -82,7 +82,7 @@ function normalizePhoneE164(input: string): string | null {
   if (!raw) return null;
   try {
     const { parsePhoneNumberFromString } = require("libphonenumber-js");
-    const region = (Localization.region ?? "SK") as string;
+    const region = getDeviceRegionCode();
     const parsed = parsePhoneNumberFromString(raw, region);
     if (parsed?.isValid()) return parsed.number;
   } catch {
@@ -227,7 +227,7 @@ export function AccountScreen() {
       setShowProfileModal(false);
     } catch (error) {
       console.error("[account] Failed to save profile:", error);
-      Alert.alert("Chyba", "Profil sa nepodarilo uložiť.");
+      Alert.alert(t("common.error"), t("account.profileSaveFailed"));
     } finally {
       setSavingProfile(false);
     }
@@ -238,7 +238,7 @@ export function AccountScreen() {
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Oprávnenie", "Potrebujeme prístup k galérii.");
+        Alert.alert(t("account.permission"), t("account.galleryPermission"));
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
@@ -268,7 +268,7 @@ export function AccountScreen() {
     try {
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
       if (status !== "granted") {
-        Alert.alert("Oprávnenie", "Potrebujeme prístup ku kamere.");
+        Alert.alert(t("account.permission"), t("account.cameraPermission"));
         return;
       }
       const result = await ImagePicker.launchCameraAsync({
@@ -309,7 +309,7 @@ export function AccountScreen() {
           <Text style={styles.profileHint}>Načítavam…</Text>
         ) : (
           <Text style={styles.profileHint}>
-            {profileProfession.trim() ? profileProfession : "Pridajte svoju profesiu"}
+            {profileProfession.trim() ? profileProfession : t("account.professionPlaceholder")}
           </Text>
         )}
         <View style={styles.emailRow}>
@@ -367,7 +367,7 @@ export function AccountScreen() {
       <View style={styles.card}>
         <Row
           icon="card-outline"
-          label="Predplatné"
+          label={t("account.subscription")}
           onPress={() => nav.navigate("Subscription")}
         />
       </View>
@@ -395,16 +395,16 @@ export function AccountScreen() {
       </View>
 
       {/* Údržba - obnovenie sharedWithCount pre existujúce projekty */}
-      <SectionTitle title="Údržba" />
+      <SectionTitle title={t("account.maintenance")} />
       <View style={styles.card}>
         <Row
           icon="refresh-outline"
-          label="Obnoviť počty zdieľaní"
+          label={t("account.refreshSharedCounts")}
           onPress={async () => {
             try {
               const res = await getFns().httpsCallable("backfillProjectSharedCounts")({});
               const data = res?.data as { ok?: boolean; updated?: number };
-              Alert.alert("Hotovo", `Aktualizovaných projektov: ${data?.updated ?? 0}. Obnovte zoznam projektov.`);
+              Alert.alert(t("account.done"), t("account.refreshSuccess", { count: String(data?.updated ?? 0) }));
             } catch (e: any) {
               Alert.alert(t("common.error"), e?.message ?? t("account.refreshFailed"));
             }
@@ -486,7 +486,7 @@ export function AccountScreen() {
         <Row icon="document-text-outline" label={t("account.termsOfService")} onPress={() => openUrl(TERMS_URL)} />
         <Row
           icon="people-outline"
-          label="Subprocesori"
+          label={t("account.contractors")}
           onPress={async () => {
             const url = "https://staveto.sk/subprocessors";
             const supported = await Linking.canOpenURL(url);
@@ -499,7 +499,7 @@ export function AccountScreen() {
         />
         <Row
           icon="document-outline"
-          label="Privacy statement"
+          label={t("account.privacyStatement")}
           onPress={async () => {
             const url = "https://staveto.sk/privacy-statement";
             const supported = await Linking.canOpenURL(url);
@@ -631,7 +631,7 @@ export function AccountScreen() {
                 <Text style={styles.profileCancelText}>{t("common.cancel")}</Text>
               </TouchableOpacity>
               <TouchableOpacity style={styles.profileSave} onPress={saveProfile} disabled={savingProfile}>
-                <Text style={styles.profileSaveText}>{savingProfile ? "Ukladám…" : "Uložiť"}</Text>
+                <Text style={styles.profileSaveText}>{savingProfile ? t("common.saving") : t("common.save")}</Text>
               </TouchableOpacity>
             </View>
           </View>

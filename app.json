@@ -68,7 +68,8 @@
     "extra": {
       "eas": {
         "projectId": "359dbeac-adc6-411f-bd76-5494d2064f58"
-      }
+      },
+      "buildTimestamp": "2025-02-19"
     }
   }
 }

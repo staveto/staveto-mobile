@@ -9,6 +9,7 @@ import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import * as projectMembersService from "../services/projectMembers";
 import * as projectsService from "../services/projects";
+import { getCallable } from "../firebase";
 import type { ProjectMemberDoc } from "../services/projectMembers";
 import type { ProjectPhaseDoc } from "../services/projects";
 
@@ -202,6 +203,11 @@ export function ProjectMembersScreen() {
         },
         editSharePhases ? editSelectedPhaseIds : []
       );
+      try {
+        await getCallable("syncMembersByUidForProject")({ projectId });
+      } catch (e) {
+        console.warn("[ProjectMembersScreen] syncMembersByUidForProject failed:", e);
+      }
       Alert.alert(
         t('common.success') || 'Úspech',
         t('projectMembers.updateSuccess') || 'Oprávnenia boli aktualizované.'
@@ -483,6 +489,23 @@ export function ProjectMembersScreen() {
                 )}
               </View>
             ))}
+          {access.isOwner && projectId && (
+            <TouchableOpacity
+              style={styles.syncPermissionsBtn}
+              onPress={async () => {
+                try {
+                  await getCallable("syncMembersByUidForProject")({ projectId });
+                  Alert.alert(t("common.success") || "Úspech", t("projectMembers.syncSuccess") || "Oprávnenia boli synchronizované.");
+                  loadMembers(true);
+                } catch (e: any) {
+                  Alert.alert(t("common.error"), e?.message ?? (t("projectMembers.syncFailed") || "Synchronizácia zlyhala."));
+                }
+              }}
+            >
+              <Ionicons name="sync-outline" size={18} color={colors.primary} style={{ marginRight: 6 }} />
+              <Text style={styles.syncPermissionsText}>{t("projectMembers.syncPermissions") || "Synchronizovať oprávnenia"}</Text>
+            </TouchableOpacity>
+          )}
         </ScrollView>
       )}
 
@@ -934,6 +957,19 @@ const styles = StyleSheet.create({
   memberInfo: { flex: 1 },
   memberName: { fontSize: 16, fontWeight: "600", color: colors.textOnDark },
   memberEmail: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
+
+  syncPermissionsBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: spacing.sm,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    borderRadius: radius,
+  },
+  syncPermissionsText: { fontSize: 14, color: colors.primary, fontWeight: "500" },
 
   addMemberBtn: {
     position: "absolute",

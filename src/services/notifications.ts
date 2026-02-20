@@ -194,6 +194,19 @@ async function flushPendingReads(userId: string): Promise<void> {
   await AsyncStorage.setItem(PENDING_READ_KEY, JSON.stringify(remaining));
 }
 
+/**
+ * Returns count of unread notifications for the user.
+ * Used for badge display (tab bar, drawer).
+ */
+export async function getUnreadCount(userId: string): Promise<number> {
+  try {
+    const list = await listNotifications(userId, { limitCount: 99 });
+    return list.filter((n) => !n.readAt).length;
+  } catch {
+    return 0;
+  }
+}
+
 export async function listNotifications(
   userId: string,
   opts?: { limitCount?: number }

@@ -1,4 +1,4 @@
-import { collection, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, setDoc, serverTimestamp, limit } from "../lib/rnFirestore";
+import { collection, collectionGroup, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, setDoc, serverTimestamp, limit } from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
 import firestore from "@react-native-firebase/firestore";
 import { getApp } from "@react-native-firebase/app";
@@ -13,9 +13,13 @@ export type ProjectDoc = {
   name: string;
   projectType?: "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE"; // Support both old and new types
   templateId?: string;
+  coverImageUrl?: string;
+  coverImagePath?: string;
+  coverImageUpdatedAt?: number;
   addressText?: string; // Project address for navigation
   countryCode?: string; // ISO 3166-1 alpha-2 (e.g. SK, AT)
   city?: string;
+  equipmentCount?: number;
   ownerId?: string; // Read-only: included from existing DB field, no schema change
   archivedAt?: unknown; // Timestamp when archived (truthy = archived)
   createdAt?: string; // ISO string when project was created
@@ -38,9 +42,13 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
   return {
     id: docSnap.id,
     name: (d.name as string) ?? "",
+    coverImageUrl: (d.coverImageUrl as string) || undefined,
+    coverImagePath: (d.coverImagePath as string) || undefined,
+    coverImageUpdatedAt: typeof d.coverImageUpdatedAt === "number" ? d.coverImageUpdatedAt : undefined,
     addressText: (d.addressText as string) || undefined,
     countryCode: (d.countryCode as string) || undefined,
     city: (d.city as string) || undefined,
+    equipmentCount: typeof d.equipmentCount === "number" ? d.equipmentCount : undefined,
     projectType: d.projectType as "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE" | undefined,
     templateId: d.templateId as string | undefined,
     ownerId: (d.ownerId as string) || undefined, // Read-only: read from existing DB field
@@ -217,7 +225,8 @@ export async function getProject(projectId: string): Promise<ProjectDoc | null> 
 /**
  * Internal helper to load all projects (including archived)
  */
-async function listAllMyProjectsInternal(ownerId: string): Promise<ProjectDoc[]> {
+async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: boolean): Promise<ProjectDoc[]> {
+  const getOptions = forceServerRead ? ({ source: "server" } as const) : undefined;
   // CRITICAL FIX: Always use auth.currentUser.uid, never trust ownerId from params
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
@@ -243,7 +252,7 @@ async function listAllMyProjectsInternal(ownerId: string): Promise<ProjectDoc[]>
     const ownerSnap = await firestore()
       .collection(COLLECTION)
       .where("ownerId", "==", actualOwnerId)
-      .get();
+      .get(getOptions);
     console.log(`[projects] listAllMyProjectsInternal: found ${ownerSnap.docs.length} owner projects`);
     
     // Debug: Check ownerId in each project
@@ -255,32 +264,49 @@ async function listAllMyProjectsInternal(ownerId: string): Promise<ProjectDoc[]>
 
     const ownerProjects = ownerSnap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) })) as ProjectDoc[];
 
-    // Include projects shared via invite claim reverse index.
-    let memberProjects: ProjectDoc[] = [];
-    try {
-      const refsSnap = await getDocs(collection(db, paths.userProjectRefs(actualOwnerId)));
-      const ownerIds = new Set(ownerProjects.map((p) => p.id));
-      const memberProjectIds = refsSnap.docs
-        .map((d) => (typeof d.data().projectId === "string" ? (d.data().projectId as string) : d.id))
-        .filter((projectId) => !!projectId && !ownerIds.has(projectId));
+    // Include projects shared via invite claim (projectRefs) and via membership (projects/*/members).
+    let memberProjectIds = new Set<string>();
+    const ownerIds = new Set(ownerProjects.map((p) => p.id));
 
-      const memberProjectDocs = await Promise.all(
-        memberProjectIds.map(async (projectId) => {
-          try {
-            const snap = await getDoc(doc(db, COLLECTION, projectId));
-            if (!snap.exists()) return null;
-            const p = toDoc({ id: snap.id, data: snap.data.bind(snap) }) as ProjectDoc;
-            p.isSharedToMe = true;
-            return p;
-          } catch (error) {
-            console.warn(`[projects] Failed to load member project ${projectId}:`, error);
-            return null;
-          }
-        })
-      );
-      memberProjects = memberProjectDocs.filter((p): p is ProjectDoc => !!p);
+    // Source 1: users/{uid}/projectRefs (created by claimProjectInvites Cloud Function)
+    try {
+      const refsSnap = await getDocs(collection(db, paths.userProjectRefs(actualOwnerId)), getOptions);
+      refsSnap.docs.forEach((d) => {
+        const projectId = typeof d.data().projectId === "string" ? (d.data().projectId as string) : d.id;
+        if (projectId && !ownerIds.has(projectId)) memberProjectIds.add(projectId);
+      });
     } catch (error) {
       console.warn("[projects] Failed to load member project refs:", error);
+    }
+
+    // Source 2: collectionGroup('members') where userId == uid (fallback when projectRefs empty or member added directly)
+    try {
+      const membersGroup = collectionGroup(db, "members");
+      const memberQuery = query(membersGroup, where("userId", "==", actualOwnerId));
+      const memberSnap = await getDocs(memberQuery, getOptions);
+      memberSnap.docs.forEach((d) => {
+        const pathParts = d.ref.path.split("/");
+        const projectId = pathParts[1];
+        if (projectId && !ownerIds.has(projectId)) memberProjectIds.add(projectId);
+      });
+      if (memberSnap.docs.length > 0) {
+        console.log(`[projects] listAllMyProjectsInternal: found ${memberSnap.docs.length} member docs via collectionGroup`);
+      }
+    } catch (error) {
+      console.warn("[projects] Failed to load member projects via collectionGroup:", error);
+    }
+
+    const memberProjects: ProjectDoc[] = [];
+    for (const projectId of memberProjectIds) {
+      try {
+        const snap = await getDoc(doc(db, COLLECTION, projectId), getOptions);
+        if (!snap.exists()) continue;
+        const p = toDoc({ id: snap.id, data: snap.data.bind(snap) }) as ProjectDoc;
+        p.isSharedToMe = true;
+        memberProjects.push(p);
+      } catch (error) {
+        console.warn(`[projects] Failed to load member project ${projectId}:`, error);
+      }
     }
 
     const merged = [...ownerProjects, ...memberProjects].filter(
@@ -315,9 +341,10 @@ async function listAllMyProjectsInternal(ownerId: string): Promise<ProjectDoc[]>
 /**
  * List active (non-archived) projects for a user
  * Used for dashboard, expense selection, etc.
+ * @param forceServerRead - When true, bypasses cache (use after sync to get fresh sharedWithCount)
  */
-export async function listMyProjects(ownerId: string): Promise<ProjectDoc[]> {
-  const allProjects = await listAllMyProjectsInternal(ownerId);
+export async function listMyProjects(ownerId: string, options?: { forceServerRead?: boolean }): Promise<ProjectDoc[]> {
+  const allProjects = await listAllMyProjectsInternal(ownerId, options?.forceServerRead);
   
   // Filter out archived projects (archivedAt is truthy)
   const activeProjects = allProjects.filter((project) => !project.archivedAt);

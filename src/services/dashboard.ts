@@ -1,6 +1,7 @@
 import * as projectsService from "./projects";
 import * as tasksService from "./tasks";
 import * as expensesService from "./expenses";
+import { fetchProjectAccess } from "../hooks/useProjectAccess";
 import type { ProjectDoc } from "./projects";
 import type { TaskDoc } from "./tasks";
 
@@ -13,20 +14,22 @@ export type DashboardViewModel = {
     blockedCount: number;
     expensesMonthSum: number;
     expensesTotalSum: number; // Total expenses across all projects
+    hasExpensesAccess: boolean; // True if user can see expenses in at least one project
   };
   projectStats: Map<string, { openCount: number; totalCount: number; progress: number }>;
 };
 
 /**
  * Load dashboard data for a user
+ * @param forceServerRead - When true, bypasses Firestore cache (use after sync to get fresh sharedWithCount)
  */
-export async function loadDashboardData(ownerId: string): Promise<DashboardViewModel> {
+export async function loadDashboardData(ownerId: string, options?: { forceServerRead?: boolean }): Promise<DashboardViewModel> {
   if (!ownerId) {
     throw new Error('Musíte byť prihlásený na načítanie dashboard dát.');
   }
 
   // Load projects
-  const projects = await projectsService.listMyProjects(ownerId);
+  const projects = await projectsService.listMyProjects(ownerId, { forceServerRead: options?.forceServerRead });
 
   // Load all tasks from all projects in parallel
   const allTasksPromises = projects.map(async (project) => {
@@ -69,29 +72,43 @@ export async function loadDashboardData(ownerId: string): Promise<DashboardViewM
     return false;
   });
 
-  // Load expenses for current month and total
+  // Load expenses for current month and total (only from projects where user has expenses access)
   const now = new Date();
   const firstDayOfMonth = new Date(now.getFullYear(), now.getMonth(), 1);
   const lastDayOfMonth = new Date(now.getFullYear(), now.getMonth() + 1, 0);
   
   let expensesMonthSum = 0;
   let expensesTotalSum = 0;
+  let projectIdsWithExpensesAccess = new Set<string>();
   try {
-    // Load expenses from all projects
-    const expensesPromises = projects.map(async (project) => {
-      try {
-        const expenses = await expensesService.listExpensesByProject(project.id);
-        // Filter for READY expenses only
-        const readyExpenses = expenses.filter(exp => {
-          if (!exp.date || exp.status !== 'READY' || !exp.amount) return false;
-          return true;
-        });
-        return readyExpenses;
-      } catch (error: any) {
-        console.warn(`[dashboard] Error loading expenses for project ${project.id}:`, error);
-        return [];
-      }
+    // Determine which projects the user can see expenses for (owner = full access, member = sharedItems.expenses)
+    const expensesAccessPromises = projects.map(async (project) => {
+      const isOwner = project.ownerId === ownerId;
+      if (isOwner) return { projectId: project.id, canReadExpenses: true };
+      const access = await fetchProjectAccess(project.id, ownerId, project.ownerId);
+      return { projectId: project.id, canReadExpenses: access.canReadExpenses };
     });
+    const expensesAccessList = await Promise.all(expensesAccessPromises);
+    projectIdsWithExpensesAccess = new Set(
+      expensesAccessList.filter((a) => a.canReadExpenses).map((a) => a.projectId)
+    );
+
+    // Load expenses only from projects where user has expenses permission
+    const expensesPromises = projects
+      .filter((p) => projectIdsWithExpensesAccess.has(p.id))
+      .map(async (project) => {
+        try {
+          const expenses = await expensesService.listExpensesByProject(project.id);
+          const readyExpenses = expenses.filter(exp => {
+            if (!exp.date || exp.status !== 'READY' || !exp.amount) return false;
+            return true;
+          });
+          return readyExpenses;
+        } catch (error: any) {
+          console.warn(`[dashboard] Error loading expenses for project ${project.id}:`, error);
+          return [];
+        }
+      });
 
     const allExpensesArrays = await Promise.all(expensesPromises);
     const allExpenses = allExpensesArrays.flat();
@@ -166,6 +183,7 @@ export async function loadDashboardData(ownerId: string): Promise<DashboardViewM
       blockedCount: blockedTasks.length,
       expensesMonthSum,
       expensesTotalSum,
+      hasExpensesAccess: projectIdsWithExpensesAccess.size > 0,
     },
     projectStats,
   };

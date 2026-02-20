@@ -11,6 +11,11 @@ import {
   Alert,
   RefreshControl,
   ScrollView,
+  Image,
+  Pressable,
+  ActionSheetIOS,
+  Platform,
+  useWindowDimensions,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useRoute, useNavigation } from "@react-navigation/native";
@@ -18,15 +23,17 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
+import * as projectCoverService from "../services/projectCover";
 import * as projectFactory from "../services/projectFactory";
 import * as templateService from "../services/templateService";
-import type { PhaseCustomization, PhaseStatus } from "../services/projectFactory";
+import type { PhaseCustomization } from "../services/projectFactory";
 import type { CatalogPhase } from "../lib/types";
 import type { ProjectDoc } from "../services/projects";
 import { colors, radius, spacing } from "../theme";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
 import { openInMaps } from "../lib/maps";
 import { COUNTRY_CODES, COUNTRY_NAMES } from "../utils/countries";
+import { getCallable } from "../firebase";
 
 type Project = ProjectDoc;
 
@@ -35,7 +42,9 @@ function showError(msg: string) {
 }
 
 const PROJECTS_FILTER_KEY = "projects_filter_v1";
+const TYPE_FILTER_KEY = "projects_type_filter_v1";
 type ProjectFilter = "all" | "mine" | "shared";
+type TypeFilter = "ALL" | "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
 
 function formatCreatedAt(isoStr?: string): string {
   if (!isoStr) return "";
@@ -48,6 +57,31 @@ function formatCreatedAt(isoStr?: string): string {
 }
 
 type ProjectCreationType = NonNullable<ProjectDoc["projectType"]>;
+type SelectableProjectType = "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
+type CreationMethod = "template" | "empty";
+type DisplayProjectType = "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
+
+const DEFAULT_TEMPLATE_ID = "eu-construction-v1";
+
+function normalizeProjectType(projectType?: ProjectDoc["projectType"]): DisplayProjectType {
+  if (projectType === "RESIDENTIAL" || projectType === "TRADE" || projectType === "MAINTENANCE") return projectType;
+  return "MANAGEMENT";
+}
+
+function getProjectInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "PR";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0] ?? ""}${words[1][0] ?? ""}`.toUpperCase();
+}
+
+function getLocationAnchor(project: ProjectDoc): string | null {
+  if (project.city?.trim()) return project.city.trim();
+  if (!project.addressText?.trim()) return null;
+  const firstPart = project.addressText.split(",")[0]?.trim();
+  if (firstPart && firstPart.length <= 24) return firstPart;
+  return null;
+}
 
 export function ProjectsScreen() {
   const route = useRoute();
@@ -60,7 +94,7 @@ export function ProjectsScreen() {
   const [showNew, setShowNew] = useState(false);
   const [newStep, setNewStep] = useState<1 | 2 | 3>(1);
   const [selectedType, setSelectedType] = useState<ProjectCreationType | null>(null);
-  const [useTemplate, setUseTemplate] = useState<boolean | null>(null); // null = not chosen, true = with template, false = from scratch
+  const [creationMethod, setCreationMethod] = useState<CreationMethod>("template");
   const [newName, setNewName] = useState("");
   const [newAddress, setNewAddress] = useState("");
   const [newCountry, setNewCountry] = useState<string>("SK");
@@ -77,12 +111,116 @@ export function ProjectsScreen() {
   const [menuProject, setMenuProject] = useState<Project | null>(null);
   const [showMenu, setShowMenu] = useState(false);
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
+  const [selectedTypeFilter, setSelectedTypeFilter] = useState<TypeFilter>("ALL");
+  const { width: windowWidth } = useWindowDimensions();
+
+  const selectableTypeCards: Array<{ type: SelectableProjectType; icon: React.ComponentProps<typeof Ionicons>["name"] }> = [
+    { type: "MANAGEMENT", icon: "clipboard-outline" },
+    { type: "RESIDENTIAL", icon: "home-outline" },
+    { type: "TRADE", icon: "person-outline" },
+    { type: "MAINTENANCE", icon: "construct-outline" },
+  ];
+
+  const resetTemplateSelectionState = useCallback(() => {
+    setTemplateId("");
+    setTemplatePhases([]);
+    setPhaseCustomizations(new Map());
+    setLoadingPhases(false);
+  }, []);
+
+  const loadDefaultTemplatePhases = useCallback(async () => {
+    setTemplateId(DEFAULT_TEMPLATE_ID);
+    setLoadingPhases(true);
+    try {
+      const phases = await templateService.getTemplatePhases(DEFAULT_TEMPLATE_ID);
+      setTemplatePhases(phases);
+
+      const customizations = new Map<string, PhaseCustomization>();
+      phases.forEach((phase) => {
+        customizations.set(phase.id, {
+          phaseId: phase.id,
+          enabled: true,
+          status: "active",
+        });
+      });
+      setPhaseCustomizations(customizations);
+    } catch (e) {
+      console.warn("[ProjectsScreen] Could not load default template phases:", e);
+      setTemplatePhases([]);
+      setPhaseCustomizations(new Map());
+    } finally {
+      setLoadingPhases(false);
+    }
+  }, []);
+
+  const getCreateFlowTypeTitle = useCallback(
+    (type: ProjectCreationType | null) => {
+      if (!type) return "";
+      const normalizedType = type === "BUILD" ? "MANAGEMENT" : type;
+      return t(`createProject.type.${normalizedType}.title`);
+    },
+    [t]
+  );
+
+  const getContainsItems = useCallback(
+    (type: ProjectCreationType | null) => {
+      const items = ["tasks", "expenses", "diary"];
+      if (type === "MANAGEMENT" || type === "BUILD") {
+        items.push("phases", "documents");
+      }
+      if (type === "MAINTENANCE") {
+        items.push("equipment", "serviceTasks");
+      }
+      return items;
+    },
+    []
+  );
+
+  const getProjectTypeLabel = useCallback(
+    (projectType?: ProjectDoc["projectType"]) => {
+      const normalized = normalizeProjectType(projectType);
+      return t(`createProject.type.${normalized}.title`);
+    },
+    [t]
+  );
+
+  const getThumbTint = useCallback((projectType?: ProjectDoc["projectType"]) => {
+    const normalized = normalizeProjectType(projectType);
+    if (normalized === "TRADE") return "#5dade220";
+    if (normalized === "MAINTENANCE") return "#7dcea022";
+    if (normalized === "RESIDENTIAL") return "#8ea7ff22";
+    return "#ff9f4322";
+  }, []);
+
+  const getThumbIcon = useCallback((projectType?: ProjectDoc["projectType"]): React.ComponentProps<typeof Ionicons>["name"] => {
+    const normalized = normalizeProjectType(projectType);
+    if (normalized === "RESIDENTIAL") return "home-outline";
+    if (normalized === "TRADE") return "briefcase-outline";
+    if (normalized === "MAINTENANCE") return "construct-outline";
+    return "clipboard-outline";
+  }, []);
+
+  const getBadgeColor = useCallback((projectType?: ProjectDoc["projectType"]) => {
+    const normalized = normalizeProjectType(projectType);
+    if (normalized === "TRADE") return "#5dade2";
+    if (normalized === "MAINTENANCE") return "#7dcea0";
+    if (normalized === "RESIDENTIAL") return "#8ea7ff";
+    return "#ff9f43";
+  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem(PROJECTS_FILTER_KEY).then((saved) => {
       if (saved === "mine" || saved === "shared" || saved === "all") {
         setProjectFilter(saved);
         if (__DEV__) console.log("[ProjectsScreen] Loaded filter:", saved);
+      }
+    });
+  }, []);
+
+  useEffect(() => {
+    AsyncStorage.getItem(TYPE_FILTER_KEY).then((saved) => {
+      if (saved === "MANAGEMENT" || saved === "RESIDENTIAL" || saved === "TRADE" || saved === "MAINTENANCE" || saved === "ALL") {
+        setSelectedTypeFilter(saved);
       }
     });
   }, []);
@@ -94,6 +232,15 @@ export function ProjectsScreen() {
       if (__DEV__) console.log("[ProjectsScreen] Filter changed:", filter);
     } catch (e) {
       console.warn("[ProjectsScreen] Failed to persist filter:", e);
+    }
+  }, []);
+
+  const handleTypeFilterChange = useCallback(async (filter: TypeFilter) => {
+    setSelectedTypeFilter(filter);
+    try {
+      await AsyncStorage.setItem(TYPE_FILTER_KEY, filter);
+    } catch (e) {
+      console.warn("[ProjectsScreen] Failed to persist type filter:", e);
     }
   }, []);
 
@@ -114,6 +261,16 @@ export function ProjectsScreen() {
     }
     
     try {
+      try {
+        await getCallable("syncMyProjectsSharedCount")({});
+      } catch (e) {
+        console.warn("[ProjectsScreen] syncMyProjectsSharedCount failed:", e);
+        try {
+          await getCallable("backfillProjectSharedCounts")({});
+        } catch (e2) {
+          console.warn("[ProjectsScreen] backfillProjectSharedCounts failed:", e2);
+        }
+      }
       console.log('[ProjectsScreen] Loading projects for orgId:', orgId);
       const list = await projectsService.listAllMyProjects(orgId);
       console.log('[ProjectsScreen] Loaded', list.length, 'projects');
@@ -141,11 +298,15 @@ export function ProjectsScreen() {
 
   const filterProjects = useCallback(
     (list: Project[]) => {
-      if (projectFilter === "mine") return list.filter((p) => p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0);
-      if (projectFilter === "shared") return list.filter((p) => p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0);
-      return list;
+      let result = list;
+      if (projectFilter === "mine") result = result.filter((p) => p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0);
+      else if (projectFilter === "shared") result = result.filter((p) => p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0);
+      if (selectedTypeFilter !== "ALL") {
+        result = result.filter((p) => normalizeProjectType(p.projectType) === selectedTypeFilter);
+      }
+      return result;
     },
-    [projectFilter]
+    [projectFilter, selectedTypeFilter]
   );
 
   useFocusEffect(
@@ -155,11 +316,13 @@ export function ProjectsScreen() {
         setShowNew(true);
         setNewStep(1);
         setSelectedType(null);
+        setCreationMethod("template");
         setNewName("");
+        resetTemplateSelectionState();
         setError(null);
         (navigation as { setParams?: (params: Record<string, unknown>) => void }).setParams?.({ openNew: false });
       }
-    }, [load, navigation, route.params])
+    }, [load, navigation, resetTemplateSelectionState, route.params])
   );
 
   const closeNewModal = () => {
@@ -168,119 +331,63 @@ export function ProjectsScreen() {
     setNewCountry("SK");
     setNewCity("");
     setSelectedType(null);
-    setUseTemplate(null);
+    setCreationMethod("template");
     setNewName("");
     setNewAddress("");
-    setTemplateId("");
-    setTemplatePhases([]);
-    setPhaseCustomizations(new Map());
+    resetTemplateSelectionState();
     setError(null);
   };
 
+  const handleSelectType = useCallback(
+    (type: SelectableProjectType) => {
+      setSelectedType(type);
+      setError(null);
+      setCreationMethod("template");
+      resetTemplateSelectionState();
+    },
+    [resetTemplateSelectionState]
+  );
+
+  useEffect(() => {
+    if (
+      selectedType === "MANAGEMENT" &&
+      newStep === 2 &&
+      creationMethod === "template" &&
+      !loadingPhases &&
+      !templatePhases.length &&
+      !templateId
+    ) {
+      loadDefaultTemplatePhases();
+      return;
+    }
+
+    if ((selectedType !== "MANAGEMENT" && selectedType !== "BUILD") || (selectedType === "MANAGEMENT" && creationMethod === "empty")) {
+      resetTemplateSelectionState();
+    }
+  }, [
+    selectedType,
+    newStep,
+    creationMethod,
+    loadingPhases,
+    templatePhases.length,
+    templateId,
+    loadDefaultTemplatePhases,
+    resetTemplateSelectionState,
+  ]);
+
   const onNext = async () => {
     if (newStep === 1) {
-      // Krok 1 → Krok 2: Kontrola typu a výber šablóny (len pre MANAGEMENT)
       if (!selectedType) {
-        setError('Vyberte typ projektu');
+        setError(t("createProject.selectTypeRequired"));
         return;
-      }
-
-      // Pre MANAGEMENT projekty: spýtať sa na výber medzi šablónou a "od nuly"
-      if (selectedType === 'MANAGEMENT') {
-        if (useTemplate === null) {
-          setError('Vyberte, či chcete použiť šablónu Staveto alebo vytvoriť projekt od nuly');
-          return;
-        }
-        
-        if (useTemplate) {
-          // Použiť šablónu
-          const determinedTemplateId = 'eu-construction-v1';
-          setTemplateId(determinedTemplateId);
-          
-          // Load template phases
-          setLoadingPhases(true);
-          setError(null);
-          try {
-            const phases = await templateService.getTemplatePhases(determinedTemplateId);
-            setTemplatePhases(phases);
-            
-            // Initialize all phases as enabled with 'active' status
-            const customizations = new Map<string, PhaseCustomization>();
-            phases.forEach(phase => {
-              customizations.set(phase.id, {
-                phaseId: phase.id,
-                enabled: true,
-                status: 'active',
-              });
-            });
-            setPhaseCustomizations(customizations);
-          } catch (e: any) {
-            console.error('[ProjectsScreen] Error loading template phases:', e);
-            setError(`Chyba pri načítaní šablóny: ${e.message || 'Neznáma chyba'}`);
-            setLoadingPhases(false);
-            return;
-          } finally {
-            setLoadingPhases(false);
-          }
-        } else {
-          // Vytvoriť od nuly - bez šablóny
-          setTemplateId("");
-          setTemplatePhases([]);
-          setPhaseCustomizations(new Map());
-        }
-      } else if (selectedType === 'BUILD') {
-        // BUILD projekty vždy používajú šablónu
-        const determinedTemplateId = 'eu-construction-v1';
-        setTemplateId(determinedTemplateId);
-        
-        // Load template phases
-        setLoadingPhases(true);
-        setError(null);
-        try {
-          const phases = await templateService.getTemplatePhases(determinedTemplateId);
-          setTemplatePhases(phases);
-          
-          // Initialize all phases as enabled with 'active' status
-          const customizations = new Map<string, PhaseCustomization>();
-          phases.forEach(phase => {
-            customizations.set(phase.id, {
-              phaseId: phase.id,
-              enabled: true,
-              status: 'active',
-            });
-          });
-          setPhaseCustomizations(customizations);
-        } catch (e: any) {
-          console.error('[ProjectsScreen] Error loading template phases:', e);
-          setError(`Chyba pri načítaní šablóny: ${e.message || 'Neznáma chyba'}`);
-          setLoadingPhases(false);
-          return;
-        } finally {
-          setLoadingPhases(false);
-        }
-      } else {
-        // RESIDENTIAL, TRADE, MAINTENANCE - bez šablóny
-        setTemplateId("");
-        setTemplatePhases([]);
-        setPhaseCustomizations(new Map());
       }
 
       setError(null);
       setNewStep(2);
     } else if (newStep === 2) {
-      // Krok 2 → Krok 3: Validácia názvu a fáz
       if (!newName.trim()) {
-        setError('Zadajte názov projektu');
+        setError(t("createProject.nameRequired"));
         return;
-      }
-
-      // If template exists (only for MANAGEMENT/BUILD), validate phase customizations
-      if (templateId && (selectedType === 'MANAGEMENT' || selectedType === 'BUILD') && phaseCustomizations.size > 0) {
-        const enabledPhases = Array.from(phaseCustomizations.values()).filter(c => c.enabled);
-        if (enabledPhases.length === 0) {
-          setError('Vyberte aspoň jednu fázu');
-          return;
-        }
       }
 
       setError(null);
@@ -303,41 +410,38 @@ export function ProjectsScreen() {
   const onCreate = async () => {
     // Validácia
     if (!orgId) {
-      const errorMsg = 'Nie ste prihlásený. Prosím prihláste sa.';
+      const errorMsg = t("createProject.notSignedIn");
       setError(errorMsg);
       showError(errorMsg);
       return;
     }
     
     if (!selectedType) {
-      const errorMsg = 'Vyberte typ projektu';
+      const errorMsg = t("createProject.selectTypeRequired");
       setError(errorMsg);
       return;
     }
     
     if (!newName.trim()) {
-      const errorMsg = 'Zadajte názov projektu';
+      const errorMsg = t("createProject.nameRequired");
       setError(errorMsg);
       return;
-    }
-
-    // If template exists (only for MANAGEMENT/BUILD), validate phase customizations
-    if (templateId && (selectedType === 'MANAGEMENT' || selectedType === 'BUILD') && phaseCustomizations.size > 0) {
-      const enabledPhases = Array.from(phaseCustomizations.values()).filter(c => c.enabled);
-      if (enabledPhases.length === 0) {
-        setError('Vyberte aspoň jednu fázu');
-        return;
-      }
     }
     
     setError(null);
     setSubmitting(true);
     
     try {
-      console.log(`[ProjectsScreen] Creating project: type="${selectedType}", name="${newName.trim()}", templateId="${templateId}"`);
+      const shouldUseTemplate =
+        selectedType === "BUILD" || (selectedType === "MANAGEMENT" && creationMethod === "template");
+      const finalTemplateId = shouldUseTemplate ? DEFAULT_TEMPLATE_ID : "";
+
+      console.log(
+        `[ProjectsScreen] Creating project: type="${selectedType}", name="${newName.trim()}", templateId="${finalTemplateId}"`
+      );
       
       // Prepare phase customizations array
-      const customizationsArray = templateId && phaseCustomizations.size > 0
+      const customizationsArray = shouldUseTemplate && phaseCustomizations.size > 0
         ? Array.from(phaseCustomizations.values())
         : undefined;
       
@@ -346,7 +450,7 @@ export function ProjectsScreen() {
       // Vytvor projekt - ownerId sa automaticky použije z auth.currentUser.uid v projectFactory
       await projectFactory.createProjectFromTemplate({
         projectType: selectedType,
-        templateId: templateId,
+        templateId: finalTemplateId,
         name: newName.trim(),
         addressText: newAddress.trim() || undefined,
         countryCode: newCountry.trim() || undefined,
@@ -396,28 +500,19 @@ export function ProjectsScreen() {
     }
   };
 
-  const togglePhaseEnabled = (phaseId: string) => {
-    const custom = phaseCustomizations.get(phaseId);
-    if (custom) {
-      const newCustomizations = new Map(phaseCustomizations);
-      newCustomizations.set(phaseId, {
-        ...custom,
-        enabled: !custom.enabled,
-      });
-      setPhaseCustomizations(newCustomizations);
-    }
-  };
-
-  const setPhaseStatus = (phaseId: string, status: PhaseStatus) => {
-    const custom = phaseCustomizations.get(phaseId);
-    if (custom) {
-      const newCustomizations = new Map(phaseCustomizations);
-      newCustomizations.set(phaseId, {
-        ...custom,
-        status,
-      });
-      setPhaseCustomizations(newCustomizations);
-    }
+  const renderContainsChecklist = () => {
+    const items = getContainsItems(selectedType);
+    return (
+      <View style={styles.containsSection}>
+        <Text style={styles.containsTitle}>{t("createProject.containsTitle")}</Text>
+        {items.map((itemKey) => (
+          <View key={itemKey} style={styles.containsItem}>
+            <Ionicons name="checkmark-circle-outline" size={16} color={colors.primary} />
+            <Text style={styles.containsItemText}>{t(`createProject.contains.${itemKey}`)}</Text>
+          </View>
+        ))}
+      </View>
+    );
   };
 
   const openProjectMenu = (item: Project) => {
@@ -499,6 +594,65 @@ export function ProjectsScreen() {
     }
   };
 
+  const showCoverSheet = useCallback(
+    (item: Project) => {
+      const hasCover = !!item.coverImageUrl;
+      const options = [
+        t("cover.cancel"),
+        t("cover.takePhoto"),
+        t("cover.chooseFromGallery"),
+        ...(hasCover ? [t("cover.remove")] : []),
+      ];
+      const cancelIndex = 0;
+      const takeIndex = 1;
+      const chooseIndex = 2;
+      const removeIndex = hasCover ? 3 : -1;
+
+      const runUpload = async (action: "camera" | "gallery") => {
+        try {
+          const picked = await projectCoverService.pickCoverImageWithOptions(t, action);
+          if (!picked?.uri) return;
+          const { url, path } = await projectCoverService.uploadProjectCover(item.id, picked.uri);
+          await projectCoverService.setProjectCover(item.id, { url, path }, item.coverImagePath);
+          load();
+        } catch (e) {
+          showError(t("cover.uploadError"));
+        }
+      };
+
+      const runRemove = async () => {
+        try {
+          await projectCoverService.removeProjectCover(item.id);
+          load();
+        } catch (e) {
+          showError(t("cover.uploadError"));
+        }
+      };
+
+      if (Platform.OS === "ios") {
+        ActionSheetIOS.showActionSheetWithOptions(
+          { options, cancelButtonIndex: cancelIndex },
+          async (buttonIndex) => {
+            if (buttonIndex === takeIndex) await runUpload("camera");
+            else if (buttonIndex === chooseIndex) await runUpload("gallery");
+            else if (buttonIndex === removeIndex) await runRemove();
+          }
+        );
+      } else {
+        const buttons: Array<{ text: string; style?: "cancel" | "destructive"; onPress?: () => void }> = [
+          { text: t("cover.cancel"), style: "cancel" },
+          { text: t("cover.takePhoto"), onPress: () => runUpload("camera") },
+          { text: t("cover.chooseFromGallery"), onPress: () => runUpload("gallery") },
+        ];
+        if (hasCover) {
+          buttons.push({ text: t("cover.remove"), onPress: () => runRemove() });
+        }
+        Alert.alert(t("cover.changeTitle"), "", buttons);
+      }
+    },
+    [t, load]
+  );
+
   const activeProjects = filterProjects(projects.filter((p) => !p.archivedAt));
   const archivedProjects = filterProjects(projects.filter((p) => !!p.archivedAt));
 
@@ -530,6 +684,26 @@ export function ProjectsScreen() {
         </View>
       ) : (
         <>
+        <View style={styles.typeFilterWrapper}>
+          <ScrollView
+            horizontal
+            showsHorizontalScrollIndicator={false}
+            contentContainerStyle={[styles.typeFilterRow, { paddingRight: spacing.xl }]}
+            style={[styles.typeFilterScroll, { width: windowWidth - 2 * spacing.md }]}
+          >
+            {(["ALL", "MANAGEMENT", "RESIDENTIAL", "TRADE", "MAINTENANCE"] as TypeFilter[]).map((type) => (
+              <TouchableOpacity
+                key={type}
+                style={[styles.filterChip, selectedTypeFilter === type && styles.filterChipActive]}
+                onPress={() => handleTypeFilterChange(type)}
+              >
+                <Text style={[styles.filterChipText, selectedTypeFilter === type && styles.filterChipTextActive]}>
+                  {t(`home.filter.type.${type.toLowerCase()}`)}
+                </Text>
+              </TouchableOpacity>
+            ))}
+          </ScrollView>
+        </View>
         <View style={styles.filterRow}>
           <TouchableOpacity
             style={[styles.filterChip, projectFilter === "all" && styles.filterChipActive]}
@@ -553,6 +727,7 @@ export function ProjectsScreen() {
         <FlatList
           data={activeProjects}
           keyExtractor={(p) => p.id}
+          extraData={`${selectedTypeFilter}-${projectFilter}`}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
             projects.length > 0 && activeProjects.length === 0 && archivedProjects.length === 0 ? (
@@ -570,15 +745,15 @@ export function ProjectsScreen() {
             />
           }
           renderItem={({ item }) => {
-            // Determine project category for display
-            const projectType = item.projectType;
-            const categoryLabel = projectType === "RESIDENTIAL" 
-              ? t("projectType.RESIDENTIAL") 
-              : projectType === "TRADE"
-              ? t("projectType.TRADE")
-              : projectType === "MAINTENANCE"
-              ? t("projectType.maintenance")
-              : t("projectType.MANAGEMENT"); // MANAGEMENT or undefined = Vedenie výstavby
+            const normalizedType = normalizeProjectType(item.projectType);
+            const typeLabel = getProjectTypeLabel(item.projectType);
+            const location = getLocationAnchor(item);
+            const badgeColor = getBadgeColor(item.projectType);
+            const maintenanceCount =
+              normalizedType === "MAINTENANCE" && typeof item.equipmentCount === "number"
+                ? t("projectCard.equipmentCount", { count: String(item.equipmentCount) })
+                : null;
+            const showCover = normalizedType !== "MAINTENANCE" && !!item.coverImageUrl;
             
             const isOwner = !!item.ownerId && item.ownerId === user?.id;
             return (
@@ -594,12 +769,39 @@ export function ProjectsScreen() {
                 activeOpacity={0.7}
               >
                 <View style={styles.cardContent}>
+                  <Pressable
+                    style={[styles.projectThumb, { backgroundColor: getThumbTint(item.projectType) }]}
+                    onPress={() => {
+                      if (isOwner) showCoverSheet(item);
+                    }}
+                  >
+                    {showCover ? (
+                      <Image source={{ uri: item.coverImageUrl! }} style={styles.projectThumbImage} resizeMode="cover" />
+                    ) : normalizedType === "MAINTENANCE" ? (
+                      <Ionicons name="construct-outline" size={20} color={colors.textSecondary} />
+                    ) : (
+                      <>
+                        <Text style={styles.projectThumbInitials}>{getProjectInitials(item.name || t("projects.noName"))}</Text>
+                        <Ionicons name={getThumbIcon(item.projectType)} size={11} color={colors.textMuted} style={styles.projectThumbIcon} />
+                      </>
+                    )}
+                  </Pressable>
                   <View style={styles.cardMain}>
                     <View style={styles.nameRow}>
                       <Text style={styles.name} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
                     </View>
                     <ProjectBadgesRow isOwner={isOwner} sharedWithCount={item.sharedWithCount ?? 0} isSharedToMe={item.isSharedToMe} />
-                    <Text style={styles.category} numberOfLines={1}>{categoryLabel}</Text>
+                    <View style={styles.typeBadgeRow}>
+                      <View style={[styles.typeBadge, { borderColor: badgeColor }]}>
+                        <Text style={[styles.typeBadgeText, { color: badgeColor }]} numberOfLines={1}>
+                          {typeLabel.toUpperCase()}
+                        </Text>
+                      </View>
+                      {location ? (
+                        <Text style={styles.typeBadgeCity} numberOfLines={1}>{location}</Text>
+                      ) : null}
+                    </View>
+                    {maintenanceCount && <Text style={styles.categoryMeta} numberOfLines={1}>{maintenanceCount}</Text>}
                     {item.createdAt && (
                       <Text style={styles.createdAt}>{t("projects.createdAt")}: {formatCreatedAt(item.createdAt)}</Text>
                     )}
@@ -646,14 +848,15 @@ export function ProjectsScreen() {
               <View style={styles.archivedSection}>
                 <Text style={styles.archivedTitle}>{t("projects.archiveSection")}</Text>
                 {archivedProjects.map((item) => {
-                  const projectType = item.projectType;
-                  const categoryLabel = projectType === "RESIDENTIAL" 
-                    ? t("projectType.RESIDENTIAL") 
-                    : projectType === "TRADE"
-                    ? t("projectType.TRADE")
-                    : projectType === "MAINTENANCE"
-                    ? t("projectType.maintenance")
-                    : t("projectType.MANAGEMENT");
+                  const normalizedType = normalizeProjectType(item.projectType);
+                  const typeLabel = getProjectTypeLabel(item.projectType);
+                  const location = getLocationAnchor(item);
+                  const badgeColor = getBadgeColor(item.projectType);
+                  const maintenanceCount =
+                    normalizedType === "MAINTENANCE" && typeof item.equipmentCount === "number"
+                      ? t("projectCard.equipmentCount", { count: String(item.equipmentCount) })
+                      : null;
+                  const showCover = normalizedType !== "MAINTENANCE" && !!item.coverImageUrl;
                   const isOwnerArchived = !!item.ownerId && item.ownerId === user?.id;
                   return (
                     <TouchableOpacity
@@ -668,12 +871,39 @@ export function ProjectsScreen() {
                       activeOpacity={0.7}
                     >
                       <View style={styles.cardContent}>
+                        <Pressable
+                          style={[styles.projectThumb, styles.archivedThumb, { backgroundColor: getThumbTint(item.projectType) }]}
+                          onPress={() => {
+                            if (isOwnerArchived) showCoverSheet(item);
+                          }}
+                        >
+                          {showCover ? (
+                            <Image source={{ uri: item.coverImageUrl! }} style={styles.projectThumbImage} resizeMode="cover" />
+                          ) : normalizedType === "MAINTENANCE" ? (
+                            <Ionicons name="construct-outline" size={20} color={colors.textMuted} />
+                          ) : (
+                            <>
+                              <Text style={styles.projectThumbInitials}>{getProjectInitials(item.name || t("projects.noName"))}</Text>
+                              <Ionicons name={getThumbIcon(item.projectType)} size={11} color={colors.textMuted} style={styles.projectThumbIcon} />
+                            </>
+                          )}
+                        </Pressable>
                         <View style={styles.cardMain}>
                           <View style={styles.nameRow}>
                             <Text style={[styles.name, styles.archivedText]} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
                           </View>
                           <ProjectBadgesRow isOwner={isOwnerArchived} sharedWithCount={item.sharedWithCount ?? 0} isSharedToMe={item.isSharedToMe} />
-                          <Text style={[styles.category, styles.archivedText]} numberOfLines={1}>{categoryLabel}</Text>
+                          <View style={styles.typeBadgeRow}>
+                            <View style={[styles.typeBadge, styles.typeBadgeArchived, { borderColor: badgeColor }]}>
+                              <Text style={[styles.typeBadgeText, styles.typeBadgeTextArchived, { color: badgeColor }]} numberOfLines={1}>
+                                {typeLabel.toUpperCase()}
+                              </Text>
+                            </View>
+                            {location ? (
+                              <Text style={[styles.typeBadgeCity, styles.archivedText]} numberOfLines={1}>{location}</Text>
+                            ) : null}
+                          </View>
+                          {maintenanceCount && <Text style={[styles.categoryMeta, styles.archivedText]} numberOfLines={1}>{maintenanceCount}</Text>}
                           {item.createdAt && (
                             <Text style={[styles.createdAt, styles.archivedText]}>{t("projects.createdAt")}: {formatCreatedAt(item.createdAt)}</Text>
                           )}
@@ -742,160 +972,43 @@ export function ProjectsScreen() {
             
             <ScrollView 
               style={styles.modalContent} 
-              showsVerticalScrollIndicator={true}
+              showsVerticalScrollIndicator={newStep !== 1}
+              scrollEnabled={newStep !== 1}
               keyboardShouldPersistTaps="handled"
             >
             {newStep === 1 ? (
               <>
-                {/* Krok 1: Základ - Typ projektu */}
-                <Text style={styles.modalLabel}>{t("projects.selectType")}</Text>
+                <Text style={styles.createHeader}>{t("createProject.header")}</Text>
+                <Text style={styles.createSubtext}>{t("createProject.subtext")}</Text>
                 <View style={styles.typeGrid}>
-                  <View style={styles.typeRow}>
-                    <TouchableOpacity
-                      style={[styles.typeCard, selectedType === "MANAGEMENT" && styles.typeCardActive]}
-                      onPress={() => {
-                        setSelectedType("MANAGEMENT");
-                        setUseTemplate(null);
-                        setError(null);
-                      }}
-                    >
-                      <View style={styles.typeIconContainer}>
-                        <Ionicons
-                          name="clipboard-outline"
-                          size={28}
-                          color={selectedType === "MANAGEMENT" ? colors.primary : colors.textMuted}
-                        />
-                      </View>
-                      <Text style={[styles.typeCardText, selectedType === "MANAGEMENT" && styles.typeCardTextActive]} numberOfLines={2}>
-                        {t("projectType.MANAGEMENT")}
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.typeCard, selectedType === "RESIDENTIAL" && styles.typeCardActive]}
-                      onPress={() => {
-                        setSelectedType("RESIDENTIAL");
-                        setError(null);
-                      }}
-                    >
-                      <View style={styles.typeIconContainer}>
-                        <Ionicons
-                          name="home-outline"
-                          size={28}
-                          color={selectedType === "RESIDENTIAL" ? colors.primary : colors.textMuted}
-                        />
-                      </View>
-                      <Text style={[styles.typeCardText, selectedType === "RESIDENTIAL" && styles.typeCardTextActive]} numberOfLines={2}>
-                        {t("projectType.RESIDENTIAL")}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                  <View style={styles.typeRow}>
-                    <TouchableOpacity
-                      style={[styles.typeCard, selectedType === "TRADE" && styles.typeCardActive]}
-                      onPress={() => {
-                        setSelectedType("TRADE");
-                        setUseTemplate(null);
-                        setError(null);
-                      }}
-                    >
-                      <View style={styles.typeIconContainer}>
-                        <Ionicons
-                          name="person-outline"
-                          size={28}
-                          color={selectedType === "TRADE" ? colors.primary : colors.textMuted}
-                        />
-                      </View>
-                      <Text style={[styles.typeCardText, selectedType === "TRADE" && styles.typeCardTextActive]} numberOfLines={2}>
-                        {t("projectType.TRADE")}
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.typeCard, selectedType === "MAINTENANCE" && styles.typeCardActive]}
-                      onPress={() => {
-                        setSelectedType("MAINTENANCE");
-                        setError(null);
-                      }}
-                    >
-                      <View style={styles.typeIconContainer}>
-                        <Ionicons
-                          name="construct-outline"
-                          size={28}
-                          color={selectedType === "MAINTENANCE" ? colors.primary : colors.textMuted}
-                        />
-                      </View>
-                      <Text style={[styles.typeCardText, selectedType === "MAINTENANCE" && styles.typeCardTextActive]} numberOfLines={2}>
-                        {t("projectType.maintenance")}
-                      </Text>
-                    </TouchableOpacity>
-                  </View>
-                  {selectedType === "BUILD" && (
-                    <View style={styles.templateInfo}>
-                      <Ionicons name="information-circle-outline" size={16} color={colors.textMuted} />
-                      <Text style={styles.templateInfoText}>Šablóna: eu-construction-v1</Text>
+                  {Array.from({ length: 2 }).map((_, rowIndex) => (
+                    <View key={`row-${rowIndex}`} style={styles.typeRow}>
+                      {selectableTypeCards.slice(rowIndex * 2, rowIndex * 2 + 2).map((card) => {
+                        const isActive = selectedType === card.type;
+                        return (
+                          <TouchableOpacity
+                            key={card.type}
+                            style={[styles.typeCard, isActive && styles.typeCardActive]}
+                            onPress={() => handleSelectType(card.type)}
+                          >
+                            <View style={styles.typeIconContainer}>
+                              <Ionicons name={card.icon} size={24} color={isActive ? colors.primary : colors.textMuted} />
+                            </View>
+                            <Text style={[styles.typeCardTitle, isActive && styles.typeCardTitleActive]} numberOfLines={1}>
+                              {t(`createProject.type.${card.type}.title`)}
+                            </Text>
+                            <Text style={[styles.typeCardSubtitle, isActive && styles.typeCardSubtitleActive]} numberOfLines={2}>
+                              {t(`createProject.type.${card.type}.subtitle`)}
+                            </Text>
+                            <Text style={[styles.typeMiniLabelText, isActive && styles.typeMiniLabelTextActive]} numberOfLines={1}>
+                              {t(`createProject.type.${card.type}.miniLabel`)}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
                     </View>
-                  )}
+                  ))}
                 </View>
-                
-                {/* Výber medzi šablónou a "od nuly" - len pre MANAGEMENT */}
-                {selectedType === "MANAGEMENT" && (
-                  <>
-                    <Text style={[styles.modalLabel, { marginTop: spacing.lg }]}>Ako chcete vytvoriť projekt?</Text>
-                    {__DEV__ && console.log('[ProjectsScreen] Rendering template choice for MANAGEMENT, useTemplate:', useTemplate)}
-                    <View style={styles.templateChoiceRow}>
-                      <TouchableOpacity
-                        style={[
-                          styles.templateChoiceCard,
-                          useTemplate === true && styles.templateChoiceCardActive
-                        ]}
-                        onPress={() => {
-                          setUseTemplate(true);
-                          setError(null);
-                        }}
-                      >
-                        <Ionicons 
-                          name="document-text-outline" 
-                          size={24} 
-                          color={useTemplate === true ? colors.primary : colors.textMuted} 
-                        />
-                        <Text style={[
-                          styles.templateChoiceText,
-                          useTemplate === true && styles.templateChoiceTextActive
-                        ]}>
-                          So šablónou Staveto
-                        </Text>
-                        <Text style={styles.templateChoiceSubtext}>
-                          Použije sa šablóna s fázami a úlohami
-                        </Text>
-                      </TouchableOpacity>
-                      
-                      <TouchableOpacity
-                        style={[
-                          styles.templateChoiceCard,
-                          useTemplate === false && styles.templateChoiceCardActive
-                        ]}
-                        onPress={() => {
-                          setUseTemplate(false);
-                          setError(null);
-                        }}
-                      >
-                        <Ionicons 
-                          name="create-outline" 
-                          size={24} 
-                          color={useTemplate === false ? colors.primary : colors.textMuted} 
-                        />
-                        <Text style={[
-                          styles.templateChoiceText,
-                          useTemplate === false && styles.templateChoiceTextActive
-                        ]}>
-                          Od nuly
-                        </Text>
-                        <Text style={styles.templateChoiceSubtext}>
-                          Vytvoríte si vlastné fázy a úlohy
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
-                  </>
-                )}
                 
                 {/* Error message */}
                 {error && (
@@ -906,8 +1019,7 @@ export function ProjectsScreen() {
               </>
             ) : newStep === 2 ? (
               <>
-                {/* Krok 2: Názov projektu + Adresa + Prispôsobiť šablónu (len pre MANAGEMENT/BUILD) */}
-                <Text style={styles.modalLabel}>Názov projektu *</Text>
+                <Text style={styles.modalLabel}>{t("projects.namePlaceholder")} *</Text>
                 <TextInput
                   style={styles.inputWhite}
                   value={newName}
@@ -917,7 +1029,7 @@ export function ProjectsScreen() {
                   }}
                   placeholder={t("projects.namePlaceholder")}
                   placeholderTextColor="rgba(255, 255, 255, 0.7)"
-                  editable={!submitting && !loadingPhases}
+                  editable={!submitting}
                   autoFocus={true}
                 />
 
@@ -940,7 +1052,7 @@ export function ProjectsScreen() {
                   onChangeText={(text) => { setNewCity(text); setError(null); }}
                   placeholder={t("projects.cityPlaceholder")}
                   placeholderTextColor="rgba(255, 255, 255, 0.7)"
-                  editable={!submitting && !loadingPhases}
+                  editable={!submitting}
                 />
                 <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.address")}</Text>
                 <TextInput
@@ -950,76 +1062,71 @@ export function ProjectsScreen() {
                     setNewAddress(text);
                     setError(null);
                   }}
-                  placeholder="Napríklad: Bratislava, Slovensko"
+                  placeholder={t("createProject.addressPlaceholder")}
                   placeholderTextColor="rgba(255, 255, 255, 0.7)"
-                  editable={!submitting && !loadingPhases}
+                  editable={!submitting}
                 />
 
-                {loadingPhases ? (
-                  <View style={{ marginTop: spacing.lg, alignItems: 'center' }}>
-                    <ActivityIndicator color={colors.primary} size="large" />
-                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>Načítavam šablónu...</Text>
-                  </View>
-                ) : templateId && (selectedType === 'MANAGEMENT' || selectedType === 'BUILD') && (
+                {renderContainsChecklist()}
+
+                {selectedType === "MANAGEMENT" && (
                   <>
-                    <Text style={[styles.modalLabel, { marginTop: spacing.lg }]}>Prispôsobiť šablónu</Text>
-                    {templatePhases.length > 0 ? (
-                      <ScrollView style={styles.phasesList} nestedScrollEnabled>
-                        {templatePhases.map((phase) => {
-                          const custom = phaseCustomizations.get(phase.id);
-                          const enabled = custom?.enabled ?? true;
-                          const status = custom?.status ?? 'active';
-                          
-                          return (
-                            <View key={phase.id} style={styles.phaseCustomizationRow}>
-                              <TouchableOpacity
-                                style={styles.phaseCheckbox}
-                                onPress={() => togglePhaseEnabled(phase.id)}
-                              >
-                                <Ionicons
-                                  name={enabled ? "checkbox" : "square-outline"}
-                                  size={24}
-                                  color={enabled ? colors.primary : colors.textMuted}
-                                />
-                                <Text style={[styles.phaseName, !enabled && styles.phaseNameDisabled]}>
-                                  {phase.name || `FÁZA ${phase.order + 1}`}
-                                </Text>
-                              </TouchableOpacity>
-                              
-                              {enabled && (
-                                <View style={styles.phaseStatusRow}>
-                                  <TouchableOpacity
-                                    style={[styles.statusButton, status === 'completed' && styles.statusButtonActive]}
-                                    onPress={() => setPhaseStatus(phase.id, 'completed')}
-                                  >
-                                    <Text style={[styles.statusButtonText, status === 'completed' && styles.statusButtonTextActive]}>
-                                      Dokončená
-                                    </Text>
-                                  </TouchableOpacity>
-                                  <TouchableOpacity
-                                    style={[styles.statusButton, status === 'active' && styles.statusButtonActive]}
-                                    onPress={() => setPhaseStatus(phase.id, 'active')}
-                                  >
-                                    <Text style={[styles.statusButtonText, status === 'active' && styles.statusButtonTextActive]}>
-                                      Aktívna
-                                    </Text>
-                                  </TouchableOpacity>
-                                  <TouchableOpacity
-                                    style={[styles.statusButton, status === 'later' && styles.statusButtonActive]}
-                                    onPress={() => setPhaseStatus(phase.id, 'later')}
-                                  >
-                                    <Text style={[styles.statusButtonText, status === 'later' && styles.statusButtonTextActive]}>
-                                      Neskôr
-                                    </Text>
-                                  </TouchableOpacity>
-                                </View>
-                              )}
-                            </View>
-                          );
-                        })}
-                      </ScrollView>
-                    ) : (
-                      <Text style={styles.emptyText}>Šablóna neobsahuje žiadne fázy</Text>
+                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("createProject.howToStart")}</Text>
+                    <View style={styles.templateChoiceColumn}>
+                      <TouchableOpacity
+                        style={[styles.templateChoiceCard, creationMethod === "template" && styles.templateChoiceCardActive]}
+                        onPress={() => {
+                          setCreationMethod("template");
+                          setError(null);
+                        }}
+                      >
+                        <View style={styles.templateChoiceHeader}>
+                          <Ionicons
+                            name={creationMethod === "template" ? "radio-button-on" : "radio-button-off"}
+                            size={18}
+                            color={creationMethod === "template" ? colors.primary : colors.textMuted}
+                          />
+                          <Text style={[styles.templateChoiceText, creationMethod === "template" && styles.templateChoiceTextActive]}>
+                            {t("createProject.method.template.title")}
+                          </Text>
+                        </View>
+                        <Text style={styles.templateChoiceSubtext}>{t("createProject.method.template.helper")}</Text>
+                      </TouchableOpacity>
+
+                      <TouchableOpacity
+                        style={[styles.templateChoiceCard, creationMethod === "empty" && styles.templateChoiceCardActive]}
+                        onPress={() => {
+                          setCreationMethod("empty");
+                          setError(null);
+                        }}
+                      >
+                        <View style={styles.templateChoiceHeader}>
+                          <Ionicons
+                            name={creationMethod === "empty" ? "radio-button-on" : "radio-button-off"}
+                            size={18}
+                            color={creationMethod === "empty" ? colors.primary : colors.textMuted}
+                          />
+                          <Text style={[styles.templateChoiceText, creationMethod === "empty" && styles.templateChoiceTextActive]}>
+                            {t("createProject.method.empty.title")}
+                          </Text>
+                        </View>
+                        <Text style={styles.templateChoiceSubtext}>{t("createProject.method.empty.helper")}</Text>
+                      </TouchableOpacity>
+                    </View>
+
+                    {creationMethod === "template" && (
+                      <View style={styles.templatePreview}>
+                        {loadingPhases ? (
+                          <ActivityIndicator color={colors.primary} size="small" />
+                        ) : (
+                          <Ionicons name="layers-outline" size={16} color={colors.textMuted} />
+                        )}
+                        <Text style={styles.templatePreviewText}>
+                          {templatePhases.length > 0
+                            ? t("createProject.templatePreview", { count: templatePhases.length.toString() })
+                            : t("createProject.templatePreviewGeneric")}
+                        </Text>
+                      </View>
                     )}
                   </>
                 )}
@@ -1033,53 +1140,42 @@ export function ProjectsScreen() {
               </>
             ) : (
               <>
-                {/* Krok 3: Zhrnutie a vytvorenie */}
-                <Text style={styles.modalLabel}>Zhrnutie</Text>
+                <Text style={styles.modalLabel}>{t("createProject.summaryTitle")}</Text>
                 <View style={styles.summaryContainer}>
                   <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Názov:</Text>
+                    <Text style={styles.summaryLabel}>{t("projects.namePlaceholder")}:</Text>
                     <Text style={styles.summaryValue}>{newName}</Text>
                   </View>
                   <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>Typ:</Text>
+                    <Text style={styles.summaryLabel}>{t("createProject.summaryYouSelected")}</Text>
+                    <Text style={styles.summaryValue}>{getCreateFlowTypeTitle(selectedType)}</Text>
+                  </View>
+                  <View style={styles.summaryRow}>
+                    <Text style={styles.summaryLabel}>{t("createProject.summaryStructure")}</Text>
                     <Text style={styles.summaryValue}>
-                      {selectedType === "MANAGEMENT" ? t("projectType.MANAGEMENT") :
-                       selectedType === "RESIDENTIAL" ? t("projectType.RESIDENTIAL") :
-                       selectedType === "TRADE" ? t("projectType.TRADE") :
-                       selectedType === "MAINTENANCE" ? t("projectType.maintenance") : selectedType}
+                      {selectedType === "MANAGEMENT" || selectedType === "BUILD"
+                        ? t("createProject.structureWithPhases")
+                        : t("createProject.structureNoPhases")}
                     </Text>
                   </View>
                   {newAddress.trim() && (
                     <View style={styles.summaryRow}>
-                      <Text style={styles.summaryLabel}>Adresa:</Text>
+                      <Text style={styles.summaryLabel}>{t("projects.address")}:</Text>
                       <Text style={styles.summaryValue}>{newAddress.trim()}</Text>
                     </View>
                   )}
-                  {selectedType === 'MANAGEMENT' && (
+                  {selectedType === "MANAGEMENT" && (
                     <View style={styles.summaryRow}>
-                      <Text style={styles.summaryLabel}>Spôsob vytvorenia:</Text>
+                      <Text style={styles.summaryLabel}>{t("createProject.howToStart")}</Text>
                       <Text style={styles.summaryValue}>
-                        {useTemplate ? t("account.withTemplate") : t("account.fromScratch")}
+                        {creationMethod === "template"
+                          ? t("createProject.method.template.short")
+                          : t("createProject.method.empty.short")}
                       </Text>
                     </View>
                   )}
-                  {templateId && (selectedType === 'MANAGEMENT' || selectedType === 'BUILD') && (
-                    <>
-                      <View style={styles.summaryRow}>
-                        <Text style={styles.summaryLabel}>Šablóna:</Text>
-                        <Text style={styles.summaryValue}>{templateId}</Text>
-                      </View>
-                      {templatePhases.length > 0 && (
-                        <View style={styles.summaryRow}>
-                          <Text style={styles.summaryLabel}>Fázy:</Text>
-                          <Text style={styles.summaryValue}>
-                            {Array.from(phaseCustomizations.values()).filter(c => c.enabled).length} z {templatePhases.length}
-                          </Text>
-                        </View>
-                      )}
-                    </>
-                  )}
                 </View>
+                {renderContainsChecklist()}
                 
                 {/* Error message */}
                 {error && (
@@ -1103,10 +1199,10 @@ export function ProjectsScreen() {
                 <TouchableOpacity
                   style={[
                     styles.modalOk, 
-                    (!selectedType || (selectedType === "MANAGEMENT" && useTemplate === null)) && styles.modalOkDisabled
+                    !selectedType && styles.modalOkDisabled
                   ]}
                   onPress={onNext}
-                  disabled={!selectedType || (selectedType === "MANAGEMENT" && useTemplate === null)}
+                  disabled={!selectedType}
                 >
                   <Text style={styles.modalOkText}>{t("projects.next")}</Text>
                 </TouchableOpacity>
@@ -1121,9 +1217,9 @@ export function ProjectsScreen() {
                   <Text style={styles.modalCancelText}>{t("projects.back")}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
-                  style={[styles.modalOk, (!newName.trim() || submitting || loadingPhases) && styles.modalOkDisabled]}
+                  style={[styles.modalOk, (!newName.trim() || submitting) && styles.modalOkDisabled]}
                   onPress={onNext}
-                  disabled={!newName.trim() || submitting || loadingPhases}
+                  disabled={!newName.trim() || submitting}
                 >
                   <Text style={styles.modalOkText}>{t("projects.next")}</Text>
                 </TouchableOpacity>
@@ -1145,7 +1241,7 @@ export function ProjectsScreen() {
                   {submitting ? (
                     <ActivityIndicator size="small" color="#fff" />
                   ) : (
-                    <Text style={styles.modalOkText}>Vygenerovať projekt</Text>
+                    <Text style={styles.modalOkText}>{t("createProject.createButton")}</Text>
                   )}
                 </TouchableOpacity>
               </View>
@@ -1191,6 +1287,18 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   centered: { flex: 1, backgroundColor: colors.background, justifyContent: "center", alignItems: "center" },
   list: { padding: spacing.md, paddingBottom: 60 },
+  typeFilterWrapper: {
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.xs,
+    overflow: "hidden",
+  },
+  typeFilterScroll: {
+    maxHeight: 40,
+  },
+  typeFilterRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
   filterRow: {
     flexDirection: "row",
     gap: spacing.sm,
@@ -1286,7 +1394,37 @@ const styles = StyleSheet.create({
   },
   cardContent: {
     flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+  },
+  projectThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
     alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    marginTop: 2,
+    position: "relative",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  archivedThumb: {
+    opacity: 0.85,
+  },
+  projectThumbImage: {
+    width: "100%",
+    height: "100%",
+  },
+  projectThumbInitials: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.textSecondary,
+  },
+  projectThumbIcon: {
+    position: "absolute",
+    right: 3,
+    bottom: 3,
   },
   cardMain: {
     flex: 1,
@@ -1302,6 +1440,38 @@ const styles = StyleSheet.create({
   nameRow: { flexDirection: "row", alignItems: "center", gap: 6, marginBottom: 4 },
   name: { fontSize: 16, fontWeight: "600", color: colors.text, flex: 1 },
   category: { fontSize: 13, color: colors.textMuted },
+  categoryMeta: { fontSize: 12, color: colors.textMuted, marginTop: 1 },
+  typeBadgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginTop: 2,
+    flexWrap: "wrap",
+  },
+  typeBadge: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    backgroundColor: "transparent",
+  },
+  typeBadgeArchived: {
+    opacity: 0.85,
+  },
+  typeBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
+  typeBadgeTextArchived: {
+    opacity: 0.9,
+  },
+  typeBadgeCity: {
+    fontSize: 12,
+    color: colors.textMuted,
+    flex: 1,
+    flexShrink: 1,
+  },
   cardMember: {
     borderLeftWidth: 3,
     borderLeftColor: colors.primary + "99",
@@ -1325,67 +1495,81 @@ const styles = StyleSheet.create({
   modal: {
     backgroundColor: colors.card,
     borderRadius: radius,
-    padding: spacing.lg,
+    padding: spacing.md,
     borderWidth: 1,
     borderColor: colors.border,
-    maxHeight: "90%",
-    minHeight: 360,
+    maxHeight: "96%",
+    minHeight: 460,
     flexDirection: "column",
   },
-  modalContent: { flex: 1, maxHeight: "70%" },
-  modalTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.md },
+  modalContent: { flex: 1, maxHeight: "82%" },
+  modalTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.sm },
   modalLabel: { fontSize: 14, color: colors.textMuted, marginBottom: spacing.sm },
-  typeRow: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.lg },
-  typeGrid: { 
-    flexDirection: "row", 
-    flexWrap: "wrap", 
-    gap: spacing.sm, 
-    marginBottom: spacing.lg,
-    justifyContent: "space-between",
+  createHeader: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.xs,
+  },
+  createSubtext: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
   },
   typeGrid: {
     flexDirection: "column",
-    gap: spacing.md,
-    marginBottom: spacing.lg,
+    gap: spacing.xs,
+    marginBottom: spacing.sm,
   },
   typeRow: {
     flexDirection: "row",
-    gap: spacing.md,
+    gap: spacing.xs,
   },
   typeCard: {
     flex: 1,
     flexDirection: "column",
-    alignItems: "center",
-    justifyContent: "center",
-    paddingVertical: spacing.md,
+    alignItems: "flex-start",
+    justifyContent: "flex-start",
+    paddingVertical: spacing.xs,
     paddingHorizontal: spacing.sm,
     borderRadius: radius,
-    borderWidth: 2,
+    borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.card,
-    minHeight: 80,
+    minHeight: 132,
   },
   typeCardActive: {
-    backgroundColor: colors.primary,
+    backgroundColor: colors.primary + "10",
     borderColor: colors.primary,
   },
-  typeIcon: {
-    fontSize: 32,
-    marginRight: spacing.md,
-  },
   typeIconContainer: {
-    marginBottom: spacing.xs,
-    alignItems: "center",
-    justifyContent: "center",
+    marginBottom: 2,
   },
-  typeCardText: {
-    fontSize: 12,
+  typeCardTitle: {
+    fontSize: 14,
     fontWeight: "600",
     color: colors.text,
-    textAlign: "center",
+    marginBottom: 2,
   },
-  typeCardTextActive: {
-    color: "#fff",
+  typeCardTitleActive: {
+    color: colors.primary,
+  },
+  typeCardSubtitle: {
+    fontSize: 12,
+    lineHeight: 15,
+    color: colors.textMuted,
+    marginBottom: 4,
+  },
+  typeCardSubtitleActive: {
+    color: colors.textSecondary,
+  },
+  typeMiniLabelText: {
+    fontSize: 10,
+    color: colors.textMuted,
+    marginTop: 0,
+  },
+  typeMiniLabelTextActive: {
+    color: colors.textSecondary,
   },
   typeBtn: {
     flex: 1,
@@ -1458,110 +1642,74 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     fontSize: 14,
   },
-  templateInfo: {
-    flexDirection: "row",
-    alignItems: "center",
-    marginTop: spacing.sm,
-    padding: spacing.sm,
-    backgroundColor: colors.background,
-    borderRadius: radius,
-    gap: spacing.xs,
-  },
-  templateInfoText: {
-    fontSize: 12,
-    color: colors.textMuted,
-  },
-  templateChoiceRow: {
-    flexDirection: "row",
-    gap: spacing.md,
-    marginTop: spacing.sm,
-    marginBottom: spacing.md,
-  },
-  templateChoiceCard: {
-    flex: 1,
+  containsSection: {
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
     padding: spacing.md,
     borderRadius: radius,
-    borderWidth: 2,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  containsTitle: {
+    fontSize: 14,
+    color: colors.text,
+    fontWeight: "600",
+    marginBottom: spacing.sm,
+  },
+  containsItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginBottom: spacing.xs,
+  },
+  containsItemText: {
+    fontSize: 13,
+    color: colors.textSecondary,
+  },
+  templateChoiceColumn: {
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  templateChoiceCard: {
+    padding: spacing.md,
+    borderRadius: radius,
+    borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.card,
-    alignItems: "center",
-    minHeight: 120,
-    justifyContent: "center",
   },
   templateChoiceCardActive: {
     borderColor: colors.primary,
     backgroundColor: colors.primary + "10",
   },
+  templateChoiceHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
   templateChoiceText: {
     fontSize: 14,
     fontWeight: "600",
     color: colors.text,
-    marginTop: spacing.sm,
-    textAlign: "center",
   },
   templateChoiceTextActive: {
     color: colors.primary,
   },
   templateChoiceSubtext: {
-    fontSize: 11,
+    fontSize: 12,
     color: colors.textMuted,
     marginTop: spacing.xs,
-    textAlign: "center",
   },
-  phasesList: {
-    maxHeight: 300,
-    marginBottom: spacing.md,
-  },
-  phaseCustomizationRow: {
-    marginBottom: spacing.md,
-    padding: spacing.md,
-    backgroundColor: colors.background,
-    borderRadius: radius,
-    borderWidth: 1,
-    borderColor: colors.border,
-  },
-  phaseCheckbox: {
+  templatePreview: {
     flexDirection: "row",
     alignItems: "center",
+    gap: spacing.xs,
+    paddingHorizontal: spacing.xs,
     marginBottom: spacing.sm,
   },
-  phaseName: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: colors.text,
-    marginLeft: spacing.sm,
-  },
-  phaseNameDisabled: {
-    color: colors.textMuted,
-    textDecorationLine: "line-through",
-  },
-  phaseStatusRow: {
-    flexDirection: "row",
-    gap: spacing.xs,
-    marginLeft: spacing.lg + spacing.sm, // Align with phase name
-  },
-  statusButton: {
-    flex: 1,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.xs,
-    borderRadius: radius / 2,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
-    alignItems: "center",
-  },
-  statusButtonActive: {
-    backgroundColor: colors.primary,
-    borderColor: colors.primary,
-  },
-  statusButtonText: {
+  templatePreviewText: {
     fontSize: 12,
-    color: colors.text,
-    fontWeight: "500",
-  },
-  statusButtonTextActive: {
-    color: "#FFFFFF",
-    fontWeight: "600",
+    color: colors.textMuted,
   },
   countryChip: {
     paddingVertical: spacing.sm,

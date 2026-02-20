@@ -13,12 +13,14 @@ import {
 import { showToast } from "../helpers/toast";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import * as notificationsService from "../services/notifications";
 import type { NotificationDoc, NotificationType } from "../services/notifications";
+import * as invitesService from "../services/invites";
+import type { PendingInvite } from "../services/invites";
 import * as tasksService from "../services/tasks";
 
 export function NotificationsScreen() {
@@ -27,6 +29,7 @@ export function NotificationsScreen() {
   const { user, orgId } = useAuth();
   const navigation = useNavigation();
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
+  const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<"all" | "unread" | "today" | "overdue">("unread");
@@ -37,6 +40,7 @@ export function NotificationsScreen() {
       setLoading(false);
       setRefreshing(false);
       setNotifications([]);
+      setPendingInvites([]);
       return;
     }
     if (isRefresh) {
@@ -46,14 +50,16 @@ export function NotificationsScreen() {
     }
 
     try {
-      const list = await notificationsService.listNotifications(orgId, { limitCount: 50 });
-      if (__DEV__ && list.some((n) => n.type === "PROJECT_INVITED")) {
-        console.log("[NotificationsScreen] Loaded PROJECT_INVITED notifications:", list.filter((n) => n.type === "PROJECT_INVITED").length);
-      }
+      const [list, invites] = await Promise.all([
+        notificationsService.listNotifications(orgId, { limitCount: 50 }),
+        invitesService.listPendingInvites(),
+      ]);
       setNotifications(list);
+      setPendingInvites(invites);
     } catch (error: any) {
-      console.error("[NotificationsScreen] Error loading notifications:", error);
+      console.error("[NotificationsScreen] Error loading:", error);
       setNotifications([]);
+      setPendingInvites([]);
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -64,9 +70,11 @@ export function NotificationsScreen() {
     loadNotifications(true);
   }, [loadNotifications]);
 
-  useEffect(() => {
-    loadNotifications();
-  }, [loadNotifications]);
+  useFocusEffect(
+    useCallback(() => {
+      loadNotifications(false);
+    }, [loadNotifications])
+  );
 
   const markAsRead = useCallback(
     async (notification: NotificationDoc) => {
@@ -320,7 +328,8 @@ export function NotificationsScreen() {
     return true;
   });
 
-  const unreadCount = notifications.filter((n) => !n.readAt).length;
+  const unreadNotificationsCount = notifications.filter((n) => !n.readAt).length;
+  const unreadCount = unreadNotificationsCount + pendingInvites.length;
   const todayCount = notifications.filter(isTodayNotification).length;
   const overdueCount = notifications.filter(isOverdueNotification).length;
 
@@ -377,7 +386,73 @@ export function NotificationsScreen() {
       </View>
 
       {/* Notifications List */}
-      {filteredNotifications.length === 0 ? (
+      {filter === "unread" && pendingInvites.length > 0 ? (
+        <FlatList
+          data={[
+            ...pendingInvites.map((inv) => ({ kind: "invite" as const, id: `invite-${inv.projectId}`, invite: inv })),
+            ...filteredNotifications.map((n) => ({ kind: "notification" as const, id: n.id, notification: n })),
+          ]}
+          keyExtractor={(item) => item.id}
+          contentContainerStyle={styles.listContent}
+          refreshControl={
+            <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
+          }
+          renderItem={({ item }) =>
+            item.kind === "invite" ? (
+              <TouchableOpacity
+                style={[styles.notificationCard, styles.notificationCardUnread]}
+                onPress={() => {
+                  const parentNav = navigation.getParent();
+                  if (parentNav) (parentNav as any).navigate("ProjectInvites");
+                }}
+                activeOpacity={0.7}
+              >
+                <View style={styles.cardContent}>
+                  <View style={styles.iconContainer}>
+                    <Ionicons name="person-add-outline" size={52} color={colors.primary} />
+                  </View>
+                  <View style={styles.textContainer}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>
+                      {t("notifications.type.projectInvited")}
+                    </Text>
+                    <Text style={styles.cardSubtitle} numberOfLines={2}>
+                      {t("notifications.projectLabel")}: {item.invite.projectName}
+                    </Text>
+                  </View>
+                  <View style={styles.rightContainer}>
+                    <View style={styles.unreadDot} />
+                    <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+                  </View>
+                </View>
+              </TouchableOpacity>
+            ) : (
+              <TouchableOpacity
+                style={[styles.notificationCard, !item.notification.readAt && styles.notificationCardUnread]}
+                onPress={() => handleNotificationPress(item.notification)}
+                activeOpacity={0.7}
+              >
+                <View style={styles.cardContent}>
+                  <View style={styles.iconContainer}>
+                    <Ionicons name={getNotificationIcon(item.notification.type)} size={52} color={colors.primary} />
+                  </View>
+                  <View style={styles.textContainer}>
+                    <Text style={styles.cardTitle} numberOfLines={1}>
+                      {getNotificationTitle(item.notification)}
+                    </Text>
+                    <Text style={styles.cardSubtitle} numberOfLines={2}>
+                      {getNotificationSubtitle(item.notification)}
+                    </Text>
+                  </View>
+                  <View style={styles.rightContainer}>
+                    {!item.notification.readAt && <View style={styles.unreadDot} />}
+                    <Text style={styles.timeText}>{formatRelativeTime(item.notification.createdAt)}</Text>
+                  </View>
+                </View>
+              </TouchableOpacity>
+            )
+          }
+        />
+      ) : filteredNotifications.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Ionicons name="notifications-off-outline" size={64} color={colors.textMuted} />
           <Text style={styles.emptyText}>

@@ -29,6 +29,7 @@ import { doc, getDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import * as ImagePicker from "expo-image-picker";
 import { getDeviceRegionCode } from "../utils/countries";
 import auth from "@react-native-firebase/auth";
+import Constants from "expo-constants";
 
 function Row({
   icon,
@@ -150,7 +151,9 @@ export function AccountScreen() {
     }
   };
 
-  const appVersion = "1.0.0"; // could use Constants.expoConfig?.version
+  const appVersion = Constants.expoConfig?.version ?? "1.0.0";
+  const buildTimestamp = (Constants.expoConfig?.extra as { buildTimestamp?: string })?.buildTimestamp;
+  const versionDisplay = buildTimestamp ? `${appVersion} (${buildTimestamp})` : appVersion;
 
   const loadProfile = useCallback(async () => {
     if (!user?.id) {
@@ -514,7 +517,7 @@ export function AccountScreen() {
         <View style={[rowStyles.row, { borderBottomWidth: 0 }]}>
           <Ionicons name="phone-portrait-outline" size={22} color={colors.textMuted} style={rowStyles.icon} />
           <Text style={rowStyles.label}>{t("account.appVersion")}</Text>
-          <Text style={styles.versionNum}>{appVersion}</Text>
+          <Text style={styles.versionNum}>{versionDisplay}</Text>
         </View>
       </View>
 

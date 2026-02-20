@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState, useRef } from "react";
+import React, { useCallback, useEffect, useMemo, useState, useRef } from "react";
 import {
   View,
   Text,
@@ -64,6 +64,7 @@ import * as constructionDiaryService from "../services/constructionDiary";
 import * as projectDocumentsService from "../services/projectDocuments";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectMembersService from "../services/projectMembers";
+import * as projectCoverService from "../services/projectCover";
 import * as equipmentService from "../services/equipment";
 import * as weatherService from "../services/weather";
 import { extractInvoiceData, type OcrParsed, type OcrStatus } from "../services/invoiceOCR";
@@ -164,6 +165,8 @@ export function ProjectOverviewScreen() {
   const [projectCountryCode, setProjectCountryCode] = useState<string | undefined>(undefined);
   const [projectCity, setProjectCity] = useState<string | undefined>(undefined);
   const [projectOwnerId, setProjectOwnerId] = useState<string | null>(null);
+  const [coverImageUrl, setCoverImageUrl] = useState<string | undefined>(undefined);
+  const [coverImagePath, setCoverImagePath] = useState<string | undefined>(undefined);
   const [addingPhases, setAddingPhases] = useState(false);
   const [showEditModal, setShowEditModal] = useState(false);
   const [editProjectName, setEditProjectName] = useState("");
@@ -364,6 +367,14 @@ export function ProjectOverviewScreen() {
     }
   }, [projectId]);
 
+  /** Filter out expense/price-related activity when member doesn't have expenses shared. */
+  const visibleActivityEvents = useMemo(() => {
+    if (access.isOwner || access.canReadExpenses) return activityEvents;
+    return activityEvents.filter(
+      (e) => e.type !== "expense_added" && e.type !== "ocr_completed"
+    );
+  }, [activityEvents, access.isOwner, access.canReadExpenses]);
+
   const weatherTypeIcon = useCallback((type: weatherService.DayRiskType): React.ComponentProps<typeof Ionicons>["name"] => {
     if (type === "RAIN") return "rainy-outline";
     if (type === "WIND") return "flag-outline";
@@ -443,6 +454,8 @@ export function ProjectOverviewScreen() {
         setProjectCountryCode(project.countryCode);
         setProjectCity(project.city);
         setProjectOwnerId(project.ownerId ?? null);
+        setCoverImageUrl(project.coverImageUrl);
+        setCoverImagePath(project.coverImagePath);
       } else {
         console.warn(`[ProjectOverview] Project ${projectId} not found or no access - continuing without project metadata`);
       }
@@ -1064,6 +1077,7 @@ export function ProjectOverviewScreen() {
     if (Platform.OS === 'ios') {
       const actions = [
         ...(isOwner ? [{ key: "edit", label: t("projectOverview.editProject"), onPress: handleEditProject }] : []),
+        ...(isOwner ? [{ key: "cover", label: t("cover.changeCover"), onPress: handleChangeCover }] : []),
         ...(whatsappDiaryEnabled ? [{ key: "updates", label: t("projectOverview.updates"), onPress: () => (navigation as any).navigate("Updates", { projectId }) }] : []),
         ...(contractorsEnabled ? [{ key: "suppliers", label: t("projectOverview.suppliers"), onPress: () => (navigation as any).navigate("ProjectSuppliers", { projectId }) }] : []),
         { key: "export", label: t("projectOverview.exportToCsv"), onPress: handleExportCsv },
@@ -1093,6 +1107,7 @@ export function ProjectOverviewScreen() {
         [
           { text: t("common.cancel"), style: 'cancel' },
           ...(isOwner ? [{ text: t("projectOverview.editProject"), onPress: handleEditProject }] : []),
+          ...(isOwner ? [{ text: t("cover.changeCover"), onPress: handleChangeCover }] : []),
           ...(whatsappDiaryEnabled ? [{ text: t("projectOverview.updates"), onPress: () => (navigation as any).navigate("Updates", { projectId }) }] : []),
           ...(contractorsEnabled ? [{ text: t("projectOverview.suppliers"), onPress: () => (navigation as any).navigate("ProjectSuppliers", { projectId }) }] : []),
           { text: t("projectOverview.exportToCsv"), onPress: handleExportCsv },
@@ -1109,6 +1124,68 @@ export function ProjectOverviewScreen() {
     setEditProjectCity(projectCity || "");
     setShowEditModal(true);
   };
+
+  const handleChangeCover = useCallback(() => {
+    const hasCover = !!coverImageUrl;
+    const options = [
+      t("cover.cancel"),
+      t("cover.takePhoto"),
+      t("cover.chooseFromGallery"),
+      ...(hasCover ? [t("cover.remove")] : []),
+    ];
+    const cancelIndex = 0;
+    const takeIndex = 1;
+    const chooseIndex = 2;
+    const removeIndex = hasCover ? 3 : -1;
+
+    const runUpload = async (action: "camera" | "gallery") => {
+      try {
+        const picked = await projectCoverService.pickCoverImageWithOptions(t, action);
+        if (!picked?.uri) return;
+        const { url, path } = await projectCoverService.uploadProjectCover(projectId, picked.uri);
+        await projectCoverService.setProjectCover(projectId, { url, path }, coverImagePath);
+        setCoverImageUrl(url);
+        setCoverImagePath(path);
+        await load(true);
+      } catch (e: any) {
+        const msg = e?.message || (typeof e === "string" ? e : t("cover.uploadError"));
+        Alert.alert(t("common.error"), msg);
+      }
+    };
+
+    const runRemove = async () => {
+      try {
+        await projectCoverService.removeProjectCover(projectId);
+        setCoverImageUrl(undefined);
+        setCoverImagePath(undefined);
+        await load(true);
+      } catch (e: any) {
+        const msg = e?.message || (typeof e === "string" ? e : t("cover.uploadError"));
+        Alert.alert(t("common.error"), msg);
+      }
+    };
+
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex: cancelIndex },
+        async (buttonIndex) => {
+          if (buttonIndex === takeIndex) await runUpload("camera");
+          else if (buttonIndex === chooseIndex) await runUpload("gallery");
+          else if (buttonIndex === removeIndex) await runRemove();
+        }
+      );
+    } else {
+      const buttons: Array<{ text: string; style?: "cancel" | "destructive"; onPress?: () => void }> = [
+        { text: t("cover.cancel"), style: "cancel" },
+        { text: t("cover.takePhoto"), onPress: () => runUpload("camera") },
+        { text: t("cover.chooseFromGallery"), onPress: () => runUpload("gallery") },
+      ];
+      if (hasCover) {
+        buttons.push({ text: t("cover.remove"), onPress: () => runRemove() });
+      }
+      Alert.alert(t("cover.changeTitle"), "", buttons);
+    }
+  }, [projectId, coverImageUrl, coverImagePath, t, load]);
 
   const handleSaveEdit = async () => {
     if (!editProjectName.trim() || !projectId || !orgId) return;
@@ -1304,6 +1381,13 @@ export function ProjectOverviewScreen() {
         },
       ]
     );
+  };
+
+  const assigneeDisplay = (task: TaskDoc) => {
+    const name = task.assigneeName?.trim();
+    if (!name) return t("projectOverview.unassigned") || "Nepriradené";
+    if (name === "—" || name === "\u2014" || name === "â€\"" || name === "-" || name === "–") return t("projectOverview.unassigned") || "Nepriradené";
+    return name;
   };
 
   const onAssigneePress = (task: TaskDoc) => {
@@ -3235,12 +3319,12 @@ export function ProjectOverviewScreen() {
               {isOwner ? (
                 <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
                   <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                  <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                  <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
                 </TouchableOpacity>
               ) : (
                 <View style={[styles.colAssignee, styles.assigneeCell]}>
                   <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                  <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                  <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
                 </View>
               )}
               {isOwner ? (
@@ -3438,12 +3522,12 @@ export function ProjectOverviewScreen() {
                               {isOwner ? (
                                 <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
                                   <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                                  <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                                  <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
                                 </TouchableOpacity>
                               ) : (
                                 <View style={[styles.colAssignee, styles.assigneeCell]}>
                                   <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                                  <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                                  <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
                                 </View>
                               )}
                               {isOwner ? (
@@ -3551,12 +3635,12 @@ export function ProjectOverviewScreen() {
                       {isOwner ? (
                         <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
                           <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                          <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                          <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
                         </TouchableOpacity>
                       ) : (
                         <View style={[styles.colAssignee, styles.assigneeCell]}>
                           <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                          <Text style={styles.assigneeText} numberOfLines={1}>{task.assigneeName ?? t("projectOverview.unassigned")}</Text>
+                          <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
                         </View>
                       )}
                       {isOwner ? (
@@ -3985,7 +4069,7 @@ export function ProjectOverviewScreen() {
                 <ActivityIndicator size="small" color={colors.primary} />
               ) : (
                 <>
-                  <Text style={styles.activityCount}>{activityEvents.length}</Text>
+                  <Text style={styles.activityCount}>{visibleActivityEvents.length}</Text>
                   <Ionicons
                     name={activityExpanded ? "chevron-up" : "chevron-down"}
                     size={18}
@@ -3996,17 +4080,17 @@ export function ProjectOverviewScreen() {
             </View>
           </TouchableOpacity>
 
-          {activityEvents.length === 0 && !activityLoading ? (
+          {visibleActivityEvents.length === 0 && !activityLoading ? (
             <Text style={styles.activityEmpty}>{t("home.noRecentActivity")}</Text>
           ) : (
-            (activityExpanded ? activityEvents.slice(0, 4) : activityEvents.slice(0, 1)).map((event) => (
+            (activityExpanded ? visibleActivityEvents.slice(0, 4) : visibleActivityEvents.slice(0, 1)).map((event) => (
               <View key={event.id} style={styles.activityRow}>
                 <Text style={styles.activitySummary} numberOfLines={1}>{formatEventSummary(t, event)}</Text>
                 <Text style={styles.activityTime}>{formatActivityAge(event.createdAt)}</Text>
               </View>
             ))
           )}
-          {!activityExpanded && activityEvents.length > 1 ? (
+          {!activityExpanded && visibleActivityEvents.length > 1 ? (
             <TouchableOpacity
               onPress={() => setActivityExpanded(true)}
               style={styles.activityViewAll}
@@ -4097,11 +4181,14 @@ export function ProjectOverviewScreen() {
             <Text style={styles.assigneePickerSubtitle}>Vyber člena projektu</Text>
             <ScrollView style={styles.assigneePickerList} contentContainerStyle={styles.assigneePickerListContent}>
               {assigneeCandidates.map((candidate) => {
+                const taskAssigneeId = assigneeTask?.assigneeId ?? null;
+                const taskAssigneeName = assigneeTask?.assigneeName?.trim();
+                const isPlaceholder = !taskAssigneeName || taskAssigneeName === "—" || taskAssigneeName === "\u2014" || taskAssigneeName === "â€\"";
                 const isSelected =
                   candidate.assigneeId !== null
                     ? assigneeTask?.assigneeId === candidate.assigneeId
-                    : (assigneeTask?.assigneeId ?? null) === null &&
-                      (assigneeTask?.assigneeName ?? null) === candidate.assigneeName;
+                    : taskAssigneeId === null &&
+                      (candidate.assigneeName === null ? (taskAssigneeName === null || isPlaceholder) : taskAssigneeName === candidate.assigneeName);
                 return (
                   <TouchableOpacity
                     key={candidate.key}

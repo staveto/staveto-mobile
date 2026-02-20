@@ -15,6 +15,7 @@ import {
   ActionSheetIOS,
   Platform,
   Image,
+  useWindowDimensions,
 } from "react-native";
 import { DrawerActions, TabActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -28,10 +29,11 @@ import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
 import * as dashboardService from "../services/dashboard";
 import * as projectEventsService from "../services/projectEvents";
+import * as projectCoverService from "../services/projectCover";
 import type { ProjectDoc } from "../services/projects";
 import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
-import { db } from "../firebase";
+import { db, getCallable } from "../firebase";
 import { doc, getDoc } from "../lib/rnFirestore";
 import { loadHomeLayout, getDefaultLayout, type HomeSectionConfig } from "../services/homeLayout";
 import { HomeCustomizeSheet } from "../components/HomeCustomizeSheet";
@@ -63,7 +65,9 @@ try {
 const LAST_USED_PROJECT_KEY = "@staveto:lastUsedProjectId";
 const ROLE_FILTER_KEY = "@staveto:lastRoleFilter";
 const PROJECTS_FILTER_KEY = "projects_filter_v1";
+const TYPE_FILTER_KEY = "home_type_filter_v1";
 type ProjectFilter = "all" | "mine" | "shared";
+type TypeFilter = "ALL" | "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
 
 type DashboardViewModel = {
   projects: ProjectDoc[];
@@ -74,6 +78,7 @@ type DashboardViewModel = {
     blockedCount: number;
     expensesMonthSum: number;
     expensesTotalSum: number;
+    hasExpensesAccess: boolean;
   };
   projectStats: Map<string, { openCount: number; totalCount: number; progress: number }>;
 };
@@ -95,7 +100,30 @@ type CompactProjectItemProps = {
   onOpen: (projectId: string) => void;
   onPhoto: (projectId: string) => void;
   onTask: (projectId: string) => void;
+  onCoverPress?: (project: ProjectDoc) => void;
 };
+
+type DisplayProjectType = "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
+
+function normalizeProjectType(projectType?: ProjectDoc["projectType"]): DisplayProjectType {
+  if (projectType === "RESIDENTIAL" || projectType === "TRADE" || projectType === "MAINTENANCE") return projectType;
+  return "MANAGEMENT";
+}
+
+function getProjectInitials(name: string): string {
+  const words = name.trim().split(/\s+/).filter(Boolean);
+  if (words.length === 0) return "PR";
+  if (words.length === 1) return words[0].slice(0, 2).toUpperCase();
+  return `${words[0][0] ?? ""}${words[1][0] ?? ""}`.toUpperCase();
+}
+
+function getLocationAnchor(project: ProjectDoc): string | null {
+  if (project.city?.trim()) return project.city.trim();
+  if (!project.addressText?.trim()) return null;
+  const firstPart = project.addressText.split(",")[0]?.trim();
+  if (firstPart && firstPart.length <= 24) return firstPart;
+  return null;
+}
 
 const CompactProjectItem = React.memo(function CompactProjectItem({
   project,
@@ -105,16 +133,42 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
   onOpen,
   onPhoto,
   onTask,
+  onCoverPress,
   currentUserId,
 }: CompactProjectItemProps) {
   const { t } = useI18n();
   const isOwner = !!project.ownerId && project.ownerId === currentUserId;
+  const normalizedType = normalizeProjectType(project.projectType);
   const stripeColor =
-    project.projectType === "BUILD" || project.projectType === "MANAGEMENT"
+    normalizedType === "MANAGEMENT"
       ? "#ff9f43"
-      : project.projectType === "TRADE"
+      : normalizedType === "TRADE"
       ? "#5dade2"
+      : normalizedType === "RESIDENTIAL"
+      ? "#8ea7ff"
       : "#7dcea0";
+  const thumbTint =
+    normalizedType === "MANAGEMENT"
+      ? "#ff9f4322"
+      : normalizedType === "TRADE"
+      ? "#5dade220"
+      : normalizedType === "RESIDENTIAL"
+      ? "#8ea7ff22"
+      : "#7dcea022";
+  const typeLabel = t(`createProject.type.${normalizedType}.title`);
+  const location = getLocationAnchor(project);
+  const badgeColor =
+    normalizedType === "MANAGEMENT"
+      ? "#ff9f43"
+      : normalizedType === "TRADE"
+      ? "#5dade2"
+      : normalizedType === "RESIDENTIAL"
+      ? "#8ea7ff"
+      : "#7dcea0";
+  const maintenanceCount =
+    normalizedType === "MAINTENANCE" && typeof project.equipmentCount === "number"
+      ? t("projectCard.equipmentCount", { count: String(project.equipmentCount) })
+      : null;
   const statusLabel = status === "OK" ? "OK" : status === "RISK" ? t("home.statusRisk") : t("home.statusWaiting");
 
   const isSharedToMe = project.isSharedToMe === true;
@@ -130,13 +184,56 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
       activeOpacity={0.8}
     >
       <View style={[styles.compactStripe, { backgroundColor: stripeColor }]} />
+      <Pressable
+        style={[styles.compactThumb, { backgroundColor: thumbTint }]}
+        onPress={() => {
+          if (isOwner && onCoverPress) onCoverPress(project);
+        }}
+      >
+        {normalizedType !== "MAINTENANCE" && project.coverImageUrl ? (
+          <Image source={{ uri: project.coverImageUrl }} style={styles.compactThumbImage} resizeMode="cover" />
+        ) : normalizedType === "MAINTENANCE" ? (
+          <Ionicons name="construct-outline" size={20} color={colors.textSecondary} />
+        ) : (
+          <>
+            <Text style={styles.compactThumbInitials}>{getProjectInitials(project.name || t("projects.noName"))}</Text>
+            <Ionicons
+              name={
+                normalizedType === "RESIDENTIAL"
+                  ? "home-outline"
+                  : normalizedType === "TRADE"
+                  ? "briefcase-outline"
+                  : "clipboard-outline"
+              }
+              size={11}
+              color={colors.textMuted}
+              style={styles.compactThumbIcon}
+            />
+          </>
+        )}
+      </Pressable>
       <View style={styles.compactProjectBody}>
         <View style={styles.compactProjectTitleRow}>
           <Text style={styles.compactProjectTitle} numberOfLines={1}>
             {project.name}
           </Text>
         </View>
+        <View style={styles.compactTypeBadgeRow}>
+          <View style={[styles.compactTypeBadge, { borderColor: badgeColor }]}>
+            <Text style={[styles.compactTypeBadgeText, { color: badgeColor }]} numberOfLines={1}>
+              {typeLabel.toUpperCase()}
+            </Text>
+          </View>
+          {location ? (
+            <Text style={styles.compactTypeBadgeCity} numberOfLines={1}>{location}</Text>
+          ) : null}
+        </View>
         <ProjectBadgesRow isOwner={isOwner} sharedWithCount={project.sharedWithCount ?? 0} isSharedToMe={project.isSharedToMe} />
+        {maintenanceCount && (
+          <Text style={styles.compactMaintenanceMeta} numberOfLines={1}>
+            {maintenanceCount}
+          </Text>
+        )}
         <Text style={styles.compactProjectSubline} numberOfLines={1}>
           {openTasks} {openTasks === 1 ? t("home.openTask_one") : t("home.openTask_other")} • {t("home.activityLabel")} {lastActivity}
         </Text>
@@ -171,6 +268,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
 export function HomeScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const { width: windowWidth } = useWindowDimensions();
   const { t } = useI18n();
   const { user, orgId } = useAuth();
   const [dashboardData, setDashboardData] = useState<DashboardViewModel | null>(null);
@@ -182,6 +280,7 @@ export function HomeScreen() {
   const [lastUsedProjectId, setLastUsedProjectId] = useState<string | null>(null);
   const [roleFilter, setRoleFilter] = useState<RoleKey | "ALL">("ALL");
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
+  const [selectedTypeFilter, setSelectedTypeFilter] = useState<TypeFilter>("ALL");
 
   // Load persisted role filter on mount
   useEffect(() => {
@@ -207,6 +306,14 @@ export function HomeScreen() {
     });
   }, []);
 
+  useEffect(() => {
+    AsyncStorage.getItem(TYPE_FILTER_KEY).then((saved) => {
+      if (saved === "MANAGEMENT" || saved === "RESIDENTIAL" || saved === "TRADE" || saved === "MAINTENANCE" || saved === "ALL") {
+        setSelectedTypeFilter(saved);
+      }
+    });
+  }, []);
+
   const handleProjectFilterChange = useCallback(async (filter: ProjectFilter) => {
     setProjectFilter(filter);
     try {
@@ -214,6 +321,15 @@ export function HomeScreen() {
       if (__DEV__) console.log("[HomeScreen] Filter changed:", filter);
     } catch (e) {
       console.warn("[HomeScreen] Failed to persist filter:", e);
+    }
+  }, []);
+
+  const handleTypeFilterChange = useCallback(async (filter: TypeFilter) => {
+    setSelectedTypeFilter(filter);
+    try {
+      await AsyncStorage.setItem(TYPE_FILTER_KEY, filter);
+    } catch (e) {
+      console.warn("[HomeScreen] Failed to persist type filter:", e);
     }
   }, []);
 
@@ -334,7 +450,7 @@ export function HomeScreen() {
       }
     });
   }, []);
-  const greetingName = user?.firstName ?? onboardingFirstName ?? user?.name ?? onboardingDisplayName ?? user?.email ?? t("home.userFallback");
+  const greetingName = user?.firstName ?? user?.name ?? onboardingFirstName ?? onboardingDisplayName ?? user?.email ?? t("home.userFallback");
 
   const formatLastActivity = useCallback(
     (date: Date | null) => {
@@ -387,7 +503,18 @@ export function HomeScreen() {
     }
 
     try {
-      const data = await dashboardService.loadDashboardData(orgId);
+      try {
+        await getCallable("syncMyProjectsSharedCount")({});
+      } catch (e) {
+        console.warn("[HomeScreen] syncMyProjectsSharedCount failed:", e);
+        try {
+          await getCallable("backfillProjectSharedCounts")({});
+        } catch (e2) {
+          console.warn("[HomeScreen] backfillProjectSharedCounts failed:", e2);
+        }
+      }
+      // Force server read after sync to get fresh sharedWithCount (bypass cache)
+      const data = await dashboardService.loadDashboardData(orgId, { forceServerRead: true });
 
       // Enrich today tasks with project names and phase names
       // Filter out tasks from BUILD projects
@@ -429,6 +556,7 @@ export function HomeScreen() {
           blockedCount: 0,
           expensesMonthSum: 0,
           expensesTotalSum: 0,
+          hasExpensesAccess: false,
         },
         projectStats: new Map(),
       });
@@ -496,6 +624,65 @@ export function HomeScreen() {
     loadDashboard(true);
     loadLiveActivity();
   }, [loadDashboard, loadLiveActivity]);
+
+  const showCoverSheet = useCallback(
+    (project: ProjectDoc) => {
+      const hasCover = !!project.coverImageUrl;
+      const options = [
+        t("cover.cancel"),
+        t("cover.takePhoto"),
+        t("cover.chooseFromGallery"),
+        ...(hasCover ? [t("cover.remove")] : []),
+      ];
+      const cancelIndex = 0;
+      const takeIndex = 1;
+      const chooseIndex = 2;
+      const removeIndex = hasCover ? 3 : -1;
+
+      const runUpload = async (action: "camera" | "gallery") => {
+        try {
+          const picked = await projectCoverService.pickCoverImageWithOptions(t, action);
+          if (!picked?.uri) return;
+          const { url, path } = await projectCoverService.uploadProjectCover(project.id, picked.uri);
+          await projectCoverService.setProjectCover(project.id, { url, path }, project.coverImagePath);
+          loadDashboard(true);
+        } catch (e) {
+          Alert.alert("", t("cover.uploadError"));
+        }
+      };
+
+      const runRemove = async () => {
+        try {
+          await projectCoverService.removeProjectCover(project.id);
+          loadDashboard(true);
+        } catch (e) {
+          Alert.alert("", t("cover.uploadError"));
+        }
+      };
+
+      if (Platform.OS === "ios") {
+        ActionSheetIOS.showActionSheetWithOptions(
+          { options, cancelButtonIndex: cancelIndex },
+          async (buttonIndex) => {
+            if (buttonIndex === takeIndex) await runUpload("camera");
+            else if (buttonIndex === chooseIndex) await runUpload("gallery");
+            else if (buttonIndex === removeIndex) await runRemove();
+          }
+        );
+      } else {
+        const buttons: Array<{ text: string; style?: "cancel" | "destructive"; onPress?: () => void }> = [
+          { text: t("cover.cancel"), style: "cancel" },
+          { text: t("cover.takePhoto"), onPress: () => runUpload("camera") },
+          { text: t("cover.chooseFromGallery"), onPress: () => runUpload("gallery") },
+        ];
+        if (hasCover) {
+          buttons.push({ text: t("cover.remove"), onPress: () => runRemove() });
+        }
+        Alert.alert(t("cover.changeTitle"), "", buttons);
+      }
+    },
+    [t, loadDashboard]
+  );
 
   useEffect(() => {
     loadDashboard();
@@ -906,7 +1093,7 @@ export function HomeScreen() {
   const data = dashboardData || {
     projects: [],
     todayTasks: [],
-    kpis: { openCount: 0, doneTodayCount: 0, blockedCount: 0, expensesMonthSum: 0, expensesTotalSum: 0 },
+    kpis: { openCount: 0, doneTodayCount: 0, blockedCount: 0, expensesMonthSum: 0, expensesTotalSum: 0, hasExpensesAccess: false },
     projectStats: new Map(),
   };
 
@@ -917,23 +1104,30 @@ export function HomeScreen() {
   }, [liveRows]);
 
   const filteredProjects = useMemo(() => {
-    if (projectFilter === "mine") return data.projects.filter((p) => p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0);
-    if (projectFilter === "shared") return data.projects.filter((p) => p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0);
-    return data.projects;
-  }, [data.projects, projectFilter]);
+    let list = data.projects;
+    if (projectFilter === "mine") list = list.filter((p) => p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0);
+    else if (projectFilter === "shared") list = list.filter((p) => p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0);
+    if (selectedTypeFilter !== "ALL") {
+      list = list.filter((p) => {
+        const norm = normalizeProjectType(p.projectType);
+        return norm === selectedTypeFilter;
+      });
+    }
+    return list;
+  }, [data.projects, projectFilter, selectedTypeFilter]);
 
+  // Focus project comes from ALL projects so "Currently Working On" always shows user's last-used project
   const focusProject = useMemo(() => {
     if (lastUsedProjectId) {
-      const selected = filteredProjects.find((p) => p.id === lastUsedProjectId);
+      const selected = data.projects.find((p) => p.id === lastUsedProjectId);
       if (selected) return selected;
     }
-    return filteredProjects[0] ?? null;
-  }, [filteredProjects, lastUsedProjectId]);
+    return data.projects[0] ?? null;
+  }, [data.projects, lastUsedProjectId]);
 
-  const otherProjects = useMemo(
-    () => filteredProjects.filter((p) => p.id !== focusProject?.id),
-    [filteredProjects, focusProject?.id]
-  );
+  const otherProjects = useMemo(() => {
+    return filteredProjects.filter((p) => p.id !== focusProject?.id);
+  }, [filteredProjects, focusProject?.id]);
 
   const overdueCount = useMemo(
     () =>
@@ -1016,6 +1210,7 @@ export function HomeScreen() {
       <FlatList
         data={enabledSectionIds.has("other_projects") ? otherProjects : []}
         keyExtractor={(item) => item.id}
+        extraData={`${selectedTypeFilter}-${projectFilter}`}
         contentContainerStyle={[styles.content, { paddingTop: spacing.md, paddingBottom: insets.bottom + 120 }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
@@ -1034,20 +1229,22 @@ export function HomeScreen() {
               <TouchableOpacity style={styles.statChip} onPress={() => goToProjects()} activeOpacity={0.8}>
                 <Text style={styles.statChipText}>{t("home.projectsCount", { count: String(data.projects.length) })}</Text>
               </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.statChip}
-                onPress={() => stackNav.navigate("ExpensesKpiScreen")}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.statChipText}>{t("home.expensesCount", { amount: String(Math.round(data.kpis.expensesTotalSum)) })}</Text>
-              </TouchableOpacity>
+              {data.kpis.hasExpensesAccess && (
+                <TouchableOpacity
+                  style={styles.statChip}
+                  onPress={() => stackNav.navigate("ExpensesKpiScreen")}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.statChipText}>{t("home.expensesCount", { amount: String(Math.round(data.kpis.expensesTotalSum)) })}</Text>
+                </TouchableOpacity>
+              )}
             </ScrollView>
                   )}
                   {enabledSectionIds.has("current_work") && focusProject ? (
               <View style={styles.focusCard}>
                 <View style={styles.focusCaptionRow}>
                   <Text style={styles.focusCaption}>{t("home.currentlyWorkingOn")}</Text>
-                  {focusProject.isSharedToMe === true && (
+                  {(focusProject.isSharedToMe === true || (focusProject.sharedWithCount ?? 0) > 0) && (
                     <View style={styles.focusSharedBadge}>
                       <Text style={styles.focusSharedBadgeText}>{t("home.filterShared")}</Text>
                     </View>
@@ -1084,6 +1281,27 @@ export function HomeScreen() {
               </View>
             ) : null}
                   {enabledSectionIds.has("project_filters") && (
+            <>
+            <View style={styles.typeFilterWrapper}>
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={[styles.typeFilterRow, { paddingRight: spacing.xl }]}
+                style={[styles.typeFilterScroll, { width: windowWidth - 2 * spacing.lg }]}
+              >
+                {(["ALL", "MANAGEMENT", "RESIDENTIAL", "TRADE", "MAINTENANCE"] as TypeFilter[]).map((type) => (
+                <TouchableOpacity
+                  key={type}
+                  style={[styles.filterChip, selectedTypeFilter === type && styles.filterChipActive]}
+                  onPress={() => handleTypeFilterChange(type)}
+                >
+                  <Text style={[styles.filterChipText, selectedTypeFilter === type && styles.filterChipTextActive]}>
+                    {t(`home.filter.type.${type.toLowerCase()}`)}
+                  </Text>
+                </TouchableOpacity>
+              ))}
+              </ScrollView>
+            </View>
             <View style={styles.filterRow}>
               <TouchableOpacity
                 style={[styles.filterChip, projectFilter === "all" && styles.filterChipActive]}
@@ -1104,6 +1322,7 @@ export function HomeScreen() {
                 <Text style={[styles.filterChipText, projectFilter === "shared" && styles.filterChipTextActive]}>{t("home.filterShared")}</Text>
               </TouchableOpacity>
             </View>
+            </>
                   )}
                   {enabledSectionIds.has("other_projects") && (
             <View style={styles.sectionHeaderCompact}>
@@ -1127,10 +1346,24 @@ export function HomeScreen() {
               onOpen={handleProjectClick}
               onPhoto={(projectId) => runContextAction("photo", projectId)}
               onTask={(projectId) => runContextAction("task", projectId)}
+              onCoverPress={showCoverSheet}
               currentUserId={user?.id}
             />
           );
         }}
+        ListEmptyComponent={
+          enabledSectionIds.has("other_projects") && otherProjects.length === 0 ? (
+            <View style={styles.emptyListContainer}>
+              <Text style={styles.emptyListText}>
+                {projectFilter === "shared"
+                  ? focusProject && (focusProject.isSharedToMe === true || (focusProject.sharedWithCount ?? 0) > 0)
+                    ? t("home.onlySharedProjectAbove")
+                    : t("home.noSharedProjects")
+                  : t("home.noProjectsMatchFilter")}
+              </Text>
+            </View>
+          ) : null
+        }
         ListFooterComponent={
           enabledSectionIds.has("other_projects") ? (
             <TouchableOpacity style={styles.showAllButton} onPress={() => goToProjects()}>
@@ -1645,6 +1878,18 @@ const styles = StyleSheet.create({
   sectionHeaderCompact: {
     marginBottom: spacing.sm,
   },
+  typeFilterWrapper: {
+    marginBottom: spacing.xs,
+    overflow: "hidden",
+  },
+  typeFilterScroll: {
+    maxHeight: 40,
+  },
+  typeFilterRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    paddingRight: spacing.lg,
+  },
   filterRow: {
     flexDirection: "row",
     gap: spacing.sm,
@@ -1671,7 +1916,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   compactProjectRow: {
-    minHeight: 64,
+    minHeight: 82,
     backgroundColor: colors.card,
     borderRadius: radius,
     borderWidth: 1,
@@ -1691,8 +1936,34 @@ const styles = StyleSheet.create({
   },
   compactProjectBody: {
     flex: 1,
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+  },
+  compactThumb: {
+    width: 44,
+    height: 44,
+    borderRadius: 12,
+    marginLeft: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+    justifyContent: "center",
+    overflow: "hidden",
+    position: "relative",
+  },
+  compactThumbImage: {
+    width: "100%",
+    height: "100%",
+  },
+  compactThumbInitials: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.textSecondary,
+  },
+  compactThumbIcon: {
+    position: "absolute",
+    right: 3,
+    bottom: 3,
   },
   compactProjectTitleRow: {
     flexDirection: "row",
@@ -1713,6 +1984,36 @@ const styles = StyleSheet.create({
     marginTop: 2,
     color: colors.textMuted,
     fontSize: 12,
+  },
+  compactTypeBadgeRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginTop: 1,
+    flexWrap: "wrap",
+  },
+  compactTypeBadge: {
+    borderWidth: 1,
+    borderRadius: 10,
+    paddingVertical: 2,
+    paddingHorizontal: 8,
+    backgroundColor: "transparent",
+  },
+  compactTypeBadgeText: {
+    fontSize: 10,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+  },
+  compactTypeBadgeCity: {
+    fontSize: 12,
+    color: colors.textMuted,
+    flex: 1,
+    flexShrink: 1,
+  },
+  compactMaintenanceMeta: {
+    marginTop: 1,
+    color: colors.textMuted,
+    fontSize: 11,
   },
   compactActions: {
     flexDirection: "row",
@@ -2191,6 +2492,16 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     textAlign: "center",
     padding: spacing.md,
+  },
+  emptyListContainer: {
+    padding: spacing.xl,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  emptyListText: {
+    fontSize: 14,
+    color: colors.textMuted,
+    textAlign: "center",
   },
   fab: {
     position: "absolute",

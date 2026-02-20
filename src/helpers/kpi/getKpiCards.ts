@@ -147,20 +147,22 @@ export function getKpiCards(data: DashboardViewModel): KpiCard[] {
     });
   }
 
-  // 4. Expenses This Month
-  cards.push({
-    id: "expenses_month",
-    type: "expenses_month",
-    value: data.kpis.expensesMonthSum,
-    label: "VÝDAVKY",
-    caption: "tento mesiac",
-    icon: "cash-outline",
-    iconColor: "#FF6B35",
-    navigationTarget: {
-      screen: "Projects", // Expenses are shown per-project, so navigate to Projects
-      params: { highlightExpenses: true },
-    },
-  });
+  // 4. Expenses This Month (only if user has expenses access)
+  if (data.kpis.hasExpensesAccess) {
+    cards.push({
+      id: "expenses_month",
+      type: "expenses_month",
+      value: data.kpis.expensesMonthSum,
+      label: "VÝDAVKY",
+      caption: "tento mesiac",
+      icon: "cash-outline",
+      iconColor: "#FF6B35",
+      navigationTarget: {
+        screen: "Projects",
+        params: { highlightExpenses: true },
+      },
+    });
+  }
 
   return cards;
 }
@@ -221,19 +223,21 @@ export function getKpiCardsWithTasks(
     },
   });
 
-  // 4. Total Expenses (all time, not just this month)
-  cards.push({
-    id: "expenses_total",
-    type: "expenses_total",
-    value: data.kpis.expensesTotalSum,
-    label: t("kpi.expensesTotal"),
-    icon: "cash-outline",
-    iconColor: "#FF6B35",
-    navigationTarget: {
-      screen: "Projects",
-      params: { highlightExpenses: true },
-    },
-  });
+  // 4. Total Expenses (only if user has expenses access in at least one project)
+  if (data.kpis.hasExpensesAccess) {
+    cards.push({
+      id: "expenses_total",
+      type: "expenses_total",
+      value: data.kpis.expensesTotalSum,
+      label: t("kpi.expensesTotal"),
+      icon: "cash-outline",
+      iconColor: "#FF6B35",
+      navigationTarget: {
+        screen: "Projects",
+        params: { highlightExpenses: true },
+      },
+    });
+  }
 
   return cards;
 }

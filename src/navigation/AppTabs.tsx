@@ -2,6 +2,7 @@ import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
+import { useUnreadCount } from "../hooks/useUnreadCount";
 import { HomeStack } from "./HomeStack";
 import { ProjectsScreen } from "../screens/ProjectsScreen";
 import { NotificationsScreen } from "../screens/NotificationsScreen";
@@ -22,6 +23,7 @@ const tabIcons: Record<string, React.ComponentProps<typeof Ionicons>["name"]> = 
 /** Tabs: Home, Projects, Notifications, Search, Account. */
 export function AppTabs() {
   const { t } = useI18n();
+  const { count: unreadCount } = useUnreadCount();
   return (
     <Tab.Navigator
       screenOptions={({ route }) => ({
@@ -38,7 +40,14 @@ export function AppTabs() {
     >
       <Tab.Screen name="Home" component={HomeStack} options={{ title: t("tabs.home"), headerShown: false }} />
       <Tab.Screen name="Projects" component={ProjectsScreen} options={{ title: t("tabs.projects") }} />
-      <Tab.Screen name="Notifications" component={NotificationsScreen} options={{ title: t("tabs.notifications") || "Notifikácie" }} />
+      <Tab.Screen
+        name="Notifications"
+        component={NotificationsScreen}
+        options={{
+          title: t("tabs.notifications") || "Notifikácie",
+          tabBarBadge: unreadCount > 0 ? unreadCount : undefined,
+        }}
+      />
       <Tab.Screen name="Search" component={SearchScreen} options={{ title: t("tabs.search") }} />
       <Tab.Screen name="Account" component={AccountScreen} options={{ title: t("tabs.account") }} />
     </Tab.Navigator>

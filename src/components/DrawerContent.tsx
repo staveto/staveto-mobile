@@ -4,10 +4,13 @@ import {
   Text,
   TouchableOpacity,
   StyleSheet,
-  ScrollView,
   Image,
-  ActivityIndicator,
   Linking,
+  Switch,
+  Alert,
+  ActionSheetIOS,
+  Platform,
+  ActivityIndicator,
 } from "react-native";
 import { DrawerContentScrollView, DrawerContentComponentProps } from "@react-navigation/drawer";
 import { Ionicons } from "@expo/vector-icons";
@@ -15,11 +18,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, spacing } from "../theme";
-import { db } from "../firebase";
-import { doc, getDoc } from "../lib/rnFirestore";
+import { db, storage } from "../firebase";
+import * as ImagePicker from "expo-image-picker";
+import { doc, getDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import { getUserSubscription } from "../services/subscription";
 import type { SubscriptionTier } from "../services/subscription";
 import { SUPPORT_EMAIL } from "../constants/consent";
+import { useUnreadCount } from "../hooks/useUnreadCount";
 
 const DRAWER_WIDTH_RATIO = 0.86;
 
@@ -43,13 +48,17 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const { user, logout } = useAuth();
   const [photoURL, setPhotoURL] = useState<string | null>(null);
   const [planTier, setPlanTier] = useState<SubscriptionTier | undefined>(undefined);
+  const [openToWork, setOpenToWork] = useState(false);
+  const [updatingOpenToWork, setUpdatingOpenToWork] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
 
   useEffect(() => {
     if (!user?.id) return;
     getDoc(doc(db, "users", user.id)).then((snap: { exists: () => boolean; data: () => Record<string, unknown> }) => {
       if (snap.exists()) {
-        const d = snap.data() as { photoURL?: string | null };
+        const d = snap.data() as { photoURL?: string | null; openToWork?: boolean };
         setPhotoURL(d.photoURL ?? null);
+        setOpenToWork(d.openToWork === true);
       }
     });
   }, [user?.id]);
@@ -71,6 +80,126 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     await Linking.openURL(`mailto:${SUPPORT_EMAIL}?subject=${subject}&body=${body}`);
   }, [user?.email]);
 
+  const handleOpenToWorkChange = useCallback(
+    async (value: boolean) => {
+      if (!user?.id || updatingOpenToWork) return;
+      setOpenToWork(value);
+      setUpdatingOpenToWork(true);
+      try {
+        await updateDoc(doc(db, "users", user.id), {
+          openToWork: value,
+          updatedAt: serverTimestamp(),
+        });
+      } catch {
+        setOpenToWork(!value);
+      } finally {
+        setUpdatingOpenToWork(false);
+      }
+    },
+    [user?.id, updatingOpenToWork]
+  );
+
+  const pickProfilePhoto = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(t("account.permission"), t("account.galleryPermission"));
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      setUploadingPhoto(true);
+      const asset = result.assets[0];
+      const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
+      const storageRef = storage().ref(`users/${user.id}/profile/${fileName}`);
+      await storageRef.putFile(asset.uri);
+      const url = await storageRef.getDownloadURL();
+      await updateDoc(doc(db, "users", user.id), { photoURL: url, updatedAt: serverTimestamp() });
+      setPhotoURL(url);
+    } catch (error) {
+      console.error("[drawer] Failed to pick profile photo:", error);
+      Alert.alert(t("common.error"), t("account.uploadPhotoFailed"));
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }, [user?.id, t]);
+
+  const takeProfilePhoto = useCallback(async () => {
+    if (!user?.id) return;
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(t("account.permission"), t("account.cameraPermission"));
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        allowsEditing: true,
+        aspect: [1, 1],
+        quality: 0.8,
+      });
+      if (result.canceled || !result.assets[0]) return;
+      setUploadingPhoto(true);
+      const asset = result.assets[0];
+      const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
+      const storageRef = storage().ref(`users/${user.id}/profile/${fileName}`);
+      await storageRef.putFile(asset.uri);
+      const url = await storageRef.getDownloadURL();
+      await updateDoc(doc(db, "users", user.id), { photoURL: url, updatedAt: serverTimestamp() });
+      setPhotoURL(url);
+    } catch (error) {
+      console.error("[drawer] Failed to take profile photo:", error);
+      Alert.alert(t("common.error"), t("account.takePhotoFailed"));
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }, [user?.id, t]);
+
+  const removeProfilePhoto = useCallback(async () => {
+    if (!user?.id) return;
+    setUploadingPhoto(true);
+    try {
+      await updateDoc(doc(db, "users", user.id), { photoURL: null, updatedAt: serverTimestamp() });
+      setPhotoURL(null);
+    } catch (error) {
+      console.error("[drawer] Failed to remove profile photo:", error);
+      Alert.alert(t("common.error"), t("account.uploadPhotoFailed"));
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }, [user?.id, t]);
+
+  const showProfilePhotoOptions = useCallback(() => {
+    if (uploadingPhoto) return;
+    const options = [t("cover.cancel"), t("cover.takePhoto"), t("cover.chooseFromGallery")];
+    if (photoURL) options.push(t("cover.remove"));
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex: 0 },
+        async (buttonIndex) => {
+          if (buttonIndex === 1) await takeProfilePhoto();
+          else if (buttonIndex === 2) await pickProfilePhoto();
+          else if (buttonIndex === 3 && photoURL) await removeProfilePhoto();
+        }
+      );
+    } else {
+      const buttons: { text: string; onPress?: () => void; style?: "cancel" }[] = [
+        { text: t("cover.cancel"), style: "cancel" },
+        { text: t("cover.takePhoto"), onPress: takeProfilePhoto },
+        { text: t("cover.chooseFromGallery"), onPress: pickProfilePhoto },
+      ];
+      if (photoURL) buttons.push({ text: t("cover.remove"), onPress: removeProfilePhoto });
+      Alert.alert(t("nav.profilePhotoTitle"), "", buttons);
+    }
+  }, [uploadingPhoto, photoURL, t, takeProfilePhoto, pickProfilePhoto, removeProfilePhoto]);
+
+  const { count: unreadCount } = useUnreadCount();
   const displayName = user?.name ?? user?.firstName ?? user?.email ?? "—";
   const initials = displayName !== "—" ? displayName.slice(0, 2).toUpperCase() : "?";
 
@@ -112,6 +241,15 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       },
     },
     {
+      id: "messages",
+      icon: "chatbubbles-outline",
+      labelKey: "nav.messages",
+      action: () => {
+        closeDrawer();
+        // TODO: navigate to Messages screen
+      },
+    },
+    {
       id: "settings",
       icon: "settings-outline",
       labelKey: "account.settings",
@@ -129,6 +267,15 @@ export function DrawerContent(props: DrawerContentComponentProps) {
         openSupportEmail();
       },
     },
+    {
+      id: "knowhow",
+      icon: "document-text-outline",
+      labelKey: "nav.knowhow",
+      action: () => {
+        closeDrawer();
+        // TODO: navigate to Knowhow screen (technical docs / guides)
+      },
+    },
   ];
 
   return (
@@ -138,7 +285,12 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       scrollEnabled={true}
     >
       <View style={styles.header}>
-        <View style={styles.avatarWrap}>
+        <TouchableOpacity
+          style={[styles.avatarWrap, openToWork && styles.avatarWrapOpenToWork]}
+          onPress={showProfilePhotoOptions}
+          activeOpacity={0.8}
+          disabled={uploadingPhoto}
+        >
           {photoURL ? (
             <Image source={{ uri: photoURL }} style={styles.avatar} />
           ) : (
@@ -146,12 +298,28 @@ export function DrawerContent(props: DrawerContentComponentProps) {
               <Text style={styles.avatarText}>{initials}</Text>
             </View>
           )}
-        </View>
+          {uploadingPhoto && (
+            <View style={styles.avatarOverlay}>
+              <ActivityIndicator size="large" color="#fff" />
+            </View>
+          )}
+        </TouchableOpacity>
         <Text style={styles.userName} numberOfLines={1}>
           {displayName}
         </Text>
         <View style={styles.planBadge}>
           <Text style={styles.planText}>{getPlanLabel(planTier)}</Text>
+        </View>
+        <View style={styles.openToWorkRow}>
+          <Ionicons name="briefcase-outline" size={20} color={colors.textOnDark} style={styles.openToWorkIcon} />
+          <Text style={styles.openToWorkLabel}>{t("nav.openToWork")}</Text>
+          <Switch
+            value={openToWork}
+            onValueChange={handleOpenToWorkChange}
+            disabled={updatingOpenToWork}
+            trackColor={{ false: "rgba(255,255,255,0.3)", true: colors.primary }}
+            thumbColor="#fff"
+          />
         </View>
       </View>
 
@@ -163,7 +331,14 @@ export function DrawerContent(props: DrawerContentComponentProps) {
             onPress={item.action}
             activeOpacity={0.7}
           >
-            <Ionicons name={item.icon} size={24} color={colors.textOnDark} style={styles.navIcon} />
+            <View style={styles.navIconWrap}>
+              <Ionicons name={item.icon} size={24} color={colors.textOnDark} style={styles.navIcon} />
+              {item.id === "notifications" && unreadCount > 0 && (
+                <View style={styles.navBadge}>
+                  <Text style={styles.navBadgeText}>{unreadCount > 99 ? "99+" : unreadCount}</Text>
+                </View>
+              )}
+            </View>
             <Text style={styles.navLabel}>{t(item.labelKey)}</Text>
             <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.6)" />
           </TouchableOpacity>
@@ -201,6 +376,17 @@ const styles = StyleSheet.create({
     borderRadius: 36,
     overflow: "hidden",
     marginBottom: spacing.sm,
+    borderWidth: 3,
+    borderColor: "transparent",
+  },
+  avatarWrapOpenToWork: {
+    borderColor: colors.primary,
+  },
+  avatarOverlay: {
+    ...StyleSheet.absoluteFillObject,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   avatar: {
     width: "100%",
@@ -235,6 +421,25 @@ const styles = StyleSheet.create({
     fontWeight: "600",
     color: colors.textOnDark,
   },
+  openToWorkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: spacing.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.sm,
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderRadius: 8,
+    alignSelf: "stretch",
+  },
+  openToWorkIcon: {
+    marginRight: spacing.sm,
+    width: 24,
+  },
+  openToWorkLabel: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.textOnDark,
+  },
   navSection: {
     flex: 1,
     paddingTop: spacing.md,
@@ -246,9 +451,30 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     minHeight: 48,
   },
-  navIcon: {
+  navIconWrap: {
+    position: "relative",
     marginRight: spacing.md,
     width: 28,
+  },
+  navIcon: {
+    width: 28,
+  },
+  navBadge: {
+    position: "absolute",
+    top: -6,
+    right: -8,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  navBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: "#fff",
   },
   navLabel: {
     flex: 1,

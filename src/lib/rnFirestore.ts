@@ -72,11 +72,17 @@ export function query(base: CollectionRef | QueryRef, ...constraints: QueryConst
   return q;
 }
 
-export function getDoc(ref: DocumentRef) {
+export function getDoc(ref: DocumentRef, options?: FirebaseFirestore.GetOptions) {
+  if (options != null) {
+    return (ref as FirebaseFirestore.DocumentReference).get(options);
+  }
   return getDocModular(ref);
 }
 
-export function getDocs(ref: QueryRef | CollectionRef) {
+export function getDocs(ref: QueryRef | CollectionRef, options?: FirebaseFirestore.GetOptions) {
+  if (options != null) {
+    return (ref as FirebaseFirestore.Query).get(options);
+  }
   return getDocsModular(ref);
 }
 

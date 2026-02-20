@@ -100,8 +100,45 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
       }
 
       const memberByUidRef = doc(db, "projects", projectId, "membersByUid", uid);
-      const memberSnap = await getDoc(memberByUidRef);
+      let memberSnap = await getDoc(memberByUidRef);
+
       if (!memberSnap.exists()) {
+        const membersRef = doc(db, "projects", projectId, "members", uid);
+        const membersSnap = await getDoc(membersRef);
+        if (membersSnap.exists()) {
+          const mData = membersSnap.data();
+          const mStatus = mData?.status ?? "";
+          if (mStatus === "active" || !mStatus) {
+            const mShared = (mData?.sharedItems as Partial<ProjectAccess["sharedItems"]>) ?? {};
+            const hasSharedItems = typeof mShared.tasks === "boolean" || typeof mShared.phases === "boolean";
+            const mSi = hasSharedItems
+              ? {
+                  tasks: !!mShared.tasks,
+                  phases: !!mShared.phases,
+                  expenses: !!mShared.expenses,
+                  diary: !!mShared.diary,
+                  documents: !!mShared.documents,
+                }
+              : ALL_TRUE;
+            const mPerm = (mData?.permissionLevel === "editor" ? "editor" : "viewer") as "viewer" | "editor";
+            setAccess({
+              loading: false,
+              isOwner: false,
+              isMember: true,
+              permissionLevel: mPerm,
+              sharedItems: mSi,
+              sharedPhaseIds: (mData?.sharedPhaseIds as string[]) ?? [],
+              canReadTasks: mSi.tasks,
+              canReadPhases: mSi.phases,
+              canReadExpenses: mSi.expenses,
+              canReadDiary: mSi.diary,
+              canReadDocuments: mSi.documents,
+              canWrite: mPerm === "editor",
+            });
+            setLoading(false);
+            return;
+          }
+        }
         setAccess({ ...NO_ACCESS, loading: false });
         setLoading(false);
         return;
@@ -195,8 +232,42 @@ export async function fetchProjectAccess(
     }
 
     const memberByUidRef = doc(db, "projects", projectId, "membersByUid", uid);
-    const memberSnap = await getDoc(memberByUidRef);
+    let memberSnap = await getDoc(memberByUidRef);
     if (!memberSnap.exists()) {
+      const membersRef = doc(db, "projects", projectId, "members", uid);
+      const membersSnap = await getDoc(membersRef);
+      if (membersSnap.exists()) {
+        const mData = membersSnap.data();
+        const mStatus = mData?.status ?? "";
+        if (mStatus === "active" || !mStatus) {
+          const mShared = (mData?.sharedItems as Partial<ProjectAccess["sharedItems"]>) ?? {};
+          const hasSharedItems = typeof mShared.tasks === "boolean" || typeof mShared.phases === "boolean";
+          const mSi = hasSharedItems
+            ? {
+                tasks: !!mShared.tasks,
+                phases: !!mShared.phases,
+                expenses: !!mShared.expenses,
+                diary: !!mShared.diary,
+                documents: !!mShared.documents,
+              }
+            : ALL_TRUE;
+          const mPerm = (mData?.permissionLevel === "editor" ? "editor" : "viewer") as "viewer" | "editor";
+          return {
+            loading: false,
+            isOwner: false,
+            isMember: true,
+            permissionLevel: mPerm,
+            sharedItems: mSi,
+            sharedPhaseIds: (mData?.sharedPhaseIds as string[]) ?? [],
+            canReadTasks: mSi.tasks,
+            canReadPhases: mSi.phases,
+            canReadExpenses: mSi.expenses,
+            canReadDiary: mSi.diary,
+            canReadDocuments: mSi.documents,
+            canWrite: mPerm === "editor",
+          };
+        }
+      }
       return { ...NO_ACCESS, loading: false };
     }
 

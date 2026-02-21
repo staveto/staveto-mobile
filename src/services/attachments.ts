@@ -62,28 +62,15 @@ export async function uploadAttachment(
     throw new Error('Musíte byť prihlásený na nahrávanie prílohy.');
   }
 
-  // DEBUG: Verify project exists and user is owner BEFORE upload
+  // Verify project exists before upload (Storage rules enforce owner/editor write permission)
   try {
     const projectRef = doc(db, 'projects', projectId);
     const projectSnap = await getDoc(projectRef);
-    
     if (!projectSnap.exists()) {
       throw new Error(`Projekt ${projectId} neexistuje v Firestore.`);
     }
-    
-    const projectData = projectSnap.data();
-    const projectOwnerId = projectData.ownerId;
-    const currentUserId = currentUser.uid;
-    
-    console.log(`[attachments] DEBUG: Project check:`);
-    console.log(`  - Project ID: ${projectId}`);
-    console.log(`  - Project exists: YES`);
-    console.log(`  - Project ownerId: "${projectOwnerId}"`);
-    console.log(`  - Current user uid: "${currentUserId}"`);
-    console.log(`  - Match: ${projectOwnerId === currentUserId ? 'YES ✅' : 'NO ❌'}`);
-    
-    if (projectOwnerId !== currentUserId) {
-      throw new Error(`Nemáte oprávnenie nahrávať prílohy do projektu ${projectId}. Projekt ownerId (${projectOwnerId}) sa nezhoduje s vaším uid (${currentUserId}).`);
+    if (__DEV__) {
+      console.log(`[attachments] Upload: projectId=${projectId}, uid=${currentUser.uid}`);
     }
   } catch (error: any) {
     console.error(`[attachments] Project verification error:`, error);
@@ -112,15 +99,13 @@ export async function uploadAttachment(
     await storageRef.putFile(options.localUri, { contentType: options.mimeType });
     console.log(`[attachments] ✅ Upload successful: ${storagePath}`);
   } catch (error: any) {
-    console.error(`[attachments] Storage upload error:`, error);
-    console.error(`[attachments] Error code: ${error.code}`);
-    console.error(`[attachments] Error message: ${error.message}`);
-    console.error(`[attachments] Storage path: ${storagePath}`);
-    console.error(`[attachments] Current user uid: ${currentUser.uid}`);
-    console.error(`[attachments] Project ID: ${projectId}`);
-    
-    // Re-throw with more context
-    throw new Error(`Nepodarilo sa nahrať súbor: ${error.message || error.code || 'Neznáma chyba'}`);
+    const code = String(error?.code ?? "").toLowerCase();
+    const msg = error?.message ?? "";
+    console.error(`[attachments] Storage upload error:`, { code, msg, projectId, uid: currentUser.uid });
+    if (code === "storage/unauthorized" || code === "storage/canceled" || msg.includes("permission-denied")) {
+      throw new Error("permission-denied");
+    }
+    throw new Error(`Nepodarilo sa nahrať súbor: ${msg || code || "Neznáma chyba"}`);
   }
   const finalFilePath = storageRef.fullPath || storagePath;
   console.log(`[attachments] Final uploaded filePath: ${finalFilePath}`);
@@ -226,11 +211,22 @@ export async function listAttachments(
 }
 
 /**
- * Get download URL for an attachment
+ * Get download URL for an attachment.
+ * Storage rules: read allowed for owner or member with tasks/expenses/documents permission.
  */
 export async function getAttachmentURL(attachment: AttachmentDoc): Promise<string> {
-  const storageRef = storage.ref(attachment.storagePath);
-  return await storageRef.getDownloadURL();
+  try {
+    const storageRef = storage.ref(attachment.storagePath);
+    return await storageRef.getDownloadURL();
+  } catch (error: any) {
+    const code = String(error?.code ?? "").toLowerCase();
+    const msg = error?.message ?? "";
+    console.error(`[attachments] getDownloadURL error:`, { code, msg, path: attachment.storagePath });
+    if (code === "storage/unauthorized" || msg.includes("permission-denied")) {
+      throw new Error("permission-denied");
+    }
+    throw error;
+  }
 }
 
 /**

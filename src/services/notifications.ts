@@ -24,6 +24,7 @@ export type NotificationType =
   | "PROJECT_ACTIVITY"
   | "PROJECT_CREATED"
   | "PROJECT_INVITED"
+  | "PROBLEM_ASSIGNED"
   | "EXPENSE_ADDED"
   | "MEMBER_JOINED"
   | "MEMBER_LEFT"
@@ -56,7 +57,7 @@ export type NotificationDoc = {
   /** @deprecated Use fromUserName. Kept for NotificationRow compat. */
   actorName?: string | null;
   /** @deprecated Inferred from type. Kept for NotificationRow compat. */
-  entityType?: "task" | "project" | "expense" | "document";
+  entityType?: "task" | "project" | "expense" | "document" | "problem";
   meta?: Record<string, unknown>;
   /** Deduplication key for TASK_ASSIGNED anti-spam (e.g. TASK_ASSIGNED_projectId_taskId_assigneeId) */
   dedupeKey?: string | null;
@@ -124,11 +125,12 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
 function inferEntityType(
   type: NotificationType,
   d: Record<string, unknown>
-): "task" | "project" | "expense" | "document" {
-  if (d.entityType && ["task", "project", "expense", "document"].includes(d.entityType as string)) {
-    return d.entityType as "task" | "project" | "expense" | "document";
+): "task" | "project" | "expense" | "document" | "problem" {
+  if (d.entityType && ["task", "project", "expense", "document", "problem"].includes(d.entityType as string)) {
+    return d.entityType as "task" | "project" | "expense" | "document" | "problem";
   }
   if (type.includes("TASK")) return "task";
+  if (type === "PROBLEM_ASSIGNED") return "problem";
   if (type.includes("PROJECT") || type.includes("MEMBER")) return "project";
   if (type.includes("EXPENSE")) return "expense";
   return "project";

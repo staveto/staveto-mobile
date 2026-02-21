@@ -1,3 +1,4 @@
+import { Platform } from "react-native";
 import auth from "@react-native-firebase/auth";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import { doc, setDoc, getDoc, serverTimestamp } from "../lib/rnFirestore";
@@ -139,7 +140,19 @@ export async function login(email: string, password: string): Promise<{ user: Au
 }
 
 export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string }> {
-  const { idToken } = await GoogleSignin.signIn();
+  if (Platform.OS === "android") {
+    const hasPlayServices = await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+    if (!hasPlayServices) {
+      throw new Error("Google Play Services nie sú dostupné. Aktualizujte ich v Obchode Play.");
+    }
+  }
+
+  const response = await GoogleSignin.signIn();
+  if (response.type === "cancelled" || !response.data?.idToken) {
+    throw new Error("Používateľ zrušil prihlásenie.");
+  }
+
+  const idToken = response.data.idToken;
   const googleCredential = auth.GoogleAuthProvider.credential(idToken);
   const cred = await auth().signInWithCredential(googleCredential);
   const user = toAuthUser(cred.user);
@@ -170,6 +183,13 @@ export function getAuthErrorMessage(code: string): string {
     "auth/wrong-password": "Nesprávne heslo.",
     "auth/email-already-in-use": "Email je už registrovaný.",
     "auth/weak-password": "Heslo musí mať aspoň 6 znakov.",
+    "auth/invalid-credential": "Neplatné prihlasovacie údaje. Skontrolujte Web Client ID vo Firebase.",
+    "auth/account-exists-with-different-credential": "Účet s týmto emailom už existuje. Prihláste sa heslom.",
+    "auth/credential-already-in-use": "Tieto prihlasovacie údaje sú už použité.",
+    "auth/operation-not-allowed": "Google prihlásenie nie je povolené. Skontrolujte Firebase Console.",
+    "auth/configuration-not-found": "Chýba Web Client ID. Pridajte EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID do .env",
+    "DEVELOPER_ERROR": "Chyba konfigurácie. Skontrolujte SHA-1 v Firebase a Web Client ID.",
+    "SIGN_IN_REQUIRED": "Používateľ zrušil prihlásenie.",
   };
   return m[code] ?? "Chyba prihlásenia. Skúste znova.";
 }

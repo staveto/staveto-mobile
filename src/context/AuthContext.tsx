@@ -3,12 +3,27 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import auth from "@react-native-firebase/auth";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import { doc, getDoc } from "../lib/rnFirestore";
-import { db } from "../firebase";
+import { db, getCallable } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
 import { configurePurchases } from "../services/billing";
 import { registerForPushNotifications, setupPushNotifications, removePushToken } from "../services/pushNotifications";
 
-type User = { id: string; email: string; name?: string; firstName?: string; lastName?: string };
+export type BillingStatus = {
+  status: "trial" | "active" | "expired";
+  isPro: boolean;
+  trialEndsAt: string | null;
+  remainingTrialDays: number;
+  currentPeriodEndAt: string | null;
+};
+
+type User = {
+  id: string;
+  email: string;
+  name?: string;
+  firstName?: string;
+  lastName?: string;
+  billing?: BillingStatus | null;
+};
 
 type AuthState = {
   token: string | null;
@@ -60,6 +75,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     }
   };
 
+  const fetchBillingStatus = async (uid: string): Promise<BillingStatus | null> => {
+    try {
+      const res = await getCallable("getBillingStatus")({});
+      const data = res?.data as BillingStatus | undefined;
+      if (__DEV__ && data?.isPro) {
+        console.log("[auth] Billing status: isPro=true, status=", data.status, "currentPeriodEndAt=", data.currentPeriodEndAt);
+      }
+      return data ?? null;
+    } catch (e) {
+      if (__DEV__) console.warn("[auth] getBillingStatus failed:", e);
+      return null;
+    }
+  };
+
   useEffect(() => {
     loadFromStorage();
   }, []);
@@ -102,6 +131,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       }
       registerForPushNotifications().catch((err) => console.warn("[auth] push register failed:", err));
       configurePurchases(fbUser.uid).catch(() => {});
+      const billing = await fetchBillingStatus(fbUser.uid);
+      user = { ...user, billing: billing ?? undefined };
       if (!claimedInviteSessionsRef.current.has(fbUser.uid)) {
         claimedInviteSessionsRef.current.add(fbUser.uid);
         claimProjectInvites()
@@ -166,6 +197,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (dn && !user.name) user = { ...user, name: dn };
         if (!user.name && fn && ln) user = { ...user, name: `${fn} ${ln}`.trim() };
       }
+      const billing = await fetchBillingStatus(fbUser.uid);
+      user = { ...user, billing: billing ?? undefined };
       setState((s) => ({ ...s, token, user }));
     } catch {
       // ignore

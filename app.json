@@ -29,7 +29,7 @@
     },
     "android": {
       "package": "com.staveto.app",
-      "versionCode": 5,
+      "versionCode": 11,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
@@ -41,7 +41,8 @@
         "android.permission.READ_EXTERNAL_STORAGE",
         "android.permission.WRITE_EXTERNAL_STORAGE",
         "android.permission.CAMERA",
-        "android.permission.RECORD_AUDIO","com.android.vending.BILLING"
+        "android.permission.RECORD_AUDIO",
+        "com.android.vending.BILLING"
       ]
     },
     "plugins": [
@@ -59,7 +60,25 @@
         }
       ],
       "expo-speech-recognition",
-      "@react-native-firebase/messaging"
+      "@react-native-firebase/messaging",
+      [
+        "expo-build-properties",
+        {
+          "ios": {
+            "useFrameworks": "static",
+            "forceStaticLinking": [
+              "RNFBApp",
+              "RNFBAuth",
+              "RNFBFirestore",
+              "RNFBFunctions",
+              "RNFBMessaging",
+              "RNFBStorage"
+            ]
+          }
+        }
+      ],
+      "./plugins/withFirebaseModularHeaders",
+      "@react-native-community/datetimepicker"
     ],
     "web": {
       "favicon": "./assets/favicon.png"

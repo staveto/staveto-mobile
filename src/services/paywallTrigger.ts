@@ -1,13 +1,17 @@
 /**
  * Paywall trigger – show paywall when user reaches usage thresholds without entitlement.
- * Rule: projects >= 1 && tasks >= 3 -> show paywall once.
+ * Uses server billing status (billing.isPro, billing.status).
+ * Rule: billing.isPro => never show. billing.status==="expired" => show with 24h cooldown.
+ *       billing.status==="trial" => engagement trigger (projects>=1 && tasks>=3) + 24h cooldown.
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { NavigationProp } from "@react-navigation/native";
+import type { BillingStatus } from "../helpers/freeTrial";
 
 const STORAGE_KEY = "@staveto:paywall_trigger";
-const SHOWN_KEY = "@staveto:paywall_shown";
+const LAST_PAYWALL_SHOWN_AT = "@staveto:lastPaywallShownAt";
+const COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 type Counts = { projects: number; tasks: number; appOpened: number };
 
@@ -29,9 +33,13 @@ async function setCounts(c: Counts): Promise<void> {
   }
 }
 
-async function wasPaywallShown(): Promise<boolean> {
+async function isWithinCooldown(): Promise<boolean> {
   try {
-    return (await AsyncStorage.getItem(SHOWN_KEY)) === "1";
+    const raw = await AsyncStorage.getItem(LAST_PAYWALL_SHOWN_AT);
+    if (!raw) return false;
+    const ts = parseInt(raw, 10);
+    if (isNaN(ts)) return false;
+    return Date.now() - ts < COOLDOWN_MS;
   } catch {
     return false;
   }
@@ -39,13 +47,24 @@ async function wasPaywallShown(): Promise<boolean> {
 
 async function markPaywallShown(): Promise<void> {
   try {
-    await AsyncStorage.setItem(SHOWN_KEY, "1");
+    await AsyncStorage.setItem(LAST_PAYWALL_SHOWN_AT, String(Date.now()));
   } catch {
     // ignore
   }
 }
 
 export type PaywallEvent = "project_created" | "task_created" | "app_opened";
+
+/**
+ * Require Pro or valid trial before OCR/export/advanced actions.
+ * Returns true if user can proceed, false if paywall should be shown.
+ */
+export function requireProOrTrialValid(billing: BillingStatus | null | undefined): boolean {
+  if (!billing) return false;
+  if (billing.isPro) return true;
+  if (billing.status === "trial" && billing.remainingTrialDays > 0) return true;
+  return false;
+}
 
 /**
  * Track a paywall-relevant event. Call from project/task creation or app open.
@@ -68,21 +87,31 @@ export async function trackPaywallEvent(event: PaywallEvent): Promise<void> {
 
 /**
  * Check if paywall should be shown and navigate if so.
- * Call after tracking events, when user has no entitlement.
- * Rule: projects >= 1 && tasks >= 3 -> show once.
+ * billing.isPro => never show.
+ * billing.status==="expired" => show with 24h cooldown.
+ * billing.status==="trial" => engagement trigger (projects>=1 && tasks>=3) + 24h cooldown.
  */
 export async function checkAndShowPaywall(
-  hasEntitlement: boolean,
+  billing: BillingStatus | null | undefined,
   navigation: NavigationProp<Record<string, object>>
 ): Promise<boolean> {
-  if (hasEntitlement) return false;
-  if (await wasPaywallShown()) return false;
+  if (billing?.isPro) return false;
+  if (await isWithinCooldown()) return false;
 
-  const c = await getCounts();
-  const shouldShow = c.projects >= 1 && c.tasks >= 3;
-  if (!shouldShow) return false;
+  if (billing?.status === "expired") {
+    await markPaywallShown();
+    (navigation as any).navigate("Paywall");
+    return true;
+  }
 
-  await markPaywallShown();
-  (navigation as any).navigate("Paywall");
-  return true;
+  if (billing?.status === "trial") {
+    const c = await getCounts();
+    const shouldShow = c.projects >= 1 && c.tasks >= 3;
+    if (!shouldShow) return false;
+    await markPaywallShown();
+    (navigation as any).navigate("Paywall");
+    return true;
+  }
+
+  return false;
 }

@@ -351,7 +351,7 @@ export function AccountScreen() {
         <View style={styles.orgRow}>
           <Ionicons name="checkmark-circle" size={22} color={colors.primary} style={{ marginRight: spacing.md }} />
           <View style={{ flex: 1 }}>
-            <Text style={styles.orgName}>staveto.sk</Text>
+            <Text style={styles.orgName}>staveto.com</Text>
             <Text style={styles.orgEmail}>{user?.email ?? "—"}</Text>
           </View>
           <TouchableOpacity style={styles.inviteBtn} onPress={() => Alert.alert(t("account.comingSoon"))}>
@@ -365,8 +365,41 @@ export function AccountScreen() {
         />
       </View>
 
-      {/* Plán */}
+      {/* Plán / Billing banner */}
       <SectionTitle title={t("account.plan")} />
+      {user?.billing && (
+        <View style={[styles.card, styles.billingBanner]}>
+          <View style={styles.billingBannerContent}>
+            <Ionicons
+              name={user.billing.isPro ? "checkmark-circle" : "time-outline"}
+              size={24}
+              color={user.billing.status === "expired" ? "#FF5722" : colors.primary}
+            />
+            <View style={styles.billingBannerText}>
+              <Text style={styles.billingBannerTitle}>
+                {user.billing.status === "trial"
+                  ? t("subscription.statusTrial")
+                  : user.billing.status === "active"
+                    ? t("subscription.proActive")
+                    : t("subscription.statusExpired")}
+              </Text>
+              {user.billing.status === "trial" && user.billing.remainingTrialDays > 0 && (
+                <Text style={styles.billingBannerSub}>
+                  {t("subscription.trialRemainingDays", { count: String(user.billing.remainingTrialDays) })}
+                </Text>
+              )}
+            </View>
+          </View>
+          <TouchableOpacity
+            style={styles.billingBannerButton}
+            onPress={() => nav.navigate("Subscription")}
+          >
+            <Text style={styles.billingBannerButtonText}>
+              {user.billing.isPro ? t("account.subscription") : t("subscription.activatePro")}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      )}
       <View style={styles.card}>
         <Row
           icon="card-outline"
@@ -489,9 +522,9 @@ export function AccountScreen() {
         <Row icon="document-text-outline" label={t("account.termsOfService")} onPress={() => openUrl(TERMS_URL)} />
         <Row
           icon="people-outline"
-          label={t("account.contractors")}
+          label={t("account.subprocessors")}
           onPress={async () => {
-            const url = "https://staveto.sk/subprocessors";
+            const url = "https://www.staveto.com/subprocessors";
             const supported = await Linking.canOpenURL(url);
             if (supported) {
               await Linking.openURL(url);
@@ -504,7 +537,7 @@ export function AccountScreen() {
           icon="document-outline"
           label={t("account.privacyStatement")}
           onPress={async () => {
-            const url = "https://staveto.sk/privacy-statement";
+            const url = "https://www.staveto.com/privacy-statement";
             const supported = await Linking.canOpenURL(url);
             if (supported) {
               await Linking.openURL(url);
@@ -729,6 +762,41 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  billingBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.md,
+  },
+  billingBannerContent: {
+    flexDirection: "row",
+    alignItems: "center",
+    flex: 1,
+  },
+  billingBannerText: {
+    marginLeft: spacing.md,
+  },
+  billingBannerTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  billingBannerSub: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  billingBannerButton: {
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+  },
+  billingBannerButtonText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "600",
   },
   orgRow: {
     flexDirection: "row",

@@ -47,7 +47,6 @@ import { normalizeRoleKey } from "../helpers/role";
 import type { RoleKey } from "../helpers/role";
 import { getKpiCardsWithTasks } from "../helpers/kpi/getKpiCards";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
-import { getEntitlement } from "../services/billing";
 import { KpiCardComponent } from "../components/KpiCard";
 import type { KpiCard } from "../helpers/kpi/getKpiCards";
 
@@ -343,7 +342,7 @@ export function HomeScreen() {
     }
   }, []);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
-  const [pendingAction, setPendingAction] = useState<"task" | "photo" | "expense" | "voice" | null>(null);
+  const [pendingAction, setPendingAction] = useState<"task" | "photo" | "expense" | "voice" | "problem" | null>(null);
   const [fabProjectSelectionMode, setFabProjectSelectionMode] = useState(false);
   const [actionProjectId, setActionProjectId] = useState<string | null>(null);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
@@ -698,13 +697,12 @@ export function HomeScreen() {
       (async () => {
         await trackPaywallEvent("app_opened");
         try {
-          const ent = await getEntitlement();
-          await checkAndShowPaywall(!!ent?.entitlement, navigation);
+          await checkAndShowPaywall(user?.billing, navigation);
         } catch {
           // ignore
         }
       })();
-    }, [loadDashboard, navigation])
+    }, [loadDashboard, navigation, user?.billing])
   );
 
   // Save last used project ID
@@ -770,7 +768,7 @@ export function HomeScreen() {
   );
 
   const executeAction = useCallback(
-    async (action: "task" | "photo" | "expense" | "voice", projectId: string) => {
+    async (action: "task" | "photo" | "expense" | "voice" | "problem", projectId: string) => {
       await saveLastUsedProject(projectId);
       const project = dashboardData?.projects.find((p) => p.id === projectId);
 
@@ -805,6 +803,13 @@ export function HomeScreen() {
             diaryInputMode: "voice",
           });
           break;
+        case "problem":
+          stackNav.navigate("CreateProblem", {
+            projectId,
+            projectName: project?.name,
+            projectType: project?.projectType ?? "BUILD",
+          });
+          break;
       }
       setPendingAction(null);
       setShowProjectSelector(false);
@@ -813,7 +818,7 @@ export function HomeScreen() {
   );
 
   const runContextAction = useCallback(
-    (action: "task" | "photo" | "expense" | "voice", projectId?: string) => {
+    (action: "task" | "photo" | "expense" | "voice" | "problem", projectId?: string) => {
       if (projectId) {
         executeAction(action, projectId);
         return;
@@ -1471,6 +1476,16 @@ export function HomeScreen() {
               <Text style={styles.sheetActionIcon}>€</Text>
               <Text style={styles.sheetActionText}>{t("home.recordExpense")}</Text>
             </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.sheetActionRow}
+              onPress={() => {
+                setShowActionSheet(false);
+                runContextAction("problem", actionProjectId ?? undefined);
+              }}
+            >
+              <Text style={styles.sheetActionIcon}>⚠️</Text>
+              <Text style={styles.sheetActionText}>{t("home.reportProblem")}</Text>
+            </TouchableOpacity>
           </Pressable>
         </Pressable>
       </Modal>
@@ -1685,6 +1700,18 @@ export function HomeScreen() {
             ?.getParent()
             ?.getParent()
             ?.navigate("TaskDetail", { task });
+        }}
+        onProblemPress={(problem) => {
+          calendarSheetRef.current?.dismiss();
+          (navigation.getParent() as { getParent: () => { navigate: (n: string, p: object) => void } } | undefined)
+            ?.getParent()
+            ?.getParent()
+            ?.navigate("ProblemDetail", {
+              projectId: problem.projectId,
+              problemId: problem.id,
+              projectName: problem.projectName,
+              projectType: problem.projectType,
+            });
         }}
         onSeeAllForDate={(dueDateYmd) => {
           calendarSheetRef.current?.dismiss();

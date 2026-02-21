@@ -32,16 +32,29 @@ import { useAuth } from "../context/AuthContext";
 import { colors, spacing } from "../theme";
 import { toYmd, ymdToDate } from "../utils/date";
 import * as tasksService from "../services/tasks";
+import * as problemsService from "../services/problems";
 import type { TaskWithProject } from "../services/tasks";
+import type { ProblemWithProject } from "../services/problems";
 
 const SHEET_BG = "#1e2530";
 const SHEET_TEXT = "#ffffff";
 const SHEET_ACTION = "#7dd3fc";
 
-/** Servisné úlohy (MAINTENANCE, equipment) – modrá */
-const COLOR_SERVICE = "#60a5fa";
-/** Výstavba (BUILD, projekty) – oranžová */
-const COLOR_CONSTRUCTION = colors.primary;
+/** Farba podľa typu – legenda pre všetky typy projektov + problémy */
+const COLOR_BY_TYPE: Record<string, string> = {
+  MANAGEMENT: "#6b7280",
+  RESIDENTIAL: "#8b5cf6",
+  TRADE: "#f59e0b",
+  BUILD: colors.primary,
+  MAINTENANCE: "#60a5fa",
+  problem: "#ef4444",
+  /** Spätná kompatibilita */
+  COLOR_SERVICE: "#60a5fa",
+  COLOR_CONSTRUCTION: colors.primary,
+};
+
+const COLOR_SERVICE = COLOR_BY_TYPE.MAINTENANCE;
+const COLOR_CONSTRUCTION = COLOR_BY_TYPE.BUILD;
 
 const CALENDAR_PADDING = spacing.md * 2;
 const DAY_CELL_SIZE = Math.max(36, Math.floor((Dimensions.get("window").width - CALENDAR_PADDING) / 7));
@@ -49,6 +62,7 @@ const DAY_CELL_SIZE = Math.max(36, Math.floor((Dimensions.get("window").width - 
 type Props = {
   sheetRef: React.RefObject<BottomSheetModal | null>;
   onTaskPress?: (task: TaskWithProject) => void;
+  onProblemPress?: (problem: ProblemWithProject) => void;
   onSeeAllForDate?: (dueDateYmd: string) => void;
 };
 
@@ -73,7 +87,9 @@ const WEEKDAYS_BY_LOCALE: Record<Locale, string[]> = {
   pl: ["Pn", "Wt", "Śr", "Cz", "Pt", "So", "Nd"],
 };
 
-export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Props) {
+const PROJECT_TYPES = ["MANAGEMENT", "RESIDENTIAL", "TRADE", "BUILD", "MAINTENANCE"] as const;
+
+export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSeeAllForDate }: Props) {
   const { t, locale } = useI18n();
   const dateFnsLocale = LOCALE_MAP[locale] ?? enUS;
   const weekdays = WEEKDAYS_BY_LOCALE[locale] ?? WEEKDAYS_BY_LOCALE.en;
@@ -81,6 +97,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [tasksByYmd, setTasksByYmd] = useState<Map<string, TaskWithProject[]>>(new Map());
+  const [problemsByYmd, setProblemsByYmd] = useState<Map<string, ProblemWithProject[]>>(new Map());
   const [loading, setLoading] = useState(false);
 
   const days = useMemo(() => {
@@ -97,19 +114,32 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
       const end = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 2, 0);
       const startYmd = toYmd(start);
       const endYmd = toYmd(end);
-      const tasks = await tasksService.listTasksWithDueDateInRange(user.id, startYmd, endYmd);
-      const map = new Map<string, TaskWithProject[]>();
+      const [tasks, problems] = await Promise.all([
+        tasksService.listTasksWithDueDateInRange(user.id, startYmd, endYmd),
+        problemsService.listProblemsWithDueDateInRange(user.id, startYmd, endYmd),
+      ]);
+      const taskMap = new Map<string, TaskWithProject[]>();
       for (const task of tasks) {
         const ymd = task.dueDate?.trim();
         if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
-        const arr = map.get(ymd) ?? [];
+        const arr = taskMap.get(ymd) ?? [];
         arr.push(task);
-        map.set(ymd, arr);
+        taskMap.set(ymd, arr);
       }
-      setTasksByYmd(map);
+      const problemMap = new Map<string, ProblemWithProject[]>();
+      for (const p of problems) {
+        const ymd = p.dueDate?.trim();
+        if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
+        const arr = problemMap.get(ymd) ?? [];
+        arr.push(p);
+        problemMap.set(ymd, arr);
+      }
+      setTasksByYmd(taskMap);
+      setProblemsByYmd(problemMap);
     } catch (e) {
-      console.warn("[HomeCalendarSheet] Failed to load tasks:", e);
+      console.warn("[HomeCalendarSheet] Failed to load tasks/problems:", e);
       setTasksByYmd(new Map());
+      setProblemsByYmd(new Map());
     } finally {
       setLoading(false);
     }
@@ -134,12 +164,16 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
 
   const selectedYmd = selectedDate ? toYmd(selectedDate) : null;
   const tasksForSelected = selectedYmd ? (tasksByYmd.get(selectedYmd) ?? []) : [];
+  const problemsForSelected = selectedYmd ? (problemsByYmd.get(selectedYmd) ?? []) : [];
 
-  const isServiceTask = (t: TaskWithProject) =>
-    t.projectType === "MAINTENANCE" || !!t.equipmentId || !!t.serviceRuleId;
   const getTasksForDay = (day: Date) => tasksByYmd.get(toYmd(day)) ?? [];
-  const hasServiceOnDay = (day: Date) => getTasksForDay(day).some(isServiceTask);
-  const hasConstructionOnDay = (day: Date) => getTasksForDay(day).some((t) => !isServiceTask(t));
+  const getProblemsForDay = (day: Date) => problemsByYmd.get(toYmd(day)) ?? [];
+  const getTaskType = (t: TaskWithProject) =>
+    t.projectType === "MAINTENANCE" || !!t.equipmentId || !!t.serviceRuleId ? "MAINTENANCE" : (t.projectType ?? "BUILD");
+  const hasTypeOnDay = (day: Date, type: string) => {
+    if (type === "problem") return getProblemsForDay(day).length > 0;
+    return getTasksForDay(day).some((t) => getTaskType(t) === type);
+  };
 
   const handleTaskPress = useCallback(
     (task: TaskWithProject) => {
@@ -147,6 +181,14 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
       onTaskPress?.(task);
     },
     [sheetRef, onTaskPress]
+  );
+
+  const handleProblemPress = useCallback(
+    (problem: ProblemWithProject) => {
+      sheetRef.current?.dismiss();
+      onProblemPress?.(problem);
+    },
+    [sheetRef, onProblemPress]
   );
 
   const handleSeeAll = useCallback(() => {
@@ -214,8 +256,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
                 const inMonth = isSameMonth(day, currentMonth);
                 const selected = selectedDate && isSameDay(day, selectedDate);
                 const today = isToday(day);
-                const hasService = hasServiceOnDay(day);
-                const hasConstruction = hasConstructionOnDay(day);
+                const typesPresent = [...PROJECT_TYPES, "problem"].filter((t) => hasTypeOnDay(day, t));
                 return (
                   <TouchableOpacity
                     key={day.toISOString()}
@@ -239,8 +280,9 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
                       {format(day, "d")}
                     </Text>
                     <View style={styles.dayDotsRow}>
-                      {hasService && <View style={[styles.dayDot, { backgroundColor: COLOR_SERVICE }]} />}
-                      {hasConstruction && <View style={[styles.dayDot, { backgroundColor: COLOR_CONSTRUCTION }]} />}
+                      {typesPresent.slice(0, 6).map((t) => (
+                        <View key={t} style={[styles.dayDot, { backgroundColor: COLOR_BY_TYPE[t] ?? "#888" }]} />
+                      ))}
                     </View>
                   </TouchableOpacity>
                 );
@@ -249,13 +291,15 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
         </View>
 
         <View style={styles.legendRow}>
+            {PROJECT_TYPES.map((pt) => (
+              <View key={pt} style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: COLOR_BY_TYPE[pt] ?? "#888" }]} />
+                <Text style={styles.legendText}>{t(`projectType.${pt}`)}</Text>
+              </View>
+            ))}
             <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: COLOR_SERVICE }]} />
-              <Text style={styles.legendText}>{t("home.legendService")}</Text>
-            </View>
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: COLOR_CONSTRUCTION }]} />
-              <Text style={styles.legendText}>{t("home.legendConstruction")}</Text>
+              <View style={[styles.legendDot, { backgroundColor: COLOR_BY_TYPE.problem }]} />
+              <Text style={styles.legendText}>{t("home.legendProblem")}</Text>
             </View>
           </View>
 
@@ -269,27 +313,48 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onSeeAllForDate }: Pr
               <>
                 {loading ? (
                   <Text style={styles.loadingText}>{t("common.saving")}</Text>
-                ) : tasksForSelected.length === 0 ? (
+                ) : tasksForSelected.length === 0 && problemsForSelected.length === 0 ? (
                   <Text style={styles.emptyTasks}>{t("home.noTasksForDate")}</Text>
                 ) : (
                   <>
-                    {tasksForSelected.slice(0, 5).map((task) => (
-                      <TouchableOpacity
-                        key={`${task.projectId}-${task.id}`}
-                        style={styles.taskRow}
-                        onPress={() => handleTaskPress(task)}
-                        activeOpacity={0.7}
-                      >
-                        <Ionicons name="checkbox-outline" size={18} color={SHEET_ACTION} />
-                        <Text style={styles.taskTitle} numberOfLines={1}>
-                          {task.title || t("tasks.noTitle")}
-                        </Text>
-                        <Text style={styles.taskProject} numberOfLines={1}>
-                          {task.projectName ?? ""}
-                        </Text>
-                      </TouchableOpacity>
-                    ))}
-                    {tasksForSelected.length > 5 && (
+                    {problemsForSelected
+                      .slice(0, 5)
+                      .map((p) => (
+                        <TouchableOpacity
+                          key={`problem-${p.projectId}-${p.id}`}
+                          style={styles.taskRow}
+                          onPress={() => handleProblemPress(p)}
+                          activeOpacity={0.7}
+                        >
+                          <Ionicons name="warning-outline" size={18} color={COLOR_BY_TYPE.problem} />
+                          <Text style={styles.taskTitle} numberOfLines={1}>
+                            {p.shortDescription || t("problems.noDescription")}
+                          </Text>
+                          <Text style={styles.taskProject} numberOfLines={1}>
+                            {p.projectName ?? ""}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    {tasksForSelected.length > 0 &&
+                      tasksForSelected
+                        .slice(0, 5 - problemsForSelected.length)
+                        .map((task) => (
+                          <TouchableOpacity
+                            key={`task-${task.projectId}-${task.id}`}
+                            style={styles.taskRow}
+                            onPress={() => handleTaskPress(task)}
+                            activeOpacity={0.7}
+                          >
+                            <Ionicons name="checkbox-outline" size={18} color={SHEET_ACTION} />
+                            <Text style={styles.taskTitle} numberOfLines={1}>
+                              {task.title || t("tasks.noTitle")}
+                            </Text>
+                            <Text style={styles.taskProject} numberOfLines={1}>
+                              {task.projectName ?? ""}
+                            </Text>
+                          </TouchableOpacity>
+                        ))}
+                    {(tasksForSelected.length + problemsForSelected.length) > 5 && (
                       <TouchableOpacity
                         style={styles.seeAllBtn}
                         onPress={handleSeeAll}
@@ -428,9 +493,10 @@ const styles = StyleSheet.create({
   },
   legendRow: {
     flexDirection: "row",
+    flexWrap: "wrap",
     alignItems: "center",
     justifyContent: "center",
-    gap: spacing.lg,
+    gap: spacing.md,
     marginTop: spacing.sm,
     marginBottom: spacing.md,
   },

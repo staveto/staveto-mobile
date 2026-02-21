@@ -153,6 +153,7 @@ export function NotificationsScreen() {
       case "TASK_OVERDUE":
         return "warning-outline";
       case "TASK_ASSIGNED":
+      case "PROBLEM_ASSIGNED":
         return "checkmark-circle-outline";
       case "EXPENSE_ADDED":
         return "cash-outline";
@@ -181,6 +182,8 @@ export function NotificationsScreen() {
         return t("notifications.overdue");
       case "TASK_ASSIGNED":
         return t("notifications.assignedTask");
+      case "PROBLEM_ASSIGNED":
+        return t("notifications.problemAssigned");
       case "EXPENSE_ADDED":
         return t("notifications.newExpense");
       case "PROJECT_CREATED":
@@ -211,7 +214,8 @@ export function NotificationsScreen() {
     return parts.join(" • ") || t("notifications.noDescription");
   };
 
-  const handleNotificationPress = useCallback(
+  /** Navigate to the related item (project, task, etc.). Also marks as read. */
+  const handleNavigateToNotification = useCallback(
     async (notification: NotificationDoc) => {
       await markAsRead(notification);
 
@@ -268,6 +272,19 @@ export function NotificationsScreen() {
           screen: "Tasks",
           params: { dueFilter },
         });
+      } else if (notification.type === "PROBLEM_ASSIGNED" && notification.projectId) {
+        const problemId = (notification.meta?.problemId as string) ?? notification.deepLink?.params?.problemId;
+        if (problemId) {
+          const parentNav = navigation.getParent();
+          if (parentNav) {
+            (parentNav as any).navigate("ProblemDetail", { projectId: notification.projectId, problemId });
+          }
+          return;
+        }
+        const parentNav = navigation.getParent();
+        if (parentNav) {
+          (parentNav as any).navigate("ProjectOverview", { projectId: notification.projectId });
+        }
       } else if (notification.type === "EXPENSE_ADDED" && notification.projectId && notification.expenseId) {
         // Navigate to root stack ProjectOverview screen
         const parentNav = navigation.getParent();
@@ -303,6 +320,16 @@ export function NotificationsScreen() {
       }
     },
     [navigation, markAsRead]
+  );
+
+  /** Tap on card: mark as read only, no navigation. */
+  const handleMarkAsReadOnly = useCallback(
+    (notification: NotificationDoc) => {
+      if (!notification.readAt) {
+        markAsRead(notification);
+      }
+    },
+    [markAsRead]
   );
 
   const isTodayNotification = (n: NotificationDoc) => {
@@ -426,12 +453,12 @@ export function NotificationsScreen() {
                 </View>
               </TouchableOpacity>
             ) : (
-              <TouchableOpacity
-                style={[styles.notificationCard, !item.notification.readAt && styles.notificationCardUnread]}
-                onPress={() => handleNotificationPress(item.notification)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.cardContent}>
+              <View style={[styles.notificationCard, !item.notification.readAt && styles.notificationCardUnread]}>
+                <TouchableOpacity
+                  style={styles.cardContent}
+                  onPress={() => handleMarkAsReadOnly(item.notification)}
+                  activeOpacity={0.7}
+                >
                   <View style={styles.iconContainer}>
                     <Ionicons name={getNotificationIcon(item.notification.type)} size={52} color={colors.primary} />
                   </View>
@@ -447,8 +474,15 @@ export function NotificationsScreen() {
                     {!item.notification.readAt && <View style={styles.unreadDot} />}
                     <Text style={styles.timeText}>{formatRelativeTime(item.notification.createdAt)}</Text>
                   </View>
-                </View>
-              </TouchableOpacity>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.chevronButton}
+                  onPress={() => handleNavigateToNotification(item.notification)}
+                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                >
+                  <Ionicons name="chevron-forward" size={24} color={colors.primary} />
+                </TouchableOpacity>
+              </View>
             )
           }
         />
@@ -468,12 +502,12 @@ export function NotificationsScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
           }
           renderItem={({ item }) => (
-            <TouchableOpacity
-              style={[styles.notificationCard, !item.readAt && styles.notificationCardUnread]}
-              onPress={() => handleNotificationPress(item)}
-              activeOpacity={0.7}
-            >
-              <View style={styles.cardContent}>
+            <View style={[styles.notificationCard, !item.readAt && styles.notificationCardUnread]}>
+              <TouchableOpacity
+                style={styles.cardContent}
+                onPress={() => handleMarkAsReadOnly(item)}
+                activeOpacity={0.7}
+              >
                 <View style={styles.iconContainer}>
                   <Ionicons name={getNotificationIcon(item.type)} size={52} color={colors.primary} />
                 </View>
@@ -489,8 +523,15 @@ export function NotificationsScreen() {
                   {!item.readAt && <View style={styles.unreadDot} />}
                   <Text style={styles.timeText}>{formatRelativeTime(item.createdAt)}</Text>
                 </View>
-              </View>
-            </TouchableOpacity>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.chevronButton}
+                onPress={() => handleNavigateToNotification(item)}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+              >
+                <Ionicons name="chevron-forward" size={24} color={colors.primary} />
+              </TouchableOpacity>
+            </View>
           )}
         />
       )}
@@ -573,6 +614,8 @@ const styles = StyleSheet.create({
     padding: spacing.md,
   },
   notificationCard: {
+    flexDirection: "row",
+    alignItems: "center",
     backgroundColor: colors.card,
     borderRadius: radius,
     padding: spacing.md,
@@ -587,6 +630,7 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary + "15",
   },
   cardContent: {
+    flex: 1,
     flexDirection: "row",
     alignItems: "center",
   },
@@ -617,6 +661,10 @@ const styles = StyleSheet.create({
   rightContainer: {
     alignItems: "flex-end",
     justifyContent: "center",
+  },
+  chevronButton: {
+    padding: spacing.sm,
+    marginLeft: spacing.xs,
   },
   unreadDot: {
     width: 10,

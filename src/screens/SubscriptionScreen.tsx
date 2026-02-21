@@ -1,8 +1,8 @@
 /**
  * Subscription Management Screen
  *
- * Single plan: 14-day trial then €14.99/month.
- * Shows entitlement status and OCR usage.
+ * Single plan: Staveto Pro — 14 days free, then €14.99/month.
+ * Server billing (getBillingStatus) is source of truth.
  */
 
 import React, { useState, useEffect } from "react";
@@ -22,42 +22,31 @@ import {
 import { useAuth } from "../context/AuthContext";
 import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
-import {
-  getUserSubscription,
-  redeemPromoCode as redeemPromoCodeService,
-  subscribeToSubscription,
-  type Subscription,
-} from "../services/subscription";
-import { getEntitlement, DEFAULT_ENTITLEMENT, type Entitlement } from "../services/billing";
+import { redeemPromoCode as redeemPromoCodeService } from "../services/subscription";
+import { getEntitlement, purchaseMonthly, restorePurchases } from "../services/billing";
 import { colors, radius, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
 import { showToast } from "../helpers/toast";
 
 export function SubscriptionScreen() {
   const { t } = useI18n();
-  const { user } = useAuth();
+  const { user, refreshUser } = useAuth();
   const navigation = useNavigation();
-  const [entitlement, setEntitlement] = useState<Entitlement | null>(null);
-  const [subscription, setSubscription] = useState<Subscription | null>(null);
+  const billing = user?.billing ?? null;
+  const [usage, setUsage] = useState<{ ocrUsed: number; ocrLimit: number } | null>(null);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [purchasing, setPurchasing] = useState(false);
   const [showPromoModal, setShowPromoModal] = useState(false);
   const [promoCodeInput, setPromoCodeInput] = useState("");
   const [promoRedeeming, setPromoRedeeming] = useState(false);
 
-  const loadData = async () => {
-    if (!user?.id) return;
+  const loadUsage = async () => {
     try {
-      const [ent, sub] = await Promise.all([
-        getEntitlement(),
-        getUserSubscription(user.id),
-      ]);
-      setEntitlement(ent);
-      setSubscription(sub);
-    } catch (error) {
-      console.error("[SubscriptionScreen] Error loading:", error);
-      setEntitlement(DEFAULT_ENTITLEMENT);
-      setSubscription(null);
+      const ent = await getEntitlement();
+      setUsage({ ocrUsed: ent.ocrUsed, ocrLimit: ent.ocrLimit });
+    } catch {
+      setUsage({ ocrUsed: 0, ocrLimit: 0 });
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -65,17 +54,51 @@ export function SubscriptionScreen() {
   };
 
   useEffect(() => {
-    if (!user?.id) return;
-    loadData();
-    const unsubscribe = subscribeToSubscription(user.id, (sub) => {
-      setSubscription(sub);
-    });
-    return () => unsubscribe();
+    if (!user?.id) {
+      setLoading(false);
+      return;
+    }
+    loadUsage();
   }, [user?.id]);
 
   const onRefresh = async () => {
     setRefreshing(true);
-    await loadData();
+    await refreshUser();
+    await loadUsage();
+  };
+
+  const handleActivatePro = async () => {
+    setPurchasing(true);
+    try {
+      const { success } = await purchaseMonthly();
+      if (success) {
+        showToast(t("paywall.purchaseSuccess"));
+        await refreshUser();
+      } else {
+        Alert.alert(t("paywall.purchaseFailed"), t("paywall.noProducts"));
+      }
+    } catch (e) {
+      Alert.alert(t("paywall.purchaseFailed"), String(e));
+    } finally {
+      setPurchasing(false);
+    }
+  };
+
+  const handleRestore = async () => {
+    setPurchasing(true);
+    try {
+      const { success } = await restorePurchases();
+      if (success) {
+        showToast(t("paywall.restoreSuccess"));
+        await refreshUser();
+      } else {
+        showToast(t("paywall.restoreNoPurchases"));
+      }
+    } catch (e) {
+      Alert.alert(t("paywall.restoreFailed"), String(e));
+    } finally {
+      setPurchasing(false);
+    }
   };
 
   const getPromoErrorMessage = (code: string): string => {
@@ -100,27 +123,20 @@ export function SubscriptionScreen() {
     if (!code) return;
     setPromoRedeeming(true);
     try {
-      const result = await redeemPromoCodeService(code);
+      await redeemPromoCodeService(code);
       showToast(t("subscription.promoCodeSuccess"));
       setShowPromoModal(false);
       setPromoCodeInput("");
-      setSubscription({
-        tier: "PRO",
-        status: "active",
-        currentPeriodEnd: result.currentPeriodEnd,
-        source: "promo",
-        promoCode: code.toUpperCase(),
-      });
-      await loadData();
+      await refreshUser();
     } catch (error: any) {
-      const code = error?.message || error?.details || "";
-      Alert.alert(t("common.error"), getPromoErrorMessage(code));
+      const errCode = error?.message || error?.details || "";
+      Alert.alert(t("common.error"), getPromoErrorMessage(errCode));
     } finally {
       setPromoRedeeming(false);
     }
   };
 
-  if (loading) {
+  if (loading && !billing) {
     return (
       <View style={styles.container}>
         <ActivityIndicator size="large" color={colors.primary} />
@@ -128,12 +144,23 @@ export function SubscriptionScreen() {
     );
   }
 
+  const isPro = billing?.isPro ?? false;
+  const status = billing?.status ?? "expired";
   const statusLabel =
-    entitlement?.status === "trial"
+    status === "trial"
       ? t("subscription.statusTrial")
-      : entitlement?.status === "active"
+      : status === "active"
         ? t("subscription.statusActive")
         : t("subscription.statusExpired");
+
+  const formatDate = (iso: string | null) => {
+    if (!iso) return "—";
+    try {
+      return new Date(iso).toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+    } catch {
+      return iso;
+    }
+  };
 
   return (
     <ScrollView
@@ -142,33 +169,47 @@ export function SubscriptionScreen() {
     >
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{t("subscription.currentPlan")}</Text>
-        <TouchableOpacity
-          style={styles.currentPlanCard}
-          onPress={() => {
-            if (!entitlement?.entitlement) {
-              (navigation as any).navigate("Paywall");
-            }
-          }}
-          activeOpacity={entitlement?.entitlement ? 1 : 0.7}
-          disabled={!!entitlement?.entitlement}
-        >
+        <View style={styles.currentPlanCard}>
           <View style={styles.currentPlanHeader}>
             <Text style={styles.currentPlanName}>{t("subscription.planSingle")}</Text>
-            <Text style={styles.currentPlanPrice}>14.99 €</Text>
+            <Text style={styles.currentPlanPrice}>€14.99</Text>
           </View>
           <Text style={styles.currentPlanPeriod}>/{t("subscription.planSingleDescription")}</Text>
-          <View style={[styles.statusBadge, !entitlement?.entitlement && styles.statusBadgeExpired]}>
-            <Text style={[styles.statusBadgeText, !entitlement?.entitlement && styles.statusBadgeTextExpired]}>
+          <View style={[styles.statusBadge, status === "expired" && styles.statusBadgeExpired]}>
+            <Text style={[styles.statusBadgeText, status === "expired" && styles.statusBadgeTextExpired]}>
               {statusLabel}
             </Text>
           </View>
-          {!entitlement?.entitlement && (
-            <View style={styles.upgradeHint}>
-              <Ionicons name="chevron-forward" size={16} color={colors.primary} />
-              <Text style={styles.upgradeHintText}>{t("paywall.selectPlan")}</Text>
-            </View>
+          {status === "trial" && (
+            <Text style={styles.trialRemaining}>
+              {t("subscription.trialRemainingDays", { count: String(billing?.remainingTrialDays ?? 0) })}
+            </Text>
           )}
-        </TouchableOpacity>
+          {status === "expired" && (
+            <Text style={styles.trialExpiredText}>{t("subscription.trialExpired")}</Text>
+          )}
+          {status === "active" && billing?.currentPeriodEndAt && (
+            <Text style={styles.renewsAt}>{t("subscription.renewsAt", { date: formatDate(billing.currentPeriodEndAt) })}</Text>
+          )}
+          {!isPro && (
+            <TouchableOpacity
+              style={[styles.activateButton, purchasing && styles.upgradeButtonDisabled]}
+              onPress={handleActivatePro}
+              disabled={purchasing}
+            >
+              {purchasing ? (
+                <ActivityIndicator size="small" color="#fff" />
+              ) : (
+                <Text style={styles.activateButtonText}>{t("subscription.activatePro")}</Text>
+              )}
+            </TouchableOpacity>
+          )}
+          {!isPro && (
+            <TouchableOpacity style={styles.restoreButton} onPress={handleRestore} disabled={purchasing}>
+              <Text style={styles.restoreButtonText}>{t("paywall.restorePurchases")}</Text>
+            </TouchableOpacity>
+          )}
+        </View>
 
         <View style={styles.usageSection}>
           <Text style={styles.usageTitle}>{t("subscription.ocrUsed")}</Text>
@@ -178,9 +219,9 @@ export function SubscriptionScreen() {
                 style={[
                   styles.usageBar,
                   {
-                    width: `${Math.min(100, ((entitlement?.ocrUsed ?? 0) / (entitlement?.ocrLimit || 1)) * 100)}%`,
+                    width: `${Math.min(100, ((usage?.ocrUsed ?? 0) / (usage?.ocrLimit || 1)) * 100)}%`,
                     backgroundColor:
-                      (entitlement?.ocrUsed ?? 0) >= (entitlement?.ocrLimit ?? 0)
+                      (usage?.ocrUsed ?? 0) >= (usage?.ocrLimit ?? 0)
                         ? "#FF5722"
                         : colors.primary,
                   },
@@ -188,7 +229,7 @@ export function SubscriptionScreen() {
               />
             </View>
             <Text style={styles.usageValue}>
-              {entitlement?.ocrUsed ?? 0} / {entitlement?.ocrLimit ?? 0}
+              {usage?.ocrUsed ?? 0} / {usage?.ocrLimit ?? 0}
             </Text>
           </View>
         </View>
@@ -305,16 +346,42 @@ const styles = StyleSheet.create({
   statusBadgeTextExpired: {
     color: "#FF5722",
   },
-  upgradeHint: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 4,
+  trialRemaining: {
+    fontSize: 14,
+    color: colors.textMuted,
     marginTop: spacing.sm,
   },
-  upgradeHintText: {
-    fontSize: 12,
+  trialExpiredText: {
+    fontSize: 14,
+    color: "#FF5722",
+    marginTop: spacing.sm,
+  },
+  renewsAt: {
+    fontSize: 14,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
+  },
+  activateButton: {
+    backgroundColor: colors.primary,
+    borderRadius: radius,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    alignItems: "center",
+    marginTop: spacing.md,
+  },
+  activateButtonText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  restoreButton: {
+    alignItems: "center",
+    paddingVertical: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  restoreButtonText: {
     color: colors.primary,
-    fontWeight: "500",
+    fontSize: 14,
   },
   usageSection: {
     backgroundColor: colors.card,

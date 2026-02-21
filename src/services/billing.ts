@@ -1,16 +1,22 @@
 /**
  * Billing abstraction for Staveto.
  * RevenueCat + Google Play Billing for native; Cloud Function fallback when API key not set.
+ * Requires expo-dev-client / EAS build (not Expo Go).
  */
 
 import { Platform } from "react-native";
 import { getCallable } from "../firebase";
 
-let Purchases: typeof import("react-native-purchases") | null = null;
+let Purchases: typeof import("react-native-purchases").default | null = null;
 try {
-  Purchases = require("react-native-purchases");
+  const mod = require("react-native-purchases");
+  Purchases = mod?.default ?? mod;
+  if (!Purchases || typeof (Purchases as any).configure !== "function") {
+    Purchases = null;
+    if (__DEV__) console.warn("[billing] RevenueCat SDK not properly loaded. Use dev-client/EAS build, not Expo Go.");
+  }
 } catch {
-  // react-native-purchases not installed
+  if (__DEV__) console.warn("[billing] react-native-purchases not installed or failed to load");
 }
 
 export const PLAN_ID = "staveto_monthly_1499";
@@ -59,7 +65,7 @@ function getApiKey(): string | null {
 
 export async function configurePurchases(userId?: string | null): Promise<void> {
   if (!Purchases) {
-    if (__DEV__) console.warn("[billing] react-native-purchases not installed");
+    if (__DEV__) console.warn("[billing] react-native-purchases not installed or not available (use dev-client, not Expo Go)");
     return;
   }
   const apiKey = getApiKey();
@@ -79,9 +85,11 @@ export async function configurePurchases(userId?: string | null): Promise<void> 
     return;
   }
   try {
-    if (__DEV__) Purchases.setLogLevel(Purchases.LOG_LEVEL.DEBUG);
-    await Purchases.configure({ apiKey });
-    if (userId) await Purchases.logIn(userId);
+    const LOG_LEVEL = (Purchases as any).LOG_LEVEL;
+    if (__DEV__ && typeof (Purchases as any).setLogLevel === "function" && LOG_LEVEL?.DEBUG != null) {
+      (Purchases as any).setLogLevel(LOG_LEVEL.DEBUG);
+    }
+    await Purchases.configure({ apiKey, appUserID: userId ?? undefined });
     purchasesConfigured = true;
     if (__DEV__) console.log("[billing] RevenueCat configured");
   } catch (e) {
@@ -90,11 +98,24 @@ export async function configurePurchases(userId?: string | null): Promise<void> 
   }
 }
 
+/** Safe wrapper for getCustomerInfo - returns null on failure with console error. */
+export async function getCustomerInfoSafe(): Promise<{ entitlements: { active: Record<string, unknown> } } | null> {
+  if (!Purchases || typeof (Purchases as any).getCustomerInfo !== "function") return null;
+  try {
+    const info = await (Purchases as any).getCustomerInfo();
+    return info ?? null;
+  } catch (e) {
+    if (__DEV__) console.error("[billing] getCustomerInfo error:", e);
+    return null;
+  }
+}
+
 async function getEntitlementFromRevenueCat(): Promise<Entitlement | null> {
   if (!Purchases || !getApiKey()) return null;
   try {
-    const customerInfo = await Purchases.getCustomerInfo();
-    const ent = customerInfo.entitlements.active[REVENUECAT_ENTITLEMENT_ID];
+    const customerInfo = await getCustomerInfoSafe();
+    if (!customerInfo?.entitlements?.active) return null;
+    const ent = customerInfo.entitlements.active[REVENUECAT_ENTITLEMENT_ID] as { periodType?: string; latestPurchaseDate?: string; expirationDate?: string } | undefined;
     if (__DEV__) {
       console.log("[billing] customerInfo entitlements:", Object.keys(customerInfo.entitlements.active));
     }
@@ -147,9 +168,9 @@ export async function getOfferings(): Promise<{
   current: { availablePackages: Array<{ packageType: string; identifier: string }> } | null;
   all: Record<string, { availablePackages: Array<unknown> }>;
 } | null> {
-  if (!Purchases || !getApiKey()) return null;
+  if (!Purchases || !getApiKey() || typeof (Purchases as any).getOfferings !== "function") return null;
   try {
-    const offerings = await Purchases.getOfferings();
+    const offerings = await (Purchases as any).getOfferings();
     if (__DEV__) {
       console.log("[billing] offerings.current:", offerings.current?.identifier);
       console.log("[billing] availablePackages count:", offerings.current?.availablePackages?.length ?? 0);
@@ -165,13 +186,13 @@ export async function getOfferings(): Promise<{
 }
 
 export async function purchaseMonthly(): Promise<{ success: boolean }> {
-  if (!Purchases || !getApiKey()) {
-    if (__DEV__) console.warn("[billing] RevenueCat not configured");
+  if (!Purchases || !getApiKey() || typeof (Purchases as any).getOfferings !== "function" || typeof (Purchases as any).purchasePackage !== "function") {
+    if (__DEV__) console.warn("[billing] RevenueCat not configured or missing native methods (use dev-client build)");
     return { success: false };
   }
   try {
-    const offerings = await Purchases.getOfferings();
-    const offering = offerings.current ?? offerings.all[REVENUECAT_OFFERING_ID];
+    const offerings = await (Purchases as any).getOfferings();
+    const offering = offerings.current ?? offerings.all?.[REVENUECAT_OFFERING_ID];
     if (!offering?.availablePackages?.length) {
       if (__DEV__) console.warn("[billing] No packages available");
       return { success: false };
@@ -179,7 +200,7 @@ export async function purchaseMonthly(): Promise<{ success: boolean }> {
     const pkg =
       offering.availablePackages.find((p: { packageType: string }) => p.packageType === "MONTHLY") ??
       offering.availablePackages[0];
-    const { customerInfo } = await Purchases.purchasePackage(pkg);
+    const { customerInfo } = await (Purchases as any).purchasePackage(pkg);
     const ent = customerInfo.entitlements.active[REVENUECAT_ENTITLEMENT_ID];
     return { success: !!ent };
   } catch (e: unknown) {
@@ -189,12 +210,12 @@ export async function purchaseMonthly(): Promise<{ success: boolean }> {
 }
 
 export async function restorePurchases(): Promise<{ success: boolean }> {
-  if (!Purchases || !getApiKey()) {
+  if (!Purchases || !getApiKey() || typeof (Purchases as any).restorePurchases !== "function") {
     if (__DEV__) console.warn("[billing] RevenueCat not configured");
     return { success: false };
   }
   try {
-    const customerInfo = await Purchases.restorePurchases();
+    const customerInfo = await (Purchases as any).restorePurchases();
     const ent = customerInfo.entitlements.active[REVENUECAT_ENTITLEMENT_ID];
     return { success: !!ent };
   } catch (e: unknown) {

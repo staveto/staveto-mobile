@@ -62,6 +62,7 @@ import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
 import * as constructionDiaryService from "../services/constructionDiary";
 import * as projectDocumentsService from "../services/projectDocuments";
+import * as problemsService from "../services/problems";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectMembersService from "../services/projectMembers";
 import * as projectCoverService from "../services/projectCover";
@@ -93,7 +94,6 @@ import type { ProjectEvent } from "../lib/types";
 import type { ProjectWeatherSnapshot } from "../services/weather";
 import { DescriptionInputModal } from "../components/DescriptionInputModal";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
-import { getEntitlement } from "../services/billing";
 
 const DONE_COLOR = "#2e7d32";
 
@@ -137,6 +137,8 @@ export function ProjectOverviewScreen() {
   const expandedPhasesRef = React.useRef<Map<string, boolean>>(new Map());
   const [expandedExpenses, setExpandedExpenses] = useState(false);
   const [expandedDiary, setExpandedDiary] = useState(false);
+  const [expandedProblems, setExpandedProblems] = useState(false);
+  const [openProblemsCount, setOpenProblemsCount] = useState(0);
   const [expandedDocuments, setExpandedDocuments] = useState(false);
   const [showNewTask, setShowNewTask] = useState(false);
   const [showTaskDescriptionModal, setShowTaskDescriptionModal] = useState(false);
@@ -593,6 +595,15 @@ export function ProjectOverviewScreen() {
       } else {
         setEquipmentList([]);
       }
+
+      // Problems count (open + in_progress) for all project types
+      try {
+        const count = await problemsService.countOpenProblems(projectId);
+        setOpenProblemsCount(count);
+      } catch (e: any) {
+        console.warn("[ProjectOverview] Error loading problems count:", e);
+        setOpenProblemsCount(0);
+      }
       
       // Load all attachments for the project to build attachment count maps
       try {
@@ -850,7 +861,7 @@ export function ProjectOverviewScreen() {
       await load(true); // Reload with refresh
       console.log(`[ProjectOverview] Custom task created successfully`);
       trackPaywallEvent("task_created").then(() =>
-        getEntitlement().then((ent) => checkAndShowPaywall(!!ent?.entitlement, navigation))
+        checkAndShowPaywall(user?.billing, navigation)
       );
     } catch (e: unknown) {
       console.error(`[ProjectOverview] Error creating task:`, e);
@@ -3935,6 +3946,34 @@ export function ProjectOverviewScreen() {
           </View>
         )}
 
+        {/* Problems Section - All project types */}
+        {!access.loading && (
+          <View style={styles.expensesSection}>
+          <TouchableOpacity 
+            style={styles.expensesHeader}
+            onPress={() => (navigation as any).navigate("ProblemsList", { projectId, projectName, projectType })}
+          >
+            <View style={styles.expensesHeaderLeft}>
+              <Ionicons 
+                name="document-text-outline" 
+                size={20} 
+                color={colors.text} 
+                style={{ marginRight: spacing.sm }}
+              />
+              <Text style={styles.expensesHeaderText}>
+                {projectType === 'MAINTENANCE' ? t("problems.titlePoruchy") : projectType === 'TRADE' ? t("problems.titleReklamacie") : t("problems.title")}
+              </Text>
+              {openProblemsCount > 0 && (
+                <View style={styles.problemsBadge}>
+                  <Text style={styles.problemsBadgeText}>{openProblemsCount}</Text>
+                </View>
+              )}
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+          </TouchableOpacity>
+          </View>
+        )}
+
         {/* Project Documents Section - For BUILD and MANAGEMENT projects, only if can read documents */}
         {!access.loading && (projectType === 'BUILD' || projectType === 'MANAGEMENT') && access.canReadDocuments && (
           <View style={styles.expensesSection}>
@@ -6434,6 +6473,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.textMuted,
     marginLeft: spacing.xs,
+  },
+  problemsBadge: {
+    backgroundColor: colors.primary,
+    borderRadius: 10,
+    minWidth: 20,
+    height: 20,
+    justifyContent: 'center',
+    alignItems: 'center',
+    marginLeft: spacing.sm,
+    paddingHorizontal: 6,
+  },
+  problemsBadgeText: {
+    fontSize: 12,
+    fontWeight: '600',
+    color: '#fff',
   },
   expensesList: {
     padding: spacing.sm,

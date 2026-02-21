@@ -207,10 +207,20 @@ service cloud.firestore {
         allow write: if canWriteAsEditor(projectId);
       }
 
-      // attachments: enforce sharedItems.documents
+      // attachments: used for tasks, expenses, and documents - allow read if user can read any of these
       match /attachments/{attachmentId} {
-        allow read: if canReadDocuments(projectId);
+        allow read: if canReadTasks(projectId) || canReadExpenses(projectId) || canReadDocuments(projectId);
         allow write: if canWriteAsEditor(projectId);
+      }
+
+      // problems: defects/issues per project - read: owner or member; create: owner or editor; update: owner or creator or assignee; delete: owner only
+      match /problems/{problemId} {
+        allow read: if isOwner(projectId) || isMember(projectId);
+        allow create: if canWriteAsEditor(projectId);
+        allow update: if isOwner(projectId)
+          || resource.data.createdByUid == uid()
+          || resource.data.assigneeUid == uid();
+        allow delete: if isOwner(projectId);
       }
 
       // membersByUid: read for self (rules check), write by CF only

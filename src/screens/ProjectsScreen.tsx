@@ -462,10 +462,8 @@ export function ProjectsScreen() {
       closeNewModal();
       load();
       const { trackPaywallEvent, checkAndShowPaywall } = await import("../services/paywallTrigger");
-      const { getEntitlement } = await import("../services/billing");
       await trackPaywallEvent("project_created");
-      const ent = await getEntitlement();
-      await checkAndShowPaywall(!!ent?.entitlement, navigation);
+      await checkAndShowPaywall(user?.billing, navigation);
     } catch (e: unknown) {
       console.error('Error creating project:', e);
       const error = e as { code?: string; message?: string };

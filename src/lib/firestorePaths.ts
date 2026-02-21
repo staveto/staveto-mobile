@@ -47,6 +47,10 @@ export const paths = {
   projectDocuments: (projectId: string) => `projects/${projectId}/documents`,
   projectDocument: (projectId: string, documentId: string) =>
     `projects/${projectId}/documents/${documentId}`,
+  // Problems / Defects (all project types)
+  projectProblems: (projectId: string) => `projects/${projectId}/problems`,
+  projectProblem: (projectId: string, problemId: string) =>
+    `projects/${projectId}/problems/${problemId}`,
   // Equipment (MAINTENANCE v2)
   projectEquipment: (projectId: string) => `projects/${projectId}/equipment`,
   projectEquipmentItem: (projectId: string, equipmentId: string) =>

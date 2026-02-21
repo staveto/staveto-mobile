@@ -10,32 +10,74 @@ service firebase.storage {
       return request.auth.uid;
     }
     
-    // Project owner check (owner-only MVP) - same as Firestore rules
-    // IMPORTANT: In Storage rules, use firestore.exists() and firestore.get()
+    // Project owner check - same as Firestore rules
     function projectOwner(projectId) {
       return signedIn()
         && firestore.exists(/databases/(default)/documents/projects/$(projectId))
         && firestore.get(/databases/(default)/documents/projects/$(projectId)).data.ownerId == uid();
     }
     
-    // Unified attachments model: projects/{projectId}/attachments/{attachmentId}/{filename}
-    // All attachments (for tasks, expenses, phases) are stored here with metadata in Firestore
-    match /projects/{projectId}/attachments/{attachmentId}/{filename} {
-      // Allow read if user is project owner
-      allow read: if projectOwner(projectId);
-      
-      // Allow write (upload/delete) if user is project owner
-      allow write: if projectOwner(projectId)
-        && request.resource.size < 50 * 1024 * 1024; // Max 50MB per file
+    // Project member: membersByUid exists OR legacy members/{uid} with status active
+    // Matches Firestore isMember semantics
+    function isProjectMember(projectId) {
+      return signedIn()
+        && (
+          firestore.exists(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid()))
+          || (
+            firestore.exists(/databases/(default)/documents/projects/$(projectId)/members/$(uid()))
+            && (
+              !("status" in firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data)
+              || firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data.status == "active"
+            )
+          )
+        );
     }
     
-    // DEPRECATED: Task attachments nested path (kept for backward compatibility)
-    // This path is no longer used - all attachments go to projects/{projectId}/attachments
-    match /projects/{projectId}/tasks/{taskId}/attachments/{attachmentId}/{filename} {
-      allow read: if projectOwner(projectId);
-      
-      allow write: if projectOwner(projectId)
+    // Read attachments: owner OR member with tasks/expenses/documents permission (matches Firestore)
+    // Legacy members without membersByUid get full read
+    function canReadAttachments(projectId) {
+      return projectOwner(projectId)
+        || (
+          isProjectMember(projectId)
+          && (
+            !firestore.exists(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid()))
+            || firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.sharedItems.tasks == true
+            || firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.sharedItems.expenses == true
+            || firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.sharedItems.documents == true
+          )
+        );
+    }
+    
+    // Write attachments: owner OR member with permissionLevel == 'editor' (matches Firestore canWriteAsEditor)
+    function canWriteAttachments(projectId) {
+      return projectOwner(projectId)
+        || (
+          firestore.exists(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid()))
+          && firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.permissionLevel == 'editor'
+        );
+    }
+    
+    // Unified attachments: projects/{projectId}/attachments/{attachmentId}/{filename}
+    // Read: owner or member with tasks/expenses/documents; Write: owner or editor; max 50MB
+    match /projects/{projectId}/attachments/{attachmentId}/{filename} {
+      allow read: if canReadAttachments(projectId);
+      allow write: if canWriteAttachments(projectId)
         && request.resource.size < 50 * 1024 * 1024;
+    }
+    
+    // DEPRECATED: Task attachments nested path (backward compatibility)
+    match /projects/{projectId}/tasks/{taskId}/attachments/{attachmentId}/{filename} {
+      allow read: if canReadAttachments(projectId);
+      allow write: if canWriteAttachments(projectId)
+        && request.resource.size < 50 * 1024 * 1024;
+    }
+    
+    // Problem photos: projects/{projectId}/problems/{problemId}/{filename}
+    // Read: owner or member; Write: owner or editor; max 15MB per photo
+    match /projects/{projectId}/problems/{problemId}/{filename} {
+      allow read: if projectOwner(projectId) || isProjectMember(projectId);
+      allow write: if canWriteAttachments(projectId)
+        && request.resource.size < 15 * 1024 * 1024;
     }
     
     // Equipment photos (MAINTENANCE): projects/{projectId}/equipment/{equipmentId}/photo_*.jpg|png
@@ -55,7 +97,7 @@ service firebase.storage {
         && request.resource.size < 10 * 1024 * 1024; // Max 10MB
     }
     
-    // Deny all other paths
+    // Deny all other paths (must come after specific matches)
     match /{allPaths=**} {
       allow read, write: if false;
     }

@@ -96,8 +96,10 @@ export async function getUserTier(userId: string): Promise<SubscriptionTier> {
   if (subscription.source === "promo" && subscription.currentPeriodEnd) {
     const endMs = toMillis(subscription.currentPeriodEnd);
     if (endMs > 0 && endMs <= Date.now()) {
+      if (__DEV__) console.log("[subscription] Promo expired for user", userId, "endMs:", endMs);
       return "FREE";
     }
+    if (__DEV__) console.log("[subscription] Promo PRO active until", new Date(endMs).toISOString(), "userId:", userId);
   }
   return subscription.tier;
 }
@@ -120,26 +122,6 @@ export function subscribeToSubscription(
     const data = snapshot.data();
     callback(data?.subscription || null);
   });
-}
-
-/**
- * Create Stripe Checkout Session (calls Cloud Function)
- * 
- * Returns checkout URL that should be opened in browser/webview.
- */
-export async function createCheckoutSession(priceId: string): Promise<{ url: string; sessionId: string }> {
-  const result = await getCallable("createCheckoutSession")({ priceId });
-  return result.data as { url: string; sessionId: string };
-}
-
-/**
- * Create Billing Portal Session (calls Cloud Function)
- * 
- * Returns billing portal URL for managing subscription.
- */
-export async function createBillingPortalSession(): Promise<{ url: string }> {
-  const result = await getCallable("createBillingPortalSession")();
-  return result.data as { url: string };
 }
 
 /**

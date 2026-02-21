@@ -103,19 +103,23 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
 
       await AsyncStorage.setItem(PENDING_ONBOARDING_KEY, JSON.stringify(payload));
 
+      // Complete onboarding first so user can proceed even if Firestore is temporarily unavailable
+      await finishOnboarding();
+      onFinished();
+
+      // Sync to Firestore in background (non-blocking)
       if (user?.id) {
-        await updateUserProfileFromOnboarding(user.id, {
+        updateUserProfileFromOnboarding(user.id, {
           firstName: firstName.trim(),
           lastName: lastName.trim(),
           displayName,
           phoneE164: phoneE164 ?? undefined,
           primaryCountry,
           timezone: getDeviceTimezone(),
+        }).catch((e) => {
+          console.warn("[OnboardingMvp] Firestore sync failed, will retry on next app open:", e);
         });
       }
-
-      await finishOnboarding();
-      onFinished();
     } catch (e) {
       console.error("ONBOARDING error", e);
       setError(t("onboardingMvp.errorSaveFailed"));

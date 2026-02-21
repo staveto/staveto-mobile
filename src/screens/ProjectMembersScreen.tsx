@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, ActivityIndicator } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, ActivityIndicator, Share } from "react-native";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -145,13 +145,39 @@ export function ProjectMembersScreen() {
         },
         sharePhases ? selectedPhaseIds : []
       );
-      
+
+      const inviterName = user?.name || user?.firstName || user?.email || "";
+      const projName = projectName || t("home.selectProject") || "Project";
+      const inviteMessage =
+        (inviterName ? t("projectMembers.invitedBy", { name: inviterName }) + "\n\n" : "") +
+        t("projectMembers.inviteMessageLine1", { projectName: projName }) + "\n" +
+        t("projectMembers.inviteMessageLine2", { email: addMemberEmail.trim() });
+
       Alert.alert(
-        t('common.success') || 'Úspech',
-        t('projectMembers.inviteSuccess', { email: addMemberEmail.trim() }) || `Pozvánka bola vytvorená pre ${addMemberEmail.trim()}. ${t('projectMembers.emailNote') || 'Poznámka: Email sa automaticky neodosiela. Používateľ musí vedieť, že má prístup k projektu.'}`,
+        t("common.success") || "Úspech",
+        t("projectMembers.inviteSuccess", { email: addMemberEmail.trim() }),
         [
           {
-            text: 'OK',
+            text: t("projectMembers.copyInviteMessage") || "Copy invite message",
+            onPress: async () => {
+              try {
+                const Clipboard = await import("expo-clipboard");
+                await Clipboard.setStringAsync(inviteMessage);
+                console.log("[ProjectMembersScreen] Invite message copied to clipboard");
+                Alert.alert(t("common.success") || "Úspech", t("projectMembers.inviteCopied") || "Skopírované do schránky.");
+              } catch (e) {
+                console.warn("[ProjectMembersScreen] Clipboard unavailable (Expo Go?), using Share:", e);
+                try {
+                  await Share.share({ message: inviteMessage, title: t("projectMembers.inviteShareTitle") || "Pozvánka do projektu" });
+                } catch (shareErr) {
+                  console.error("[ProjectMembersScreen] Share failed:", shareErr);
+                  Alert.alert(t("common.error") || "Chyba", t("projectMembers.copyFailed") || "Nepodarilo sa skopírovať.");
+                }
+              }
+            },
+          },
+          {
+            text: "OK",
             onPress: () => {
               closeAddMember();
               loadMembers(true);

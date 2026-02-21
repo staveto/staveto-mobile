@@ -33,6 +33,9 @@ import { ProjectSuppliersScreen } from "../screens/projects/ProjectSuppliersScre
 import { UpdatesScreen } from "../screens/projects/UpdatesScreen";
 import { ProjectTeamScreen } from "../screens/projects/ProjectTeamScreen";
 import { ProjectInvitesScreen } from "../screens/ProjectInvitesScreen";
+import { ProblemsListScreen } from "../screens/ProblemsListScreen";
+import { ProblemDetailScreen } from "../screens/ProblemDetailScreen";
+import { CreateProblemScreen } from "../screens/CreateProblemScreen";
 import { AppDrawer } from "./AppDrawer";
 import { colors, spacing } from "../theme";
 import { db } from "../firebase";
@@ -180,6 +183,21 @@ export function RootNavigator() {
         name="ProjectInvites"
         component={ProjectInvitesScreen}
         options={{ headerShown: true, title: t("projectInvites.title") || "Pozvánky do projektov" }}
+      />
+      <Stack.Screen
+        name="ProblemsList"
+        component={ProblemsListScreen}
+        options={{ headerShown: true, title: t("problems.title") || "Problémy" }}
+      />
+      <Stack.Screen
+        name="ProblemDetail"
+        component={ProblemDetailScreen}
+        options={{ headerShown: true, title: t("problems.detail") || "Detail problému" }}
+      />
+      <Stack.Screen
+        name="CreateProblem"
+        component={CreateProblemScreen}
+        options={{ headerShown: true, title: t("problems.new") || "Nový problém" }}
       />
       <Stack.Screen
         name="Subscription"

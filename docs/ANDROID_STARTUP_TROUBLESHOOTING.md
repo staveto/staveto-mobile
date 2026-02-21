@@ -1,6 +1,55 @@
-# Android – Aplikácia sa nespustí (Loading stuck)
+# Android – Aplikácia sa nespustí
 
-Ak emulátor zobrazuje "Loading from 10.0.2.2:8082..." a zostane tam, skús tieto kroky.
+## Dôležité: Projekt používa expo-dev-client
+
+**Expo Go nestačí.** Potrebuješ **development build** – vlastnú zostavenú APK s dev klientom. Chyba `unable to resolve Intent exp+stavetoapp://expo-development-client` znamená, že na emulátore nie je nainštalovaná Staveto app.
+
+---
+
+## Správny postup (prvý štart)
+
+### Krok 1: Spusti emulátor MANUÁLNE
+
+1. Otvor **Android Studio** → **Device Manager** (alebo Tools → Device Manager)
+2. Spusti emulátor (napr. Medium_Phone_API_36) – klikni na ▶
+3. Počkaj, kým sa úplne nabootuje (domovská obrazovka)
+
+### Krok 2: Zostav a nainštaluj appku
+
+V **externom PowerShelli** (nie Cursor):
+
+```powershell
+cd c:\Users\Marek\Staveto_Cursor\staveto-app_v2\mobile
+npm run dev:android:external
+```
+
+Toto zostaví APK a nainštaluje ju na bežiaci emulátor. Prvý build môže trvať 5–15 minút.
+
+### Krok 3: Ďalšie spustenia
+
+Keď už máš appku nainštalovanú, stačí:
+
+```powershell
+npx expo start --android
+```
+
+---
+
+## Ak port 5554 odmietne spojenie
+
+Chyba: `could not connect to TCP port 5554: target machine actively refused it`
+
+**Príčina:** Emulátor ešte nebeží alebo ADB sa nepripojil.
+
+**Riešenie:**
+1. Spusti emulátor manuálne z Android Studio (krok 1 vyššie)
+2. Počkaj 30–60 sekúnd na plné nabootovanie
+3. Skontroluj: `adb devices` – mal by zobraziť emulator-5554
+4. Potom spusti `npm run dev:android:external`
+
+---
+
+## Ak emulátor zobrazuje "Loading from 10.0.2.2..." a zostane tam
 
 ---
 

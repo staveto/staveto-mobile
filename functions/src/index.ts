@@ -1,6 +1,8 @@
 import * as admin from "firebase-admin";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
+import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
 import { log } from "firebase-functions/logger";
+import { getUserTokens, findUidByEmailLower, sendPushToUser } from "./push";
 import * as crypto from "crypto";
 import vision from "@google-cloud/vision";
 
@@ -73,21 +75,101 @@ function parseAmount(value: string): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
+/** Max reasonable invoice total (EUR) – filters out IDs, barcodes, etc. */
+const MAX_REASONABLE_AMOUNT = 999_999.99;
+
+function isReasonableAmount(n: number): boolean {
+  return n > 0 && n <= MAX_REASONABLE_AMOUNT;
+}
+
 function pickLargestAmount(text: string): number | null {
   const matches = text.match(/[\d][\d\s.,]{1,}/g);
   if (!matches) return null;
   const amounts = matches
     .map((m) => parseAmount(m))
-    .filter((n): n is number => typeof n === "number" && n > 0);
+    .filter((n): n is number => typeof n === "number" && isReasonableAmount(n));
   if (!amounts.length) return null;
-  return Math.max(...amounts);
+  const max = Math.max(...amounts);
+  // Prefer amounts with 2 decimals (EUR totals) over round numbers (45 from "45%", 46 from barcode)
+  const withDecimals = amounts.filter((n) => n % 1 !== 0 && n > 1 && n < 1000);
+  if (withDecimals.length > 0 && max >= 40 && max <= 60 && Number.isInteger(max)) {
+    const bestDecimal = Math.max(...withDecimals);
+    return bestDecimal;
+  }
+  return max;
 }
 
 function extractLineAmount(lines: string[], keywordRegex: RegExp): number | null {
-  for (const line of lines) {
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     if (!keywordRegex.test(line)) continue;
-    const amount = pickLargestAmount(line);
+    let amount = pickLargestAmount(line);
     if (amount !== null) return amount;
+    if (i + 1 < lines.length) {
+      amount = pickLargestAmount(lines[i + 1]);
+      if (amount !== null) return amount;
+    }
+  }
+  return null;
+}
+
+/** Lines that mean BASE (without VAT) – never use as total. */
+const BASE_ONLY_REGEX = /^(?:základ|base|netto|net|báze)\s*[:]?\s*/i;
+
+/** Lines about discount – amounts like 45 from "45% zľava" must not be used as total (multi-language) */
+const DISCOUNT_LINE_REGEX = /(?:z[lľ]ava|discount|rabatt|sconto|r[ée]duction|korting|zni[żz]ka)\s*[:\s]*\d*\s*%/i;
+
+/** Extract amount in XX,XX EUR or XX.XX EUR format – avoids picking 45 from "45%" or 46 from barcodes */
+function extractEurAmountFromLine(line: string): number | null {
+  const m = line.match(/(\d{1,6}[.,]\d{2})\s*(?:eur|€|euro)/i);
+  if (!m?.[1]) return null;
+  const n = parseAmount(m[1]);
+  return n != null && isReasonableAmount(n) ? n : null;
+}
+
+/** Extract total WITH VAT. Prioritize XX,XX EUR format, then unambiguous "total" phrases. */
+function extractTotalWithVat(lines: string[]): number | null {
+  const totalWithVatRegex =
+    /(?:spolu(?:\s+v\s+eur)?|uhraden[ée]|platen[ée]\s+v\s+hotovosti|na\s*[úu]hradu\s*(?:eur)?|celkom|total|summe|gesamt|totale|importe|razem|k\s*[úu]hrade|hotovosť|karta|platba|zaplatiť|betrag|úhradu\s*eur|paid|bezahlt|pagato|amount|montant|importo)/i;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    if (BASE_ONLY_REGEX.test(line)) continue;
+    if (DISCOUNT_LINE_REGEX.test(line)) continue;
+    if (!totalWithVatRegex.test(line)) continue;
+    // Prefer amount in "40,20 EUR" format – avoids 45 from "45%" or 46 from barcodes
+    let amount = extractEurAmountFromLine(line);
+    if (amount !== null) return amount;
+    if (i + 1 < lines.length) {
+      amount = extractEurAmountFromLine(lines[i + 1]);
+      if (amount !== null) return amount;
+    }
+    // Fallback: line may have "40,20" without EUR – prefer amounts with 2 decimals (totals)
+    const decimalAmounts = (line + (i + 1 < lines.length ? " " + lines[i + 1] : ""))
+      .match(/\d{1,6}[.,]\d{2}/g) || [];
+    const parsed = decimalAmounts.map((s) => parseAmount(s)).filter((n): n is number => n != null && isReasonableAmount(n));
+    if (parsed.length > 0) return Math.max(...parsed);
+    amount = pickLargestAmount(line);
+    if (amount !== null) return amount;
+    if (i + 1 < lines.length) {
+      amount = pickLargestAmount(lines[i + 1]);
+      if (amount !== null) return amount;
+    }
+  }
+  return null;
+}
+
+/** Fallback: Základ + DPH = Spolu (SK receipts) – always WITH VAT */
+function extractTotalFromBaseAndVat(lines: string[]): number | null {
+  let base: number | null = null;
+  let vat: number | null = null;
+  const baseRegex = /(základ|base|netto|net)\s*[:]?\s*/i;
+  const vatRegex = /(dph|vat|mwst|iva)\s*[:]?\s*/i;
+  for (const line of lines) {
+    if (baseRegex.test(line) && base === null) base = pickLargestAmount(line);
+    if (vatRegex.test(line) && vat === null) vat = pickLargestAmount(line);
+  }
+  if (base != null && vat != null && isReasonableAmount(base + vat)) {
+    return Math.round((base + vat) * 100) / 100;
   }
   return null;
 }
@@ -120,16 +202,45 @@ function parseDate(text: string): string | null {
   return null;
 }
 
+/** Section headers (supplier/customer) in multiple languages – strip from supplier name */
+const SUPPLIER_PREFIX_REGEX =
+  /^(?:dod[áa]vate[lľ]|odberate[lľ]|dodávatel|odberatel|lieferant|kunde|supplier|customer|fornitore|cliente|fournisseur|client|dostawca|odbiorca|leverancier|klant)\s*[:]?\s*/i;
+/** Single stray char from OCR (e.g. "ľ" misread as "y" from "Dodávateľ") – only strip if followed by space + company-like text */
+const SUPPLIER_LEADING_JUNK = /^[yíýľ]\s+(?=[A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŔŠŤÚÝŽ])/i;
+
+function cleanSupplierName(raw: string): string {
+  let s = raw.trim();
+  s = s.replace(SUPPLIER_PREFIX_REGEX, "");
+  s = s.replace(SUPPLIER_LEADING_JUNK, ""); // "y DEK s.r.o." -> "DEK s.r.o."
+  return s.trim().slice(0, 80) || raw.trim().slice(0, 80);
+}
+
 function parseSupplierName(lines: string[]): string | null {
-  for (const line of lines) {
+  let candidate: string | null = null;
+  let inSupplierSection = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
     const trimmed = line.trim();
     if (!trimmed) continue;
+    if (/\b(?:odberate[lľ]|kunde|customer|cliente|client|odbiorca|klant)\b/i.test(trimmed)) inSupplierSection = false;
+    if (/\b(?:dod[áa]vate[lľ]|lieferant|supplier|fornitore|fournisseur|dostawca|leverancier)\b/i.test(trimmed)) {
+      inSupplierSection = true;
+      continue; // Section header – take next line
+    }
     if (/fakt[úu]ra|invoice|rechnung|fattura|factura|rachunek/i.test(trimmed)) continue;
     if (/\d{6,}/.test(trimmed)) continue;
     if (trimmed.length < 3) continue;
-    return trimmed.slice(0, 80);
+    // Prefer lines that look like company names (multi-language legal forms, incl. "s. r. o." with spaces)
+    if (/\b(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl|s\.a\.|s\.l\.|nv|bv|s\.a\.r\.l\.|eurl)\b/i.test(trimmed)) {
+      return cleanSupplierName(trimmed);
+    }
+    if (inSupplierSection && !candidate) candidate = trimmed;
+    if (!candidate) candidate = trimmed;
   }
-  return null;
+  const result = candidate ? cleanSupplierName(candidate) : null;
+  // Reject OCR noise: short Arabic-only strings (e.g. "کلام") from misread Latin on non-Arabic invoices
+  if (result && /^[\u0600-\u06FF\s]+$/.test(result) && result.length < 10) return null;
+  return result;
 }
 
 /** Extracts EU VAT/Tax ID from invoice text (IČO, USt-IdNr, NIP, P.IVA, CIF, etc.) */
@@ -152,17 +263,110 @@ function parseSupplierTaxId(text: string): string | null {
   return null;
 }
 
+/** Highest priority: "uhradené" / "platené v hotovosti" = final paid amount (SK invoices) */
+function extractPaidAmount(rawText: string): number | null {
+  const block = rawText.replace(/\s+/g, " ");
+  const paidRegex =
+    /(?:uhraden[ée]|platen[ée](?:\s+v\s+hotovosti)?)\s*(\d{1,6}[.,]\d{2})\s*(?:eur|€|euro)?/gi;
+  const all = [...block.matchAll(paidRegex)];
+  if (all.length > 0) {
+    const last = all[all.length - 1];
+    const n = parseAmount(last[1]);
+    return n != null && isReasonableAmount(n) ? n : null;
+  }
+  return null;
+}
+
+/** Fallback: find "XX,XX EUR" or "XX.XX EUR" after total keywords (multi-language) */
+function extractTotalFromEurInText(rawText: string): number | null {
+  const block = rawText.replace(/\s+/g, " ");
+  const m = block.match(
+    /(?:spolu|uhraden[ée]|platen[ée](?:\s+v\s+hotovosti)?|total|summe|gesamt|totale|importe|razem|paid|bezahlt|pagato|pay[ée]|betrag|amount|montant|importo)[\s\S]{0,80}?(\d{1,6}[.,]\d{2})\s*(?:eur|€|euro)/i
+  );
+  if (m?.[1]) {
+    const n = parseAmount(m[1]);
+    return n != null && isReasonableAmount(n) ? n : null;
+  }
+  return null;
+}
+
 function parseInvoiceText(rawText: string): ParsedInvoice {
   const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const invoiceNumber = parseInvoiceNumber(rawText);
   const issueDate = parseDate(rawText);
-  const totalRegex = /(celkom|spolu|total|summe|gesamt|totale|importe|razem|pagos|betrag)/i;
-  const totalAmount =
-    extractLineAmount(lines, totalRegex) ?? pickLargestAmount(rawText);
+  // Always use total WITH VAT: prioritize XX,XX EUR format near "Spolu"/"Uhradené"
+  const totalRegex =
+    /(?:spolu(?:\s+v\s+eur)?|uhraden[ée]|na\s*[úu]hradu|celkom|total|summe|gesamt|totale|importe|razem|k\s*[úu]hrade|hotovosť|karta|platba|zaplatiť|betrag|úhradu\s*eur|eur\s*\d|paid|bezahlt|pagato|amount|montant|importo)/i;
+  let totalAmount =
+    extractPaidAmount(rawText) ??
+    extractTotalWithVat(lines) ??
+    extractTotalFromEurInText(rawText) ??
+    extractLineAmount(lines, totalRegex) ??
+    extractTotalFromBaseAndVat(lines) ??
+    pickLargestAmount(rawText);
+  if (totalAmount != null && !isReasonableAmount(totalAmount)) {
+    totalAmount = extractTotalFromBaseAndVat(lines) ?? pickLargestAmount(rawText);
+  }
   const vatRegex = /(dph|vat|mwst|iva|tva|podatek)/i;
   const vatAmount = extractLineAmount(lines, vatRegex);
-  const supplierName = parseSupplierName(lines);
   const supplierTaxId = parseSupplierTaxId(rawText);
+  let supplierName = parseSupplierName(lines);
+  // Fallback 1: find company name (with legal form) before the tax ID in text
+  if (!supplierName && supplierTaxId) {
+    const taxIdx = rawText.indexOf(supplierTaxId);
+    if (taxIdx > 0) {
+      const beforeTax = rawText.slice(0, taxIdx);
+      const m = beforeTax.match(
+        /([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž0-9\u0600-\u06FF][^\n]{2,50}\s+(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl|s\.a\.|s\.l\.|nv|bv)\b)/i
+      );
+      if (m?.[1]) {
+        const extracted = m[1].replace(/\s+/g, " ").trim();
+        const isNoise = /^[\u0600-\u06FF\s]+$/.test(extracted) && extracted.length < 10;
+        if (!/\d{6,}/.test(extracted) && !isNoise) supplierName = cleanSupplierName(extracted);
+      }
+    }
+    // Fallback 2: tax ID might appear before company name in OCR – search after tax ID too
+    if (!supplierName && taxIdx >= 0 && taxIdx < rawText.length) {
+      const afterTax = rawText.slice(taxIdx + supplierTaxId.length, taxIdx + 200);
+      const m2 = afterTax.match(
+        /([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž][^\n]{1,40}\s+(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b)/i
+      );
+      if (m2?.[1]) {
+        const extracted = m2[1].replace(/\s+/g, " ").trim();
+        const isNoise = /^[\u0600-\u06FF\s]+$/.test(extracted) && extracted.length < 10;
+        if (!/\d{6,}/.test(extracted) && !isNoise) supplierName = cleanSupplierName(extracted);
+      }
+    }
+  }
+  // Fallback 3: line containing tax ID – company name is often 1–2 lines before
+  if (!supplierName && supplierTaxId) {
+    for (let i = 0; i < lines.length; i++) {
+      if (!lines[i].includes(supplierTaxId)) continue;
+      const legalForm = /\b(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b/i;
+      for (const offset of [2, 1]) {
+        if (i - offset < 0) continue;
+        const line = lines[i - offset].trim();
+        if (line.length < 4 || line.length > 80 || /\d{6,}/.test(line)) continue;
+        const isNoise = /^[\u0600-\u06FF\s]+$/.test(line) && line.length < 10;
+        if (isNoise) continue;
+        supplierName = cleanSupplierName(line);
+        if (legalForm.test(line)) break; // Prefer line with legal form
+      }
+      break;
+    }
+  }
+  // Fallback 4: search first 800 chars for any "CompanyName s.r.o."
+  if (!supplierName) {
+    const top = rawText.slice(0, 800);
+    const m3 = top.match(
+      /\b([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž][A-Za-záäčďéíĺľňóôřšťúýž0-9\s\-\.]{1,45}(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b)/i
+    );
+    if (m3?.[1]) {
+      const extracted = m3[1].replace(/\s+/g, " ").trim();
+      const isNoise = /^[\u0600-\u06FF\s]+$/.test(extracted) && extracted.length < 10;
+      if (!/\d{6,}/.test(extracted) && !isNoise && extracted.length >= 4) supplierName = cleanSupplierName(extracted);
+    }
+  }
   return {
     supplierName,
     supplierTaxId,
@@ -216,7 +420,9 @@ export const claimProjectInvites = onCall(
     const projectIds: string[] = [];
     const projectOwnerCache = new Map<string, string | undefined>();
     const projectSharedCountCache = new Map<string, number>();
+    const projectNameCache = new Map<string, string>();
     const displayName = (request.auth.token.name as string) ?? request.auth.token.email ?? emailLower;
+    const ownerPushTargets: Array<{ ownerUid: string; projectId: string; projectName: string; joinerName: string }> = [];
     const { setMembersByUidMirror } = await import("./team");
 
     for (const memberDoc of memberDocs) {
@@ -290,6 +496,18 @@ export const claimProjectInvites = onCall(
             fromUserName: displayName || emailLower,
             severity: "info",
           });
+          let pName = projectNameCache.get(projectId);
+          if (!pName) {
+            const ps = await db.doc(`projects/${projectId}`).get();
+            pName = (ps.data()?.name as string) ?? "Projekt";
+            projectNameCache.set(projectId, pName);
+          }
+          ownerPushTargets.push({
+            ownerUid: recipientUid,
+            projectId,
+            projectName: pName,
+            joinerName: displayName || emailLower,
+          });
         }
 
         claimedCount += 1;
@@ -343,6 +561,14 @@ export const claimProjectInvites = onCall(
 
     if (claimedCount > 0) {
       await batch.commit();
+      for (const t of ownerPushTargets) {
+        sendPushToUser(
+          t.ownerUid,
+          "Pozvánka prijatá",
+          `${t.joinerName} prijal pozvánku do projektu ${t.projectName}.`,
+          { type: "MEMBER_JOINED", projectId: t.projectId }
+        ).catch((err) => log("[claimProjectInvites] push error", t.ownerUid, err));
+      }
     }
 
     return { claimedCount, projectIds };
@@ -620,6 +846,16 @@ export const acceptProjectInvite = onCall(
       }
 
       await batch.commit();
+
+      if (recipientUid && recipientUid !== uid) {
+        const projectName = (projectSnapForCount.data()?.name as string) ?? "Projekt";
+        sendPushToUser(
+          recipientUid,
+          "Pozvánka prijatá",
+          `${name} prijal pozvánku do projektu ${projectName}.`,
+          { type: "MEMBER_JOINED", projectId }
+        ).catch((err) => log("[acceptProjectInvite] push error", recipientUid, err));
+      }
       return { ok: true, projectId };
     } catch (err) {
       if (err instanceof HttpsError) throw err;
@@ -749,7 +985,6 @@ export const extractInvoiceData = onCall(
 
     const db = admin.firestore();
     const cacheCollection = db.collection("users").doc(uid).collection("ocrCache");
-    const limitsRef = db.collection("users").doc(uid).collection("limits").doc("ocr");
 
     let bytes: Buffer;
     try {
@@ -778,33 +1013,91 @@ export const extractInvoiceData = onCall(
         rawText?: string;
       };
       if (cached.status === "success") {
+        const rawText = cached.rawText ?? cached.extractedText ?? "";
+        // Re-parse cached rawText so improved parsing logic applies (fixes stale cache after deploy)
+        const reparsed = rawText ? parseInvoiceText(rawText) : (cached.parsed ?? cached.fields);
         return {
           ok: true,
-          extractedText: cached.extractedText ?? cached.rawText ?? "",
-          fields: cached.fields ?? cached.parsed ?? {},
+          extractedText: rawText,
+          fields: reparsed,
           status: "success" as const,
-          parsed: cached.parsed,
-          rawText: cached.rawText ?? cached.extractedText ?? "",
+          parsed: reparsed,
+          rawText,
         };
       }
       return cached;
     }
 
-    const today = new Date().toISOString().slice(0, 10);
-    let limitReached = false;
-    await db.runTransaction(async (tx) => {
-      const snap = await tx.get(limitsRef);
-      const data = snap.data() as { date?: string; count?: number } | undefined;
-      const count = data?.date === today ? data?.count ?? 0 : 0;
-      if (count >= 30) {
-        limitReached = true;
-        return;
+    const requestId = attachmentId || hash;
+    const { checkAndConsumeOcrCreditSync, getPeriodKey, getLimitsConfig } = await import("./billing");
+    const limits = await getLimitsConfig(db);
+    const userRef = db.collection("users").doc(uid);
+
+    const gateError = await db.runTransaction<
+      { errorCode: string; cooldownSeconds?: number } | null
+    >(async (tx) => {
+      const userSnap = await tx.get(userRef);
+      if (!userSnap.exists) {
+        return { errorCode: "ENTITLEMENT_REQUIRED" };
       }
-      tx.set(limitsRef, { date: today, count: count + 1 }, { merge: true });
+      const userData = userSnap.data() as Record<string, unknown>;
+      let effectiveUserData = userData;
+      let periodKey: string;
+      const needsTrialInit = !userData?.subscriptionStatus && !userData?.subscription;
+      if (needsTrialInit) {
+        const now = new Date();
+        const trialEnd = new Date(now.getTime() + 14 * 24 * 60 * 60 * 1000);
+        const trialFields = {
+          subscriptionStatus: "trial",
+          trialStartAt: admin.firestore.Timestamp.fromDate(now),
+          trialEndAt: admin.firestore.Timestamp.fromDate(trialEnd),
+          planId: "staveto_monthly_1499",
+          entitlement: true,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        };
+        tx.set(userRef, trialFields, { merge: true });
+        effectiveUserData = { ...userData, ...trialFields };
+        periodKey = "trial";
+      } else {
+        periodKey = getPeriodKey(userData);
+      }
+
+      const usageRef = db.collection("users").doc(uid).collection("usage").doc(periodKey);
+      const usageSnap = await tx.get(usageRef);
+      const usageData = usageSnap.exists ? (usageSnap.data() as { ocrUsed?: number; lastOcrAt?: unknown; requestIds?: string[] }) : undefined;
+
+      const gateResult = checkAndConsumeOcrCreditSync(effectiveUserData, usageData, limits, requestId);
+      if (!gateResult.allowed) {
+        return { errorCode: gateResult.errorCode!, cooldownSeconds: gateResult.cooldownSeconds };
+      }
+
+      const ocrUsed = typeof usageData?.ocrUsed === "number" ? usageData.ocrUsed : 0;
+      const requestIds: string[] = Array.isArray(usageData?.requestIds) ? usageData.requestIds : [];
+      const now = admin.firestore.FieldValue.serverTimestamp();
+      const nowTs = admin.firestore.Timestamp.now();
+      tx.set(usageRef, {
+        periodKey,
+        ocrUsed: ocrUsed + 1,
+        lastOcrAt: nowTs,
+        requestIds: [...requestIds, requestId],
+        updatedAt: now,
+      }, { merge: true });
+      return null;
     });
 
-    if (limitReached) {
-      return { status: "limit", parsed: null };
+    if (gateError) {
+      const upgradeRequired =
+        gateError.errorCode === "ENTITLEMENT_REQUIRED" || gateError.errorCode === "LIMIT_REACHED";
+      return {
+        status: "limit",
+        parsed: null,
+        errorCode: gateError.errorCode,
+        cooldownSeconds: gateError.cooldownSeconds,
+        code: "LIMIT_EXCEEDED",
+        upgradeRequired,
+        remaining: 0,
+        limit: upgradeRequired ? 0 : undefined,
+      };
     }
 
     let rawText = "";
@@ -871,7 +1164,7 @@ export const extractInvoiceData = onCall(
       throwStepError("vision_call", "empty_ocr_text");
     }
 
-    const parsed = parseInvoiceText(rawText);
+    const parsed = parseInvoiceText(rawText) as ParseInvoiceResult;
     const response = {
       ok: true,
       extractedText: rawText,
@@ -880,6 +1173,7 @@ export const extractInvoiceData = onCall(
       status: "success" as const,
       parsed,
       rawText,
+      _debug: { fromCache: false, rawTextLength: rawText.length, rawTextPreview: rawText.slice(0, 600), parsedAmount: parsed.totalAmount, parsedSupplier: parsed.supplierName, totalAmountSource: parsed._debugSource?.totalAmountSource, linesCount: parsed._debugSource?.linesCount },
     };
     await cacheCollection.doc(hash).set({
       ...response,
@@ -892,4 +1186,195 @@ export const extractInvoiceData = onCall(
 );
 
 export { inboundWebhook } from "./whatsapp";
-export { addProjectMemberByEmail, removeProjectMember, updateMemberPermissions, backfillProjectSharedCounts } from "./team";
+export { addProjectMemberByEmail, removeProjectMember, updateMemberPermissions, syncMembersByUidForProject, backfillProjectSharedCounts, syncMyProjectsSharedCount } from "./team";
+export { calculateDistanceKm } from "./distance";
+export { redeemPromoCode } from "./promo";
+export { checkEntitlement, getBillingStatus } from "./billing";
+export { revenuecatWebhook } from "./revenuecatWebhook";
+
+/** Send in-app notification when a project member invite is created. Push is sent by onNotificationCreated. */
+export const onMemberInviteCreated = onDocumentCreated(
+  {
+    document: "projects/{projectId}/members/{memberId}",
+    region: "europe-west1",
+  },
+  async (event) => {
+    const snap = event.data;
+    if (!snap?.exists) return;
+    const data = snap.data();
+    const status = data?.status;
+    const emailLower = (data?.emailLower ?? data?.email ?? "").trim().toLowerCase();
+    if (status !== "invited" || !emailLower) return;
+
+    const projectId = event.params?.projectId;
+    if (!projectId) return;
+
+    const invitedByUid = (data?.invitedBy as string) ?? null;
+    const uid = (data?.userId as string) ?? (await findUidByEmailLower(emailLower));
+    if (!uid) {
+      log("[onMemberInviteCreated] No user found for email, skipping notification", emailLower);
+      return;
+    }
+
+    const db = admin.firestore();
+    const projectSnap = await db.doc(`projects/${projectId}`).get();
+    const projectName = (projectSnap.data()?.name as string) ?? "Projekt";
+
+    await db.collection("notifications").add({
+      userId: uid,
+      type: "PROJECT_INVITED",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      readAt: null,
+      projectId,
+      projectName,
+      fromUserId: invitedByUid,
+      severity: "info",
+      message: `${projectName} – čaká na prijatie`,
+    });
+    log("[onMemberInviteCreated] In-app notification created for", uid, "project", projectId);
+  }
+);
+
+/** Send in-app notification when a problem is created or assignee changes. */
+export const onProblemCreated = onDocumentCreated(
+  {
+    document: "projects/{projectId}/problems/{problemId}",
+    region: "europe-west1",
+  },
+  async (event) => {
+    const snap = event.data;
+    if (!snap?.exists) return;
+    const data = snap.data();
+    const assigneeUid = (data?.assigneeUid as string) ?? "";
+    const createdByUid = (data?.createdByUid as string) ?? "";
+    if (!assigneeUid) return;
+
+    const projectId = event.params?.projectId;
+    const problemId = event.params?.problemId;
+    if (!projectId || !problemId) return;
+
+    const db = admin.firestore();
+    const projectSnap = await db.doc(`projects/${projectId}`).get();
+    const projectName = (projectSnap.data()?.name as string) ?? "Projekt";
+    const shortDescription = (data?.shortDescription as string) ?? "";
+    const createdByName = (data?.createdByName as string) ?? "";
+    const isSelfAssign = assigneeUid === createdByUid;
+
+    const message = isSelfAssign
+      ? `Nahlásil si nový problém: ${shortDescription || "Bez popisu"}`
+      : createdByName
+        ? `${createdByName} ti priradil problém: ${shortDescription || "Bez popisu"}`
+        : `Bola ti priradená nová úloha v projekte ${projectName}`;
+
+    await db.collection("notifications").add({
+      userId: assigneeUid,
+      type: "PROBLEM_ASSIGNED",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      readAt: null,
+      projectId,
+      projectName,
+      message,
+      fromUserId: createdByUid,
+      fromUserName: createdByName || null,
+      severity: "info",
+      meta: { problemId, projectId },
+      deepLink: { screen: "ProblemDetail", params: { projectId, problemId } },
+    });
+    log("[onProblemCreated] Notification created for assignee", assigneeUid, "problem", problemId);
+  }
+);
+
+/** Send in-app notification when problem assignee changes. */
+export const onProblemUpdated = onDocumentUpdated(
+  {
+    document: "projects/{projectId}/problems/{problemId}",
+    region: "europe-west1",
+  },
+  async (event) => {
+    const before = event.data?.before.data();
+    const after = event.data?.after.data();
+    if (!before || !after) return;
+    const oldAssignee = (before.assigneeUid as string) ?? "";
+    const newAssignee = (after.assigneeUid as string) ?? "";
+    if (!newAssignee || oldAssignee === newAssignee) return;
+
+    const projectId = event.params?.projectId;
+    const problemId = event.params?.problemId;
+    if (!projectId || !problemId) return;
+
+    const audit = after.audit as { lastStatusByUid?: string } | undefined;
+    const updatedByUid = (audit?.lastStatusByUid ?? after.createdByUid ?? "") as string;
+    if (updatedByUid === newAssignee) return; // Don't notify self
+
+    const db = admin.firestore();
+    const projectSnap = await db.doc(`projects/${projectId}`).get();
+    const projectName = (projectSnap.data()?.name as string) ?? "Projekt";
+    const shortDescription = (after.shortDescription as string) ?? "";
+    const createdByName = (after.createdByName as string) ?? "";
+
+    const message = createdByName
+      ? `${createdByName} ti priradil problém: ${shortDescription || "Bez popisu"}`
+      : `Bola ti priradená úloha v projekte ${projectName}`;
+
+    await db.collection("notifications").add({
+      userId: newAssignee,
+      type: "PROBLEM_ASSIGNED",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      readAt: null,
+      projectId,
+      projectName,
+      message,
+      fromUserId: updatedByUid,
+      fromUserName: createdByName || null,
+      severity: "info",
+      meta: { problemId, projectId },
+      deepLink: { screen: "ProblemDetail", params: { projectId, problemId } },
+    });
+    log("[onProblemUpdated] Notification created for new assignee", newAssignee, "problem", problemId);
+  }
+);
+
+/** Send FCM push to user's phone whenever any notification is created in Firestore. */
+export const onNotificationCreated = onDocumentCreated(
+  {
+    document: "notifications/{notificationId}",
+    region: "europe-west1",
+  },
+  async (event) => {
+    const snap = event.data;
+    if (!snap?.exists) return;
+    const data = snap.data();
+    const userId = data?.userId as string | undefined;
+    const type = (data?.type as string) ?? "PROJECT_ACTIVITY";
+    const message = (data?.message as string) ?? "";
+    const projectId = (data?.projectId as string) ?? "";
+    const projectName = (data?.projectName as string) ?? "";
+
+    if (!userId) {
+      log("[onNotificationCreated] No userId, skipping push");
+      return;
+    }
+
+    const titleMap: Record<string, string> = {
+      TASK_ASSIGNED: "Priradená úloha",
+      TASK_DUE_TODAY: "Úloha dnes",
+      TASK_OVERDUE: "Úloha po termíne",
+      PROJECT_INVITED: "Pozvánka do projektu",
+      PROBLEM_ASSIGNED: "Priradený problém",
+      EXPENSE_ADDED: "Nový výdavok",
+      PROJECT_CREATED: "Nový projekt",
+      MEMBER_JOINED: "Člen vstúpil",
+      MEMBER_LEFT: "Člen opustil projekt",
+      MEMBER_REMOVED: "Člen bol odstránený",
+      SYNC_ISSUE: "Problém so synchronizáciou",
+    };
+    const title = titleMap[type] ?? "Upozornenie";
+    const body = message || (projectName ? `Projekt: ${projectName}` : "Máte nové upozornenie.");
+
+    await sendPushToUser(userId, title, body, {
+      type: type === "PROJECT_INVITED" ? "PROJECT_INVITE" : type,
+      projectId,
+    });
+    log("[onNotificationCreated] Push sent to", userId, "type", type);
+  }
+);

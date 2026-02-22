@@ -81,28 +81,40 @@ async function assertOwner(projectId: string, uid: string) {
   const projectRef = admin.firestore().doc(`projects/${projectId}`);
   const projectSnap = await projectRef.get();
   if (!projectSnap.exists) {
-    throw new HttpsError("not-found", "Project not found.");
+    throw new HttpsError("not-found", "errors.project.notFound");
   }
   const ownerId = projectSnap.data()?.ownerId as string | undefined;
   if (!ownerId || ownerId !== uid) {
-    throw new HttpsError("permission-denied", "Only the project owner can manage members.");
+    throw new HttpsError("permission-denied", "errors.auth.notAllowed");
   }
   return projectRef;
 }
 
+/** Check if user has editor or owner permission (can manage members). */
+async function hasEditorOrOwnerPermission(
+  db: admin.firestore.Firestore,
+  projectId: string,
+  uid: string
+): Promise<boolean> {
+  const memberByUid = await db.doc(`projects/${projectId}/membersByUid/${uid}`).get();
+  if (!memberByUid.exists) return false;
+  const d = memberByUid.data() as { permissionLevel?: string } | undefined;
+  return d?.permissionLevel === "editor";
+}
+
 export const addProjectMemberByEmail = onCall(
-  { region: "europe-west1" },
+  { region: "europe-west1", invoker: "public" },
   async (request) => {
     if (!request.auth) {
-      throw new HttpsError("unauthenticated", "Authentication required.");
+      throw new HttpsError("unauthenticated", "errors.auth.required");
     }
 
     const { projectId, email } = request.data as AddMemberRequest;
     if (!projectId || typeof projectId !== "string") {
-      throw new HttpsError("invalid-argument", "projectId is required.");
+      throw new HttpsError("invalid-argument", "errors.invalid.projectId");
     }
     if (!email || typeof email !== "string") {
-      throw new HttpsError("invalid-argument", "email is required.");
+      throw new HttpsError("invalid-argument", "errors.invalid.email");
     }
 
     const uid = request.auth.uid;
@@ -125,11 +137,14 @@ export const addProjectMemberByEmail = onCall(
     const memberData = memberDoc.data() as MemberSnapshot;
 
     if (memberUid === uid) {
-      throw new HttpsError("failed-precondition", "Owner is already part of the project.");
+      throw new HttpsError("failed-precondition", "errors.precondition.ownerAlreadyMember");
     }
 
     const memberRef = projectRef.collection("members").doc(memberUid);
     const db = admin.firestore();
+
+    const now = admin.firestore.FieldValue.serverTimestamp();
+    const defaultSharedItems = { tasks: true, phases: true, expenses: true, diary: true, documents: true };
 
     await db.runTransaction(async (tx) => {
       const memberSnap = await tx.get(memberRef);
@@ -142,16 +157,42 @@ export const addProjectMemberByEmail = onCall(
           emailLower: memberData.emailLower ?? emailLower,
           displayName: memberData.displayName ?? null,
           role: "MEMBER",
-          joinedAt: admin.firestore.FieldValue.serverTimestamp(),
+          status: "active",
+          joinedAt: now,
           addedBy: uid,
+          permissionLevel: "editor",
+          sharedItems: defaultSharedItems,
+          sharedPhaseIds: [],
         },
         { merge: true }
       );
 
       if (isNewMember) {
         const projectSnap = await tx.get(projectRef);
-        const currentCount = (projectSnap.data()?.membersCount as number | undefined) ?? 0;
-        tx.update(projectRef, { membersCount: currentCount + 1 });
+        const projectData = projectSnap.data() ?? {};
+        const currentSharedWithCount = (projectData.sharedWithCount as number | undefined) ?? 0;
+        tx.update(projectRef, { sharedWithCount: currentSharedWithCount + 1 });
+
+        const mirrorRef = db.doc(`projects/${projectId}/membersByUid/${memberUid}`);
+        tx.set(mirrorRef, {
+          uid: memberUid,
+          permissionLevel: "editor",
+          sharedItems: defaultSharedItems,
+          sharedPhaseIds: [],
+          status: "active",
+          joinedAt: now,
+        });
+
+        const projectRefDoc = db.doc(`users/${memberUid}/projectRefs/${projectId}`);
+        tx.set(projectRefDoc, {
+          projectId,
+          role: "member",
+          permissionLevel: "editor",
+          sharedItems: defaultSharedItems,
+          sharedPhaseIds: [],
+          joinedAt: now,
+          source: "addMember",
+        });
       }
     });
 
@@ -174,31 +215,47 @@ export const addProjectMemberByEmail = onCall(
 type RemoveMemberByIdRequest = {
   projectId?: string;
   memberId?: string;
+  memberUid?: string;
 };
 
 export const removeProjectMember = onCall(
-  { region: "europe-west1", enforceAppCheck: false },
+  { region: "europe-west1", enforceAppCheck: false, invoker: "public" },
   async (request) => {
     if (!request.auth?.uid) {
-      throw new HttpsError("unauthenticated", "Authentication required.");
+      throw new HttpsError("unauthenticated", "errors.auth.required");
     }
 
-    const { projectId, memberId } = request.data as RemoveMemberByIdRequest;
+    const { projectId, memberId, memberUid } = request.data as RemoveMemberByIdRequest;
     if (!projectId || typeof projectId !== "string") {
-      throw new HttpsError("invalid-argument", "projectId is required.");
+      throw new HttpsError("invalid-argument", "errors.invalid.projectId");
     }
-    if (!memberId || typeof memberId !== "string") {
-      throw new HttpsError("invalid-argument", "memberId is required.");
+    let resolvedMemberId = typeof memberId === "string" && memberId.trim() ? memberId.trim() : null;
+    if (!resolvedMemberId && typeof memberUid === "string" && memberUid.trim()) {
+      resolvedMemberId = memberUid.trim();
+    }
+    if (!resolvedMemberId) {
+      throw new HttpsError("invalid-argument", "errors.invalid.memberId");
     }
 
     const uid = request.auth.uid;
     const db = admin.firestore();
     const projectRef = db.doc(`projects/${projectId}`);
-    const memberRef = db.doc(`projects/${projectId}/members/${memberId}`);
+    let memberRef = db.doc(`projects/${projectId}/members/${resolvedMemberId}`);
 
-    const memberSnap = await memberRef.get();
+    let memberSnap = await memberRef.get();
+    if (!memberSnap.exists && typeof memberUid === "string" && memberUid.trim()) {
+      const byUserId = await db
+        .collection(`projects/${projectId}/members`)
+        .where("userId", "==", memberUid.trim())
+        .limit(1)
+        .get();
+      if (!byUserId.empty) {
+        memberRef = byUserId.docs[0].ref;
+        memberSnap = await memberRef.get();
+      }
+    }
     if (!memberSnap.exists) {
-      throw new HttpsError("not-found", "Member not found.");
+      throw new HttpsError("not-found", "errors.member.notFound");
     }
 
     const memberData = memberSnap.data() as {
@@ -213,12 +270,21 @@ export const removeProjectMember = onCall(
 
     const projectSnap = await projectRef.get();
     if (!projectSnap.exists) {
-      throw new HttpsError("not-found", "Project not found.");
+      throw new HttpsError("not-found", "errors.project.notFound");
     }
     const ownerId = projectSnap.data()?.ownerId as string | undefined;
 
-    if (!isSelf && (!ownerId || ownerId !== uid)) {
-      throw new HttpsError("permission-denied", "Only owner can remove members, or member can leave.");
+    const memberRole = (memberData as { role?: string }).role;
+    const isRemovingOwner = memberRole === "owner" || memberUserId === ownerId;
+    const canRemove =
+      isSelf ||
+      uid === ownerId ||
+      (isRemovingOwner ? false : await hasEditorOrOwnerPermission(db, projectId, uid));
+    if (!canRemove) {
+      throw new HttpsError(
+        "permission-denied",
+        "Only owner or editor can remove members, or member can leave."
+      );
     }
 
     const currentSharedWithCount = (projectSnap.data()?.sharedWithCount as number | undefined) ?? 0;
@@ -268,37 +334,44 @@ export const removeProjectMember = onCall(
       });
     }
 
-    if (memberUserId) {
-      const tasksSnap = await db.collection(`projects/${projectId}/tasks`).get();
-      for (const taskDoc of tasksSnap.docs) {
-        const d = taskDoc.data();
-        if (d.assigneeId === memberUserId || d.assignedTo === memberUserId) {
-          batch.update(taskDoc.ref, {
-            assigneeId: null,
-            assigneeName: null,
-            assignedTo: null,
-            assignedToEmail: null,
-            updatedAt: admin.firestore.FieldValue.serverTimestamp(),
-          });
-        }
+    const tasksSnap = await db.collection(`projects/${projectId}/tasks`).get();
+    const memberEmailLower = memberEmail.trim().toLowerCase();
+    const memberNameLower = memberName.trim().toLowerCase();
+    for (const taskDoc of tasksSnap.docs) {
+      const d = taskDoc.data();
+      const taskAssigneeId = (d.assigneeId ?? d.assignedTo) ?? "";
+      const taskAssigneeName = (d.assigneeName ?? d.assignedToEmail ?? "").toString().trim().toLowerCase();
+      const shouldClear =
+        (memberUserId && taskAssigneeId === memberUserId) ||
+        taskAssigneeId === resolvedMemberId ||
+        (memberNameLower && taskAssigneeName === memberNameLower) ||
+        (memberEmailLower && taskAssigneeName === memberEmailLower);
+      if (shouldClear) {
+        batch.update(taskDoc.ref, {
+          assigneeId: null,
+          assigneeName: null,
+          assignedTo: null,
+          assignedToEmail: null,
+          updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+        });
       }
     }
 
     await batch.commit();
 
-    console.log("[team] removeProjectMember", { projectId, memberId, memberUserId, isSelf });
+    console.log("[team] removeProjectMember", { projectId, memberId: resolvedMemberId, memberUserId, isSelf });
     return { ok: true };
   }
 );
 
 export const updateMemberPermissions = onCall(
-  { region: "europe-west1", enforceAppCheck: false },
+  { region: "europe-west1", enforceAppCheck: false, invoker: "public" },
   async (request) => {
     console.log("[updateMemberPermissions] auth?", !!request.auth, "uid", request.auth?.uid);
     console.log("[updateMemberPermissions] data", request.data);
 
     if (!request.auth?.uid) {
-      throw new HttpsError("unauthenticated", "Auth required");
+      throw new HttpsError("unauthenticated", "errors.auth.required");
     }
 
     const uid = request.auth.uid;
@@ -306,7 +379,7 @@ export const updateMemberPermissions = onCall(
     const projectId = typeof data.projectId === "string" ? data.projectId.trim() : "";
     const memberId = typeof data.memberId === "string" ? data.memberId.trim() : "";
     if (!projectId || !memberId) {
-      throw new HttpsError("invalid-argument", "projectId and memberId are required.");
+      throw new HttpsError("invalid-argument", "errors.invalid.memberId");
     }
 
     await assertOwner(projectId, uid);
@@ -315,7 +388,7 @@ export const updateMemberPermissions = onCall(
     const memberRef = db.doc(`projects/${projectId}/members/${memberId}`);
     const memberSnap = await memberRef.get();
     if (!memberSnap.exists) {
-      throw new HttpsError("not-found", "Member not found.");
+      throw new HttpsError("not-found", "errors.member.notFound");
     }
 
     const memberData = memberSnap.data() as {
@@ -375,14 +448,97 @@ export const updateMemberPermissions = onCall(
 );
 
 /**
+ * Sync membersByUid from members collection for a project.
+ * Ensures Firestore rules can correctly evaluate sharedItems for each member.
+ * Call when invited users don't see phases/tasks despite correct permissions.
+ */
+export const syncMembersByUidForProject = onCall(
+  { region: "europe-west1", enforceAppCheck: false, invoker: "public" },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError("unauthenticated", "errors.auth.required");
+    }
+
+    const uid = request.auth.uid;
+    const data = (request.data ?? {}) as { projectId?: string };
+    const projectId = typeof data.projectId === "string" ? data.projectId.trim() : "";
+    if (!projectId) {
+      throw new HttpsError("invalid-argument", "errors.invalid.projectId");
+    }
+
+    const db = admin.firestore();
+    const projectRef = db.doc(`projects/${projectId}`);
+    const projectSnap = await projectRef.get();
+    if (!projectSnap.exists) {
+      throw new HttpsError("not-found", "errors.project.notFound");
+    }
+    const ownerId = (projectSnap.data()?.ownerId as string) ?? null;
+    if (!ownerId || ownerId !== uid) {
+      throw new HttpsError("permission-denied", "errors.auth.notAllowed");
+    }
+
+    const membersSnap = await db.collection(`projects/${projectId}/members`).get();
+    const batch = db.batch();
+    let updated = 0;
+
+    const fullAccessDefault = { tasks: true, phases: true, expenses: true, diary: true, documents: true };
+
+    for (const memberDoc of membersSnap.docs) {
+      const memberData = memberDoc.data() as {
+        userId?: string | null;
+        status?: string;
+        permissionLevel?: string;
+        sharedItems?: MembersByUidData["sharedItems"];
+        sharedPhaseIds?: string[];
+      };
+      const memberUserId = memberData.userId ?? null;
+      if (!memberUserId || memberUserId === ownerId) continue;
+      if (memberData.status !== "active" && memberData.status !== undefined) continue;
+
+      const mirrorRef = db.doc(`projects/${projectId}/membersByUid/${memberUserId}`);
+      const mirrorSnap = await mirrorRef.get();
+
+      const sharedItems = memberData.sharedItems && typeof memberData.sharedItems === "object"
+        ? memberData.sharedItems
+        : mirrorSnap.exists
+          ? (mirrorSnap.data() as any)?.sharedItems ?? fullAccessDefault
+          : fullAccessDefault;
+      const permissionLevel = (memberData.permissionLevel === "viewer" || memberData.permissionLevel === "editor")
+        ? memberData.permissionLevel
+        : "viewer";
+      const sharedPhaseIds = Array.isArray(memberData.sharedPhaseIds) ? memberData.sharedPhaseIds : [];
+
+      const needsUpdate = !mirrorSnap.exists
+        || JSON.stringify((mirrorSnap.data() as any)?.sharedItems) !== JSON.stringify(sharedItems)
+        || (mirrorSnap.data() as any)?.permissionLevel !== permissionLevel;
+
+      if (needsUpdate) {
+        setMembersByUidMirror(batch, projectId, memberUserId, {
+          permissionLevel,
+          sharedItems,
+          sharedPhaseIds,
+          status: "active",
+        });
+        updated++;
+      }
+    }
+
+    if (updated > 0) {
+      await batch.commit();
+    }
+    return { ok: true, updated };
+  }
+);
+
+/**
  * One-time backfill: set sharedWithCount on all projects based on active members (excluding owner).
  * Call once to fix projects that were shared before sharedWithCount was implemented.
  */
 export const backfillProjectSharedCounts = onCall(
-  { region: "europe-west1", enforceAppCheck: false },
+  { region: "europe-west1", enforceAppCheck: false, invoker: "public" },
   async (request) => {
     if (!request.auth?.uid) {
-      throw new HttpsError("unauthenticated", "Auth required");
+      throw new HttpsError("unauthenticated", "errors.auth.required");
     }
 
     const db = admin.firestore();
@@ -414,6 +570,49 @@ export const backfillProjectSharedCounts = onCall(
     }
 
     console.log("[backfillProjectSharedCounts] done, updated", updated, "projects");
+    return { ok: true, updated };
+  }
+);
+
+/**
+ * Sync sharedWithCount for the current user's owned projects only.
+ * Call when user pulls to refresh on Projects screen to fix stale counts.
+ */
+export const syncMyProjectsSharedCount = onCall(
+  { region: "europe-west1", enforceAppCheck: false, invoker: "public" },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError("unauthenticated", "errors.auth.required");
+    }
+
+    const uid = request.auth.uid;
+    const db = admin.firestore();
+    const projectsSnap = await db.collection("projects").where("ownerId", "==", uid).get();
+    let updated = 0;
+
+    for (const projectDoc of projectsSnap.docs) {
+      const projectId = projectDoc.id;
+      const projectData = projectDoc.data();
+      const ownerId = (projectData.ownerId as string) ?? null;
+      if (!ownerId) continue;
+
+      const membersSnap = await db.collection(`projects/${projectId}/members`).get();
+      let count = 0;
+      for (const m of membersSnap.docs) {
+        const d = m.data();
+        const userId = d.userId ?? null;
+        if (userId && userId !== ownerId && (d.status === "active" || !d.status)) {
+          count++;
+        }
+      }
+
+      const current = (projectData.sharedWithCount as number | undefined) ?? 0;
+      if (current !== count) {
+        await projectDoc.ref.update({ sharedWithCount: count });
+        updated++;
+      }
+    }
+
     return { ok: true, updated };
   }
 );

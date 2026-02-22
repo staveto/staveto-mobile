@@ -26,6 +26,7 @@ export type NotificationType =
   | "PROJECT_INVITED"
   | "PROBLEM_ASSIGNED"
   | "EXPENSE_ADDED"
+  | "DIARY_ADDED"
   | "MEMBER_JOINED"
   | "MEMBER_LEFT"
   | "MEMBER_REMOVED"
@@ -44,6 +45,7 @@ export type NotificationDoc = {
   taskId?: string | null;
   taskTitle?: string | null;
   dueDate?: string | null;
+  problemId?: string | null;
   expenseId?: string | null;
   amount?: number | null;
   currency?: string | null;
@@ -93,6 +95,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
 
   const meta = (d.meta as Record<string, unknown>) ?? undefined;
   const taskIdFromMeta = meta?.taskId as string | undefined;
+  const problemIdFromMeta = meta?.problemId as string | undefined;
 
   return {
     id: docSnap.id,
@@ -103,6 +106,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
     projectId: (d.projectId as string) ?? null,
     projectName: (d.projectName as string) ?? null,
     taskId: (d.taskId as string) ?? taskIdFromMeta ?? null,
+    problemId: (d.problemId as string) ?? problemIdFromMeta ?? null,
     taskTitle: (d.taskTitle as string) ?? null,
     dueDate: convertTimestamp(d.dueDate) ?? (d.dueDate as string | null) ?? null,
     expenseId: (d.expenseId as string) ?? null,
@@ -412,6 +416,35 @@ export async function createExpenseAddedNotification(data: {
   });
 }
 
+export async function createDiaryAddedNotification(data: {
+  userId: string;
+  projectId: string;
+  projectName?: string | null;
+}): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+  if (currentUser.uid !== data.userId) {
+    throw new Error("Nemáte oprávnenie na vytvorenie notifikácie.");
+  }
+
+  const c = collection(db, "notifications");
+  await addDoc(c, {
+    userId: data.userId,
+    type: "DIARY_ADDED",
+    createdAt: serverTimestamp(),
+    readAt: null,
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    deepLink: {
+      screen: "ProjectOverview",
+      params: { projectId: data.projectId, openDiaryModal: true },
+    },
+    severity: "info",
+  });
+}
+
 export async function createProjectCreatedNotification(data: {
   userId: string;
   projectId: string;
@@ -525,6 +558,43 @@ export async function createTaskAssignedNotification(data: {
     entityType: "task",
     dedupeKey,
     createdAtClient: nowClient,
+    createdAt: serverTimestamp(),
+    readAt: null,
+    severity: "info",
+  });
+  return { id: ref.id };
+}
+
+export async function createProblemAssignedNotification(data: {
+  userId: string;
+  projectId: string;
+  projectName?: string | null;
+  problemId: string;
+  problemTitle?: string | null;
+  message?: string;
+  fromUserId?: string;
+  fromUserName?: string;
+}): Promise<{ id: string } | null> {
+  if (!auth.currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+  if (data.userId === auth.currentUser.uid) return null; // Don't notify self
+
+  const c = collection(db, "notifications");
+  const ref = await addDoc(c, {
+    userId: data.userId,
+    type: "PROBLEM_ASSIGNED",
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    message: data.message ?? (data.problemTitle ? `Bola ti priradená úloha: ${data.problemTitle}` : "Bola ti priradená úloha."),
+    fromUserId: data.fromUserId ?? auth.currentUser.uid,
+    fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
+    meta: { problemId: data.problemId, projectId: data.projectId },
+    entityType: "problem",
+    deepLink: {
+      screen: "ProblemDetail",
+      params: { projectId: data.projectId, problemId: data.problemId },
+    },
     createdAt: serverTimestamp(),
     readAt: null,
     severity: "info",

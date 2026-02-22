@@ -48,12 +48,12 @@ service firebase.storage {
         );
     }
     
-    // Write attachments: owner OR member with permissionLevel == 'editor' (matches Firestore canWriteAsEditor)
+    // Write attachments: owner OR member with permissionLevel == 'editor' or 'admin' (matches Firestore canWriteAsEditor)
     function canWriteAttachments(projectId) {
       return projectOwner(projectId)
         || (
           firestore.exists(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid()))
-          && firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.permissionLevel == 'editor'
+          && (firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.permissionLevel == 'editor' || firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.permissionLevel == 'admin')
         );
     }
     

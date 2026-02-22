@@ -14,6 +14,7 @@ import {
   Image,
   TextInput,
   ActivityIndicator,
+  FlatList,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
@@ -30,6 +31,12 @@ import * as ImagePicker from "expo-image-picker";
 import { getDeviceRegionCode } from "../utils/countries";
 import auth from "@react-native-firebase/auth";
 import Constants from "expo-constants";
+import {
+  PROFESSION_CODES,
+  mapExistingFreeTextToCodeForMigration,
+  toSavePayload,
+  type ProfessionCode,
+} from "../lib/professions";
 
 function Row({
   icon,
@@ -105,8 +112,11 @@ export function AccountScreen() {
   const [profileFirstName, setProfileFirstName] = useState("");
   const [profileLastName, setProfileLastName] = useState("");
   const [profilePhone, setProfilePhone] = useState("");
-  const [profileProfession, setProfileProfession] = useState("");
+  const [profileProfessionCode, setProfileProfessionCode] = useState<ProfessionCode | null>(null);
+  const [profileProfessionOtherText, setProfileProfessionOtherText] = useState("");
   const [profilePhotoURL, setProfilePhotoURL] = useState<string | null>(null);
+  const [showProfessionModal, setShowProfessionModal] = useState(false);
+  const [professionSearch, setProfessionSearch] = useState("");
   const [loadingProfile, setLoadingProfile] = useState(true);
   const [showProfileModal, setShowProfileModal] = useState(false);
   const [savingProfile, setSavingProfile] = useState(false);
@@ -164,7 +174,10 @@ export function AccountScreen() {
       const snap = await getDoc(doc(db, "users", user.id));
       if (snap.exists()) {
         const data = snap.data() as {
+          primaryProfessionCode?: string | null;
+          primaryProfessionOtherText?: string | null;
           profession?: string;
+          primaryProfession?: string;
           photoURL?: string | null;
           firstName?: string;
           lastName?: string;
@@ -173,7 +186,20 @@ export function AccountScreen() {
         setProfileFirstName(data.firstName ?? user.firstName ?? "");
         setProfileLastName(data.lastName ?? user.lastName ?? "");
         setProfilePhone(data.phoneE164 ?? "");
-        setProfileProfession(data.profession ?? "");
+        if (data.primaryProfessionCode != null) {
+          setProfileProfessionCode(data.primaryProfessionCode as ProfessionCode);
+          setProfileProfessionOtherText(data.primaryProfessionOtherText ?? "");
+        } else {
+          const legacy = data.profession ?? data.primaryProfession ?? "";
+          const migrated = mapExistingFreeTextToCodeForMigration(legacy);
+          if (migrated) {
+            setProfileProfessionCode(migrated.code);
+            setProfileProfessionOtherText(migrated.otherText ?? "");
+          } else {
+            setProfileProfessionCode(null);
+            setProfileProfessionOtherText("");
+          }
+        }
         setProfilePhotoURL(data.photoURL ?? null);
       } else {
         setProfileFirstName(user.firstName ?? "");
@@ -205,11 +231,21 @@ export function AccountScreen() {
       Alert.alert(t("common.error"), t("account.errorLastNameRequired"));
       return;
     }
+    if (profileProfessionCode === null) {
+      Alert.alert(t("common.error"), t("profile.primaryProfession.required"));
+      return;
+    }
+    if (profileProfessionCode === "OTHER" && profileProfessionOtherText.trim().length < 2) {
+      Alert.alert(t("common.error"), t("profile.primaryProfession.otherRequired"));
+      return;
+    }
     const phoneE164 = profilePhone.trim() ? normalizePhoneE164(profilePhone) : null;
     if (profilePhone.trim() && !phoneE164) {
       Alert.alert(t("common.error"), t("account.errorPhoneInvalid"));
       return;
     }
+    const professionPayload = toSavePayload(profileProfessionCode, profileProfessionOtherText);
+    if (!professionPayload) return;
     setSavingProfile(true);
     try {
       const displayName = `${profileFirstName.trim()} ${profileLastName.trim()}`.trim();
@@ -218,7 +254,8 @@ export function AccountScreen() {
         lastName: profileLastName.trim(),
         displayName,
         phoneE164: phoneE164 ?? null,
-        profession: profileProfession.trim() || null,
+        primaryProfessionCode: professionPayload.primaryProfessionCode,
+        primaryProfessionOtherText: professionPayload.primaryProfessionOtherText,
         photoURL: profilePhotoURL ?? null,
         updatedAt: serverTimestamp(),
       });
@@ -234,7 +271,7 @@ export function AccountScreen() {
     } finally {
       setSavingProfile(false);
     }
-  }, [user?.id, profileFirstName, profileLastName, profilePhone, profileProfession, profilePhotoURL, t]);
+  }, [user?.id, profileFirstName, profileLastName, profilePhone, profileProfessionCode, profileProfessionOtherText, profilePhotoURL, t]);
 
   const pickProfilePhoto = useCallback(async () => {
     if (!user?.id) return;
@@ -254,7 +291,7 @@ export function AccountScreen() {
       setUploadingPhoto(true);
       const asset = result.assets[0];
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
-      const storageRef = storage().ref(`users/${user.id}/profile/${fileName}`);
+      const storageRef = storage.ref(`users/${user.id}/profile/${fileName}`);
       await storageRef.putFile(asset.uri);
       const url = await storageRef.getDownloadURL();
       setProfilePhotoURL(url);
@@ -284,7 +321,7 @@ export function AccountScreen() {
       setUploadingPhoto(true);
       const asset = result.assets[0];
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
-      const storageRef = storage().ref(`users/${user.id}/profile/${fileName}`);
+      const storageRef = storage.ref(`users/${user.id}/profile/${fileName}`);
       await storageRef.putFile(asset.uri);
       const url = await storageRef.getDownloadURL();
       setProfilePhotoURL(url);
@@ -312,7 +349,11 @@ export function AccountScreen() {
           <Text style={styles.profileHint}>Načítavam…</Text>
         ) : (
           <Text style={styles.profileHint}>
-            {profileProfession.trim() ? profileProfession : t("account.professionPlaceholder")}
+            {profileProfessionCode
+              ? profileProfessionCode === "OTHER"
+                ? profileProfessionOtherText || t("profile.primaryProfession.otherPlaceholder")
+                : t(`professions.${profileProfessionCode}`)
+              : t("profile.primaryProfession.placeholder")}
           </Text>
         )}
         <View style={styles.emailRow}>
@@ -654,14 +695,40 @@ export function AccountScreen() {
               onChangeText={setProfilePhone}
               keyboardType="phone-pad"
             />
-            <Text style={styles.profileFieldLabel}>Primárna profesia</Text>
-            <TextInput
-              style={styles.profileInput}
-              placeholder="Napr. Elektrikár, Tesár, Stavbyvedúci"
-              placeholderTextColor={colors.textMuted}
-              value={profileProfession}
-              onChangeText={setProfileProfession}
-            />
+            <Text style={styles.profileFieldLabel}>{t("profile.primaryProfession.label")}</Text>
+            <TouchableOpacity
+              style={[styles.profileInput, styles.profileInputRow]}
+              onPress={() => setShowProfessionModal(true)}
+              activeOpacity={0.7}
+            >
+              <Text
+                style={[
+                  styles.profileInputText,
+                  !profileProfessionCode && { color: colors.textMuted },
+                ]}
+              >
+                {profileProfessionCode
+                  ? profileProfessionCode === "OTHER"
+                    ? profileProfessionOtherText || t("profile.primaryProfession.otherPlaceholder")
+                    : t(`professions.${profileProfessionCode}`)
+                  : t("profile.primaryProfession.placeholder")}
+              </Text>
+              <Ionicons name="chevron-down" size={20} color={colors.textMuted} />
+            </TouchableOpacity>
+            {profileProfessionCode === "OTHER" ? (
+              <>
+                <Text style={[styles.profileFieldLabel, { marginTop: spacing.sm }]}>
+                  {t("profile.primaryProfession.otherPlaceholder")}
+                </Text>
+                <TextInput
+                  style={styles.profileInput}
+                  placeholder={t("profile.primaryProfession.otherPlaceholder")}
+                  placeholderTextColor={colors.textMuted}
+                  value={profileProfessionOtherText}
+                  onChangeText={setProfileProfessionOtherText}
+                />
+              </>
+            ) : null}
             <View style={styles.profileModalActions}>
               <TouchableOpacity style={styles.profileCancel} onPress={() => setShowProfileModal(false)}>
                 <Text style={styles.profileCancelText}>{t("common.cancel")}</Text>
@@ -698,6 +765,50 @@ export function AccountScreen() {
             ))}
             <TouchableOpacity style={styles.languageCancel} onPress={() => setShowLanguageModal(false)}>
               <Text style={styles.languageCancelText}>{t("tasks.cancel")}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showProfessionModal} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowProfessionModal(false)} />
+          <View style={styles.languageModal}>
+            <Text style={styles.languageModalTitle}>{t("profile.primaryProfession.label")}</Text>
+            <TextInput
+              style={styles.professionSearchInput}
+              placeholder={t("search.placeholder")}
+              placeholderTextColor={colors.textMuted}
+              value={professionSearch}
+              onChangeText={setProfessionSearch}
+            />
+            <FlatList
+              data={PROFESSION_CODES.filter((code) => {
+                const label = t(`professions.${code}`);
+                return !professionSearch.trim() || label.toLowerCase().includes(professionSearch.trim().toLowerCase());
+              })}
+              keyExtractor={(item) => item}
+              style={styles.professionList}
+              renderItem={({ item: code }) => (
+                <TouchableOpacity
+                  style={[styles.languageOption, profileProfessionCode === code && styles.languageOptionActive]}
+                  onPress={() => {
+                    setProfileProfessionCode(code);
+                    setShowProfessionModal(false);
+                    setProfessionSearch("");
+                  }}
+                >
+                  <Text style={[styles.languageOptionText, profileProfessionCode === code && styles.languageOptionTextActive]}>
+                    {t(`professions.${code}`)}
+                  </Text>
+                  {profileProfessionCode === code ? (
+                    <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
+                  ) : null}
+                </TouchableOpacity>
+              )}
+            />
+            <TouchableOpacity style={styles.languageCancel} onPress={() => setShowProfessionModal(false)}>
+              <Text style={styles.languageCancelText}>{t("common.cancel")}</Text>
             </TouchableOpacity>
           </View>
         </View>
@@ -909,6 +1020,8 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     marginBottom: spacing.md,
   },
+  profileInputRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between" },
+  profileInputText: { fontSize: 16, color: colors.text, flex: 1 },
   profileModalActions: {
     flexDirection: "row",
     justifyContent: "flex-end",
@@ -937,6 +1050,17 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     textAlign: "center",
   },
+  professionSearchInput: {
+    backgroundColor: colors.background,
+    borderRadius: radius,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.md,
+    color: colors.text,
+    fontSize: 16,
+  },
+  professionList: { maxHeight: 280, marginBottom: spacing.sm },
   languageOption: {
     flexDirection: "row",
     alignItems: "center",

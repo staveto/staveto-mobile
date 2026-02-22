@@ -343,8 +343,10 @@ export function HomeScreen() {
   }, []);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
   const [pendingAction, setPendingAction] = useState<"task" | "photo" | "expense" | "voice" | "problem" | null>(null);
+  const [pendingExpenseType, setPendingExpenseType] = useState<"WORK" | "TRAVEL" | null>(null);
   const [fabProjectSelectionMode, setFabProjectSelectionMode] = useState(false);
   const [actionProjectId, setActionProjectId] = useState<string | null>(null);
+  const [showExpenseTypeModal, setShowExpenseTypeModal] = useState(false);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
   const [expenseStep, setExpenseStep] = useState<1 | 2>(1); // 1 = select project, 2 = enter details
   const [expenseProjectId, setExpenseProjectId] = useState<string | null>(null);
@@ -1081,8 +1083,11 @@ export function HomeScreen() {
       return;
     }
     setPendingAction(null);
-    setFabProjectSelectionMode(true);
-    setShowProjectSelector(true);
+    setPendingExpenseType(null);
+    setFabProjectSelectionMode(false);
+    setShowProjectSelector(false);
+    setShowExpenseTypeModal(false);
+    setShowActionSheet(true);
   }, [dashboardData, t]);
 
   const handleTaskClick = useCallback(
@@ -1398,15 +1403,22 @@ export function HomeScreen() {
                   key={project.id}
                   style={styles.projectItem}
                   onPress={() => {
+                    if (pendingAction === "expense" && pendingExpenseType) {
+                      const projectData = dashboardData?.projects.find((p) => p.id === project.id);
+                      stackNav.navigate("ProjectOverview", {
+                        projectId: project.id,
+                        projectName: projectData?.name,
+                        openExpenseModal: true,
+                        initialExpenseCategory: pendingExpenseType,
+                      });
+                      setShowProjectSelector(false);
+                      setPendingAction(null);
+                      setPendingExpenseType(null);
+                      return;
+                    }
                     if (pendingAction) {
                       executeAction(pendingAction, project.id);
                       return;
-                    }
-                    if (fabProjectSelectionMode) {
-                      setActionProjectId(project.id);
-                      setShowProjectSelector(false);
-                      setFabProjectSelectionMode(false);
-                      setShowActionSheet(true);
                     }
                   }}
                 >
@@ -1438,6 +1450,68 @@ export function HomeScreen() {
         </TouchableOpacity>
       )}
 
+      {/* Expense Type Selection Modal - Klasický vs Cestovné */}
+      <Modal visible={showExpenseTypeModal} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={styles.modal}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{t("expense.add")}</Text>
+              <TouchableOpacity onPress={() => {
+                setShowExpenseTypeModal(false);
+                setPendingAction(null);
+              }}>
+                <Ionicons name="close" size={24} color="#FFFFFF" />
+              </TouchableOpacity>
+            </View>
+            <Text style={[styles.expenseTypeModalHint, { marginBottom: spacing.md }]}>
+              {t("expense.selectTypeClassicOrTravel") || "Vyberte typ výdavku"}
+            </Text>
+            <TouchableOpacity
+              style={styles.expenseTypeChoice}
+              onPress={() => {
+                setShowExpenseTypeModal(false);
+                const project = focusProject ?? dashboardData?.projects?.[0];
+                if (project) {
+                  stackNav.navigate("ProjectOverview", {
+                    projectId: project.id,
+                    projectName: project.name,
+                    openExpenseModal: true,
+                  });
+                } else {
+                  setPendingExpenseType("WORK");
+                  setShowProjectSelector(true);
+                }
+              }}
+            >
+              <Ionicons name="document-text-outline" size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
+              <Text style={styles.expenseTypeChoiceText}>{t("expense.typeClassic")}</Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.expenseTypeChoice}
+              onPress={() => {
+                setShowExpenseTypeModal(false);
+                const project = focusProject ?? dashboardData?.projects?.[0];
+                if (project) {
+                  stackNav.navigate("ProjectOverview", {
+                    projectId: project.id,
+                    projectName: project.name,
+                    openExpenseModal: true,
+                  });
+                } else {
+                  setPendingExpenseType("TRAVEL");
+                  setShowProjectSelector(true);
+                }
+              }}
+            >
+              <Ionicons name="car-outline" size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
+              <Text style={styles.expenseTypeChoiceText}>{t("expense.typeTravel")}</Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
       <Modal
         visible={showActionSheet}
         transparent
@@ -1450,7 +1524,8 @@ export function HomeScreen() {
               style={styles.sheetActionRow}
               onPress={() => {
                 setShowActionSheet(false);
-                runContextAction("photo", actionProjectId ?? undefined);
+                setPendingAction("photo");
+                setShowProjectSelector(true);
               }}
             >
               <Text style={styles.sheetActionIcon}>📷</Text>
@@ -1460,7 +1535,8 @@ export function HomeScreen() {
               style={styles.sheetActionRow}
               onPress={() => {
                 setShowActionSheet(false);
-                runContextAction("task", actionProjectId ?? undefined);
+                setPendingAction("task");
+                setShowProjectSelector(true);
               }}
             >
               <Text style={styles.sheetActionIcon}>✅</Text>
@@ -1470,7 +1546,17 @@ export function HomeScreen() {
               style={styles.sheetActionRow}
               onPress={() => {
                 setShowActionSheet(false);
-                runContextAction("expense", actionProjectId ?? undefined);
+                const project = focusProject ?? dashboardData?.projects?.[0];
+                if (project) {
+                  stackNav.navigate("ProjectOverview", {
+                    projectId: project.id,
+                    projectName: project.name,
+                    openExpenseModal: true,
+                  });
+                } else {
+                  setPendingAction("expense");
+                  setShowExpenseTypeModal(true);
+                }
               }}
             >
               <Text style={styles.sheetActionIcon}>€</Text>
@@ -1480,7 +1566,8 @@ export function HomeScreen() {
               style={styles.sheetActionRow}
               onPress={() => {
                 setShowActionSheet(false);
-                runContextAction("problem", actionProjectId ?? undefined);
+                setPendingAction("problem");
+                setShowProjectSelector(true);
               }}
             >
               <Text style={styles.sheetActionIcon}>⚠️</Text>
@@ -2626,6 +2713,25 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
   },
   projectItemText: {
+    fontSize: 16,
+    color: "#FFFFFF",
+    flex: 1,
+  },
+  expenseTypeModalHint: {
+    fontSize: 14,
+    color: colors.textMuted,
+  },
+  expenseTypeChoice: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: spacing.md,
+    backgroundColor: colors.background,
+    borderRadius: radius,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  expenseTypeChoiceText: {
     fontSize: 16,
     color: "#FFFFFF",
     flex: 1,

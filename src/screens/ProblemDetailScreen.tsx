@@ -11,6 +11,11 @@ import {
   Linking,
   RefreshControl,
 } from "react-native";
+
+let AudioModule: typeof import("expo-av") | null = null;
+try {
+  AudioModule = require("expo-av");
+} catch {}
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
@@ -18,6 +23,7 @@ import { useAuth } from "../context/AuthContext";
 import { useProjectAccess } from "../hooks/useProjectAccess";
 import * as problemsService from "../services/problems";
 import * as problemPhotosService from "../services/problemPhotos";
+import * as attachmentsService from "../services/attachments";
 import type { ProblemDoc, ProblemStatus } from "../services/problems";
 import { colors, radius, spacing } from "../theme";
 import { showToast } from "../helpers/toast";
@@ -49,6 +55,9 @@ export function ProblemDetailScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [photoUrls, setPhotoUrls] = useState<Map<string, string>>(new Map());
+  const [audioUrl, setAudioUrl] = useState<string | null>(null);
+  const [audioPlaying, setAudioPlaying] = useState(false);
+  const soundRef = React.useRef<{ unloadAsync: () => Promise<void>; playAsync: () => Promise<void>; pauseAsync: () => Promise<void> } | null>(null);
 
   const canEdit =
     access.isOwner ||
@@ -72,6 +81,34 @@ export function ProblemDetailScreen() {
         }
         setPhotoUrls(urls);
       }
+      if (p?.audioUrl) {
+        setAudioUrl(p.audioUrl);
+      } else if (p?.attachments?.length) {
+        for (const attId of p.attachments) {
+          try {
+            const att = await attachmentsService.getAttachment(projectId, attId);
+            if (att?.fileType === "audio") {
+              const url = att.downloadURL ?? (await attachmentsService.getAttachmentURL(att));
+              setAudioUrl(url);
+              break;
+            }
+          } catch (e) {
+            console.warn("[ProblemDetail] Failed to load attachment:", attId);
+          }
+        }
+      } else if (p?.audioAttachmentId) {
+        try {
+          const att = await attachmentsService.getAttachment(projectId, p.audioAttachmentId);
+          if (att) {
+            const url = att.downloadURL ?? (await attachmentsService.getAttachmentURL(att));
+            setAudioUrl(url);
+          }
+        } catch (e) {
+          console.warn("[ProblemDetail] Failed to load legacy audio attachment:", e);
+        }
+      } else {
+        setAudioUrl(null);
+      }
     } catch (e) {
       Alert.alert(t("common.error"), e instanceof Error ? e.message : "Chyba");
       navigation.goBack();
@@ -84,6 +121,43 @@ export function ProblemDetailScreen() {
   useEffect(() => {
     load();
   }, [load]);
+
+  useEffect(() => {
+    return () => {
+      soundRef.current?.unloadAsync().catch(() => {});
+    };
+  }, []);
+
+  const toggleAudio = useCallback(async () => {
+    const url = audioUrl;
+    if (!url || !AudioModule?.Audio) return;
+    try {
+      if (soundRef.current) {
+        if (audioPlaying) {
+          await soundRef.current.pauseAsync();
+        } else {
+          await soundRef.current.playAsync();
+        }
+        setAudioPlaying(!audioPlaying);
+        return;
+      }
+      const { sound } = await AudioModule.Audio.Sound.createAsync(
+        { uri: url },
+        { shouldPlay: true }
+      );
+      soundRef.current = sound;
+      setAudioPlaying(true);
+      sound.setOnPlaybackStatusUpdate((s: { didJustFinishNotInterruptedly?: boolean }) => {
+        if (s?.didJustFinishNotInterruptedly) {
+          setAudioPlaying(false);
+          sound.unloadAsync().catch(() => {});
+          soundRef.current = null;
+        }
+      });
+    } catch (e) {
+      console.warn("[ProblemDetail] Audio play error:", e);
+    }
+  }, [audioUrl, audioPlaying]);
 
   const onRefresh = () => {
     setRefreshing(true);
@@ -155,6 +229,26 @@ export function ProblemDetailScreen() {
 
         <Text style={styles.description}>{problem.shortDescription}</Text>
 
+        {problem.location && (
+          <View style={styles.meta}>
+            <Text style={styles.metaLabel}>{t("problems.locationLabel")}</Text>
+            <Text style={styles.metaValue}>{problem.location}</Text>
+          </View>
+        )}
+        {(problem.detail || audioUrl) && (
+          <View style={styles.meta}>
+            <Text style={styles.metaLabel}>{t("problems.noteOptional")}</Text>
+            {problem.detail && problem.detail !== t("problems.voiceMessage") ? (
+              <Text style={styles.metaValue}>{problem.detail}</Text>
+            ) : null}
+            {audioUrl && (
+              <Text style={[styles.metaValue, !problem.detail && styles.voiceMessageLabel]}>
+                🎙 {t("problems.voiceMessage")}
+              </Text>
+            )}
+          </View>
+        )}
+
         <View style={styles.meta}>
           <Text style={styles.metaLabel}>{t("problems.assignee")}</Text>
           <Text style={styles.metaValue}>{problem.assigneeName || problem.assigneeUid || "—"}</Text>
@@ -201,6 +295,13 @@ export function ProblemDetailScreen() {
           )}
         </View>
 
+        {access.isOwner && (
+          <TouchableOpacity style={[styles.deleteBtn, { marginTop: spacing.lg }]} onPress={deleteProblem}>
+            <Ionicons name="trash-outline" size={20} color={colors.error} />
+            <Text style={styles.deleteBtnText}>{t("common.delete")}</Text>
+          </TouchableOpacity>
+        )}
+
         {problem.photos && problem.photos.length > 0 && (
           <View style={styles.photosSection}>
             <Text style={styles.metaLabel}>{t("problems.photos")}</Text>
@@ -217,21 +318,26 @@ export function ProblemDetailScreen() {
             </View>
           </View>
         )}
-      </View>
 
-      {access.isOwner && (
-        <TouchableOpacity style={styles.deleteBtn} onPress={deleteProblem}>
-          <Ionicons name="trash-outline" size={20} color={colors.error} />
-          <Text style={styles.deleteBtnText}>{t("common.delete")}</Text>
-        </TouchableOpacity>
-      )}
+        {audioUrl && AudioModule?.Audio && (
+          <View style={styles.audioSection}>
+            <Text style={styles.metaLabel}>{t("problems.voiceNote")}</Text>
+            <TouchableOpacity style={styles.audioBtn} onPress={toggleAudio}>
+              <Ionicons name={audioPlaying ? "pause" : "play"} size={24} color={colors.primary} />
+              <Text style={styles.audioBtnText}>
+                {audioPlaying ? (t("common.pause") || "Pause") : (t("common.play") || "Play")}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
+      </View>
     </ScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.lg, paddingBottom: 40 },
+  content: { padding: spacing.lg, paddingBottom: 80 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   card: {
     backgroundColor: colors.card,
@@ -247,6 +353,7 @@ const styles = StyleSheet.create({
   meta: { marginBottom: spacing.sm },
   metaLabel: { fontSize: 12, color: colors.textMuted, marginBottom: 2 },
   metaValue: { fontSize: 15, color: colors.text },
+  voiceMessageLabel: { marginTop: 4 },
   statusSection: { marginTop: spacing.lg, paddingTop: spacing.lg, borderTopWidth: 1, borderTopColor: "#eee" },
   statusValue: { fontSize: 16, fontWeight: "600", color: colors.text, marginTop: 4 },
   statusButtons: { flexDirection: "row", flexWrap: "wrap", marginTop: spacing.md, gap: spacing.sm },
@@ -261,6 +368,16 @@ const styles = StyleSheet.create({
   photosSection: { marginTop: spacing.lg },
   photoGrid: { flexDirection: "row", flexWrap: "wrap", marginTop: spacing.sm, gap: spacing.sm },
   photoThumb: { width: 100, height: 100, borderRadius: 8 },
+  audioSection: { marginTop: spacing.lg },
+  audioBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderRadius: radius,
+    padding: spacing.md,
+    gap: spacing.sm,
+  },
+  audioBtnText: { color: colors.primary, fontSize: 16 },
   deleteBtn: {
     flexDirection: "row",
     alignItems: "center",

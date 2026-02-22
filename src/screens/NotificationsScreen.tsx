@@ -157,6 +157,8 @@ export function NotificationsScreen() {
         return "checkmark-circle-outline";
       case "EXPENSE_ADDED":
         return "cash-outline";
+      case "DIARY_ADDED":
+        return "journal-outline";
       case "PROJECT_CREATED":
         return "add-circle-outline";
       case "PROJECT_ACTIVITY":
@@ -186,6 +188,8 @@ export function NotificationsScreen() {
         return t("notifications.problemAssigned");
       case "EXPENSE_ADDED":
         return t("notifications.newExpense");
+      case "DIARY_ADDED":
+        return t("notifications.diaryAdded");
       case "PROJECT_CREATED":
         return t("notifications.newProject");
       case "PROJECT_ACTIVITY":
@@ -273,7 +277,7 @@ export function NotificationsScreen() {
           params: { dueFilter },
         });
       } else if (notification.type === "PROBLEM_ASSIGNED" && notification.projectId) {
-        const problemId = (notification.meta?.problemId as string) ?? notification.deepLink?.params?.problemId;
+        const problemId = notification.problemId ?? (notification.meta?.problemId as string) ?? notification.deepLink?.params?.problemId;
         if (problemId) {
           const parentNav = navigation.getParent();
           if (parentNav) {
@@ -292,6 +296,14 @@ export function NotificationsScreen() {
           (parentNav as any).navigate("ProjectOverview", {
             projectId: notification.projectId,
             openExpenseId: notification.expenseId,
+          });
+        }
+      } else if (notification.type === "DIARY_ADDED" && notification.projectId) {
+        const parentNav = navigation.getParent();
+        if (parentNav) {
+          (parentNav as any).navigate("ProjectOverview", {
+            projectId: notification.projectId,
+            openDiaryModal: true,
           });
         }
       } else if (notification.type === "PROJECT_INVITED") {

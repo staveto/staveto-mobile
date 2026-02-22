@@ -15,10 +15,16 @@ import { useI18n } from "../i18n/I18nContext";
 import { colors, spacing } from "../theme";
 
 let SpeechRecognition: typeof import("expo-speech-recognition") | null = null;
+let AudioModule: typeof import("expo-av") | null = null;
 try {
   SpeechRecognition = require("expo-speech-recognition");
 } catch (e) {
   // expo-speech-recognition not installed
+}
+try {
+  AudioModule = require("expo-av");
+} catch (e) {
+  // expo-av not installed
 }
 
 const LOCALE_MAP: Record<string, string> = {
@@ -58,8 +64,25 @@ export function DescriptionInputModal({
   const transcriptRef = useRef("");
   const resultListenerRef = useRef<{ remove: () => void } | null>(null);
   const endListenerRef = useRef<{ remove: () => void } | null>(null);
+  const recordingRef = useRef<import("expo-av").Recording | null>(null);
 
   const speechLang = LOCALE_MAP[locale] ?? "en-US";
+
+  const stopRecordingAndGetUri = useCallback(async (): Promise<string | null> => {
+    const rec = recordingRef.current;
+    recordingRef.current = null;
+    if (!rec || !AudioModule) return null;
+    try {
+      await rec.stopAndUnloadAsync();
+      const uri = rec.getURI();
+      return uri ?? null;
+    } catch (e: any) {
+      const code = String(e?.code ?? "").toLowerCase();
+      if (code === "e_audio_nodata") return null; // Too short on Android
+      console.warn("[DescriptionInputModal] Stop recording error:", e);
+      return null;
+    }
+  }, []);
 
   useEffect(() => {
     if (visible) {
@@ -70,27 +93,38 @@ export function DescriptionInputModal({
     }
   }, [visible, initialText, initialRecordingUri]);
 
+  const safeCatch = useCallback((p: unknown) => {
+    if (p != null && typeof (p as Promise<unknown>)?.catch === "function") {
+      (p as Promise<unknown>).catch(() => {});
+    }
+  }, []);
+
   useEffect(() => {
     return () => {
       resultListenerRef.current?.remove();
       endListenerRef.current?.remove();
       if (SpeechRecognition?.ExpoSpeechRecognitionModule) {
-        SpeechRecognition.ExpoSpeechRecognitionModule.abort().catch(() => {});
+        safeCatch(SpeechRecognition.ExpoSpeechRecognitionModule.abort());
       }
+      safeCatch(recordingRef.current?.stopAndUnloadAsync());
+      recordingRef.current = null;
     };
-  }, []);
+  }, [safeCatch]);
 
-  const handleClose = useCallback(() => {
+  const handleClose = useCallback(async () => {
     if (SpeechRecognition?.ExpoSpeechRecognitionModule) {
-      SpeechRecognition.ExpoSpeechRecognitionModule.abort().catch(() => {});
+      safeCatch(SpeechRecognition.ExpoSpeechRecognitionModule.abort());
     }
     resultListenerRef.current?.remove();
     endListenerRef.current?.remove();
+    if (recordingRef.current) {
+      await stopRecordingAndGetUri();
+    }
     setText(initialText);
     setRecordingUri(initialRecordingUri);
     setIsRecording(false);
     onClose();
-  }, [initialText, initialRecordingUri, onClose]);
+  }, [initialText, initialRecordingUri, onClose, stopRecordingAndGetUri, safeCatch]);
 
   const handleConfirm = useCallback(() => {
     onConfirm(text.trim(), recordingUri);
@@ -101,76 +135,105 @@ export function DescriptionInputModal({
   }, [text, recordingUri, onConfirm, onClose]);
 
   const handlePressIn = useCallback(async () => {
-    if (!SpeechRecognition?.ExpoSpeechRecognitionModule) {
+    if (!AudioModule?.Audio) {
       Alert.alert(t("common.error"), t("projectOverview.voiceRecordingNotAvailable"));
       return;
     }
     try {
-      const result = await SpeechRecognition.ExpoSpeechRecognitionModule.requestPermissionsAsync();
-      if (!result.granted) {
+      // Ensure no previous Recording exists (expo-av allows only one at a time)
+      if (recordingRef.current) {
+        await stopRecordingAndGetUri();
+      }
+      if (SpeechRecognition?.ExpoSpeechRecognitionModule) {
+        safeCatch(SpeechRecognition.ExpoSpeechRecognitionModule.abort());
+      }
+
+      const { status } = await AudioModule.Audio.requestPermissionsAsync();
+      if (status !== "granted") {
         Alert.alert(t("common.error"), t("projectOverview.audioPermissionRequired"));
         return;
       }
-      const available = await SpeechRecognition.ExpoSpeechRecognitionModule.isRecognitionAvailable();
-      if (!available) {
-        Alert.alert(t("common.error"), t("projectOverview.voiceRecordingNotAvailable"));
-        return;
-      }
+      await AudioModule.Audio.setAudioModeAsync({
+        allowsRecordingIOS: true,
+        playsInSilentModeIOS: true,
+        staysActiveInBackground: false,
+        shouldDuckAndroid: true,
+        playThroughEarpieceAndroid: false,
+      });
+
       transcriptRef.current = "";
       setIsRecording(true);
-      setIsTranscribing(true);
+      setIsTranscribing(!!SpeechRecognition?.ExpoSpeechRecognitionModule);
 
-      resultListenerRef.current?.remove();
-      endListenerRef.current?.remove();
-
-      resultListenerRef.current = SpeechRecognition.ExpoSpeechRecognitionModule.addListener(
-        "result",
-        (event: { results: Array<{ transcript?: string }>; isFinal?: boolean }) => {
-          const transcript = event.results?.[0]?.transcript ?? "";
-          if (transcript) {
-            if (event.isFinal) {
-              transcriptRef.current = (transcriptRef.current ? transcriptRef.current + " " : "") + transcript;
-            } else {
-              transcriptRef.current = transcript; // interim, overwritten by final
-            }
-          }
-        }
+      const { recording } = await AudioModule.Audio.Recording.createAsync(
+        AudioModule.Audio.RecordingOptionsPresets.HIGH_QUALITY
       );
+      recordingRef.current = recording;
 
-      endListenerRef.current = SpeechRecognition.ExpoSpeechRecognitionModule.addListener(
-        "end",
-        () => {
-          setIsRecording(false);
+      if (SpeechRecognition?.ExpoSpeechRecognitionModule) {
+        const avail = await SpeechRecognition.ExpoSpeechRecognitionModule.isRecognitionAvailable();
+        if (avail) {
+          const perm = await SpeechRecognition.ExpoSpeechRecognitionModule.requestPermissionsAsync();
+          if (perm.granted) {
+            resultListenerRef.current?.remove();
+            endListenerRef.current?.remove();
+            resultListenerRef.current = SpeechRecognition.ExpoSpeechRecognitionModule.addListener(
+              "result",
+              (event: { results: Array<{ transcript?: string }>; isFinal?: boolean }) => {
+                const transcript = event.results?.[0]?.transcript ?? "";
+                if (transcript) {
+                  // API sends full transcript each time; replace to avoid duplication
+                  transcriptRef.current = transcript;
+                }
+              }
+            );
+            endListenerRef.current = SpeechRecognition.ExpoSpeechRecognitionModule.addListener(
+              "end",
+              () => {
+                setIsTranscribing(false);
+                if (transcriptRef.current) {
+                  setText((prev) => (prev ? `${prev} ${transcriptRef.current}` : transcriptRef.current));
+                }
+                resultListenerRef.current?.remove();
+                endListenerRef.current?.remove();
+              }
+            );
+            await SpeechRecognition.ExpoSpeechRecognitionModule.start({
+              lang: speechLang,
+              interimResults: true,
+              continuous: true,
+            });
+          } else {
+            setIsTranscribing(false);
+          }
+        } else {
           setIsTranscribing(false);
-          if (transcriptRef.current) {
-            setText((prev) => (prev ? `${prev} ${transcriptRef.current}` : transcriptRef.current));
-          }
-          resultListenerRef.current?.remove();
-          endListenerRef.current?.remove();
         }
-      );
-
-
-      await SpeechRecognition.ExpoSpeechRecognitionModule.start({
-        lang: speechLang,
-        interimResults: true,
-        continuous: true,
-      });
+      }
     } catch (error: any) {
+      safeCatch(recordingRef.current?.stopAndUnloadAsync());
+      recordingRef.current = null;
       setIsRecording(false);
       setIsTranscribing(false);
       Alert.alert(t("common.error"), t("projectOverview.failedToStartRecording", { error: error.message || t("common.unknown") }));
     }
-  }, [t, speechLang]);
+  }, [t, speechLang, safeCatch, stopRecordingAndGetUri]);
 
   const handlePressOut = useCallback(async () => {
-    if (!SpeechRecognition?.ExpoSpeechRecognitionModule || !isRecording) return;
+    if (!isRecording) return;
     try {
-      await SpeechRecognition.ExpoSpeechRecognitionModule.stop();
+      if (SpeechRecognition?.ExpoSpeechRecognitionModule) {
+        await SpeechRecognition.ExpoSpeechRecognitionModule.stop();
+      }
+      const uri = await stopRecordingAndGetUri();
+      if (uri) setRecordingUri(uri);
     } catch (e) {
-      // ignore
+      await stopRecordingAndGetUri();
+    } finally {
+      setIsRecording(false);
+      setIsTranscribing(false);
     }
-  }, [isRecording]);
+  }, [isRecording, stopRecordingAndGetUri]);
 
   const hasContent = text.trim().length > 0 || !!recordingUri;
   const displayTitle = title ?? t("projectOverview.descriptionModalTitle");
@@ -198,7 +261,7 @@ export function DescriptionInputModal({
           />
 
           <View style={styles.actions}>
-            {SpeechRecognition ? (
+            {AudioModule?.Audio ? (
               <Pressable
                 style={({ pressed }) => [
                   styles.holdRecordBtn,
@@ -294,9 +357,10 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
   },
   holdRecordText: {
-    fontSize: 12,
-    color: colors.primary,
+    fontSize: 14,
+    color: colors.textOnDark,
     marginTop: spacing.xs,
+    fontWeight: "500",
   },
   holdRecordTextActive: {
     color: "#fff",

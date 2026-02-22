@@ -117,7 +117,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       setUploadingPhoto(true);
       const asset = result.assets[0];
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
-      const storageRef = storage().ref(`users/${user.id}/profile/${fileName}`);
+      const storageRef = storage.ref(`users/${user.id}/profile/${fileName}`);
       await storageRef.putFile(asset.uri);
       const url = await storageRef.getDownloadURL();
       await updateDoc(doc(db, "users", user.id), { photoURL: url, updatedAt: serverTimestamp() });
@@ -148,7 +148,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       setUploadingPhoto(true);
       const asset = result.assets[0];
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
-      const storageRef = storage().ref(`users/${user.id}/profile/${fileName}`);
+      const storageRef = storage.ref(`users/${user.id}/profile/${fileName}`);
       await storageRef.putFile(asset.uri);
       const url = await storageRef.getDownloadURL();
       await updateDoc(doc(db, "users", user.id), { photoURL: url, updatedAt: serverTimestamp() });

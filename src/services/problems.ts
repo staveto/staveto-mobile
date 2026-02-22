@@ -42,7 +42,14 @@ export type ProblemDoc = {
   category: ProblemCategory;
   priority: ProblemPriority;
   status: ProblemStatus;
+  /** Required title (1 sentence). Stored in shortDescription for backward compat. */
   shortDescription: string;
+  /** Optional detail/note. */
+  detail?: string | null;
+  /** Required location (phase/area). */
+  location?: string | null;
+  /** When true, priority is forced to high. */
+  blocksWork?: boolean | null;
   assigneeUid: string;
   assigneeName?: string;
   createdByUid: string;
@@ -53,6 +60,15 @@ export type ProblemDoc = {
   photos: ProblemPhoto[];
   locationHint?: string | null;
   audit?: { lastStatusByUid?: string; lastStatusAt?: string };
+  /** Attachment IDs (e.g. voice note) – same pattern as DiaryEntryDoc */
+  attachments?: string[];
+  /** @deprecated Use attachments[]. Kept for backward compatibility when reading. */
+  audioAttachmentId?: string | null;
+  /** @deprecated Use attachments[]. Kept for backward compatibility when reading. */
+  audioUrl?: string | null;
+  /** @deprecated Use attachments[]. Kept for backward compatibility when reading. */
+  audioStoragePath?: string | null;
+  audioDurationSec?: number | null;
 };
 
 function convertTimestamp(ts: unknown): string | undefined {
@@ -82,6 +98,9 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     priority: (d.priority as ProblemPriority) ?? "medium",
     status: (d.status as ProblemStatus) ?? "open",
     shortDescription: (d.shortDescription as string) ?? "",
+    detail: (d.detail as string) ?? null,
+    location: (d.location as string) ?? (d.locationHint as string) ?? null,
+    blocksWork: (d.blocksWork as boolean) ?? null,
     assigneeUid: (d.assigneeUid as string) ?? "",
     assigneeName: (d.assigneeName as string) ?? undefined,
     createdByUid: (d.createdByUid as string) ?? "",
@@ -92,6 +111,11 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     photos,
     locationHint: (d.locationHint as string) ?? null,
     audit: d.audit as { lastStatusByUid?: string; lastStatusAt?: string } | undefined,
+    attachments: (d.attachments as string[]) ?? undefined,
+    audioAttachmentId: (d.audioAttachmentId as string) ?? null,
+    audioUrl: (d.audioUrl as string) ?? null,
+    audioStoragePath: (d.audioStoragePath as string) ?? null,
+    audioDurationSec: typeof d.audioDurationSec === "number" ? d.audioDurationSec : null,
   };
 }
 
@@ -170,10 +194,14 @@ export type CreateProblemInput = {
   category: ProblemCategory;
   priority: ProblemPriority;
   shortDescription: string;
+  detail?: string | null;
+  location?: string | null;
+  blocksWork?: boolean | null;
   assigneeUid: string;
   assigneeName?: string;
   dueDate?: Date | string | null;
   photos?: ProblemPhoto[];
+  attachments?: string[];
 };
 
 export async function createProblem(input: CreateProblemInput): Promise<ProblemDoc> {
@@ -197,6 +225,9 @@ export async function createProblem(input: CreateProblemInput): Promise<ProblemD
     priority: input.priority,
     status: "open",
     shortDescription: input.shortDescription,
+    detail: input.detail ?? null,
+    location: input.location ?? null,
+    blocksWork: input.blocksWork ?? null,
     assigneeUid: input.assigneeUid,
     assigneeName: input.assigneeName ?? null,
     createdByUid: currentUser.uid,
@@ -205,7 +236,8 @@ export async function createProblem(input: CreateProblemInput): Promise<ProblemD
     updatedAt: serverTimestamp(),
     dueDate: dueDateTs,
     photos: input.photos ?? [],
-    locationHint: null,
+    locationHint: input.location ?? null,
+    attachments: input.attachments ?? [],
   });
 
   if (__DEV__) {
@@ -214,6 +246,24 @@ export async function createProblem(input: CreateProblemInput): Promise<ProblemD
 
   const created = await getProblem(input.projectId, ref.id);
   if (!created) throw new Error("Problém sa nepodarilo načítať po vytvorení.");
+
+  if (input.assigneeUid) {
+    try {
+      const { createProblemAssignedNotification } = await import("./notifications");
+      await createProblemAssignedNotification({
+        userId: input.assigneeUid,
+        projectId: input.projectId,
+        projectName: undefined,
+        problemId: ref.id,
+        problemTitle: input.shortDescription,
+        fromUserId: currentUser.uid,
+        fromUserName: currentUser.displayName ?? currentUser.email ?? null,
+      });
+    } catch (e) {
+      console.warn("[problems] Failed to create assignee notification:", e);
+    }
+  }
+
   return created;
 }
 
@@ -222,10 +272,14 @@ export type UpdateProblemInput = Partial<{
   priority: ProblemPriority;
   status: ProblemStatus;
   shortDescription: string;
+  detail: string | null;
+  location: string | null;
+  blocksWork: boolean | null;
   assigneeUid: string;
   assigneeName: string;
   dueDate: Date | string | null;
   photos: ProblemPhoto[];
+  attachments: string[];
 }>;
 
 export async function updateProblem(
@@ -245,6 +299,9 @@ export async function updateProblem(
 
   if (input.category !== undefined) updates.category = input.category;
   if (input.priority !== undefined) updates.priority = input.priority;
+  if (input.detail !== undefined) updates.detail = input.detail;
+  if (input.location !== undefined) updates.location = input.location;
+  if (input.blocksWork !== undefined) updates.blocksWork = input.blocksWork;
   if (input.status !== undefined) {
     updates.status = input.status;
     updates.audit = {
@@ -264,8 +321,28 @@ export async function updateProblem(
         : null;
   }
   if (input.photos !== undefined) updates.photos = input.photos;
+  if (input.attachments !== undefined) updates.attachments = input.attachments;
 
   await updateDoc(ref, updates);
+
+  if (input.assigneeUid !== undefined && input.assigneeUid) {
+    try {
+      const { createProblemAssignedNotification } = await import("./notifications");
+      const problemSnap = await getDoc(ref);
+      const shortDesc = problemSnap.exists() ? (problemSnap.data() as { shortDescription?: string }).shortDescription : undefined;
+      await createProblemAssignedNotification({
+        userId: input.assigneeUid,
+        projectId,
+        projectName: undefined,
+        problemId,
+        problemTitle: shortDesc ?? undefined,
+        fromUserId: currentUser.uid,
+        fromUserName: currentUser.displayName ?? currentUser.email ?? null,
+      });
+    } catch (e) {
+      console.warn("[problems] Failed to create assignee notification:", e);
+    }
+  }
 
   if (__DEV__) {
     console.log(`[problems] Updated: ${problemId}, projectId=${projectId}`);

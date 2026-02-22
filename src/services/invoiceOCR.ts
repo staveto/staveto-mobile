@@ -39,6 +39,11 @@ function normalizeToOcrParsed(
   const MAX = 999_999.99;
   if (totalAmount != null && (totalAmount <= 0 || totalAmount > MAX)) totalAmount = null;
   if (totalAmount == null && rawText) totalAmount = extractTotalFromRawText(rawText);
+  // When backend returns round number (45, 46, 50) but rawText has XX,XX EUR – prefer mobile fallback
+  if (totalAmount != null && rawText && totalAmount >= 40 && totalAmount <= 60 && Number.isInteger(totalAmount)) {
+    const fromRaw = extractTotalFromRawText(rawText);
+    if (fromRaw != null && fromRaw % 1 !== 0) totalAmount = fromRaw;
+  }
 
   let vatAmount: number | null = null;
   const vatRaw = ocr.vatAmount ?? ocr.vat ?? ocr.vatAmountCents;
@@ -46,8 +51,63 @@ function normalizeToOcrParsed(
   else vatAmount = parseMoneyToNumber(vatRaw);
   if (vatAmount != null && (vatAmount <= 0 || vatAmount > MAX)) vatAmount = null;
 
+  let supplierName = typeof ocr.supplierName === "string" ? ocr.supplierName.trim() : null;
+  // Reject OCR noise: short Arabic-only strings (e.g. "کلام") from misread Latin on non-Arabic invoices
+  if (supplierName && /^[\u0600-\u06FF\s]+$/.test(supplierName) && supplierName.length < 10) supplierName = null;
+  // Strip OCR artifact: "y DEK s.r.o." -> "DEK s.r.o." (misread "ľ" from "Dodávateľ")
+  if (supplierName && /^[yíýľ]\s+/i.test(supplierName)) supplierName = supplierName.replace(/^[yíýľ]\s+/i, "").trim();
+  if (!supplierName && rawText && typeof ocr.supplierTaxId === "string") {
+    const taxId = ocr.supplierTaxId as string;
+    const idx = rawText.indexOf(taxId);
+    if (idx > 0) {
+      const before = rawText.slice(0, idx);
+      const m = before.match(
+        /([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž0-9\u0600-\u06FF][^\n]{2,50}\s+(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl|s\.a\.|s\.l\.|nv|bv)\b)/i
+      );
+      const ex = m?.[1]?.replace(/\s+/g, " ").trim();
+      if (ex && ex.length >= 4 && ex.length <= 80 && !/\d{6,}/.test(ex) && !(/^[\u0600-\u06FF\s]+$/.test(ex))) {
+        supplierName = ex.replace(/^[yíýľ]\s+/i, "").trim();
+      }
+    }
+    if (!supplierName && idx >= 0) {
+      const after = rawText.slice(idx + taxId.length, idx + 200);
+      const m2 = after.match(
+        /([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž][^\n]{1,40}\s+(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b)/i
+      );
+      const ex2 = m2?.[1]?.replace(/\s+/g, " ").trim();
+      if (ex2 && ex2.length >= 4 && ex2.length <= 80 && !/\d{6,}/.test(ex2) && !(/^[\u0600-\u06FF\s]+$/.test(ex2))) {
+        supplierName = ex2.replace(/^[yíýľ]\s+/i, "").trim();
+      }
+    }
+    if (!supplierName) {
+      const lineList = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
+      const taxId = ocr.supplierTaxId as string;
+      for (let i = 0; i < lineList.length; i++) {
+        if (!lineList[i].includes(taxId)) continue;
+        for (const offset of [2, 1]) {
+          if (i - offset < 0) continue;
+          const line = lineList[i - offset].trim();
+          if (line.length < 4 || line.length > 80 || /\d{6,}/.test(line)) continue;
+          if (/^[\u0600-\u06FF\s]+$/.test(line) && line.length < 10) continue;
+          supplierName = line.replace(/\s+/g, " ").trim().replace(/^[yíýľ]\s+/i, "").trim();
+          if (/\b(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b/i.test(line)) break;
+        }
+        break;
+      }
+    }
+    if (!supplierName) {
+      const top = rawText.slice(0, 800);
+      const m3 = top.match(
+        /\b([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž][A-Za-záäčďéíĺľňóôřšťúýž0-9\s\-\.]{1,45}(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b)/i
+      );
+      const ex3 = m3?.[1]?.replace(/\s+/g, " ").trim();
+      if (ex3 && ex3.length >= 4 && ex3.length <= 80 && !/\d{6,}/.test(ex3) && !(/^[\u0600-\u06FF\s]+$/.test(ex3))) {
+        supplierName = ex3.replace(/^[yíýľ]\s+/i, "").trim();
+      }
+    }
+  }
   return {
-    supplierName: typeof ocr.supplierName === "string" ? ocr.supplierName : null,
+    supplierName,
     supplierTaxId: typeof ocr.supplierTaxId === "string" ? ocr.supplierTaxId : null,
     invoiceNumber: typeof ocr.invoiceNumber === "string" ? ocr.invoiceNumber : null,
     issueDate: typeof ocr.issueDate === "string" ? ocr.issueDate : null,
@@ -147,14 +207,6 @@ export async function extractInvoiceData(input: {
     if ("ok" in result && result.ok === true && !("status" in result)) {
       const rawParsed = (result as OcrResult).parsed as Record<string, unknown> | null;
       const rawText = (result as { rawText?: string }).rawText ?? (result as { extractedText?: string }).extractedText;
-      console.log("[expense autofill] amount candidates (raw, ok-branch)", {
-        total: rawParsed?.total,
-        totalAmount: rawParsed?.totalAmount,
-        grandTotal: rawParsed?.grandTotal,
-        amount: rawParsed?.amount,
-        sum: rawParsed?.sum,
-        amountCents: rawParsed?.amountCents,
-      });
       const parsed = normalizeToOcrParsed(rawParsed, rawText);
       return { status: "success" as const, parsed };
     }

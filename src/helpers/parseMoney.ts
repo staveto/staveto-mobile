@@ -24,11 +24,28 @@ export function parseMoneyToNumber(v: unknown): number | null {
   return Number.isFinite(n) ? n : null;
 }
 
-/** Fallback: extract total WITH VAT from raw OCR text. Prefer "Spolu v EUR", "NA ÚHRADU", exclude "Základ" (base). */
+/** Highest priority: "uhradené" / "platené v hotovosti" = final paid amount (SK invoices) */
+function extractPaidAmount(rawText: string): number | null {
+  const block = rawText.replace(/\s+/g, " ");
+  const paidRegex =
+    /(?:uhraden[ée]|platen[ée](?:\s+v\s+hotovosti)?)\s*(\d{1,6}[.,]\d{2})\s*(?:eur|€|euro)?/gi;
+  let lastMatch: RegExpExecArray | null;
+  let last: RegExpExecArray | null = null;
+  while ((lastMatch = paidRegex.exec(block)) !== null) last = lastMatch;
+  if (last?.[1]) {
+    const n = parseMoneyToNumber(last[1]);
+    if (n != null && n > 0 && n <= MAX_REASONABLE) return n;
+  }
+  return null;
+}
+
+/** Fallback: extract total WITH VAT from raw OCR text (multi-language). Exclude "Základ" (base). */
 export function extractTotalFromRawText(rawText: string | null | undefined): number | null {
   if (!rawText || typeof rawText !== "string") return null;
+  const fromPaid = extractPaidAmount(rawText);
+  if (fromPaid != null) return fromPaid;
   const totalWithVatRegex =
-    /(?:spolu\s+v\s+eur|na\s*[úu]hradu\s*(?:eur)?|celkom|total|summe|gesamt|hotovosť|karta|platba|k\s*[úu]hrade)[\s\S]*?(\d{1,6}[.,]\d{2})\s*(?:eur|€)?/i;
+    /(?:spolu(?:\s+v\s+eur)?|uhraden[ée]|platen[ée](?:\s+v\s+hotovosti)?|na\s*[úu]hradu\s*(?:eur)?|celkom|total|summe|gesamt|totale|importe|razem|hotovosť|karta|platba|k\s*[úu]hrade|paid|bezahlt|pagato|betrag|amount|montant|importo)[\s\S]*?(\d{1,6}[.,]\d{2})\s*(?:eur|€|euro)?/i;
   const m = rawText.match(totalWithVatRegex);
   if (m?.[1]) {
     const n = parseMoneyToNumber(m[1]);

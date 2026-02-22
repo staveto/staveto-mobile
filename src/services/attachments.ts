@@ -164,7 +164,21 @@ export async function uploadAttachment(
     uploadedBy: currentUser.uid,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
-  };
+    downloadURL,
+  } as AttachmentDoc & { downloadURL?: string };
+}
+
+/**
+ * Get a single attachment by ID.
+ */
+export async function getAttachment(
+  projectId: string,
+  attachmentId: string
+): Promise<AttachmentDoc | null> {
+  const refDoc = doc(db, paths.projectAttachment(projectId, attachmentId));
+  const snap = await getDoc(refDoc);
+  if (!snap.exists()) return null;
+  return toDoc({ id: snap.id, data: snap.data.bind(snap) });
 }
 
 /**

@@ -89,7 +89,7 @@ export function ProblemsListScreen() {
   };
 
   useEffect(() => {
-    const title = projectType === "MAINTENANCE" ? t("problems.titlePoruchy") : projectType === "TRADE" ? t("problems.titleReklamacie") : t("problems.title");
+    const title = projectType === "MAINTENANCE" ? t("problems.titlePoruchy") : projectType === "TRADE" ? t("problems.titleReklamacie") : (projectType === "BUILD" || projectType === "MANAGEMENT") ? t("problems.titleDefekty") : projectType === "RESIDENTIAL" ? t("problems.titleProblemy") : t("problems.title");
     navigation.setOptions({ title });
   }, [navigation, projectType, t]);
 

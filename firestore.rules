@@ -70,7 +70,7 @@ service cloud.firestore {
       return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.documents == true) || (isMember(projectId) && !hasAccessDoc(projectId));
     }
     function canWriteAsEditor(projectId) {
-      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).permissionLevel == 'editor');
+      return isOwner(projectId) || (hasAccessDoc(projectId) && (access(projectId).permissionLevel == 'editor' || access(projectId).permissionLevel == 'admin'));
     }
 
     // Users (každý len svoj)

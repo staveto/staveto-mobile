@@ -16,6 +16,7 @@ import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { ConstructionDiaryEntry } from "../lib/types";
 import { addProjectEvent } from "./projectEvents";
+import { createDiaryAddedNotification } from "./notifications";
 
 export type DiaryEntryDoc = {
   id: string;
@@ -79,6 +80,7 @@ export async function createDiaryEntry(
     notes?: string;
     phaseId?: string | null;
     attachments?: string[];
+    projectName?: string | null;
   }
 ): Promise<DiaryEntryDoc> {
   const currentUser = auth.currentUser;
@@ -116,6 +118,24 @@ export async function createDiaryEntry(
     );
   } catch (error) {
     console.warn("[constructionDiary] Failed to create project event:", error);
+  }
+
+  if (currentUser?.uid) {
+    try {
+      let projectName: string | null = data.projectName ?? null;
+      if (!projectName) {
+        const { getProject } = await import("./projects");
+        const project = await getProject(projectId);
+        projectName = project?.name ?? null;
+      }
+      await createDiaryAddedNotification({
+        userId: ownerId,
+        projectId,
+        projectName,
+      });
+    } catch (error) {
+      console.warn("[constructionDiary] Failed to create notification:", error);
+    }
   }
   
   console.log(`[constructionDiary] Created entry ${ref.id} in project ${projectId}`);

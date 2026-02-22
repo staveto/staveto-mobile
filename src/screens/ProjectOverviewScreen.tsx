@@ -107,6 +107,7 @@ export function ProjectOverviewScreen() {
     projectId?: string;
     projectName?: string;
     openExpenseModal?: boolean;
+    initialExpenseCategory?: "WORK" | "TRAVEL";
     openNewTask?: boolean;
     openDiaryModal?: boolean;
     diaryInputMode?: "text" | "voice";
@@ -118,6 +119,7 @@ export function ProjectOverviewScreen() {
     projectId: paramProjectId,
     projectName: paramProjectName,
     openExpenseModal: paramOpenExpenseModal,
+    initialExpenseCategory: paramInitialExpenseCategory,
     openNewTask: paramOpenNewTask,
     openDiaryModal: paramOpenDiaryModal,
     diaryInputMode: paramDiaryInputMode,
@@ -708,9 +710,10 @@ export function ProjectOverviewScreen() {
   useEffect(() => {
     if (paramOpenExpenseModal && projectId && access.canReadExpenses && access.canWrite && access.sharedItems?.expenses === true) {
       setExpensePhaseId(paramSelectedPhaseId ?? null);
+      if (paramInitialExpenseCategory) setExpenseCategory(paramInitialExpenseCategory);
       setShowExpenseModal(true);
     }
-  }, [paramOpenExpenseModal, projectId, paramSelectedPhaseId, access.canReadExpenses, access.canWrite, access.sharedItems?.expenses]);
+  }, [paramOpenExpenseModal, projectId, paramSelectedPhaseId, paramInitialExpenseCategory, access.canReadExpenses, access.canWrite, access.sharedItems?.expenses]);
 
   // Expand expenses section if requested from navigation (e.g. from ExpensesKpiScreen row click)
   useEffect(() => {
@@ -759,13 +762,17 @@ export function ProjectOverviewScreen() {
       const km = expenseTravelRoundTrip ? oneWayKm * 2 : oneWayKm;
       setExpenseTravelDistanceKm(String(Math.round(km * 10) / 10));
     } catch (err) {
-      const msg = err instanceof Error ? err.message : t("projectOverview.distanceCalcFailed");
+      const raw = err instanceof Error ? err.message : "";
+      const msg =
+        raw === "distance_failed" || raw.includes("distance_failed")
+          ? t("projectOverview.distanceCalcFailed")
+          : raw || t("projectOverview.distanceCalcFailed");
       setKmError(msg);
       showToast(msg);
     } finally {
       setIsLoadingDistance(false);
     }
-  }, [expenseTravelFromAddress, expenseTravelToAddress, expenseTravelFromCountry, expenseTravelToCountry, expenseTravelRoundTrip, isLoadingDistance, isOnline]);
+  }, [expenseTravelFromAddress, expenseTravelToAddress, expenseTravelFromCountry, expenseTravelToCountry, expenseTravelRoundTrip, isLoadingDistance, isOnline, t]);
 
   const handleAddressBBlur = useCallback(() => {
     const from = expenseTravelFromAddress.trim();
@@ -1520,11 +1527,6 @@ export function ProjectOverviewScreen() {
 
   const applyOcrPrefill = (parsed: OcrParsed | null) => {
     if (!parsed) return;
-    console.log("[expense autofill] incoming OCR", JSON.stringify(parsed, null, 2));
-    console.log("[expense autofill] amount candidates", {
-      totalAmount: parsed.totalAmount,
-      vatAmount: parsed.vatAmount,
-    });
     const amount = parsed.totalAmount;
     if (amount != null && amount > 0 && amount <= 999_999.99) {
       setExpenseAmount(String(amount));
@@ -1532,10 +1534,12 @@ export function ProjectOverviewScreen() {
     if (parsed.issueDate) {
       setExpenseDate(parsed.issueDate);
     }
-    if (parsed.supplierName) {
-      setExpenseSupplierName(parsed.supplierName);
+    const supplier = parsed.supplierName?.trim();
+    const isNoise = supplier && /^[\u0600-\u06FF\s]+$/.test(supplier) && supplier.length < 10;
+    if (supplier && !isNoise) {
+      setExpenseSupplierName(supplier);
       if (!expenseTitle.trim()) {
-        setExpenseTitle(parsed.supplierName);
+        setExpenseTitle(supplier);
       }
     }
     if (parsed.supplierTaxId) {
@@ -2430,6 +2434,7 @@ export function ProjectOverviewScreen() {
           notes: undefined, // Notes field removed, using workDescription instead
           phaseId: diaryPhaseId,
           attachments: attachmentIds,
+          projectName: projectName || null,
         });
         Alert.alert(t("common.success"), t("projectOverview.diaryEntryAdded"));
       }
@@ -3961,7 +3966,7 @@ export function ProjectOverviewScreen() {
                 style={{ marginRight: spacing.sm }}
               />
               <Text style={styles.expensesHeaderText}>
-                {projectType === 'MAINTENANCE' ? t("problems.titlePoruchy") : projectType === 'TRADE' ? t("problems.titleReklamacie") : t("problems.title")}
+                {projectType === 'MAINTENANCE' ? t("problems.titlePoruchy") : projectType === 'TRADE' ? t("problems.titleReklamacie") : (projectType === 'BUILD' || projectType === 'MANAGEMENT') ? t("problems.titleDefekty") : projectType === 'RESIDENTIAL' ? t("problems.titleProblemy") : t("problems.title")}
               </Text>
               {openProblemsCount > 0 && (
                 <View style={styles.problemsBadge}>
@@ -4340,9 +4345,14 @@ export function ProjectOverviewScreen() {
               showsVerticalScrollIndicator={true}
               keyboardShouldPersistTaps="handled"
             >
-            {/* First choice: Klasický výdavok vs Cestovné (A→B) */}
+            {/* First choice: Klasický výdavok vs Cestovné (A-B) – form appears only after selection */}
             <View style={styles.expenseCategorySection}>
               <Text style={styles.expenseCategoryLabel}>{t("expense.type")}</Text>
+              {!expenseCategory && (
+                <Text style={[styles.expenseCategoryHint, { marginBottom: spacing.sm }]}>
+                  {t("expense.selectTypeClassicOrTravel") || "Vyberte typ výdavku"}
+                </Text>
+              )}
               <View style={styles.expenseTypeChoiceRow}>
                 <TouchableOpacity
                   style={[
@@ -4545,20 +4555,18 @@ export function ProjectOverviewScreen() {
                     <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
                   </TouchableOpacity>
                 </View>
+                <Text style={styles.travelFormLabel}>{t("expense.distanceKm")}</Text>
                 <View style={styles.travelDistanceRow}>
-                  <View style={styles.travelDistanceInputWrap}>
-                    <Text style={styles.travelFormLabel}>{t("expense.distanceKm")}</Text>
-                    <TextInput
-                      style={styles.input}
-                      value={expenseTravelDistanceKm}
-                      onChangeText={(t) => {
-                        setExpenseTravelDistanceKm(t.replace(/[^\d.,]/g, '').replace(',', '.'));
-                      }}
-                      placeholder="0"
-                      placeholderTextColor={colors.textMuted}
-                      keyboardType="decimal-pad"
-                    />
-                  </View>
+                  <TextInput
+                    style={[styles.input, styles.travelDistanceInput]}
+                    value={expenseTravelDistanceKm}
+                    onChangeText={(t) => {
+                      setExpenseTravelDistanceKm(t.replace(/[^\d.,]/g, '').replace(',', '.'));
+                    }}
+                    placeholder="0"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="decimal-pad"
+                  />
                   <TouchableOpacity
                     style={[
                       styles.calculateKmButton,
@@ -4665,12 +4673,15 @@ export function ProjectOverviewScreen() {
               </View>
             )}
 
+            {/* Form fields – only after type is selected */}
+            {(expenseCategory === 'WORK' || expenseCategory === 'MATERIAL' || expenseCategory === 'OTHER' || expenseCategory === 'TRAVEL') && (
+              <>
             {/* Supplier */}
             <TextInput
               style={styles.input}
               value={expenseSupplierName}
               onChangeText={setExpenseSupplierName}
-              placeholder={t("expense.supplierName")}
+              placeholder={t("expense.supplierName") || "Meno dodávateľa (voliteľné)"}
               placeholderTextColor={colors.textMuted}
             />
             <TextInput
@@ -4686,7 +4697,7 @@ export function ProjectOverviewScreen() {
               style={styles.input}
               value={expenseTitle}
               onChangeText={setExpenseTitle}
-              placeholder={t("projectOverview.expenseTitlePlaceholder")}
+              placeholder={t("projectOverview.expenseTitlePlaceholder") || "Názov výdavku *"}
               placeholderTextColor={colors.textMuted}
               autoFocus
             />
@@ -4708,6 +4719,8 @@ export function ProjectOverviewScreen() {
               multiline
               numberOfLines={3}
             />
+              </>
+            )}
             
             </ScrollView>
             <View style={styles.modalButtons}>
@@ -5359,10 +5372,7 @@ export function ProjectOverviewScreen() {
                   setDiaryWeather("");
                   setDiaryWorkers("");
                   setDiaryWorkDescription("");
-                  setDiaryWorkDescriptionMode('text');
                   setDiaryWorkDescriptionRecordingUri(null);
-                  setDiaryWorkDescriptionIsRecording(false);
-                  setDiaryWorkDescriptionRecording(null);
                   setDiaryMaterials("");
                   setDiaryPhaseId(null);
                   setDiaryAttachment(null);
@@ -6936,12 +6946,13 @@ const styles = StyleSheet.create({
   },
   travelDistanceRow: {
     flexDirection: "row",
-    alignItems: "flex-end",
+    alignItems: "center",
     gap: spacing.md,
     marginBottom: spacing.sm,
   },
-  travelDistanceInputWrap: {
+  travelDistanceInput: {
     flex: 1,
+    minWidth: 0,
   },
   travelRateRow: {
     marginBottom: spacing.sm,

@@ -1,7 +1,9 @@
 import messaging from "@react-native-firebase/messaging";
-import { Platform } from "react-native";
+import { Platform, PermissionsAndroid } from "react-native";
 import { doc, setDoc } from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
+
+const ANDROID_NOTIFICATION_PERMISSION_API_LEVEL = 33;
 
 const DEVICES_COLLECTION = "devices";
 
@@ -20,24 +22,42 @@ function getDeviceId(): string {
 }
 
 /**
+ * Request notification permission (shows native system dialog).
+ * iOS: Firebase messaging.requestPermission()
+ * Android 13+: PermissionsAndroid.request(POST_NOTIFICATIONS)
+ */
+async function requestNotificationPermission(): Promise<boolean> {
+  if (Platform.OS === "ios") {
+    const authStatus = await messaging().requestPermission();
+    return (
+      authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
+      authStatus === messaging.AuthorizationStatus.PROVISIONAL
+    );
+  }
+  if (Platform.OS === "android" && Platform.Version >= ANDROID_NOTIFICATION_PERMISSION_API_LEVEL) {
+    const result = await PermissionsAndroid.request(
+      PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS
+    );
+    return result === PermissionsAndroid.RESULTS.GRANTED;
+  }
+  return true; // Android < 13: permission granted by default when in manifest
+}
+
+/**
  * Request notification permission (iOS) and get FCM token.
  * Saves token to Firestore: users/{uid}/devices/{deviceId}
  * Also updates users/{uid}.token for quick access.
+ * Shows native permission dialog at first login (like camera/microphone).
  */
 export async function registerForPushNotifications(): Promise<string | null> {
   const uid = auth().currentUser?.uid;
   if (!uid) return null;
 
   try {
-    if (Platform.OS === "ios") {
-      const authStatus = await messaging().requestPermission();
-      const enabled =
-        authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
-        authStatus === messaging.AuthorizationStatus.PROVISIONAL;
-      if (!enabled) {
-        console.log("[push] Notification permission denied");
-        return null;
-      }
+    const granted = await requestNotificationPermission();
+    if (!granted) {
+      if (__DEV__) console.log("[push] Notification permission denied");
+      return null;
     }
 
     const token = await messaging().getToken();

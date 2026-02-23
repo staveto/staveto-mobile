@@ -26,49 +26,74 @@ try {
   console.warn("expo-image-picker not available for equipment photo");
 }
 
-const CATEGORIES: { value: EquipmentCategory; label: string }[] = [
-  { value: "machine", label: "Stroj" },
-  { value: "tool", label: "Náradie" },
-  { value: "vehicle", label: "Vozidlo" },
-  { value: "building", label: "Budova" },
-  { value: "other", label: "Iné" },
+const CATEGORIES: { value: EquipmentCategory; labelKey: string }[] = [
+  { value: "machine", labelKey: "equipment.categoryMachine" },
+  { value: "tool", labelKey: "equipment.categoryTool" },
+  { value: "vehicle", labelKey: "equipment.categoryVehicle" },
+  { value: "building", labelKey: "equipment.categoryBuilding" },
+  { value: "other", labelKey: "equipment.categoryOther" },
 ];
 
-const SUBCATEGORIES: Record<EquipmentCategory, { value: string; label: string }[]> = {
+const SUBCATEGORY_LABEL_KEYS: Record<string, string> = {
+  bager: "equipment.subcategoryBager",
+  nakladač: "equipment.subcategoryNakladac",
+  miešačka: "equipment.subcategoryMiesacka",
+  valec: "equipment.subcategoryValec",
+  plošina: "equipment.subcategoryPlosina",
+  generátor: "equipment.subcategoryGenerator",
+  kompresor: "equipment.subcategoryKompresor",
+  čerpadlo: "equipment.subcategoryCerpadlo",
+  "vŕtačka": "equipment.subcategoryVrtacka",
+  píla: "equipment.subcategoryPila",
+  brúsky: "equipment.subcategoryBrushy",
+  "vibračná doska": "equipment.subcategoryVibracnaDoska",
+  laser: "equipment.subcategoryLaser",
+  dodávka: "equipment.subcategoryDodavka",
+  pickup: "equipment.subcategoryPickup",
+  osobné: "equipment.subcategoryOsobne",
+  príves: "equipment.subcategoryPrives",
+  byt: "equipment.subcategoryByt",
+  dom: "equipment.subcategoryDom",
+  sklad: "equipment.subcategorySklad",
+  areál: "equipment.subcategoryAreal",
+  iné: "equipment.subcategoryIne",
+};
+
+const SUBCATEGORIES: Record<EquipmentCategory, { value: string }[]> = {
   machine: [
-    { value: "bager", label: "Bager" },
-    { value: "nakladač", label: "Nakladač" },
-    { value: "miešačka", label: "Miešačka" },
-    { value: "valec", label: "Valec" },
-    { value: "plošina", label: "Plošina" },
-    { value: "generátor", label: "Generátor" },
-    { value: "kompresor", label: "Kompresor" },
-    { value: "čerpadlo", label: "Čerpadlo" },
-    { value: "iné", label: "Iné" },
+    { value: "bager" },
+    { value: "nakladač" },
+    { value: "miešačka" },
+    { value: "valec" },
+    { value: "plošina" },
+    { value: "generátor" },
+    { value: "kompresor" },
+    { value: "čerpadlo" },
+    { value: "iné" },
   ],
   tool: [
-    { value: "vŕtačka", label: "Vŕtačka" },
-    { value: "píla", label: "Píla" },
-    { value: "brúsky", label: "Brúsky" },
-    { value: "vibračná doska", label: "Vibračná doska" },
-    { value: "laser", label: "Laser" },
-    { value: "iné", label: "Iné" },
+    { value: "vŕtačka" },
+    { value: "píla" },
+    { value: "brúsky" },
+    { value: "vibračná doska" },
+    { value: "laser" },
+    { value: "iné" },
   ],
   vehicle: [
-    { value: "dodávka", label: "Dodávka" },
-    { value: "pickup", label: "Pickup" },
-    { value: "osobné", label: "Osobné" },
-    { value: "príves", label: "Príves" },
-    { value: "iné", label: "Iné" },
+    { value: "dodávka" },
+    { value: "pickup" },
+    { value: "osobné" },
+    { value: "príves" },
+    { value: "iné" },
   ],
   building: [
-    { value: "byt", label: "Byt" },
-    { value: "dom", label: "Dom" },
-    { value: "sklad", label: "Sklad" },
-    { value: "areál", label: "Areál" },
-    { value: "iné", label: "Iné" },
+    { value: "byt" },
+    { value: "dom" },
+    { value: "sklad" },
+    { value: "areál" },
+    { value: "iné" },
   ],
-  other: [{ value: "iné", label: "Iné" }],
+  other: [{ value: "iné" }],
 };
 
 const LABEL_PREFIX: Record<string, string> = {
@@ -319,28 +344,28 @@ export function EquipmentFormScreen() {
                   }}
                 >
                   <Ionicons name="trash-outline" size={20} color="#fff" />
-                  <Text style={styles.photoChangeText}>Odstrániť</Text>
+                  <Text style={styles.photoChangeText}>{t("equipment.formRemove")}</Text>
                 </TouchableOpacity>
               </View>
             </View>
           ) : (
             <View style={styles.photoPlaceholder}>
               <Ionicons name="camera-outline" size={48} color={colors.textMuted} />
-              <Text style={styles.photoPlaceholderText}>Pridať foto zariadenia</Text>
+              <Text style={styles.photoPlaceholderText}>{t("equipment.addEquipmentPhoto")}</Text>
             </View>
           )}
         </TouchableOpacity>
 
-        <Text style={styles.label}>Názov *</Text>
+        <Text style={styles.label}>{t("equipment.formName")}</Text>
         <TextInput
           style={styles.input}
-          placeholder="Napr. Bager CAT 320"
+          placeholder={t("equipment.formNamePlaceholder")}
           placeholderTextColor={colors.textMuted}
           value={name}
           onChangeText={setName}
         />
 
-        <Text style={styles.label}>Kategória *</Text>
+        <Text style={styles.label}>{t("equipment.formCategory")}</Text>
         <View style={styles.chipRow}>
           {CATEGORIES.map((c) => (
             <TouchableOpacity
@@ -351,12 +376,12 @@ export function EquipmentFormScreen() {
                 setSubcategory("");
               }}
             >
-              <Text style={[styles.chipText, category === c.value && styles.chipTextActive]}>{c.label}</Text>
+              <Text style={[styles.chipText, category === c.value && styles.chipTextActive]}>{t(c.labelKey)}</Text>
             </TouchableOpacity>
           ))}
         </View>
 
-        <Text style={styles.label}>Podkategória</Text>
+        <Text style={styles.label}>{t("equipment.formSubcategory")}</Text>
         <View style={styles.subcategoryWrap}>
           {subcategoryOptions.map((s) => (
             <TouchableOpacity
@@ -364,37 +389,39 @@ export function EquipmentFormScreen() {
               style={[styles.subcategoryChip, subcategory === s.value && styles.chipActive]}
               onPress={() => setSubcategory(s.value)}
             >
-              <Text style={[styles.chipText, subcategory === s.value && styles.chipTextActive]}>{s.label}</Text>
+              <Text style={[styles.chipText, subcategory === s.value && styles.chipTextActive]}>
+                {t(SUBCATEGORY_LABEL_KEYS[s.value] ?? "equipment.subcategoryIne")}
+              </Text>
             </TouchableOpacity>
           ))}
         </View>
 
         <View style={styles.labelCodeRow}>
-          <Text style={styles.label}>Kód / označenie</Text>
+          <Text style={styles.label}>{t("equipment.formLabelCode")}</Text>
           {!labelCode.trim() && (category !== "other" || subcategory) && (
             <TouchableOpacity onPress={onSuggestLabel} style={styles.suggestBtn}>
-              <Text style={styles.suggestBtnText}>Navrhnúť</Text>
+              <Text style={styles.suggestBtnText}>{t("equipment.formSuggest")}</Text>
             </TouchableOpacity>
           )}
         </View>
         <TextInput
           style={styles.input}
-          placeholder="Napr. BAG-01"
+          placeholder={t("equipment.formLabelCodePlaceholder")}
           placeholderTextColor={colors.textMuted}
           value={labelCode}
           onChangeText={setLabelCode}
         />
 
-        <Text style={styles.label}>Model</Text>
+        <Text style={styles.label}>{t("equipment.model")}</Text>
         <TextInput
           style={styles.input}
-          placeholder="Napr. Liebherr L566"
+          placeholder={t("equipment.formModelPlaceholder")}
           placeholderTextColor={colors.textMuted}
           value={model}
           onChangeText={setModel}
         />
 
-        <Text style={styles.label}>Sériové číslo</Text>
+        <Text style={styles.label}>{t("equipment.serialNumber")}</Text>
         <TextInput
           style={styles.input}
           placeholder=""
@@ -403,17 +430,17 @@ export function EquipmentFormScreen() {
           onChangeText={setSerialNumber}
         />
 
-        <Text style={styles.label}>Umiestnenie</Text>
+        <Text style={styles.label}>{t("equipment.location")}</Text>
         <TextInput
           style={styles.input}
-          placeholder="Napr. Sklad 1"
+          placeholder={t("equipment.formLocationPlaceholder")}
           placeholderTextColor={colors.textMuted}
           value={location}
           onChangeText={setLocation}
         />
 
         <TouchableOpacity style={styles.saveBtn} onPress={onSave} disabled={submitting}>
-          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>Uložiť</Text>}
+          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.saveBtnText}>{t("common.save")}</Text>}
         </TouchableOpacity>
       </ScrollView>
     </View>

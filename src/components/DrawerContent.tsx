@@ -20,13 +20,12 @@ import { useI18n } from "../i18n/I18nContext";
 import { colors, spacing } from "../theme";
 import { db, storage } from "../firebase";
 import * as ImagePicker from "expo-image-picker";
-import { doc, getDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
+import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import { getUserSubscription } from "../services/subscription";
 import type { SubscriptionTier } from "../services/subscription";
 import { SUPPORT_EMAIL } from "../constants/consent";
 import { useUnreadCount } from "../hooks/useUnreadCount";
-
-const DRAWER_WIDTH_RATIO = 0.86;
+import auth from "@react-native-firebase/auth";
 
 type NavItem = {
   id: string;
@@ -51,6 +50,36 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const [openToWork, setOpenToWork] = useState(false);
   const [updatingOpenToWork, setUpdatingOpenToWork] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+
+  const sendAgentDebugLog = useCallback(
+    (hypothesisId: string, location: string, message: string, data: Record<string, unknown> = {}, runId = "profile-photo-upload") => {
+      const payload = {
+        runId,
+        hypothesisId,
+        location,
+        message,
+        data,
+        timestamp: Date.now(),
+      };
+      const endpointPrimary = "http://127.0.0.1:7242/ingest/0123687b-551a-46fb-a614-55cb13747844";
+      const endpointAndroidEmulator = "http://10.0.2.2:7242/ingest/0123687b-551a-46fb-a614-55cb13747844";
+
+      fetch(endpointPrimary, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify(payload),
+      })
+        .catch(() =>
+          fetch(endpointAndroidEmulator, {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify(payload),
+          })
+        )
+        .catch(() => {});
+    },
+    []
+  );
 
   useEffect(() => {
     if (!user?.id) return;
@@ -103,6 +132,12 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     if (!user?.id) return;
     try {
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      // #region agent log
+      sendAgentDebugLog("H1", "DrawerContent.pickProfilePhoto.permission", "Media library permission result", {
+        granted: status === "granted",
+        status,
+      });
+      // #endregion agent log
       if (status !== "granted") {
         Alert.alert(t("account.permission"), t("account.galleryPermission"));
         return;
@@ -113,22 +148,66 @@ export function DrawerContent(props: DrawerContentComponentProps) {
         aspect: [1, 1],
         quality: 0.8,
       });
+      // #region agent log
+      sendAgentDebugLog("H2", "DrawerContent.pickProfilePhoto.pickerResult", "Image picker result", {
+        canceled: result.canceled,
+        assetCount: result.assets?.length ?? 0,
+        hasFirstAsset: Boolean(result.assets?.[0]),
+        firstAssetUriScheme: result.assets?.[0]?.uri ? result.assets[0].uri.split(":")[0] : null,
+        firstAssetFileName: result.assets?.[0]?.fileName ?? null,
+      });
+      // #endregion agent log
       if (result.canceled || !result.assets[0]) return;
       setUploadingPhoto(true);
       const asset = result.assets[0];
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
       const storageRef = storage.ref(`users/${user.id}/profile/${fileName}`);
+      const userRef = doc(db, "users", user.id);
+      const userSnap = await getDoc(userRef);
+      // #region agent log
+      sendAgentDebugLog("H3", "DrawerContent.pickProfilePhoto.uploadStart", "Starting Firebase Storage upload", {
+        storagePath: `users/${user.id}/profile/${fileName}`,
+        authUid: auth().currentUser?.uid ?? null,
+        appUserId: user.id,
+        userDocExistsBeforeWrite: userSnap.exists(),
+        hasUri: Boolean(asset.uri),
+        uriScheme: asset.uri ? asset.uri.split(":")[0] : null,
+      });
+      // #endregion agent log
       await storageRef.putFile(asset.uri);
       const url = await storageRef.getDownloadURL();
-      await updateDoc(doc(db, "users", user.id), { photoURL: url, updatedAt: serverTimestamp() });
+      // #region agent log
+      sendAgentDebugLog("H4", "DrawerContent.pickProfilePhoto.uploadSuccess", "Storage upload and URL fetch succeeded", {
+        hasDownloadUrl: Boolean(url),
+        urlHost: url ? (() => { try { return new URL(url).host; } catch { return null; } })() : null,
+      });
+      // #endregion agent log
+      await setDoc(userRef, { photoURL: url, updatedAt: serverTimestamp() }, { merge: true });
+      // #region agent log
+      sendAgentDebugLog("H5", "DrawerContent.pickProfilePhoto.firestoreUpdate", "User profile photoURL updated in Firestore", {
+        authUid: auth().currentUser?.uid ?? null,
+        userIdSuffix: user.id.slice(-6),
+        updated: true,
+      });
+      // #endregion agent log
       setPhotoURL(url);
     } catch (error) {
       console.error("[drawer] Failed to pick profile photo:", error);
+      // #region agent log
+      sendAgentDebugLog("H6", "DrawerContent.pickProfilePhoto.catch", "Profile photo upload flow failed", {
+        errorName: error instanceof Error ? error.name : "UnknownError",
+        errorMessage: error instanceof Error ? error.message : String(error),
+        errorCode:
+          typeof error === "object" && error !== null && "code" in (error as Record<string, unknown>)
+            ? String((error as Record<string, unknown>).code)
+            : null,
+      });
+      // #endregion agent log
       Alert.alert(t("common.error"), t("account.uploadPhotoFailed"));
     } finally {
       setUploadingPhoto(false);
     }
-  }, [user?.id, t]);
+  }, [user?.id, t, sendAgentDebugLog]);
 
   const takeProfilePhoto = useCallback(async () => {
     if (!user?.id) return;
@@ -151,7 +230,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       const storageRef = storage.ref(`users/${user.id}/profile/${fileName}`);
       await storageRef.putFile(asset.uri);
       const url = await storageRef.getDownloadURL();
-      await updateDoc(doc(db, "users", user.id), { photoURL: url, updatedAt: serverTimestamp() });
+      await setDoc(doc(db, "users", user.id), { photoURL: url, updatedAt: serverTimestamp() }, { merge: true });
       setPhotoURL(url);
     } catch (error) {
       console.error("[drawer] Failed to take profile photo:", error);
@@ -165,7 +244,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     if (!user?.id) return;
     setUploadingPhoto(true);
     try {
-      await updateDoc(doc(db, "users", user.id), { photoURL: null, updatedAt: serverTimestamp() });
+      await setDoc(doc(db, "users", user.id), { photoURL: null, updatedAt: serverTimestamp() }, { merge: true });
       setPhotoURL(null);
     } catch (error) {
       console.error("[drawer] Failed to remove profile photo:", error);
@@ -353,7 +432,9 @@ export function DrawerContent(props: DrawerContentComponentProps) {
         }}
         activeOpacity={0.7}
       >
-        <Ionicons name="log-out-outline" size={24} color={colors.error} style={styles.navIcon} />
+        <View style={styles.navIconWrap}>
+          <Ionicons name="log-out-outline" size={24} color={colors.error} style={styles.navIcon} />
+        </View>
         <Text style={[styles.navLabel, styles.logoutText]}>{t("account.logout")}</Text>
       </TouchableOpacity>
     </DrawerContentScrollView>

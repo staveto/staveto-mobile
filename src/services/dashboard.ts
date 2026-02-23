@@ -112,10 +112,10 @@ export async function loadDashboardData(ownerId: string, options?: { forceServer
 
     const allExpensesArrays = await Promise.all(expensesPromises);
     const allExpenses = allExpensesArrays.flat();
-    
+
     // Calculate total expenses (all READY expenses)
     expensesTotalSum = allExpenses.reduce((sum, exp) => sum + (exp.amount || 0), 0);
-    
+
     // Calculate monthly expenses (filter by date)
     const monthlyExpenses = allExpenses.filter(exp => {
       if (!exp.date) return false;

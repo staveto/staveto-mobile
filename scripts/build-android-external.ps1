@@ -13,6 +13,37 @@ Write-Host ""
 $projectRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $projectRoot
 
+# Debug log sink for this session (NDJSON)
+$debugLogPath = "c:\Users\Marek\Staveto_Cursor\staveto-app_v2\mobile\.cursor\debug.log"
+$debugLogDir = Split-Path -Parent $debugLogPath
+if (-not (Test-Path $debugLogDir)) {
+    New-Item -ItemType Directory -Path $debugLogDir -Force | Out-Null
+}
+
+function Write-AgentDebugLog {
+    param(
+        [string]$HypothesisId,
+        [string]$Location,
+        [string]$Message,
+        [hashtable]$Data,
+        [string]$RunId = "build-preflight"
+    )
+    try {
+        $payload = @{
+            id = "log_$([DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds())_$([guid]::NewGuid().ToString('N').Substring(0, 6))"
+            timestamp = [DateTimeOffset]::UtcNow.ToUnixTimeMilliseconds()
+            runId = $RunId
+            hypothesisId = $HypothesisId
+            location = $Location
+            message = $Message
+            data = $Data
+        }
+        Add-Content -Path $debugLogPath -Value ($payload | ConvertTo-Json -Compress -Depth 8) -Encoding UTF8
+    } catch {
+        # Never fail the build because of debug logging
+    }
+}
+
 # CRITICAL: Check if running in Cursor sandbox
 $currentPath = (Get-Location).Path
 if ($currentPath -match "cursor-sandbox-cache") {
@@ -55,6 +86,11 @@ $env:ORG_GRADLE_PROJECT_reactNativeArchitectures = "x86_64"
 
 # Ensure we're using real project path, not sandbox
 $env:PROJECT_ROOT = $projectRoot
+
+# Use port 8082 for Metro (avoids "Port 8081 in use" prompt in non-interactive mode)
+$env:RCT_METRO_PORT = "8082"
+# Skip interactive prompts (e.g. when port is in use)
+$env:CI = "1"
 
 # Verify node executable path (should not be in sandbox)
 $nodePath = (Get-Command node -ErrorAction SilentlyContinue).Source
@@ -127,7 +163,66 @@ if (Test-Path $appBuildGradlePath) {
     } else {
         Write-Host "  [WARN] app/build.gradle: ndk.abiFilters not found or incorrect" -ForegroundColor Yellow
     }
+
+    $namespace = ""
+    $applicationId = ""
+    if ($appBuildGradle -match 'namespace\s+"([^"]+)"') { $namespace = $matches[1] }
+    if ($appBuildGradle -match 'applicationId\s+"([^"]+)"') { $applicationId = $matches[1] }
+    $hasBuildConfigField = $appBuildGradle -match "buildConfigField\s+"
+
+    #region agent log
+    Write-AgentDebugLog -HypothesisId "H1" -Location "scripts/build-android-external.ps1:step4-build-gradle" -Message "Android Gradle identity values" -Data @{
+        namespace = $namespace
+        applicationId = $applicationId
+        hasBuildConfigField = $hasBuildConfigField
+    }
+    #endregion agent log
 }
+
+# Inspect Kotlin package/imports to diagnose BuildConfig resolution
+$mainApplicationPath = Join-Path $projectRoot "android\app\src\main\java\com\staveto\app\MainApplication.kt"
+$mainActivityPath = Join-Path $projectRoot "android\app\src\main\java\com\staveto\app\MainActivity.kt"
+if ((Test-Path $mainApplicationPath) -and (Test-Path $mainActivityPath)) {
+    $mainApplicationSrc = Get-Content $mainApplicationPath -Raw
+    $mainActivitySrc = Get-Content $mainActivityPath -Raw
+
+    $mainApplicationPackage = ""
+    $mainActivityPackage = ""
+    if ($mainApplicationSrc -match 'package\s+([^\r\n]+)') { $mainApplicationPackage = $matches[1].Trim() }
+    if ($mainActivitySrc -match 'package\s+([^\r\n]+)') { $mainActivityPackage = $matches[1].Trim() }
+
+    #region agent log
+    Write-AgentDebugLog -HypothesisId "H2" -Location "scripts/build-android-external.ps1:step4-mainapplication" -Message "MainApplication package/import snapshot" -Data @{
+        packageName = $mainApplicationPackage
+        importsComStavetoBuildConfig = ($mainApplicationSrc -match 'import\s+com\.staveto\.BuildConfig')
+        importsComStavetoAppBuildConfig = ($mainApplicationSrc -match 'import\s+com\.staveto\.app\.BuildConfig')
+        referencesBuildConfig = ($mainApplicationSrc -match 'BuildConfig\.')
+    }
+    #endregion agent log
+
+    #region agent log
+    Write-AgentDebugLog -HypothesisId "H3" -Location "scripts/build-android-external.ps1:step4-mainactivity" -Message "MainActivity package/import snapshot" -Data @{
+        packageName = $mainActivityPackage
+        importsComStavetoBuildConfig = ($mainActivitySrc -match 'import\s+com\.staveto\.BuildConfig')
+        importsComStavetoAppBuildConfig = ($mainActivitySrc -match 'import\s+com\.staveto\.app\.BuildConfig')
+        referencesBuildConfig = ($mainActivitySrc -match 'BuildConfig\.')
+    }
+    #endregion agent log
+}
+
+# Check generated BuildConfig outputs from previous/intermediate builds
+$buildConfigRoot = Join-Path $projectRoot "android\app\build\generated\source\buildConfig"
+$generatedBuildConfigFiles = @()
+if (Test-Path $buildConfigRoot) {
+    $generatedBuildConfigFiles = Get-ChildItem -Path $buildConfigRoot -Filter "BuildConfig.*" -Recurse -ErrorAction SilentlyContinue | ForEach-Object { $_.FullName }
+}
+#region agent log
+Write-AgentDebugLog -HypothesisId "H4" -Location "scripts/build-android-external.ps1:step4-generated-buildconfig" -Message "Generated BuildConfig files snapshot" -Data @{
+    buildConfigRootExists = (Test-Path $buildConfigRoot)
+    generatedCount = $generatedBuildConfigFiles.Count
+    generatedFiles = $generatedBuildConfigFiles
+}
+#endregion agent log
 
 Write-Host ""
 Write-Host "Step 5: Environment variables (printed before build):" -ForegroundColor Yellow

@@ -31,6 +31,7 @@ import type { CatalogPhase } from "../lib/types";
 import type { ProjectDoc } from "../services/projects";
 import { colors, radius, spacing } from "../theme";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
+import { ProjectTypeCrossroad, type SelectableProjectType } from "../components/ProjectTypeCrossroad";
 import { openInMaps } from "../lib/maps";
 import { COUNTRY_CODES, COUNTRY_NAMES } from "../utils/countries";
 import { getCallable } from "../firebase";
@@ -57,7 +58,6 @@ function formatCreatedAt(isoStr?: string): string {
 }
 
 type ProjectCreationType = NonNullable<ProjectDoc["projectType"]>;
-type SelectableProjectType = "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
 type CreationMethod = "template" | "empty";
 type DisplayProjectType = "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
 
@@ -113,13 +113,6 @@ export function ProjectsScreen() {
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<TypeFilter>("ALL");
   const { width: windowWidth } = useWindowDimensions();
-
-  const selectableTypeCards: Array<{ type: SelectableProjectType; icon: React.ComponentProps<typeof Ionicons>["name"] }> = [
-    { type: "MANAGEMENT", icon: "clipboard-outline" },
-    { type: "RESIDENTIAL", icon: "home-outline" },
-    { type: "TRADE", icon: "person-outline" },
-    { type: "MAINTENANCE", icon: "construct-outline" },
-  ];
 
   const resetTemplateSelectionState = useCallback(() => {
     setTemplateId("");
@@ -964,12 +957,13 @@ export function ProjectsScreen() {
         </TouchableOpacity>
       </Modal>
       <Modal visible={showNew} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
-          <View style={styles.modal}>
+        <View style={[styles.modalOverlay, newStep === 1 && styles.modalOverlayHero]}>
+          <View style={[styles.modal, newStep === 1 && styles.modalHero]}>
             <Text style={styles.modalTitle}>{t("projects.modalTitle")}</Text>
             
             <ScrollView 
-              style={styles.modalContent} 
+              style={[styles.modalContent, newStep === 1 && styles.modalContentStepOne]}
+              contentContainerStyle={newStep === 1 ? styles.modalContentStepOneInner : undefined}
               showsVerticalScrollIndicator={newStep !== 1}
               scrollEnabled={newStep !== 1}
               keyboardShouldPersistTaps="handled"
@@ -977,38 +971,11 @@ export function ProjectsScreen() {
             {newStep === 1 ? (
               <>
                 <Text style={styles.createHeader}>{t("createProject.header")}</Text>
-                <Text style={styles.createSubtext}>{t("createProject.subtext")}</Text>
-                <View style={styles.typeGrid}>
-                  {Array.from({ length: 2 }).map((_, rowIndex) => (
-                    <View key={`row-${rowIndex}`} style={styles.typeRow}>
-                      {selectableTypeCards.slice(rowIndex * 2, rowIndex * 2 + 2).map((card) => {
-                        const isActive = selectedType === card.type;
-                        return (
-                          <TouchableOpacity
-                            key={card.type}
-                            style={[styles.typeCard, isActive && styles.typeCardActive]}
-                            onPress={() => handleSelectType(card.type)}
-                          >
-                            <View style={styles.typeIconContainer}>
-                              <Ionicons name={card.icon} size={24} color={isActive ? colors.primary : colors.textMuted} />
-                            </View>
-                            <Text style={[styles.typeCardTitle, isActive && styles.typeCardTitleActive]} numberOfLines={1}>
-                              {t(`createProject.type.${card.type}.title`)}
-                            </Text>
-                            <Text style={[styles.typeCardSubtitle, isActive && styles.typeCardSubtitleActive]} numberOfLines={2}>
-                              {t(`createProject.type.${card.type}.subtitle`)}
-                            </Text>
-                            <Text style={[styles.typeMiniLabelText, isActive && styles.typeMiniLabelTextActive]} numberOfLines={1}>
-                              {t(`createProject.type.${card.type}.miniLabel`)}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  ))}
-                </View>
-                
-                {/* Error message */}
+                <ProjectTypeCrossroad
+                  selectedType={selectedType as SelectableProjectType | null}
+                  onSelectType={handleSelectType}
+                />
+                <Text style={styles.createSubtextHero}>{t("createProject.mainDirectionHint")}</Text>
                 {error && (
                   <View style={styles.errorContainer}>
                     <Text style={styles.errorText}>{error}</Text>
@@ -1202,7 +1169,7 @@ export function ProjectsScreen() {
                   onPress={onNext}
                   disabled={!selectedType}
                 >
-                  <Text style={styles.modalOkText}>{t("projects.next")}</Text>
+                  <Text style={styles.modalOkText}>{t("common.continue")}</Text>
                 </TouchableOpacity>
               </View>
             ) : newStep === 2 ? (
@@ -1490,6 +1457,9 @@ const styles = StyleSheet.create({
   },
   fabText: { color: "#fff", fontWeight: "600" },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },
+  modalOverlayHero: {
+    padding: spacing.sm,
+  },
   modal: {
     backgroundColor: colors.card,
     borderRadius: radius,
@@ -1500,7 +1470,24 @@ const styles = StyleSheet.create({
     minHeight: 460,
     flexDirection: "column",
   },
+  modalHero: {
+    minHeight: undefined,
+    maxHeight: "98%",
+    borderRadius: 18,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.md,
+  },
   modalContent: { flex: 1, maxHeight: "82%" },
+  modalContentStepOne: {
+    maxHeight: undefined,
+    overflow: "visible",
+    paddingBottom: spacing.md,
+  },
+  modalContentStepOneInner: {
+    flexGrow: 1,
+    justifyContent: "center",
+  },
   modalTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.sm },
   modalLabel: { fontSize: 14, color: colors.textMuted, marginBottom: spacing.sm },
   createHeader: {
@@ -1514,60 +1501,12 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     marginBottom: spacing.sm,
   },
-  typeGrid: {
-    flexDirection: "column",
-    gap: spacing.xs,
-    marginBottom: spacing.sm,
-  },
-  typeRow: {
-    flexDirection: "row",
-    gap: spacing.xs,
-  },
-  typeCard: {
-    flex: 1,
-    flexDirection: "column",
-    alignItems: "flex-start",
-    justifyContent: "flex-start",
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    borderRadius: radius,
-    borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
-    minHeight: 132,
-  },
-  typeCardActive: {
-    backgroundColor: colors.primary + "10",
-    borderColor: colors.primary,
-  },
-  typeIconContainer: {
-    marginBottom: 2,
-  },
-  typeCardTitle: {
+  createSubtextHero: {
     fontSize: 14,
-    fontWeight: "600",
-    color: colors.text,
-    marginBottom: 2,
-  },
-  typeCardTitleActive: {
-    color: colors.primary,
-  },
-  typeCardSubtitle: {
-    fontSize: 12,
-    lineHeight: 15,
     color: colors.textMuted,
-    marginBottom: 4,
-  },
-  typeCardSubtitleActive: {
-    color: colors.textSecondary,
-  },
-  typeMiniLabelText: {
-    fontSize: 10,
-    color: colors.textMuted,
-    marginTop: 0,
-  },
-  typeMiniLabelTextActive: {
-    color: colors.textSecondary,
+    textAlign: "center",
+    marginTop: spacing.xs,
+    marginBottom: spacing.md,
   },
   typeBtn: {
     flex: 1,
@@ -1601,7 +1540,7 @@ const styles = StyleSheet.create({
     color: "#fff",
     marginBottom: spacing.md,
   },
-  modalButtons: { flexDirection: "row", justifyContent: "flex-end", gap: spacing.md },
+  modalButtons: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: spacing.md },
   modalCancel: { padding: spacing.sm },
   modalCancelText: { color: colors.textMuted },
   modalOk: { backgroundColor: colors.primary, paddingHorizontal: spacing.lg, paddingVertical: spacing.sm, borderRadius: radius },

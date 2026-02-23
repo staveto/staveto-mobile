@@ -77,7 +77,9 @@ export function SubscriptionScreen() {
       } else {
         Alert.alert(t("paywall.purchaseFailed"), t("paywall.noProducts"));
       }
-    } catch (e) {
+    } catch (e: unknown) {
+      const err = e as { userCancelled?: boolean };
+      if (err?.userCancelled === true) return; // User cancelled – no alert
       Alert.alert(t("paywall.purchaseFailed"), String(e));
     } finally {
       setPurchasing(false);

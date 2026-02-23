@@ -9,6 +9,8 @@ import {
   Alert,
   ActivityIndicator,
   Pressable,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
@@ -240,7 +242,11 @@ export function DescriptionInputModal({
 
   return (
     <Modal visible={visible} transparent animationType="slide">
-      <View style={styles.overlay}>
+      <KeyboardAvoidingView
+        style={styles.overlay}
+        behavior={Platform.OS === "ios" ? "padding" : "height"}
+        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
+      >
         <View style={styles.modal}>
           <View style={styles.header}>
             <Text style={styles.title}>{displayTitle}</Text>
@@ -262,28 +268,30 @@ export function DescriptionInputModal({
 
           <View style={styles.actions}>
             {AudioModule?.Audio ? (
-              <Pressable
-                style={({ pressed }) => [
-                  styles.holdRecordBtn,
-                  (isRecording || pressed) && styles.holdRecordBtnActive,
-                ]}
-                onPressIn={handlePressIn}
-                onPressOut={handlePressOut}
-                delayLongPress={0}
-              >
-                {isTranscribing ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Ionicons
-                    name="mic"
-                    size={40}
-                    color={isRecording ? "#fff" : colors.primary}
-                  />
-                )}
+              <View style={styles.holdRecordWrap}>
+                <Pressable
+                  style={({ pressed }) => [
+                    styles.holdRecordBtn,
+                    (isRecording || pressed) && styles.holdRecordBtnActive,
+                  ]}
+                  onPressIn={handlePressIn}
+                  onPressOut={handlePressOut}
+                  delayLongPress={0}
+                >
+                  {isTranscribing ? (
+                    <ActivityIndicator size="small" color="#fff" />
+                  ) : (
+                    <Ionicons
+                      name="mic"
+                      size={40}
+                      color={isRecording ? "#fff" : colors.primary}
+                    />
+                  )}
+                </Pressable>
                 <Text style={[styles.holdRecordText, isRecording && styles.holdRecordTextActive]}>
                   {isRecording ? t("projectOverview.recording") : t("projectOverview.holdToRecord")}
                 </Text>
-              </Pressable>
+              </View>
             ) : (
               <Text style={styles.holdRecordUnavailable}>{t("projectOverview.voiceRecordingNotAvailable")}</Text>
             )}
@@ -297,7 +305,7 @@ export function DescriptionInputModal({
             <Text style={styles.validateBtnText}>{t("projectOverview.validateDescription")}</Text>
           </TouchableOpacity>
         </View>
-      </View>
+      </KeyboardAvoidingView>
     </Modal>
   );
 }
@@ -306,12 +314,12 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "flex-end",
+    justifyContent: "center",
   },
   modal: {
     backgroundColor: colors.background,
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
+    borderRadius: 16,
+    marginHorizontal: spacing.lg,
     padding: spacing.lg,
     paddingBottom: spacing.xl * 2,
   },
@@ -342,6 +350,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: spacing.lg,
   },
+  holdRecordWrap: {
+    alignItems: "center",
+  },
   holdRecordBtn: {
     width: 72,
     height: 72,
@@ -359,8 +370,9 @@ const styles = StyleSheet.create({
   holdRecordText: {
     fontSize: 14,
     color: colors.textOnDark,
-    marginTop: spacing.xs,
+    marginTop: spacing.sm,
     fontWeight: "500",
+    textAlign: "center",
   },
   holdRecordTextActive: {
     color: "#fff",

@@ -78,6 +78,10 @@ export function PaywallScreen() {
         showToast(t("paywall.purchaseFailed"));
       }
     } catch (e: unknown) {
+      const err = e as { userCancelled?: boolean; code?: number };
+      if (err?.userCancelled === true) {
+        return; // User closed purchase sheet – no toast
+      }
       const msg = e instanceof Error ? e.message : String(e);
       if (__DEV__) console.error("[PaywallScreen] purchase error:", e);
       showToast(t("paywall.purchaseFailed") + (msg ? `: ${msg}` : ""));

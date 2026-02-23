@@ -6,7 +6,7 @@ import { doc, getDoc } from "../lib/rnFirestore";
 import { db, getCallable } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
 import { configurePurchases } from "../services/billing";
-import { registerForPushNotifications, setupPushNotifications, removePushToken } from "../services/pushNotifications";
+import { setupPushNotifications, removePushToken } from "../services/pushNotifications";
 
 export type BillingStatus = {
   status: "trial" | "active" | "expired";
@@ -129,7 +129,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       } catch {
         // ignore profile fetch errors
       }
-      registerForPushNotifications().catch((err) => console.warn("[auth] push register failed:", err));
+      // Push notification permission is requested from RootNavigator at first app entry (after onboarding)
       configurePurchases(fbUser.uid).catch(() => {});
       const billing = await fetchBillingStatus(fbUser.uid);
       user = { ...user, billing: billing ?? undefined };

@@ -1,5 +1,5 @@
-import React, { useCallback, useEffect, useState } from "react";
-import { View, Text, ActivityIndicator, StyleSheet } from "react-native";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import { View, Text, ActivityIndicator, StyleSheet, Alert } from "react-native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../context/AuthContext";
@@ -41,6 +41,10 @@ import { colors, spacing } from "../theme";
 import { db } from "../firebase";
 import { doc, getDoc } from "../lib/rnFirestore";
 import { CONSENT_PRIVACY_VERSION, CONSENT_TERMS_VERSION, PENDING_CONSENT_KEY } from "../constants/consent";
+import { registerForPushNotifications } from "../services/pushNotifications";
+
+const FIRST_LOGIN_TRIAL_POPUP_KEY = "first_login_trial_popup_shown";
+const TRIAL_REMINDER_3D_LAST_SHOWN_KEY = "trial_reminder_3d_last_shown";
 
 const Stack = createNativeStackNavigator();
 
@@ -61,6 +65,7 @@ export function RootNavigator() {
   const [gateLoading, setGateLoading] = useState(true);
   const [consentOk, setConsentOk] = useState(false);
   const [onboardingOk, setOnboardingOk] = useState(false);
+  const hasShownTrialPopup = useRef(false);
 
   const checkGate = useCallback(async () => {
     if (!token || !user?.id) return;
@@ -121,6 +126,73 @@ export function RootNavigator() {
     }
     checkGate();
   }, [token, user?.id, checkGate]);
+
+  // Show first-login trial popup once per device (must be before any conditional return)
+  useEffect(() => {
+    const shouldShow = token && user?.id && !gateLoading && consentOk && onboardingOk;
+    if (!shouldShow || hasShownTrialPopup.current) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const shown = await AsyncStorage.getItem(FIRST_LOGIN_TRIAL_POPUP_KEY);
+        if (shown === "1" || cancelled) return;
+        hasShownTrialPopup.current = true;
+        await AsyncStorage.setItem(FIRST_LOGIN_TRIAL_POPUP_KEY, "1");
+        if (cancelled) return;
+        Alert.alert(t("subscription.firstLoginTrialTitle"), t("subscription.firstLoginTrialMessage"));
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, user?.id, gateLoading, consentOk, onboardingOk, t]);
+
+  // Request notification permission at first app entry (after consent + onboarding) – like camera/microphone
+  useEffect(() => {
+    const shouldRequest = token && user?.id && !gateLoading && consentOk && onboardingOk;
+    if (!shouldRequest) return;
+    // Small delay so trial popup can show first; then native permission dialog
+    const t = setTimeout(() => {
+      registerForPushNotifications().catch((err) => console.warn("[RootNavigator] push register failed:", err));
+    }, 600);
+    return () => clearTimeout(t);
+  }, [token, user?.id, gateLoading, consentOk, onboardingOk]);
+
+  // Show trial reminder 3 days before expiry (max once per day)
+  useEffect(() => {
+    const billing = user?.billing;
+    const shouldShow =
+      token &&
+      user?.id &&
+      !gateLoading &&
+      consentOk &&
+      onboardingOk &&
+      billing?.status === "trial" &&
+      billing.remainingTrialDays > 0 &&
+      billing.remainingTrialDays <= 3;
+    if (!shouldShow) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const today = new Date().toISOString().slice(0, 10);
+        const lastShown = await AsyncStorage.getItem(TRIAL_REMINDER_3D_LAST_SHOWN_KEY);
+        if (lastShown === today || cancelled) return;
+        await AsyncStorage.setItem(TRIAL_REMINDER_3D_LAST_SHOWN_KEY, today);
+        if (cancelled) return;
+        Alert.alert(
+          t("subscription.trialReminder3DaysTitle"),
+          t("subscription.trialReminder3DaysMessage", { count: String(billing.remainingTrialDays) })
+        );
+      } catch {
+        // ignore
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [token, user?.id, user?.billing, gateLoading, consentOk, onboardingOk, t]);
 
   if (loading || !onboardingLoaded) {
     return <LoadingScreen />;

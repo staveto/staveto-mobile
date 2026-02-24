@@ -160,7 +160,17 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
             </TouchableOpacity>
           </View>
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          <TouchableOpacity style={styles.button} onPress={() => { setError(""); setStep(2); }}>
+          <TouchableOpacity
+            style={styles.button}
+            onPress={() => {
+              if (!mode) {
+                setError(t("onboardingMvp.errorSelectOption"));
+                return;
+              }
+              setError("");
+              setStep(2);
+            }}
+          >
             <Text style={styles.buttonText}>{t("onboardingMvp.next")}</Text>
           </TouchableOpacity>
         </>

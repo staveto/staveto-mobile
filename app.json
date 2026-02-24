@@ -2,7 +2,7 @@
   "expo": {
     "name": "Staveto",
     "slug": "stavetoapp",
-    "version": "1.2.2",
+    "version": "1.2.3",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -29,7 +29,7 @@
     },
     "android": {
       "package": "com.staveto.app",
-      "versionCode": 12,
+      "versionCode": 13,
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",

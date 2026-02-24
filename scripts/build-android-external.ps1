@@ -89,6 +89,9 @@ $env:PROJECT_ROOT = $projectRoot
 
 # Use port 8082 for Metro (avoids "Port 8081 in use" prompt in non-interactive mode)
 $env:RCT_METRO_PORT = "8082"
+# Force localhost host for emulator-friendly Metro URL (with adb reverse)
+$env:REACT_NATIVE_PACKAGER_HOSTNAME = "127.0.0.1"
+$env:EXPO_PACKAGER_HOSTNAME = "127.0.0.1"
 # Skip interactive prompts (e.g. when port is in use)
 $env:CI = "1"
 
@@ -229,6 +232,8 @@ Write-Host "Step 5: Environment variables (printed before build):" -ForegroundCo
 Write-Host "  EXPO_ANDROID_ARCHITECTURES = $env:EXPO_ANDROID_ARCHITECTURES" -ForegroundColor Gray
 Write-Host "  REACT_NATIVE_ARCHITECTURES = $env:REACT_NATIVE_ARCHITECTURES" -ForegroundColor Gray
 Write-Host "  ORG_GRADLE_PROJECT_reactNativeArchitectures = $env:ORG_GRADLE_PROJECT_reactNativeArchitectures" -ForegroundColor Gray
+Write-Host "  REACT_NATIVE_PACKAGER_HOSTNAME = $env:REACT_NATIVE_PACKAGER_HOSTNAME" -ForegroundColor Gray
+Write-Host "  EXPO_PACKAGER_HOSTNAME = $env:EXPO_PACKAGER_HOSTNAME" -ForegroundColor Gray
 Write-Host ""
 Write-Host "Step 6: Building Android app..." -ForegroundColor Yellow
 Write-Host "  Command: npx expo run:android --all-arch" -ForegroundColor Gray

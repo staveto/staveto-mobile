@@ -112,7 +112,8 @@ export function ProjectsScreen() {
   const [showMenu, setShowMenu] = useState(false);
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<TypeFilter>("ALL");
-  const { width: windowWidth } = useWindowDimensions();
+  const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const heroModalHeight = Math.min(Math.max(Math.round(windowHeight * 0.86), 520), windowHeight - spacing.md);
 
   const resetTemplateSelectionState = useCallback(() => {
     setTemplateId("");
@@ -958,18 +959,11 @@ export function ProjectsScreen() {
       </Modal>
       <Modal visible={showNew} transparent animationType="slide">
         <View style={[styles.modalOverlay, newStep === 1 && styles.modalOverlayHero]}>
-          <View style={[styles.modal, newStep === 1 && styles.modalHero]}>
+          <View style={[styles.modal, newStep === 1 && styles.modalHero, newStep === 1 && { height: heroModalHeight }]}>
             <Text style={styles.modalTitle}>{t("projects.modalTitle")}</Text>
             
-            <ScrollView 
-              style={[styles.modalContent, newStep === 1 && styles.modalContentStepOne]}
-              contentContainerStyle={newStep === 1 ? styles.modalContentStepOneInner : undefined}
-              showsVerticalScrollIndicator={newStep !== 1}
-              scrollEnabled={newStep !== 1}
-              keyboardShouldPersistTaps="handled"
-            >
             {newStep === 1 ? (
-              <>
+              <View style={styles.stepOneBody}>
                 <Text style={styles.createHeader}>{t("createProject.header")}</Text>
                 <ProjectTypeCrossroad
                   selectedType={selectedType as SelectableProjectType | null}
@@ -981,8 +975,15 @@ export function ProjectsScreen() {
                     <Text style={styles.errorText}>{error}</Text>
                   </View>
                 )}
-              </>
-            ) : newStep === 2 ? (
+              </View>
+            ) : (
+              <ScrollView 
+                style={styles.modalContent}
+                showsVerticalScrollIndicator={true}
+                scrollEnabled={true}
+                keyboardShouldPersistTaps="handled"
+              >
+              {newStep === 2 ? (
               <>
                 <Text style={styles.modalLabel}>{t("projects.namePlaceholder")} *</Text>
                 <TextInput
@@ -1103,7 +1104,7 @@ export function ProjectsScreen() {
                   </View>
                 )}
               </>
-            ) : (
+              ) : (
               <>
                 <Text style={styles.modalLabel}>{t("createProject.summaryTitle")}</Text>
                 <View style={styles.summaryContainer}>
@@ -1149,8 +1150,9 @@ export function ProjectsScreen() {
                   </View>
                 )}
               </>
+              )}
+              </ScrollView>
             )}
-            </ScrollView>
             
             {/* Tlačidlá - vždy viditeľné mimo ScrollView */}
             {newStep === 1 ? (
@@ -1471,22 +1473,24 @@ const styles = StyleSheet.create({
     flexDirection: "column",
   },
   modalHero: {
-    minHeight: undefined,
-    maxHeight: "98%",
+    minHeight: 520,
+    maxHeight: "94%",
     borderRadius: 18,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
     paddingBottom: spacing.md,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 8 },
+    shadowOpacity: 0.14,
+    shadowRadius: 20,
+    elevation: 9,
   },
   modalContent: { flex: 1, maxHeight: "82%" },
-  modalContentStepOne: {
-    maxHeight: undefined,
-    overflow: "visible",
-    paddingBottom: spacing.md,
-  },
-  modalContentStepOneInner: {
-    flexGrow: 1,
-    justifyContent: "center",
+  stepOneBody: {
+    flex: 1,
+    minHeight: 420,
+    justifyContent: "space-between",
+    paddingBottom: spacing.sm,
   },
   modalTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.sm },
   modalLabel: { fontSize: 14, color: colors.textMuted, marginBottom: spacing.sm },
@@ -1494,7 +1498,8 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "700",
     color: colors.text,
-    marginBottom: spacing.xs,
+    marginBottom: spacing.sm,
+    textAlign: "center",
   },
   createSubtext: {
     fontSize: 13,
@@ -1505,8 +1510,10 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.textMuted,
     textAlign: "center",
-    marginTop: spacing.xs,
+    marginTop: spacing.sm,
     marginBottom: spacing.md,
+    paddingHorizontal: spacing.sm,
+    lineHeight: 20,
   },
   typeBtn: {
     flex: 1,

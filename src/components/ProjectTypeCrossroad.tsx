@@ -31,11 +31,11 @@ export function ProjectTypeCrossroad({ selectedType, onSelectType }: ProjectType
   const { t } = useI18n();
   const { width: windowWidth } = useWindowDimensions();
 
-  const roadSize = clamp(windowWidth - spacing.md * 4, 300, 420);
+  const roadSize = clamp(windowWidth - spacing.lg * 3, 248, 332);
   const center = roadSize / 2;
-  const cardWidth = clamp(roadSize * 0.34, 106, 136);
-  const cardHeight = clamp(roadSize * 0.23, 82, 102);
-  const centerRadius = clamp(roadSize * 0.18, 48, 62);
+  const cardWidth = clamp(roadSize * 0.33, 94, 118);
+  const cardHeight = clamp(roadSize * 0.23, 74, 92);
+  const centerRadius = clamp(roadSize * 0.18, 44, 56);
   const edgePadding = 8;
   const arrowStrokeWidth = 3.2;
   const arrowGlowWidth = 9;
@@ -166,6 +166,7 @@ export function ProjectTypeCrossroad({ selectedType, onSelectType }: ProjectType
                 minHeight: cardHeight,
               },
               isActive && styles.cardActive,
+              isActive && styles.cardActiveScale,
             ]}
             onPress={() => onSelectType(type)}
             activeOpacity={0.8}
@@ -229,7 +230,7 @@ const styles = StyleSheet.create({
   wrapper: {
     alignItems: "center",
     marginBottom: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.xs,
   },
   container: {
     position: "relative",
@@ -237,14 +238,14 @@ const styles = StyleSheet.create({
   bgRingOuter: {
     position: "absolute",
     borderWidth: 1,
-    borderColor: colors.primary + "22",
-    backgroundColor: colors.primary + "06",
+    borderColor: colors.primary + "30",
+    backgroundColor: colors.primary + "0A",
   },
   bgRingInner: {
     position: "absolute",
     borderWidth: 1,
-    borderColor: colors.primary + "18",
-    backgroundColor: colors.primary + "04",
+    borderColor: colors.primary + "26",
+    backgroundColor: colors.primary + "08",
   },
   centerCircle: {
     position: "absolute",
@@ -262,12 +263,12 @@ const styles = StyleSheet.create({
     elevation: 5,
   },
   centerText: {
-    fontSize: 14,
+    fontSize: 13,
     fontWeight: "700",
     color: colors.textOnDark,
     textAlign: "center",
     paddingHorizontal: spacing.sm,
-    lineHeight: 18,
+    lineHeight: 16,
   },
   card: {
     position: "absolute",
@@ -276,15 +277,15 @@ const styles = StyleSheet.create({
     justifyContent: "flex-start",
     paddingVertical: spacing.sm - 1,
     paddingHorizontal: spacing.sm,
-    borderRadius: radius,
+    borderRadius: radius + 2,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.card,
     zIndex: 2,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.08,
-    shadowRadius: 6,
+    shadowOpacity: 0.12,
+    shadowRadius: 8,
     elevation: 2,
   },
   cardActive: {
@@ -295,6 +296,9 @@ const styles = StyleSheet.create({
     shadowOpacity: 0.28,
     shadowRadius: 8,
     elevation: 4,
+  },
+  cardActiveScale: {
+    transform: [{ scale: 1.03 }],
   },
   cardIconWrap: {
     width: 26,
@@ -309,8 +313,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.primary + "12",
   },
   cardTitle: {
-    fontSize: 14,
-    fontWeight: "600",
+    fontSize: 13,
+    fontWeight: "700",
     color: colors.text,
     marginBottom: 3,
   },
@@ -318,8 +322,8 @@ const styles = StyleSheet.create({
     color: colors.primary,
   },
   cardSubtitle: {
-    fontSize: 11.5,
-    lineHeight: 15,
+    fontSize: 11,
+    lineHeight: 14,
     color: colors.textMuted,
   },
   cardSubtitleActive: {

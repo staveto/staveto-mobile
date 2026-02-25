@@ -3,11 +3,13 @@
  * Uses server billing status (billing.isPro, billing.status).
  * Rule: billing.isPro => never show. billing.status==="expired" => show with 24h cooldown.
  *       billing.status==="trial" => engagement trigger (projects>=1 && tasks>=3) + 24h cooldown.
+ * Uses navigationRef for Paywall navigation (root navigator has Paywall; nested screens may not).
  */
 
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import type { NavigationProp } from "@react-navigation/native";
 import type { BillingStatus } from "../helpers/freeTrial";
+import { navigationRef } from "../components/PushNotificationHandler";
 
 const STORAGE_KEY = "@staveto:paywall_trigger";
 const LAST_PAYWALL_SHOWN_AT = "@staveto:lastPaywallShownAt";
@@ -100,7 +102,15 @@ export async function checkAndShowPaywall(
 
   if (billing?.status === "expired") {
     await markPaywallShown();
-    (navigation as any).navigate("Paywall");
+    if (navigationRef.isReady()) {
+      try {
+        (navigationRef as any).navigate("Paywall");
+      } catch (e) {
+        if (__DEV__) console.warn("[paywall] Navigate to Paywall failed:", e);
+      }
+    } else if (__DEV__) {
+      console.warn("[paywall] navigationRef not ready, Paywall not shown");
+    }
     return true;
   }
 
@@ -109,7 +119,15 @@ export async function checkAndShowPaywall(
     const shouldShow = c.projects >= 1 && c.tasks >= 3;
     if (!shouldShow) return false;
     await markPaywallShown();
-    (navigation as any).navigate("Paywall");
+    if (navigationRef.isReady()) {
+      try {
+        (navigationRef as any).navigate("Paywall");
+      } catch (e) {
+        if (__DEV__) console.warn("[paywall] Navigate to Paywall failed:", e);
+      }
+    } else if (__DEV__) {
+      console.warn("[paywall] navigationRef not ready, Paywall not shown");
+    }
     return true;
   }
 

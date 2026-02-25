@@ -6,7 +6,25 @@ import { paths } from "../lib/firestorePaths";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 
 const COLLECTION = "projects";
+const CACHE_TTL_MS = 30_000;
 let didLogProjectContext = false;
+let sessionCache: { projects: ProjectDoc[]; fetchedAt: number } | null = null;
+let inFlightPromise: Promise<ProjectDoc[]> | null = null;
+let memberQueryPermissionDenied = false;
+let perfCallCount = 0;
+
+function getCachedProjects(): ProjectDoc[] | null {
+  if (!sessionCache || Date.now() - sessionCache.fetchedAt > CACHE_TTL_MS) return null;
+  return sessionCache.projects;
+}
+
+function setCachedProjects(projects: ProjectDoc[]): void {
+  sessionCache = { projects, fetchedAt: Date.now() };
+}
+
+export function getProjectsPerfStats(): { callCount: number } {
+  return { callCount: perfCallCount };
+}
 
 export type ProjectDoc = {
   id: string;
@@ -243,6 +261,8 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
     console.warn(`[projects] listAllMyProjectsInternal: ownerId param (${ownerId}) differs from auth.currentUser.uid (${actualOwnerId}). Using auth.currentUser.uid.`);
   }
   
+  perfCallCount += 1;
+  const startMs = Date.now();
   console.log(`[projects] listAllMyProjectsInternal: querying with ownerId="${actualOwnerId}" (from auth.currentUser.uid)`);
   console.log(`[projects] Query: collection('projects'), where('ownerId', '==', '${actualOwnerId}')`);
   
@@ -280,20 +300,28 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
     }
 
     // Source 2: collectionGroup('members') where userId == uid (fallback when projectRefs empty or member added directly)
-    try {
-      const membersGroup = collectionGroup(db, "members");
-      const memberQuery = query(membersGroup, where("userId", "==", actualOwnerId));
-      const memberSnap = await getDocs(memberQuery, getOptions);
-      memberSnap.docs.forEach((d) => {
-        const pathParts = d.ref.path.split("/");
-        const projectId = pathParts[1];
-        if (projectId && !ownerIds.has(projectId)) memberProjectIds.add(projectId);
-      });
-      if (memberSnap.docs.length > 0) {
-        console.log(`[projects] listAllMyProjectsInternal: found ${memberSnap.docs.length} member docs via collectionGroup`);
+    if (!memberQueryPermissionDenied) {
+      try {
+        const membersGroup = collectionGroup(db, "members");
+        const memberQuery = query(membersGroup, where("userId", "==", actualOwnerId));
+        const memberSnap = await getDocs(memberQuery, getOptions);
+        memberSnap.docs.forEach((d) => {
+          const pathParts = d.ref.path.split("/");
+          const projectId = pathParts[1];
+          if (projectId && !ownerIds.has(projectId)) memberProjectIds.add(projectId);
+        });
+        if (memberSnap.docs.length > 0) {
+          console.log(`[projects] listAllMyProjectsInternal: found ${memberSnap.docs.length} member docs via collectionGroup`);
+        }
+      } catch (error: unknown) {
+        const code = (error as { code?: string })?.code;
+        if (code === "permission-denied") {
+          memberQueryPermissionDenied = true;
+          if (__DEV__) console.warn("[projects] collectionGroup('members') permission-denied, skipping for session");
+        } else {
+          console.warn("[projects] Failed to load member projects via collectionGroup:", error);
+        }
       }
-    } catch (error) {
-      console.warn("[projects] Failed to load member projects via collectionGroup:", error);
     }
 
     const memberProjects: ProjectDoc[] = [];
@@ -312,6 +340,11 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
     const merged = [...ownerProjects, ...memberProjects].filter(
       (project, index, arr) => arr.findIndex((x) => x.id === project.id) === index
     );
+    const durationMs = Date.now() - startMs;
+    if (perfCallCount === 1) {
+      console.log(`[projects] perf: first load took ${durationMs}ms`);
+    }
+    console.log(`[projects] perf: call count this session = ${perfCallCount}`);
     console.log(
       `[projects] listAllMyProjectsInternal: owner=${ownerProjects.length}, member=${memberProjects.length}, merged=${merged.length}`
     );
@@ -344,13 +377,33 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
  * @param forceServerRead - When true, bypasses cache (use after sync to get fresh sharedWithCount)
  */
 export async function listMyProjects(ownerId: string, options?: { forceServerRead?: boolean }): Promise<ProjectDoc[]> {
-  const allProjects = await listAllMyProjectsInternal(ownerId, options?.forceServerRead);
-  
-  // Filter out archived projects (archivedAt is truthy)
+  const force = options?.forceServerRead === true;
+  if (!force) {
+    const cached = getCachedProjects();
+    if (cached) {
+      const active = cached.filter((p) => !p.archivedAt);
+      if (__DEV__) console.log(`[projects] listMyProjects: cache hit, ${active.length} active`);
+      return active;
+    }
+    if (inFlightPromise) {
+      const all = await inFlightPromise;
+      return all.filter((p) => !p.archivedAt);
+    }
+  }
+  const promise = listAllMyProjectsInternal(ownerId, force)
+    .then((p) => {
+      inFlightPromise = null;
+      setCachedProjects(p);
+      return p;
+    })
+    .catch((e) => {
+      inFlightPromise = null;
+      throw e;
+    });
+  if (!force) inFlightPromise = promise;
+  const allProjects = await promise;
   const activeProjects = allProjects.filter((project) => !project.archivedAt);
-  
   console.log(`[projects] listMyProjects: ${allProjects.length} total projects, ${activeProjects.length} active (non-archived) projects`);
-  
   return activeProjects;
 }
 
@@ -358,8 +411,28 @@ export async function listMyProjects(ownerId: string, options?: { forceServerRea
  * List all projects (including archived) for a user
  * Used for ProjectsScreen where archived projects should be visible
  */
-export async function listAllMyProjects(ownerId: string): Promise<ProjectDoc[]> {
-  return listAllMyProjectsInternal(ownerId);
+export async function listAllMyProjects(ownerId: string, options?: { forceServerRead?: boolean }): Promise<ProjectDoc[]> {
+  const force = options?.forceServerRead === true;
+  if (!force) {
+    const cached = getCachedProjects();
+    if (cached) {
+      if (__DEV__) console.log(`[projects] listAllMyProjects: cache hit, ${cached.length} projects`);
+      return cached;
+    }
+    if (inFlightPromise) return inFlightPromise;
+  }
+  const promise = listAllMyProjectsInternal(ownerId, force)
+    .then((p) => {
+      inFlightPromise = null;
+      setCachedProjects(p);
+      return p;
+    })
+    .catch((e) => {
+      inFlightPromise = null;
+      throw e;
+    });
+  if (!force) inFlightPromise = promise;
+  return promise;
 }
 
 export async function updateProject(

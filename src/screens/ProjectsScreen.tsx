@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -114,7 +114,13 @@ export function ProjectsScreen() {
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<TypeFilter>("ALL");
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
-  const heroModalHeight = Math.min(Math.max(Math.round(windowHeight * 0.86), 520), windowHeight - spacing.md);
+  const heroModalHeightRef = useRef<number | null>(null);
+  if (showNew && heroModalHeightRef.current === null) {
+    heroModalHeightRef.current = Math.min(Math.max(Math.round(windowHeight * 0.86), 520), windowHeight - spacing.md);
+  } else if (!showNew) {
+    heroModalHeightRef.current = null;
+  }
+  const heroModalHeight = heroModalHeightRef.current ?? Math.min(Math.max(Math.round(windowHeight * 0.86), 520), windowHeight - spacing.md);
 
   const resetTemplateSelectionState = useCallback(() => {
     setTemplateId("");
@@ -256,18 +262,20 @@ export function ProjectsScreen() {
     }
     
     try {
-      try {
-        await getCallable("syncMyProjectsSharedCount")({});
-      } catch (e) {
-        console.warn("[ProjectsScreen] syncMyProjectsSharedCount failed:", e);
+      if (isRefresh) {
         try {
-          await getCallable("backfillProjectSharedCounts")({});
-        } catch (e2) {
-          console.warn("[ProjectsScreen] backfillProjectSharedCounts failed:", e2);
+          await getCallable("syncMyProjectsSharedCount")({});
+        } catch (e) {
+          console.warn("[ProjectsScreen] syncMyProjectsSharedCount failed:", e);
+          try {
+            await getCallable("backfillProjectSharedCounts")({});
+          } catch (e2) {
+            console.warn("[ProjectsScreen] backfillProjectSharedCounts failed:", e2);
+          }
         }
       }
       console.log('[ProjectsScreen] Loading projects for orgId:', orgId);
-      const list = await projectsService.listAllMyProjects(orgId);
+      const list = await projectsService.listAllMyProjects(orgId, { forceServerRead: isRefresh });
       console.log('[ProjectsScreen] Loaded', list.length, 'projects');
       setProjects(list);
     } catch (e: unknown) {
@@ -306,7 +314,7 @@ export function ProjectsScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      load(true);
+      load(false);
       if ((route.params as { openNew?: boolean })?.openNew) {
         setShowNew(true);
         setNewStep(1);
@@ -961,7 +969,7 @@ export function ProjectsScreen() {
       <Modal visible={showNew} transparent animationType="slide">
         <KeyboardAvoidingView
           style={[styles.modalOverlay, newStep === 1 && styles.modalOverlayHero]}
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          behavior="padding"
           keyboardVerticalOffset={0}
         >
           <View style={[styles.modal, newStep === 1 && styles.modalHero, newStep === 1 && { height: heroModalHeight }]}>

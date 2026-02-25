@@ -8,13 +8,14 @@ import {
   RefreshControl,
   TouchableOpacity,
   Alert,
+  ScrollView,
 } from "react-native";
 import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { useProjectAccess } from "../hooks/useProjectAccess";
 import * as problemsService from "../services/problems";
-import type { ProblemDoc, ProblemStatus, ProblemPriority, ProblemCategory } from "../services/problems";
+import type { ProblemDoc, ProblemStatus, ProblemPriority } from "../services/problems";
 import { colors, radius, spacing } from "../theme";
 
 const PRIORITY_COLORS: Record<ProblemPriority, string> = {
@@ -49,8 +50,14 @@ export function ProblemsListScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<ProblemStatus | "all">("all");
-  const [priorityFilter, setPriorityFilter] = useState<ProblemPriority | "all">("all");
+  const [priorityFilter, setPriorityFilter] = useState<ProblemPriority | null>(null);
   const [archivedFilter, setArchivedFilter] = useState<"active" | "archived">("active");
+
+  const resetFilters = useCallback(() => {
+    setArchivedFilter("active");
+    setStatusFilter("all");
+    setPriorityFilter(null);
+  }, []);
 
   const load = useCallback(async () => {
     if (!projectId) return;
@@ -63,7 +70,7 @@ export function ProblemsListScreen() {
         filtered = filtered.filter((p) => !p.archivedAt);
       }
       if (statusFilter !== "all") filtered = filtered.filter((p) => p.status === statusFilter);
-      if (priorityFilter !== "all") filtered = filtered.filter((p) => p.priority === priorityFilter);
+      if (priorityFilter !== null) filtered = filtered.filter((p) => p.priority === priorityFilter);
       setProblems(filtered);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Chyba načítania.";
@@ -132,51 +139,72 @@ export function ProblemsListScreen() {
 
   return (
     <View style={styles.container}>
-      <View style={styles.filters}>
-        <TouchableOpacity
-          style={[styles.filterChip, archivedFilter === "active" && styles.filterChipActive]}
-          onPress={() => setArchivedFilter("active")}
-        >
-          <Text style={[styles.filterText, archivedFilter === "active" && styles.filterTextActive]}>
-            Active
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filterChip, archivedFilter === "archived" && styles.filterChipActive]}
-          onPress={() => setArchivedFilter("archived")}
-        >
-          <Text style={[styles.filterText, archivedFilter === "archived" && styles.filterTextActive]}>
-            Archived
-          </Text>
-        </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.filterChip, statusFilter === "all" && styles.filterChipActive]}
-          onPress={() => setStatusFilter("all")}
-        >
-          <Text style={[styles.filterText, statusFilter === "all" && styles.filterTextActive]}>{t("problems.filters.all")}</Text>
-        </TouchableOpacity>
-        {(["open", "in_progress", "fixed", "verified", "rejected"] as ProblemStatus[]).map((s) => (
-          <TouchableOpacity
-            key={s}
-            style={[styles.filterChip, statusFilter === s && styles.filterChipActive]}
-            onPress={() => setStatusFilter(s)}
-          >
-            <Text style={[styles.filterText, statusFilter === s && styles.filterTextActive]}>{t(`problems.statuses.${s}`)}</Text>
+      <View style={styles.filterSection}>
+        {/* Primary: Project scope segmented control */}
+        <View style={styles.scopeRow}>
+          <View style={styles.segmentedControl}>
+            <TouchableOpacity
+              style={[styles.segmentedSegment, archivedFilter === "active" && styles.segmentedSegmentActive]}
+              onPress={() => setArchivedFilter("active")}
+            >
+              <Text style={[styles.segmentedText, archivedFilter === "active" && styles.segmentedTextActive]}>
+                {t("problems.filters.active")}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.segmentedSegment, archivedFilter === "archived" && styles.segmentedSegmentActive]}
+              onPress={() => setArchivedFilter("archived")}
+            >
+              <Text style={[styles.segmentedText, archivedFilter === "archived" && styles.segmentedTextActive]}>
+                {t("problems.filters.archived")}
+              </Text>
+            </TouchableOpacity>
+          </View>
+          <TouchableOpacity style={styles.resetButton} onPress={resetFilters}>
+            <Text style={styles.resetButtonText}>{t("problems.filters.reset")}</Text>
           </TouchableOpacity>
-        ))}
-      </View>
-      <View style={styles.priorityFilters}>
-        {(["all", "low", "medium", "high"] as const).map((p) => (
+        </View>
+        {/* Secondary: Status chips (single horizontal scroll row) */}
+        <ScrollView
+          horizontal
+          showsHorizontalScrollIndicator={false}
+          contentContainerStyle={styles.statusChipsRow}
+          style={styles.statusChipsScroll}
+        >
           <TouchableOpacity
-            key={p}
-            style={[styles.filterChip, priorityFilter === p && styles.filterChipActive]}
-            onPress={() => setPriorityFilter(p)}
+            style={[styles.statusChip, statusFilter === "all" && styles.statusChipActive]}
+            onPress={() => setStatusFilter("all")}
           >
-            <Text style={[styles.filterText, priorityFilter === p && styles.filterTextActive]}>
-              {p === "all" ? t("problems.filters.all") : t(`problems.priorities.${p}`)}
+            <Text style={[styles.statusChipText, statusFilter === "all" && styles.statusChipTextActive]}>
+              {t("problems.filters.all")}
             </Text>
           </TouchableOpacity>
-        ))}
+          {(["open", "in_progress", "fixed", "verified", "rejected"] as ProblemStatus[]).map((s) => (
+            <TouchableOpacity
+              key={s}
+              style={[styles.statusChip, statusFilter === s && styles.statusChipActive]}
+              onPress={() => setStatusFilter(s)}
+            >
+              <Text style={[styles.statusChipText, statusFilter === s && styles.statusChipTextActive]}>
+                {t(`problems.statuses.${s}`)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </ScrollView>
+        {/* Priority: smaller chips (no All; default = all) */}
+        <View style={styles.priorityRow}>
+          {(["low", "medium", "high"] as ProblemPriority[]).map((p) => (
+            <TouchableOpacity
+              key={p}
+              style={[styles.priorityChip, priorityFilter === p && styles.priorityChipActive]}
+              onPress={() => setPriorityFilter(priorityFilter === p ? null : p)}
+            >
+              <Text style={[styles.priorityChipText, priorityFilter === p && styles.priorityChipTextActive]}>
+                {t(`problems.priorities.${p}`)}
+              </Text>
+            </TouchableOpacity>
+          ))}
+        </View>
       </View>
 
       {loading ? (
@@ -215,17 +243,47 @@ export function ProblemsListScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   center: { flex: 1, justifyContent: "center", alignItems: "center", padding: spacing.xl },
-  filters: { flexDirection: "row", flexWrap: "wrap", padding: spacing.md, gap: spacing.sm },
-  priorityFilters: { flexDirection: "row", flexWrap: "wrap", paddingHorizontal: spacing.md, paddingBottom: spacing.sm, gap: spacing.sm },
-  filterChip: {
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+  filterSection: { paddingHorizontal: spacing.md, paddingTop: spacing.sm, paddingBottom: spacing.sm },
+  scopeRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.sm },
+  segmentedControl: {
+    flexDirection: "row",
+    backgroundColor: "rgba(255,255,255,0.12)",
     borderRadius: radius,
-    backgroundColor: "rgba(255,255,255,0.15)",
+    padding: 2,
   },
-  filterChipActive: { backgroundColor: colors.primary },
-  filterText: { color: colors.textOnDark, fontSize: 13 },
-  filterTextActive: { color: "#fff", fontWeight: "600" },
+  segmentedSegment: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: radius - 2,
+    minWidth: 72,
+    alignItems: "center",
+  },
+  segmentedSegmentActive: { backgroundColor: colors.primary },
+  segmentedText: { color: "rgba(255,255,255,0.8)", fontSize: 13 },
+  segmentedTextActive: { color: "#fff", fontWeight: "600" },
+  resetButton: { paddingVertical: spacing.xs, paddingHorizontal: spacing.sm },
+  resetButtonText: { color: "rgba(255,255,255,0.7)", fontSize: 12 },
+  statusChipsScroll: { maxHeight: 40, marginBottom: spacing.xs },
+  statusChipsRow: { flexDirection: "row", gap: spacing.xs, paddingRight: spacing.md },
+  statusChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
+    borderRadius: radius,
+    backgroundColor: "rgba(255,255,255,0.12)",
+  },
+  statusChipActive: { backgroundColor: colors.primary },
+  statusChipText: { color: "rgba(255,255,255,0.85)", fontSize: 12 },
+  statusChipTextActive: { color: "#fff", fontWeight: "600" },
+  priorityRow: { flexDirection: "row", gap: spacing.xs },
+  priorityChip: {
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.1)",
+  },
+  priorityChipActive: { backgroundColor: colors.primary },
+  priorityChipText: { color: "rgba(255,255,255,0.7)", fontSize: 11 },
+  priorityChipTextActive: { color: "#fff", fontWeight: "600" },
   list: { padding: spacing.md, paddingBottom: 80 },
   item: {
     flexDirection: "row",

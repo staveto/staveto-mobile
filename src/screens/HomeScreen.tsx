@@ -47,7 +47,7 @@ import { normalizeRoleKey } from "../helpers/role";
 import type { RoleKey } from "../helpers/role";
 import { getKpiCardsWithTasks } from "../helpers/kpi/getKpiCards";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
-import { FIRST_PROJECT_PROMPT_SHOWN_KEY } from "../constants/firstProjectPrompt";
+import { hasShownFirstProjectPrompt, markFirstProjectPromptShown } from "../utils/firstProjectPrompt";
 import { KpiCardComponent } from "../components/KpiCard";
 import type { KpiCard } from "../helpers/kpi/getKpiCards";
 
@@ -497,10 +497,14 @@ export function HomeScreen() {
   useEffect(() => {
     if (loading || !dashboardData || dashboardData.projects.length > 0) return;
     let cancelled = false;
-    AsyncStorage.getItem(FIRST_PROJECT_PROMPT_SHOWN_KEY).then((shown) => {
+    (async () => {
+      const shown = await hasShownFirstProjectPrompt();
       if (cancelled) return;
-      if (shown !== "1") setShowFirstProjectModal(true);
-    });
+      if (!shown) {
+        setShowFirstProjectModal(true);
+        await markFirstProjectPromptShown();
+      }
+    })();
     return () => {
       cancelled = true;
     };
@@ -519,18 +523,19 @@ export function HomeScreen() {
     }
 
     try {
-      try {
-        await getCallable("syncMyProjectsSharedCount")({});
-      } catch (e) {
-        console.warn("[HomeScreen] syncMyProjectsSharedCount failed:", e);
+      if (isRefresh) {
         try {
-          await getCallable("backfillProjectSharedCounts")({});
-        } catch (e2) {
-          console.warn("[HomeScreen] backfillProjectSharedCounts failed:", e2);
+          await getCallable("syncMyProjectsSharedCount")({});
+        } catch (e) {
+          console.warn("[HomeScreen] syncMyProjectsSharedCount failed:", e);
+          try {
+            await getCallable("backfillProjectSharedCounts")({});
+          } catch (e2) {
+            console.warn("[HomeScreen] backfillProjectSharedCounts failed:", e2);
+          }
         }
       }
-      // Force server read after sync to get fresh sharedWithCount (bypass cache)
-      const data = await dashboardService.loadDashboardData(orgId, { forceServerRead: true });
+      const data = await dashboardService.loadDashboardData(orgId, { forceServerRead: isRefresh });
 
       // Enrich today tasks with project names and phase names
       // Filter out tasks from BUILD projects
@@ -710,7 +715,7 @@ export function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadDashboard(true);
+      loadDashboard(false);
       (async () => {
         await trackPaywallEvent("app_opened");
         try {
@@ -1245,7 +1250,14 @@ export function HomeScreen() {
             {data.projects.length === 0 && (
               <TouchableOpacity
                 style={styles.firstProjectCtaCard}
-                onPress={() => goToProjects({ openNew: true })}
+                onPress={() => {
+                  try {
+                    goToProjects({ openNew: true });
+                  } catch (e) {
+                    if (__DEV__) console.warn("[HomeScreen] goToProjects failed, falling back to Projects tab:", e);
+                    goToProjects();
+                  }
+                }}
                 activeOpacity={0.9}
               >
                 <Ionicons name="folder-open-outline" size={32} color={colors.primary} style={{ marginBottom: spacing.sm }} />
@@ -1423,7 +1435,12 @@ export function HomeScreen() {
               style={styles.firstProjectModalPrimary}
               onPress={() => {
                 setShowFirstProjectModal(false);
-                goToProjects({ openNew: true });
+                try {
+                  goToProjects({ openNew: true });
+                } catch (e) {
+                  if (__DEV__) console.warn("[HomeScreen] goToProjects failed, falling back to Projects tab:", e);
+                  goToProjects();
+                }
               }}
               activeOpacity={0.85}
             >
@@ -1433,7 +1450,7 @@ export function HomeScreen() {
               style={styles.firstProjectModalSecondary}
               onPress={async () => {
                 setShowFirstProjectModal(false);
-                await AsyncStorage.setItem(FIRST_PROJECT_PROMPT_SHOWN_KEY, "1");
+                await markFirstProjectPromptShown();
               }}
             >
               <Text style={styles.firstProjectModalSecondaryText}>{t("firstProjectPrompt.later")}</Text>

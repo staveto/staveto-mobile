@@ -1,0 +1,251 @@
+diff --git a/App.tsx b/App.tsx
+index 0ec770c..99940c9 100644
+--- a/App.tsx
++++ b/App.tsx
+@@ -1,4 +1,4 @@
+-import React from "react";
++import React, { useCallback, useEffect, useRef, useState } from "react";
+ import { StatusBar } from "expo-status-bar";
+ import { SafeAreaProvider } from "react-native-safe-area-context";
+ import { NavigationContainer } from "@react-navigation/native";
+@@ -10,11 +10,37 @@ import { UnreadCountProvider } from "./src/context/UnreadCountContext";
+ import { RootNavigator } from "./src/navigation/RootNavigator";
+ import { PushNotificationHandler, navigationRef } from "./src/components/PushNotificationHandler";
+ import { configurePurchases } from "./src/services/billing";
+-import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity } from "react-native";
++import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity, Platform } from "react-native";
+ import { colors } from "./src/theme";
++import * as SplashScreen from "expo-splash-screen";
++import Constants from "expo-constants";
++
++type BootState = "booting" | "ready" | "error";
++
++function logBootDiagnostics(): void {
++  const build = Constants.expoConfig?.version ?? "?";
++  const platform = Platform.OS;
++  const envChecks = {
++    FIREBASE_API_KEY: !!process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
++    REVENUECAT_IOS: !!process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY?.trim(),
++    GOOGLE_WEB_CLIENT_ID: !!process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID?.trim(),
++  };
++  if (__DEV__) {
++    console.log("[boot] platform:", platform, "build:", build, "env:", envChecks);
++  }
++}
++
++function setupUnhandledRejectionHandler(): void {
++  const handler = (e: PromiseRejectionEvent) => {
++    console.error("[boot] Unhandled rejection:", e?.reason ?? e);
++  };
++  if (typeof global !== "undefined" && "addEventListener" in global) {
++    (global as any).addEventListener?.("unhandledrejection", handler);
++  }
++}
+ 
+ class AppErrorBoundary extends React.Component<
+-  { children: React.ReactNode },
++  { children: React.ReactNode; onError?: (err: Error) => void },
+   { hasError: boolean; error: Error | null }
+ > {
+   state = { hasError: false, error: null as Error | null };
+@@ -25,36 +51,131 @@ class AppErrorBoundary extends React.Component<
+ 
+   componentDidCatch(error: Error) {
+     if (__DEV__) console.error("[App] ErrorBoundary caught:", error);
++    this.props.onError?.(error);
+   }
+ 
+   render() {
+     if (this.state.hasError && this.state.error) {
+-      if (__DEV__) {
+-        return (
+-          <View style={[styles.loading, { padding: 24 }]}>
+-            <Text style={{ color: "#fff", fontSize: 16, marginBottom: 16 }}>Chyba aplikácie</Text>
+-            <Text style={{ color: "rgba(255,255,255,0.9)", fontSize: 12, marginBottom: 24 }}>
+-              {this.state.error.message}
+-            </Text>
+-            <TouchableOpacity
+-              style={{ backgroundColor: colors.primary, padding: 12, borderRadius: 8 }}
+-              onPress={() => this.setState({ hasError: false, error: null })}
+-            >
+-              <Text style={{ color: "#fff", fontWeight: "600" }}>Skúsiť znova</Text>
+-            </TouchableOpacity>
+-          </View>
+-        );
+-      }
++      return (
++        <View style={[styles.loading, { padding: 24 }]}>
++          <Text style={styles.errorTitle}>App Error</Text>
++          <Text style={styles.errorMessage} selectable>
++            {this.state.error.message}
++          </Text>
++          <TouchableOpacity
++            style={styles.retryButton}
++            onPress={() => this.setState({ hasError: false, error: null })}
++          >
++            <Text style={styles.retryButtonText}>Retry</Text>
++          </TouchableOpacity>
++        </View>
++      );
+     }
+     return this.props.children;
+   }
+ }
+ 
++function BootLoader({ children }: { children: React.ReactNode }) {
++  const [state, setState] = useState<BootState>("booting");
++  const [error, setError] = useState<string | null>(null);
++  const [errorStep, setErrorStep] = useState<string | null>(null);
++  const hideSplashRef = useRef(false);
++
++  const hideSplash = useCallback(async () => {
++    if (hideSplashRef.current) return;
++    hideSplashRef.current = true;
++    try {
++      await SplashScreen.hideAsync();
++    } catch (e) {
++      if (__DEV__) console.warn("[boot] SplashScreen.hideAsync failed:", e);
++    }
++  }, []);
++
++  useEffect(() => {
++    let cancelled = false;
++    (async () => {
++      try {
++        await SplashScreen.preventAutoHideAsync?.();
++      } catch {
++        // ignore
++      }
++      const safeHide = async () => {
++        try {
++          await SplashScreen.hideAsync?.();
++        } catch {
++          // ignore
++        }
++      };
++      try {
++        logBootDiagnostics();
++        setupUnhandledRejectionHandler();
++        if (process.env.EXPO_PUBLIC_SIMULATE_BOOT_FAILURE === "1") {
++          throw new Error("Simulated boot failure (EXPO_PUBLIC_SIMULATE_BOOT_FAILURE=1)");
++        }
++        if (cancelled) return;
++        setState("ready");
++      } catch (e) {
++        if (cancelled) return;
++        const err = e instanceof Error ? e : new Error(String(e));
++        setError(err.message);
++        setErrorStep("boot");
++        setState("error");
++        console.error("[boot] Init failed:", err?.message ?? err, "step:", "boot");
++      } finally {
++        await safeHide();
++      }
++    })();
++    const fallback = setTimeout(() => hideSplash(), 5000);
++    return () => {
++      cancelled = true;
++      clearTimeout(fallback);
++    };
++  }, [hideSplash]);
++
++  if (state === "booting") {
++    return (
++      <View style={styles.loading}>
++        <ActivityIndicator size="large" color={colors.primary} />
++      </View>
++    );
++  }
++
++  if (state === "error") {
++    return (
++      <View style={[styles.loading, { padding: 24 }]}>
++        <Text style={styles.errorTitle}>Startup Error</Text>
++        {errorStep && (
++          <Text style={[styles.errorMessage, { fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 8 }]}>
++            Step: {errorStep}
++          </Text>
++        )}
++        <Text style={styles.errorMessage} selectable>
++          {error ?? "Unknown error"}
++        </Text>
++        <TouchableOpacity
++          style={styles.retryButton}
++          onPress={() => {
++            setState("booting");
++            setError(null);
++            setErrorStep(null);
++            hideSplashRef.current = false;
++          }}
++        >
++          <Text style={styles.retryButtonText}>Retry</Text>
++        </TouchableOpacity>
++      </View>
++    );
++  }
++
++  return <>{children}</>;
++}
++
+ function AppContent() {
+-  React.useEffect(() => {
++  const { loaded } = useI18n();
++
++  useEffect(() => {
+     configurePurchases().catch(() => {});
+   }, []);
+-  const { loaded } = useI18n();
+ 
+   if (!loaded) {
+     return (
+@@ -91,12 +212,18 @@ function AppContent() {
+ }
+ 
+ export default function App() {
++  const handleError = useCallback((err: Error) => {
++    if (__DEV__) console.error("[App] ErrorBoundary error:", err);
++  }, []);
++
+   return (
+-    <AppErrorBoundary>
++    <AppErrorBoundary onError={handleError}>
+       <SafeAreaProvider>
+-        <I18nProvider>
+-          <AppContent />
+-        </I18nProvider>
++        <BootLoader>
++          <I18nProvider>
++            <AppContent />
++          </I18nProvider>
++        </BootLoader>
+       </SafeAreaProvider>
+     </AppErrorBoundary>
+   );
+@@ -109,4 +236,27 @@ const styles = StyleSheet.create({
+     justifyContent: "center",
+     alignItems: "center",
+   },
++  errorTitle: {
++    color: "#fff",
++    fontSize: 18,
++    fontWeight: "600",
++    marginBottom: 12,
++  },
++  errorMessage: {
++    color: "rgba(255,255,255,0.9)",
++    fontSize: 14,
++    marginBottom: 24,
++    textAlign: "center",
++  },
++  retryButton: {
++    backgroundColor: colors.primary,
++    paddingHorizontal: 24,
++    paddingVertical: 12,
++    borderRadius: 8,
++  },
++  retryButtonText: {
++    color: "#fff",
++    fontWeight: "600",
++    fontSize: 16,
++  },
+ });

@@ -6,6 +6,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
 import { I18nProvider, useI18n } from "./src/i18n/I18nContext";
 import { AuthProvider } from "./src/context/AuthContext";
+import { UnreadCountProvider } from "./src/context/UnreadCountContext";
 import { RootNavigator } from "./src/navigation/RootNavigator";
 import { PushNotificationHandler, navigationRef } from "./src/components/PushNotificationHandler";
 import { configurePurchases } from "./src/services/billing";
@@ -77,9 +78,11 @@ function AppContent() {
       <BottomSheetModalProvider>
         <NavigationContainer ref={navigationRef} linking={linking}>
           <AuthProvider>
-            <PushNotificationHandler />
-            <StatusBar style="light" />
-            <RootNavigator />
+            <UnreadCountProvider>
+              <PushNotificationHandler />
+              <StatusBar style="light" />
+              <RootNavigator />
+            </UnreadCountProvider>
           </AuthProvider>
         </NavigationContainer>
       </BottomSheetModalProvider>

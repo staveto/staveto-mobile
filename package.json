@@ -8,6 +8,7 @@
     "start": "npm run ensure-logo && expo start",
     "android": "npm run ensure-logo && expo start --android",
     "dev:android": "node scripts/run-android.js",
+    "start:emulator": "powershell -ExecutionPolicy Bypass -File ./scripts/start-emulator.ps1",
     "dev:android:external": "powershell -ExecutionPolicy Bypass -File ./scripts/build-android-external.ps1",
     "ios": "expo run:ios",
     "web": "expo start --web",
@@ -15,7 +16,8 @@
     "clean:android": "powershell -ExecutionPolicy Bypass -File ./scripts/clean-android.ps1",
     "prebuild:android": "npx expo prebuild --platform android --clean",
     "i18n:audit": "node scripts/i18n-audit.js",
-    "i18n:add-missing": "node scripts/i18n-add-missing.js"
+    "i18n:add-missing": "node scripts/i18n-add-missing.js",
+    "repo-status": "powershell -ExecutionPolicy Bypass -File ./scripts/repo-status.ps1"
   },
   "dependencies": {
     "@google-cloud/vision": "^5.3.4",

@@ -296,7 +296,7 @@ export function ProjectOverviewScreen() {
   const [uploadingDocumentAttachment, setUploadingDocumentAttachment] = useState(false);
   const [whatsappDiaryEnabled, setWhatsappDiaryEnabled] = useState(false);
   const [contractorsEnabled, setContractorsEnabled] = useState(false);
-  const [phasesSectionExpanded, setPhasesSectionExpanded] = useState(true);
+  const [phasesSectionExpanded, setPhasesSectionExpanded] = useState(false);
   const [taskFilter, setTaskFilter] = useState<'service' | 'all'>('service');
   const [activityEvents, setActivityEvents] = useState<ProjectEvent[]>([]);
   useEffect(() => {
@@ -4349,8 +4349,8 @@ export function ProjectOverviewScreen() {
       <Modal visible={showExpenseModal} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={0}
         >
           <View style={[styles.modal, styles.expenseModal]}>
             <Text style={styles.modalTitle}>
@@ -5161,7 +5161,7 @@ export function ProjectOverviewScreen() {
       <Modal visible={showNewTask} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
           keyboardVerticalOffset={0}
         >
           <View style={styles.modal}>
@@ -5269,8 +5269,8 @@ export function ProjectOverviewScreen() {
       <Modal visible={showDiaryModal} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
-          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={0}
         >
           <View style={[styles.modal, styles.diaryModal]}>
             <Text style={styles.modalTitle}>
@@ -5444,7 +5444,7 @@ export function ProjectOverviewScreen() {
       <Modal visible={showDocumentModal} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
           keyboardVerticalOffset={0}
         >
           <View style={styles.modal}>

@@ -74,6 +74,17 @@ Potom:
 - **iOS**: naskenuj QR kód v Expo Go (len na Macu)
 - **Dev client**: ak máš `expo-dev-client`, spusti `npx expo run:android` alebo `npx expo run:ios`
 
+### Android emulator – appka sa nenaštartuje
+
+Ak sa appka v emulátore neotvorí, spusti `npm run start:emulator` namiesto `npx expo start --dev-client`:
+
+```powershell
+cd mobile
+npm run start:emulator
+```
+
+Skript nastaví `adb reverse` a `REACT_NATIVE_PACKAGER_HOSTNAME=127.0.0.1`, aby emulátor spoľahlivo pripojil Metro.
+
 ### Firebase Functions (back-end pre OCR, WhatsApp)
 
 Funkcie musia byť nasadené do Firebase, aby mobilná appka mohla používať OCR a iné Cloud Functions.

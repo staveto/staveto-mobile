@@ -47,6 +47,7 @@ import { normalizeRoleKey } from "../helpers/role";
 import type { RoleKey } from "../helpers/role";
 import { getKpiCardsWithTasks } from "../helpers/kpi/getKpiCards";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
+import { FIRST_PROJECT_PROMPT_SHOWN_KEY } from "../constants/firstProjectPrompt";
 import { KpiCardComponent } from "../components/KpiCard";
 import type { KpiCard } from "../helpers/kpi/getKpiCards";
 
@@ -342,6 +343,7 @@ export function HomeScreen() {
     }
   }, []);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
+  const [showFirstProjectModal, setShowFirstProjectModal] = useState(false);
   const [pendingAction, setPendingAction] = useState<"task" | "photo" | "expense" | "voice" | "problem" | null>(null);
   const [pendingExpenseType, setPendingExpenseType] = useState<"WORK" | "TRAVEL" | null>(null);
   const [fabProjectSelectionMode, setFabProjectSelectionMode] = useState(false);
@@ -490,6 +492,19 @@ export function HomeScreen() {
       if (id) setLastUsedProjectId(id);
     });
   }, []);
+
+  // Show "Create your first project" modal when: 0 projects, loading done, prompt not yet shown
+  useEffect(() => {
+    if (loading || !dashboardData || dashboardData.projects.length > 0) return;
+    let cancelled = false;
+    AsyncStorage.getItem(FIRST_PROJECT_PROMPT_SHOWN_KEY).then((shown) => {
+      if (cancelled) return;
+      if (shown !== "1") setShowFirstProjectModal(true);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [loading, dashboardData]);
 
   const loadDashboard = useCallback(async (isRefresh = false) => {
     if (!orgId) {
@@ -1079,7 +1094,7 @@ export function HomeScreen() {
 
   const startFabFlow = useCallback(() => {
     if (!dashboardData || dashboardData.projects.length === 0) {
-      Alert.alert(t("common.error"), t("home.noProjects"));
+      goToProjects({ openNew: true });
       return;
     }
     setPendingAction(null);
@@ -1088,7 +1103,7 @@ export function HomeScreen() {
     setShowProjectSelector(false);
     setShowExpenseTypeModal(false);
     setShowActionSheet(true);
-  }, [dashboardData, t]);
+  }, [dashboardData, t, goToProjects]);
 
   const handleTaskClick = useCallback(
     (task: TaskDoc & { projectName: string }) => {
@@ -1227,6 +1242,21 @@ export function HomeScreen() {
         }
         ListHeaderComponent={
           <>
+            {data.projects.length === 0 && (
+              <TouchableOpacity
+                style={styles.firstProjectCtaCard}
+                onPress={() => goToProjects({ openNew: true })}
+                activeOpacity={0.9}
+              >
+                <Ionicons name="folder-open-outline" size={32} color={colors.primary} style={{ marginBottom: spacing.sm }} />
+                <Text style={styles.firstProjectCtaTitle}>{t("firstProjectPrompt.title")}</Text>
+                <Text style={styles.firstProjectCtaBody}>{t("firstProjectPrompt.body")}</Text>
+                <View style={styles.firstProjectCtaButton}>
+                  <Text style={styles.firstProjectCtaButtonText}>{t("firstProjectPrompt.createButton")}</Text>
+                  <Ionicons name="arrow-forward" size={18} color="#fff" />
+                </View>
+              </TouchableOpacity>
+            )}
             {(() => {
               const enabledSections = effectiveLayout.sections.filter((s) => s.enabled);
               return (
@@ -1382,6 +1412,35 @@ export function HomeScreen() {
           ) : null
         }
       />
+
+      {/* Create your first project modal - shown once when 0 projects */}
+      <Modal visible={showFirstProjectModal} transparent animationType="fade">
+        <Pressable style={styles.modalOverlay} onPress={() => {}}>
+          <Pressable style={styles.firstProjectModal} onPress={(e) => e.stopPropagation()}>
+            <Text style={styles.firstProjectModalTitle}>{t("firstProjectPrompt.title")}</Text>
+            <Text style={styles.firstProjectModalBody}>{t("firstProjectPrompt.body")}</Text>
+            <TouchableOpacity
+              style={styles.firstProjectModalPrimary}
+              onPress={() => {
+                setShowFirstProjectModal(false);
+                goToProjects({ openNew: true });
+              }}
+              activeOpacity={0.85}
+            >
+              <Text style={styles.firstProjectModalPrimaryText}>{t("firstProjectPrompt.createButton")}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.firstProjectModalSecondary}
+              onPress={async () => {
+                setShowFirstProjectModal(false);
+                await AsyncStorage.setItem(FIRST_PROJECT_PROMPT_SHOWN_KEY, "1");
+              }}
+            >
+              <Text style={styles.firstProjectModalSecondaryText}>{t("firstProjectPrompt.later")}</Text>
+            </TouchableOpacity>
+          </Pressable>
+        </Pressable>
+      </Modal>
 
       {/* Project Selector Modal */}
       <Modal visible={showProjectSelector} transparent animationType="slide">
@@ -2681,6 +2740,83 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "center",
     padding: spacing.lg,
+  },
+  firstProjectModal: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    padding: spacing.xl,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  firstProjectModalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.md,
+  },
+  firstProjectModalBody: {
+    fontSize: 15,
+    color: colors.textMuted,
+    lineHeight: 22,
+    marginBottom: spacing.xl,
+  },
+  firstProjectModalPrimary: {
+    backgroundColor: colors.primary,
+    borderRadius: radius,
+    paddingVertical: spacing.md,
+    alignItems: "center",
+    marginBottom: spacing.sm,
+  },
+  firstProjectModalPrimaryText: {
+    color: "#fff",
+    fontSize: 16,
+    fontWeight: "600",
+  },
+  firstProjectModalSecondary: {
+    alignItems: "center",
+    paddingVertical: spacing.sm,
+  },
+  firstProjectModalSecondaryText: {
+    color: colors.textMuted,
+    fontSize: 14,
+  },
+  firstProjectCtaCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    padding: spacing.xl,
+    marginHorizontal: spacing.lg,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.border,
+    alignItems: "center",
+  },
+  firstProjectCtaTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.sm,
+    textAlign: "center",
+  },
+  firstProjectCtaBody: {
+    fontSize: 14,
+    color: colors.textMuted,
+    lineHeight: 20,
+    marginBottom: spacing.lg,
+    textAlign: "center",
+  },
+  firstProjectCtaButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius,
+  },
+  firstProjectCtaButtonText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "600",
   },
   modal: {
     backgroundColor: colors.background,

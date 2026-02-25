@@ -32,6 +32,7 @@ import {
   REVENUECAT_PACKAGE_MONTHLY_NOTRIAL,
   REVENUECAT_PACKAGE_MONTHLY_TRIAL,
 } from "../services/billing";
+import Purchases from "react-native-purchases";
 import { colors, radius, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
 import { showToast } from "../helpers/toast";
@@ -68,6 +69,42 @@ export function SubscriptionScreen() {
     }
     loadUsage();
   }, [user?.id]);
+
+  // Debug: log RevenueCat offerings on mount (dev only)
+  useEffect(() => {
+    if (!__DEV__) return;
+    let cancelled = false;
+    (async () => {
+      try {
+        const offerings = await Purchases.getOfferings();
+        if (cancelled) return;
+        console.log("[RC] current offering:", offerings.current?.identifier);
+        console.log("[RC] all offerings:", Object.keys(offerings.all ?? {}));
+        console.log(
+          "[RC] packages:",
+          offerings.current?.availablePackages?.map((p) => ({
+            pkg: p.identifier,
+            productId: p.product.identifier,
+          }))
+        );
+        const packages = offerings.current?.availablePackages ?? [];
+        if (packages.length === 0) {
+          Alert.alert(
+            "RevenueCat",
+            "No packages available. Likely not installed from Google Play / wrong tester account / wrong track."
+          );
+        }
+      } catch (error: unknown) {
+        if (cancelled) return;
+        const msg = error instanceof Error ? error.message : String(error);
+        console.warn("[RC] getOfferings error:", msg);
+        Alert.alert("RevenueCat", `getOfferings failed: ${msg}`);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const onRefresh = async () => {
     setRefreshing(true);
@@ -249,6 +286,7 @@ export function SubscriptionScreen() {
           )}
         </View>
 
+        {!isPro && (
         <View style={styles.usageSection}>
           <Text style={styles.usageTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
             {t("subscription.ocrUsed")}
@@ -273,6 +311,7 @@ export function SubscriptionScreen() {
             </Text>
           </View>
         </View>
+        )}
 
         <TouchableOpacity
           style={styles.promoButton}
@@ -296,7 +335,7 @@ export function SubscriptionScreen() {
       <Modal visible={showPromoModal} transparent animationType="fade">
         <Pressable style={styles.modalOverlay} onPress={() => !promoRedeeming && setShowPromoModal(false)}>
           <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            behavior={Platform.OS === "ios" ? "padding" : undefined}
             keyboardVerticalOffset={0}
           >
           <Pressable style={styles.promoModal} onPress={(e) => e.stopPropagation()}>

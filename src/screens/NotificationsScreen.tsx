@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
+import { useUnreadCountContext } from "../context/UnreadCountContext";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import * as notificationsService from "../services/notifications";
@@ -28,6 +29,7 @@ export function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const { user, orgId } = useAuth();
+  const { refresh: refreshUnreadCount, setCount: setUnreadCount } = useUnreadCountContext();
   const navigation = useNavigation();
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
   const [pendingInvites, setPendingInvites] = useState<PendingInvite[]>([]);
@@ -94,14 +96,17 @@ export function NotificationsScreen() {
   const handleMarkAllAsRead = useCallback(async () => {
     if (!orgId) return;
     try {
+      setUnreadCount(0);
       await notificationsService.markAllAsRead(orgId);
       setNotifications((prev) => prev.map((n) => ({ ...n, readAt: n.readAt || new Date().toISOString() })));
       setShowMenu(false);
+      await refreshUnreadCount();
     } catch (error: any) {
       console.error("[NotificationsScreen] Error marking all as read:", error);
+      await refreshUnreadCount();
       Alert.alert(t("common.error"), t("notifications.markAllReadFailed"));
     }
-  }, [orgId]);
+  }, [orgId, refreshUnreadCount, setUnreadCount]);
 
   // Safe date helpers (handle Timestamp, string, Date, null)
   const toDateSafe = (v: any): Date | null => {

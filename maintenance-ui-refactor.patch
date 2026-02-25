@@ -1,0 +1,207 @@
+diff --git a/src/screens/ProjectOverviewScreen.tsx b/src/screens/ProjectOverviewScreen.tsx
+index d25c5df..7137d50 100644
+--- a/src/screens/ProjectOverviewScreen.tsx
++++ b/src/screens/ProjectOverviewScreen.tsx
+@@ -67,6 +67,7 @@ import * as projectEventsService from "../services/projectEvents";
+ import * as projectMembersService from "../services/projectMembers";
+ import * as projectCoverService from "../services/projectCover";
+ import * as equipmentService from "../services/equipment";
++import * as serviceRulesService from "../services/serviceRules";
+ import * as weatherService from "../services/weather";
+ import { extractInvoiceData, type OcrParsed, type OcrStatus } from "../services/invoiceOCR";
+ import { calculateRouteDistanceKm } from "../services/mapsDistance";
+@@ -261,6 +262,7 @@ export function ProjectOverviewScreen() {
+ 
+   // MAINTENANCE v2: equipment
+   const [equipmentList, setEquipmentList] = useState<EquipmentDoc[]>([]);
++  const [serviceRulesCount, setServiceRulesCount] = useState(0);
+   const [showEquipmentActionSheet, setShowEquipmentActionSheet] = useState(false);
+   
+   // Diary entries state
+@@ -586,18 +588,24 @@ export function ProjectOverviewScreen() {
+       setProjectDocuments(hasDocuments ? docs : []);
+       setProjectMembers(members);
+ 
+-      // MAINTENANCE v2: load equipment only for MAINTENANCE projects
++      // MAINTENANCE v2: load equipment and service rules count only for MAINTENANCE projects
+       const isMaintenanceLike = projectTypeForLoad === 'MAINTENANCE';
+       if (isMaintenanceLike) {
+         try {
+-          const eq = await equipmentService.listEquipment(projectId, { status: 'active' });
++          const [eq, rules] = await Promise.all([
++            equipmentService.listEquipment(projectId, { status: 'active' }),
++            serviceRulesService.listServiceRulesByProject(projectId, { status: 'active' }),
++          ]);
+           setEquipmentList(eq);
++          setServiceRulesCount(rules.length);
+         } catch (e: any) {
+-          console.warn('[ProjectOverview] Error loading equipment:', e);
++          console.warn('[ProjectOverview] Error loading equipment/service rules:', e);
+           setEquipmentList([]);
++          setServiceRulesCount(0);
+         }
+       } else {
+         setEquipmentList([]);
++        setServiceRulesCount(0);
+       }
+ 
+       // Problems count (open + in_progress) for all project types
+@@ -3157,10 +3165,24 @@ export function ProjectOverviewScreen() {
+           />
+         }
+       >
+-        {/* MAINTENANCE v2: Equipment section only for MAINTENANCE projects */}
++        {/* MAINTENANCE v2: Equipment section - top priority, emphasized */}
+         {projectType === 'MAINTENANCE' && (
+-          <View style={styles.equipmentSection}>
+-            <Text style={styles.equipmentSectionTitle}>{t("equipment.title")}</Text>
++          <View style={styles.equipmentSectionMaintenance}>
++            <View style={styles.equipmentSectionHeaderRow}>
++              <Text style={styles.equipmentSectionTitleMaintenance}>
++                {t("equipment.title")} ({equipmentList.length})
++              </Text>
++              {access.canWrite && (
++                <TouchableOpacity
++                  style={styles.equipmentAddPrimary}
++                  onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
++                  activeOpacity={0.8}
++                >
++                  <Ionicons name="add" size={20} color="#FFFFFF" />
++                  <Text style={styles.equipmentAddPrimaryText}>{t("equipment.addEquipment")}</Text>
++                </TouchableOpacity>
++              )}
++            </View>
+             {equipmentList.length === 0 ? (
+               <TouchableOpacity
+                 style={styles.equipmentCta}
+@@ -3222,6 +3244,22 @@ export function ProjectOverviewScreen() {
+           </View>
+         )}
+ 
++        {/* MAINTENANCE: Service plans section */}
++        {projectType === 'MAINTENANCE' && (
++          <TouchableOpacity
++            style={styles.servicePlansSection}
++            onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName, openServiceRule: true })}
++            activeOpacity={0.7}
++          >
++            <View style={styles.expensesHeaderLeft}>
++              <Ionicons name="calendar-outline" size={20} color={colors.text} style={{ marginRight: spacing.sm }} />
++              <Text style={styles.expensesHeaderText}>{t("equipment.servicePlans")}</Text>
++              <Text style={styles.expensesCount}>({serviceRulesCount})</Text>
++            </View>
++            <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
++          </TouchableOpacity>
++        )}
++
+         {/* Table: Task Name | Assignee - only show if user can read tasks or phases */}
+         {/* For TRADE/MAINTENANCE: only show table if there are tasks */}
+         {/* For BUILD/MANAGEMENT: always show table */}
+@@ -3245,7 +3283,7 @@ export function ProjectOverviewScreen() {
+                 style={{ marginRight: 8 }}
+               />
+               <Text style={styles.phasesSectionHeaderText}>
+-                {projectType === 'MAINTENANCE' ? (t("projectOverview.serviceTasks") || "Servisné úlohy") : (t("projectOverview.phasesSection") || "Fázy a úlohy")}
++                {projectType === 'MAINTENANCE' ? (t("equipment.openServiceTasks") || "Open service tasks") : (t("projectOverview.phasesSection") || "Fázy a úlohy")}
+               </Text>
+               <Text style={styles.phasesSectionCount}>
+                 ({projectType === 'MAINTENANCE' ? displayTasksForMaintenance.length : tasks.length})
+@@ -4178,24 +4216,24 @@ export function ProjectOverviewScreen() {
+                   if (Platform.OS === 'ios' && ActionSheetIOS) {
+                     ActionSheetIOS.showActionSheetWithOptions(
+                       {
+-                        options: [t("common.cancel"), t("projectOverview.addTask"), t("projectOverview.addEquipment"), t("projectOverview.addServicePlan")],
++                        options: [t("common.cancel"), t("projectOverview.addEquipment"), t("projectOverview.addServicePlan"), t("projectOverview.addTask")],
+                         cancelButtonIndex: 0,
+                       },
+                       (idx) => {
+-                        if (idx === 1) openNewTaskModal();
+-                        else if (idx === 2) (navigation as any).navigate('EquipmentList', { projectId, projectName });
+-                        else if (idx === 3) (navigation as any).navigate('EquipmentList', { projectId, projectName, openServiceRule: true });
++                        if (idx === 1) (navigation as any).navigate('EquipmentList', { projectId, projectName });
++                        else if (idx === 2) (navigation as any).navigate('EquipmentList', { projectId, projectName, openServiceRule: true });
++                        else if (idx === 3) openNewTaskModal();
+                       }
+                     );
+                   } else {
+                     Alert.alert(
+-                      'Pridať',
++                      t("projectOverview.addEquipment") || 'Pridať',
+                       '',
+                       [
+                         { text: t("common.cancel"), style: 'cancel' },
+-                        { text: t("projectOverview.addTask"), onPress: () => openNewTaskModal() },
+                         { text: t("projectOverview.addEquipment"), onPress: () => (navigation as any).navigate('EquipmentList', { projectId, projectName }) },
+                         { text: t("projectOverview.addServicePlan"), onPress: () => (navigation as any).navigate('EquipmentList', { projectId, projectName, openServiceRule: true }) },
++                        { text: t("projectOverview.addTask"), onPress: () => openNewTaskModal() },
+                       ]
+                     );
+                   }
+@@ -4203,7 +4241,7 @@ export function ProjectOverviewScreen() {
+                 activeOpacity={0.7}
+               >
+                 <Ionicons name="add-circle" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
+-                <Text style={styles.addTaskButtonText}>{t("projectOverview.addTask") || "Pridať úlohu"}</Text>
++                <Text style={styles.addTaskButtonText}>{t("projectOverview.addEquipment") || "Add equipment"}</Text>
+                 <Ionicons name="chevron-down" size={16} color="#FFFFFF" style={{ marginLeft: 4 }} />
+               </TouchableOpacity>
+             ) : (
+@@ -6144,12 +6182,58 @@ const styles = StyleSheet.create({
+     marginBottom: spacing.lg,
+     paddingHorizontal: spacing.md,
+   },
++  equipmentSectionMaintenance: {
++    marginBottom: spacing.lg,
++    paddingHorizontal: spacing.md,
++    paddingVertical: spacing.md,
++    backgroundColor: colors.card,
++    borderRadius: radius,
++    borderWidth: 1,
++    borderColor: colors.border,
++  },
++  equipmentSectionHeaderRow: {
++    flexDirection: "row",
++    alignItems: "center",
++    justifyContent: "space-between",
++    marginBottom: spacing.sm,
++  },
++  equipmentSectionTitleMaintenance: {
++    fontSize: 18,
++    fontWeight: "700",
++    color: colors.text,
++  },
++  equipmentAddPrimary: {
++    flexDirection: "row",
++    alignItems: "center",
++    gap: 6,
++    backgroundColor: colors.primary,
++    paddingHorizontal: spacing.md,
++    paddingVertical: spacing.sm,
++    borderRadius: radius,
++  },
++  equipmentAddPrimaryText: {
++    fontSize: 15,
++    fontWeight: "600",
++    color: "#FFFFFF",
++  },
+   equipmentSectionTitle: {
+     fontSize: 16,
+     fontWeight: "600",
+     color: colors.text,
+     marginBottom: spacing.sm,
+   },
++  servicePlansSection: {
++    flexDirection: "row",
++    alignItems: "center",
++    justifyContent: "space-between",
++    paddingVertical: spacing.md,
++    paddingHorizontal: spacing.md,
++    marginBottom: spacing.sm,
++    backgroundColor: colors.card,
++    borderRadius: radius,
++    borderWidth: 1,
++    borderColor: colors.border,
++  },
+   equipmentCta: {
+     flexDirection: "row",
+     alignItems: "center",

@@ -67,6 +67,7 @@ import * as projectEventsService from "../services/projectEvents";
 import * as projectMembersService from "../services/projectMembers";
 import * as projectCoverService from "../services/projectCover";
 import * as equipmentService from "../services/equipment";
+import * as serviceRulesService from "../services/serviceRules";
 import * as weatherService from "../services/weather";
 import { extractInvoiceData, type OcrParsed, type OcrStatus } from "../services/invoiceOCR";
 import { calculateRouteDistanceKm } from "../services/mapsDistance";
@@ -261,6 +262,7 @@ export function ProjectOverviewScreen() {
 
   // MAINTENANCE v2: equipment
   const [equipmentList, setEquipmentList] = useState<EquipmentDoc[]>([]);
+  const [serviceRulesCount, setServiceRulesCount] = useState(0);
   const [showEquipmentActionSheet, setShowEquipmentActionSheet] = useState(false);
   
   // Diary entries state
@@ -586,18 +588,24 @@ export function ProjectOverviewScreen() {
       setProjectDocuments(hasDocuments ? docs : []);
       setProjectMembers(members);
 
-      // MAINTENANCE v2: load equipment only for MAINTENANCE projects
+      // MAINTENANCE v2: load equipment and service rules count only for MAINTENANCE projects
       const isMaintenanceLike = projectTypeForLoad === 'MAINTENANCE';
       if (isMaintenanceLike) {
         try {
-          const eq = await equipmentService.listEquipment(projectId, { status: 'active' });
+          const [eq, rules] = await Promise.all([
+            equipmentService.listEquipment(projectId, { status: 'active' }),
+            serviceRulesService.listServiceRulesByProject(projectId, { status: 'active' }),
+          ]);
           setEquipmentList(eq);
+          setServiceRulesCount(rules.length);
         } catch (e: any) {
-          console.warn('[ProjectOverview] Error loading equipment:', e);
+          console.warn('[ProjectOverview] Error loading equipment/service rules:', e);
           setEquipmentList([]);
+          setServiceRulesCount(0);
         }
       } else {
         setEquipmentList([]);
+        setServiceRulesCount(0);
       }
 
       // Problems count (open + in_progress) for all project types
@@ -3070,7 +3078,7 @@ export function ProjectOverviewScreen() {
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>{initials}</Text>
           </View>
-          <Ionicons name="add" size={20} color={colors.textOnDark} style={{ marginLeft: 4 }} />
+          {projectType !== 'MAINTENANCE' && <Ionicons name="add" size={20} color={colors.textOnDark} style={{ marginLeft: 4 }} />}
         </TouchableOpacity>
         <TouchableOpacity 
           style={styles.headerMenu} 
@@ -3083,8 +3091,87 @@ export function ProjectOverviewScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* Address section */}
-      {(addressText || isOwner) && (
+      {/* MAINTENANCE: Equipment section first (above Address) - asset-centric hierarchy */}
+      {projectType === 'MAINTENANCE' && (
+        <View style={styles.equipmentSectionMaintenanceTop}>
+          <View style={styles.equipmentSectionHeaderRow}>
+            <Text style={styles.equipmentSectionTitleMaintenance}>
+              {t("equipment.title")} ({equipmentList.length})
+            </Text>
+            {access.canWrite && (
+              <TouchableOpacity
+                style={styles.equipmentAddPrimary}
+                onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
+                activeOpacity={0.8}
+              >
+                <Ionicons name="add" size={20} color="#FFFFFF" />
+                <Text style={styles.equipmentAddPrimaryText}>{t("equipment.addEquipment")}</Text>
+              </TouchableOpacity>
+            )}
+          </View>
+          {equipmentList.length === 0 ? (
+            <TouchableOpacity
+              style={styles.equipmentCta}
+              onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
+            >
+              <Ionicons name="add-circle-outline" size={24} color={colors.primary} />
+              <Text style={styles.equipmentCtaText}>{t("equipment.addEquipment")}</Text>
+            </TouchableOpacity>
+          ) : (
+            <>
+              <View style={styles.equipmentListRow}>
+                {equipmentList.slice(0, 2).map((eq) => (
+                  <TouchableOpacity
+                    key={eq.id}
+                    style={styles.equipmentChip}
+                    onPress={() => (navigation as any).navigate('EquipmentDetail', { projectId, projectName, equipmentId: eq.id })}
+                    onLongPress={() => {
+                      Alert.alert(
+                        t("equipment.archiveEquipment"),
+                        t("equipment.archiveConfirm", { name: eq.name }),
+                        [
+                          { text: t("common.cancel"), style: "cancel" },
+                          {
+                            text: t("common.archive"),
+                            style: "destructive",
+                            onPress: async () => {
+                              try {
+                                await equipmentService.archiveEquipment(projectId!, eq.id);
+                                onRefresh();
+                              } catch (e: any) {
+                                Alert.alert(t("common.error"), e.message || t("equipment.archiveFailed"));
+                              }
+                            },
+                          },
+                        ]
+                      );
+                    }}
+                  >
+                    {eq.photoUrl ? (
+                      <Image
+                        source={{ uri: eq.photoUrl }}
+                        style={styles.equipmentChipImage}
+                        resizeMode="cover"
+                      />
+                    ) : null}
+                    <Text style={styles.equipmentChipText} numberOfLines={1}>{eq.labelCode || eq.name}</Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+              <TouchableOpacity
+                style={styles.equipmentViewAll}
+                onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
+              >
+                <Text style={styles.equipmentViewAllText}>{t("projectOverview.viewAll") || "Zobraziť všetky"}</Text>
+                <Ionicons name="chevron-forward" size={16} color={colors.primary} />
+              </TouchableOpacity>
+            </>
+          )}
+        </View>
+      )}
+
+      {/* Address section - for non-MAINTENANCE, show here; MAINTENANCE shows it inside scroll (after Faults) */}
+      {(addressText || isOwner) && projectType !== 'MAINTENANCE' && (
         <View style={styles.addressSection}>
           <View style={styles.addressTopRow}>
             <View style={styles.addressContent}>
@@ -3157,68 +3244,21 @@ export function ProjectOverviewScreen() {
           />
         }
       >
-        {/* MAINTENANCE v2: Equipment section only for MAINTENANCE projects */}
+        {/* MAINTENANCE: Service plans section - same structure as Expenses/Diary for consistent sizing */}
         {projectType === 'MAINTENANCE' && (
-          <View style={styles.equipmentSection}>
-            <Text style={styles.equipmentSectionTitle}>{t("equipment.title")}</Text>
-            {equipmentList.length === 0 ? (
-              <TouchableOpacity
-                style={styles.equipmentCta}
-                onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
-              >
-                <Ionicons name="add-circle-outline" size={24} color={colors.primary} />
-                <Text style={styles.equipmentCtaText}>{t("equipment.addEquipment")}</Text>
-              </TouchableOpacity>
-            ) : (
-              <>
-                <View style={styles.equipmentListRow}>
-                  {equipmentList.slice(0, 2).map((eq) => (
-                    <TouchableOpacity
-                      key={eq.id}
-                      style={styles.equipmentChip}
-                      onPress={() => (navigation as any).navigate('EquipmentDetail', { projectId, projectName, equipmentId: eq.id })}
-                      onLongPress={() => {
-                        Alert.alert(
-                          t("equipment.archiveEquipment"),
-                          t("equipment.archiveConfirm", { name: eq.name }),
-                          [
-                            { text: t("common.cancel"), style: "cancel" },
-                            {
-                              text: t("common.archive"),
-                              style: "destructive",
-                              onPress: async () => {
-                                try {
-                                  await equipmentService.archiveEquipment(projectId!, eq.id);
-                                  onRefresh();
-                                } catch (e: any) {
-                                  Alert.alert(t("common.error"), e.message || t("equipment.archiveFailed"));
-                                }
-                              },
-                            },
-                          ]
-                        );
-                      }}
-                    >
-                      {eq.photoUrl ? (
-                        <Image
-                          source={{ uri: eq.photoUrl }}
-                          style={styles.equipmentChipImage}
-                          resizeMode="cover"
-                        />
-                      ) : null}
-                      <Text style={styles.equipmentChipText} numberOfLines={1}>{eq.labelCode || eq.name}</Text>
-                    </TouchableOpacity>
-                  ))}
-                </View>
-                <TouchableOpacity
-                  style={styles.equipmentViewAll}
-                  onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
-                >
-                  <Text style={styles.equipmentViewAllText}>{t("projectOverview.viewAll") || "Zobraziť všetky"}</Text>
-                  <Ionicons name="chevron-forward" size={16} color={colors.primary} />
-                </TouchableOpacity>
-              </>
-            )}
+          <View style={styles.expensesSection}>
+            <TouchableOpacity
+              style={styles.expensesHeader}
+              onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName, openServiceRule: true })}
+              activeOpacity={0.7}
+            >
+              <View style={styles.expensesHeaderLeft}>
+                <Ionicons name="calendar-outline" size={20} color={colors.text} style={{ marginRight: spacing.sm }} />
+                <Text style={styles.expensesHeaderText}>{t("equipment.servicePlans")}</Text>
+                <Text style={styles.expensesCount}>({serviceRulesCount})</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+            </TouchableOpacity>
           </View>
         )}
 
@@ -3245,7 +3285,7 @@ export function ProjectOverviewScreen() {
                 style={{ marginRight: 8 }}
               />
               <Text style={styles.phasesSectionHeaderText}>
-                {projectType === 'MAINTENANCE' ? (t("projectOverview.serviceTasks") || "Servisné úlohy") : (t("projectOverview.phasesSection") || "Fázy a úlohy")}
+                {projectType === 'MAINTENANCE' ? (t("equipment.openServiceTasks") || "Open service tasks") : (t("projectOverview.phasesSection") || "Fázy a úlohy")}
               </Text>
               <Text style={styles.phasesSectionCount}>
                 ({projectType === 'MAINTENANCE' ? displayTasksForMaintenance.length : tasks.length})
@@ -3994,6 +4034,67 @@ export function ProjectOverviewScreen() {
           </View>
         )}
 
+        {/* MAINTENANCE: Address section at end of scroll (Equipment-first hierarchy) */}
+        {projectType === 'MAINTENANCE' && (addressText || isOwner) && (
+          <View style={[styles.expensesSection, { marginTop: spacing.lg }]}>
+            <View style={[styles.addressSection, { marginHorizontal: 0, marginTop: 0 }]}>
+            <View style={styles.addressTopRow}>
+              <View style={styles.addressContent}>
+                <Ionicons name="location" size={20} color={colors.primary} />
+                <Text style={styles.addressText} numberOfLines={1}>
+                  {addressText?.trim() || t("projectOverview.noAddress")}
+                </Text>
+                {isOwner ? (
+                  <TouchableOpacity
+                    style={styles.editAddressButton}
+                    onPress={handleEditProject}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons name="create-outline" size={18} color={colors.primary} />
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              {addressText?.trim() ? (
+                <TouchableOpacity
+                  style={styles.navigateButton}
+                  onPress={() => openInMaps(addressText)}
+                >
+                  <Ionicons name="navigate" size={18} color="#FFFFFF" />
+                  <Text style={styles.navigateButtonText}>{t("projectOverview.navigate")}</Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+            {weatherLoading && !weatherSnapshot ? (
+              <ActivityIndicator size="small" color={colors.primary} />
+            ) : weatherSnapshot ? (
+              <View style={styles.weatherDaysRow}>
+                {weatherSnapshot.daily.slice(0, 3).map((day) => (
+                  <TouchableOpacity
+                    key={day.label}
+                    style={styles.weatherDayCard}
+                    onPress={() => Linking.openURL(weatherSnapshot.detailUrl)}
+                    activeOpacity={0.85}
+                  >
+                    <Text style={styles.weatherDayLabel}>{day.label === "ZAJTRA" ? t("weather.tomorrow") : day.label === "POZAJTRA" ? t("weather.dayAfterTomorrow") : t("weather.today")}</Text>
+                    <View style={styles.weatherInlineRow}>
+                      <Ionicons name={weatherTypeIcon(day.type)} size={18} color={weatherBadgeColor(day.level)} />
+                      <Text style={styles.weatherDayTemp}>
+                        {day.tempMaxC != null || day.tempMinC != null
+                          ? `${day.tempMaxC != null ? Math.round(day.tempMaxC) : "?"}° / ${day.tempMinC != null ? Math.round(day.tempMinC) : "?"}°`
+                          : "—"}
+                      </Text>
+                    </View>
+                    <View style={[styles.weatherDayBadge, { backgroundColor: weatherBadgeColor(day.level) }]} />
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : (
+              <Text style={styles.weatherErrorText}>{weatherError || t("projectOverview.weatherLoadFailed")}</Text>
+            )}
+            </View>
+          </View>
+        )}
+
         {/* Project Documents Section - For BUILD and MANAGEMENT projects, only if can read documents */}
         {!access.loading && (projectType === 'BUILD' || projectType === 'MANAGEMENT') && access.canReadDocuments && (
           <View style={styles.expensesSection}>
@@ -4164,48 +4265,56 @@ export function ProjectOverviewScreen() {
 
       {/* Bottom: List toggle + FAB/Button for new task */}
       <View style={[styles.bottomBar, { paddingBottom: insets.bottom + spacing.md }]}>
-        <TouchableOpacity style={styles.listBtn}>
-          <Ionicons name="swap-vertical" size={20} color={colors.textOnDark} style={{ marginRight: 6 }} />
-          <Text style={styles.listBtnText}>{t("projectOverview.viewList")}</Text>
-        </TouchableOpacity>
+        {projectType !== 'MAINTENANCE' && (
+          <TouchableOpacity style={styles.listBtn}>
+            <Ionicons name="swap-vertical" size={20} color={colors.textOnDark} style={{ marginRight: 6 }} />
+            <Text style={styles.listBtnText}>{t("projectOverview.viewList")}</Text>
+          </TouchableOpacity>
+        )}
         {access.canWrite && (access.sharedItems.tasks || access.sharedItems.phases) ? (
           isTradeOrMaintenance ? (
             // For TRADE/RESIDENTIAL: text button; MAINTENANCE shows action menu (úloha + zariadenie + servisný plán)
             projectType === 'MAINTENANCE' ? (
-              <TouchableOpacity
-                style={styles.addTaskButton}
-                onPress={() => {
-                  if (Platform.OS === 'ios' && ActionSheetIOS) {
-                    ActionSheetIOS.showActionSheetWithOptions(
-                      {
-                        options: [t("common.cancel"), t("projectOverview.addTask"), t("projectOverview.addEquipment"), t("projectOverview.addServicePlan")],
-                        cancelButtonIndex: 0,
-                      },
-                      (idx) => {
-                        if (idx === 1) openNewTaskModal();
-                        else if (idx === 2) (navigation as any).navigate('EquipmentList', { projectId, projectName });
-                        else if (idx === 3) (navigation as any).navigate('EquipmentList', { projectId, projectName, openServiceRule: true });
-                      }
-                    );
-                  } else {
-                    Alert.alert(
-                      'Pridať',
-                      '',
-                      [
-                        { text: t("common.cancel"), style: 'cancel' },
-                        { text: t("projectOverview.addTask"), onPress: () => openNewTaskModal() },
-                        { text: t("projectOverview.addEquipment"), onPress: () => (navigation as any).navigate('EquipmentList', { projectId, projectName }) },
-                        { text: t("projectOverview.addServicePlan"), onPress: () => (navigation as any).navigate('EquipmentList', { projectId, projectName, openServiceRule: true }) },
-                      ]
-                    );
-                  }
-                }}
-                activeOpacity={0.7}
-              >
-                <Ionicons name="add-circle" size={20} color="#FFFFFF" style={{ marginRight: 8 }} />
-                <Text style={styles.addTaskButtonText}>{t("projectOverview.addTask") || "Pridať úlohu"}</Text>
-                <Ionicons name="chevron-down" size={16} color="#FFFFFF" style={{ marginLeft: 4 }} />
-              </TouchableOpacity>
+              <View style={[styles.addEquipmentSplitRow, styles.addEquipmentSplitRowFull]}>
+                <TouchableOpacity
+                  style={[styles.addTaskButton, styles.addEquipmentPrimary]}
+                  onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="add" size={22} color="#FFFFFF" style={{ marginRight: 8 }} />
+                  <Text style={styles.addTaskButtonText}>{t("projectOverview.addEquipmentCta") || "+ Add equipment"}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.addEquipmentDropdown}
+                  onPress={() => {
+                    if (Platform.OS === 'ios' && ActionSheetIOS) {
+                      ActionSheetIOS.showActionSheetWithOptions(
+                        {
+                          options: [t("common.cancel"), t("projectOverview.addServicePlan"), t("projectOverview.addTaskManual")],
+                          cancelButtonIndex: 0,
+                        },
+                        (idx) => {
+                          if (idx === 1) (navigation as any).navigate('EquipmentList', { projectId, projectName, openServiceRule: true });
+                          else if (idx === 2) openNewTaskModal();
+                        }
+                      );
+                    } else {
+                      Alert.alert(
+                        t("projectOverview.moreActions") || "More",
+                        '',
+                        [
+                          { text: t("common.cancel"), style: 'cancel' },
+                          { text: t("projectOverview.addServicePlan"), onPress: () => (navigation as any).navigate('EquipmentList', { projectId, projectName, openServiceRule: true }) },
+                          { text: t("projectOverview.addTaskManual"), onPress: () => openNewTaskModal() },
+                        ]
+                      );
+                    }
+                  }}
+                  activeOpacity={0.7}
+                >
+                  <Ionicons name="chevron-down" size={20} color="#FFFFFF" />
+                </TouchableOpacity>
+              </View>
             ) : (
               <TouchableOpacity 
                 style={styles.addTaskButton} 
@@ -5690,7 +5799,7 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   scrollContentContainer: { 
-    paddingBottom: spacing.md,
+    paddingBottom: spacing.xl * 3,
     flexGrow: 1,
   },
   centered: { flex: 1, backgroundColor: colors.background, justifyContent: "center", alignItems: "center" },
@@ -5749,15 +5858,21 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
+    flexWrap: "nowrap",
+    gap: spacing.sm,
   },
   addressContent: {
     flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
     flexDirection: "row",
     alignItems: "flex-start",
     marginRight: spacing.md,
   },
   addressText: {
     flex: 1,
+    flexShrink: 1,
+    minWidth: 0,
     fontSize: 13,
     color: colors.text,
     marginLeft: spacing.sm,
@@ -5769,6 +5884,7 @@ const styles = StyleSheet.create({
   navigateButton: {
     flexDirection: "row",
     alignItems: "center",
+    flexShrink: 0,
     backgroundColor: colors.primary,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs,
@@ -6144,11 +6260,73 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
     paddingHorizontal: spacing.md,
   },
+  equipmentSectionMaintenance: {
+    marginBottom: spacing.lg,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.md,
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  equipmentSectionMaintenanceTop: {
+    marginHorizontal: spacing.md,
+    marginBottom: spacing.md,
+    marginTop: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.lg,
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 2,
+    borderColor: colors.primary + "50",
+    shadowColor: colors.primary,
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 10,
+    elevation: 6,
+  },
+  equipmentSectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  equipmentSectionTitleMaintenance: {
+    fontSize: 22,
+    fontWeight: "800",
+    color: colors.text,
+  },
+  equipmentAddPrimary: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderRadius: radius,
+  },
+  equipmentAddPrimaryText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: "#FFFFFF",
+  },
   equipmentSectionTitle: {
     fontSize: 16,
     fontWeight: "600",
     color: colors.text,
     marginBottom: spacing.sm,
+  },
+  servicePlansSection: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   equipmentCta: {
     flexDirection: "row",
@@ -6213,6 +6391,32 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
     borderRadius: radius,
+  },
+  addEquipmentSplitRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    flex: 1,
+    maxWidth: 320,
+  },
+  addEquipmentSplitRowFull: {
+    maxWidth: undefined,
+    flex: 1,
+  },
+  addEquipmentPrimary: {
+    flex: 1,
+    borderTopRightRadius: 0,
+    borderBottomRightRadius: 0,
+    paddingVertical: spacing.md,
+  },
+  addEquipmentDropdown: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.sm,
+    justifyContent: "center",
+    alignItems: "center",
+    borderLeftWidth: 1,
+    borderLeftColor: "rgba(255,255,255,0.3)",
+    borderTopRightRadius: radius,
+    borderBottomRightRadius: radius,
   },
   addTaskButtonText: {
     color: "#FFFFFF",

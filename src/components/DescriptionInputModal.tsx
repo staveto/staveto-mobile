@@ -8,13 +8,13 @@ import {
   StyleSheet,
   Alert,
   ActivityIndicator,
-  Pressable,
   KeyboardAvoidingView,
   Platform,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, spacing } from "../theme";
+import { ICON_HIT_SLOP } from "../utils/accessibility";
 
 let SpeechRecognition: typeof import("expo-speech-recognition") | null = null;
 let AudioModule: typeof import("expo-av") | null = null;
@@ -63,6 +63,8 @@ export function DescriptionInputModal({
   const [recordingUri, setRecordingUri] = useState<string | null>(initialRecordingUri);
   const [isRecording, setIsRecording] = useState(false);
   const [isTranscribing, setIsTranscribing] = useState(false);
+  const [recordingMs, setRecordingMs] = useState(0);
+  const [waveBars, setWaveBars] = useState<number[]>([]);
   const transcriptRef = useRef("");
   const resultListenerRef = useRef<{ remove: () => void } | null>(null);
   const endListenerRef = useRef<{ remove: () => void } | null>(null);
@@ -91,6 +93,8 @@ export function DescriptionInputModal({
       setText(initialText);
       setRecordingUri(initialRecordingUri);
       setIsRecording(false);
+      setRecordingMs(0);
+      setWaveBars([]);
       transcriptRef.current = "";
     }
   }, [visible, initialText, initialRecordingUri]);
@@ -125,6 +129,8 @@ export function DescriptionInputModal({
     setText(initialText);
     setRecordingUri(initialRecordingUri);
     setIsRecording(false);
+    setRecordingMs(0);
+    setWaveBars([]);
     onClose();
   }, [initialText, initialRecordingUri, onClose, stopRecordingAndGetUri, safeCatch]);
 
@@ -133,10 +139,12 @@ export function DescriptionInputModal({
     setText("");
     setRecordingUri(null);
     setIsRecording(false);
+    setRecordingMs(0);
+    setWaveBars([]);
     onClose();
   }, [text, recordingUri, onConfirm, onClose]);
 
-  const handlePressIn = useCallback(async () => {
+  const startRecording = useCallback(async () => {
     if (!AudioModule?.Audio) {
       Alert.alert(t("common.error"), t("projectOverview.voiceRecordingNotAvailable"));
       return;
@@ -165,11 +173,29 @@ export function DescriptionInputModal({
 
       transcriptRef.current = "";
       setIsRecording(true);
+      setRecordingMs(0);
+      setWaveBars([]);
       setIsTranscribing(!!SpeechRecognition?.ExpoSpeechRecognitionModule);
 
+      const recordingOptions = {
+        ...AudioModule.Audio.RecordingOptionsPresets.HIGH_QUALITY,
+        isMeteringEnabled: true,
+      };
       const { recording } = await AudioModule.Audio.Recording.createAsync(
-        AudioModule.Audio.RecordingOptionsPresets.HIGH_QUALITY
+        recordingOptions as any
       );
+      recording.setProgressUpdateInterval(120);
+      recording.setOnRecordingStatusUpdate((status: any) => {
+        if (!status?.isRecording) return;
+        setRecordingMs(status.durationMillis ?? 0);
+        const metering = typeof status.metering === "number" ? status.metering : -160;
+        const normalized = Math.max(0.08, Math.min(1, (metering + 60) / 60));
+        const level = Math.round(10 + normalized * 26);
+        setWaveBars((prev) => {
+          const next = [...prev.slice(-23), level];
+          return next;
+        });
+      });
       recordingRef.current = recording;
 
       if (SpeechRecognition?.ExpoSpeechRecognitionModule) {
@@ -221,7 +247,7 @@ export function DescriptionInputModal({
     }
   }, [t, speechLang, safeCatch, stopRecordingAndGetUri]);
 
-  const handlePressOut = useCallback(async () => {
+  const stopRecording = useCallback(async () => {
     if (!isRecording) return;
     try {
       if (SpeechRecognition?.ExpoSpeechRecognitionModule) {
@@ -237,6 +263,21 @@ export function DescriptionInputModal({
     }
   }, [isRecording, stopRecordingAndGetUri]);
 
+  const toggleRecording = useCallback(async () => {
+    if (isRecording) {
+      await stopRecording();
+      return;
+    }
+    await startRecording();
+  }, [isRecording, startRecording, stopRecording]);
+
+  const formatDuration = useCallback((ms: number) => {
+    const totalSec = Math.max(0, Math.floor(ms / 1000));
+    const m = Math.floor(totalSec / 60);
+    const s = totalSec % 60;
+    return `${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }, []);
+
   const hasContent = text.trim().length > 0 || !!recordingUri;
   const displayTitle = title ?? t("projectOverview.descriptionModalTitle");
 
@@ -249,8 +290,16 @@ export function DescriptionInputModal({
       >
         <View style={styles.modal}>
           <View style={styles.header}>
-            <Text style={styles.title}>{displayTitle}</Text>
-            <TouchableOpacity onPress={handleClose} style={styles.closeBtn}>
+            <Text style={styles.title} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+              {displayTitle}
+            </Text>
+            <TouchableOpacity
+              onPress={handleClose}
+              style={styles.closeBtn}
+              accessibilityRole="button"
+              accessibilityLabel={t("common.cancel")}
+              hitSlop={ICON_HIT_SLOP}
+            >
               <Ionicons name="close" size={24} color={colors.text} />
             </TouchableOpacity>
           </View>
@@ -264,19 +313,19 @@ export function DescriptionInputModal({
             multiline
             numberOfLines={6}
             textAlignVertical="top"
+            accessibilityLabel={displayTitle}
           />
 
           <View style={styles.actions}>
             {AudioModule?.Audio ? (
-              <View style={styles.holdRecordWrap}>
-                <Pressable
-                  style={({ pressed }) => [
-                    styles.holdRecordBtn,
-                    (isRecording || pressed) && styles.holdRecordBtnActive,
-                  ]}
-                  onPressIn={handlePressIn}
-                  onPressOut={handlePressOut}
-                  delayLongPress={0}
+              <View style={styles.recordWrap}>
+                <TouchableOpacity
+                  style={[styles.recordBtn, isRecording && styles.recordBtnActive]}
+                  onPress={toggleRecording}
+                  accessibilityRole="button"
+                  accessibilityLabel={isRecording ? t("projectOverview.recording") : "Tap to start recording"}
+                  accessibilityHint={isRecording ? "Tap to stop recording" : "Tap to start recording"}
+                  hitSlop={ICON_HIT_SLOP}
                 >
                   {isTranscribing ? (
                     <ActivityIndicator size="small" color="#fff" />
@@ -287,13 +336,26 @@ export function DescriptionInputModal({
                       color={isRecording ? "#fff" : colors.primary}
                     />
                   )}
-                </Pressable>
-                <Text style={[styles.holdRecordText, isRecording && styles.holdRecordTextActive]}>
-                  {isRecording ? t("projectOverview.recording") : t("projectOverview.holdToRecord")}
+                </TouchableOpacity>
+                <Text
+                  style={[styles.recordText, isRecording && styles.recordTextActive]}
+                  maxFontSizeMultiplier={1.2}
+                  numberOfLines={2}
+                >
+                  {isRecording ? `${t("projectOverview.recording")} • ${formatDuration(recordingMs)}` : "Tap to record"}
                 </Text>
+                {isRecording && (
+                  <View style={styles.waveWrap}>
+                    {waveBars.length === 0
+                      ? Array.from({ length: 24 }).map((_, i) => <View key={i} style={[styles.waveBar, { height: 10 }]} />)
+                      : waveBars.map((h, i) => <View key={i} style={[styles.waveBar, { height: h }]} />)}
+                  </View>
+                )}
               </View>
             ) : (
-              <Text style={styles.holdRecordUnavailable}>{t("projectOverview.voiceRecordingNotAvailable")}</Text>
+              <Text style={styles.recordUnavailable} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+                {t("projectOverview.voiceRecordingNotAvailable")}
+              </Text>
             )}
           </View>
 
@@ -301,8 +363,12 @@ export function DescriptionInputModal({
             style={[styles.validateBtn, !hasContent && styles.validateBtnDisabled]}
             onPress={handleConfirm}
             disabled={!hasContent}
+            accessibilityRole="button"
+            accessibilityLabel={t("projectOverview.validateDescription")}
           >
-            <Text style={styles.validateBtnText}>{t("projectOverview.validateDescription")}</Text>
+            <Text style={styles.validateBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+              {t("projectOverview.validateDescription")}
+            </Text>
           </TouchableOpacity>
         </View>
       </KeyboardAvoidingView>
@@ -350,10 +416,10 @@ const styles = StyleSheet.create({
     alignItems: "center",
     marginBottom: spacing.lg,
   },
-  holdRecordWrap: {
+  recordWrap: {
     alignItems: "center",
   },
-  holdRecordBtn: {
+  recordBtn: {
     width: 72,
     height: 72,
     borderRadius: 36,
@@ -363,21 +429,35 @@ const styles = StyleSheet.create({
     borderWidth: 3,
     borderColor: colors.primary,
   },
-  holdRecordBtnActive: {
+  recordBtnActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
-  holdRecordText: {
+  recordText: {
     fontSize: 14,
     color: colors.textOnDark,
     marginTop: spacing.sm,
     fontWeight: "500",
     textAlign: "center",
   },
-  holdRecordTextActive: {
+  recordTextActive: {
     color: "#fff",
   },
-  holdRecordUnavailable: {
+  waveWrap: {
+    marginTop: spacing.sm,
+    height: 30,
+    width: 180,
+    flexDirection: "row",
+    alignItems: "flex-end",
+    justifyContent: "space-between",
+  },
+  waveBar: {
+    width: 4,
+    borderRadius: 2,
+    backgroundColor: colors.primary,
+    opacity: 0.95,
+  },
+  recordUnavailable: {
     fontSize: 14,
     color: colors.textMuted,
   },

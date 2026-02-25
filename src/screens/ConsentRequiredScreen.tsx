@@ -16,14 +16,14 @@ type Props = {
 };
 
 export function ConsentRequiredScreen({ onAccepted }: Props) {
-  const { locale } = useI18n();
+  const { locale, t } = useI18n();
   const [checked, setChecked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
 
   const accept = async () => {
     if (!checked) {
-      setError("Pre pokračovanie je potrebné súhlasiť.");
+      setError(t("consent.requiredError") || "Pre pokračovanie je potrebné súhlasiť.");
       return;
     }
     setSubmitting(true);
@@ -53,7 +53,7 @@ export function ConsentRequiredScreen({ onAccepted }: Props) {
       console.log("CONSENT navigated");
     } catch (e) {
       console.error("CONSENT error", e);
-      setError("Nepodarilo sa uložiť súhlas. Skúste znova.");
+      setError(t("consent.saveFailed") || "Nepodarilo sa uložiť súhlas. Skúste znova.");
     } finally {
       setSubmitting(false);
     }
@@ -61,9 +61,9 @@ export function ConsentRequiredScreen({ onAccepted }: Props) {
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Súhlas s podmienkami</Text>
+      <Text style={styles.title}>{t("consent.title") || "Súhlas s podmienkami"}</Text>
       <Text style={styles.subtitle}>
-        Pred pokračovaním potrebujeme váš súhlas s podmienkami a zásadami ochrany osobných údajov.
+        {t("consent.subtitle") || "Pred pokračovaním potrebujeme váš súhlas s podmienkami a zásadami ochrany osobných údajov."}
       </Text>
 
       <TouchableOpacity
@@ -78,13 +78,13 @@ export function ConsentRequiredScreen({ onAccepted }: Props) {
           {checked ? <Text style={styles.consentCheck}>✓</Text> : null}
         </View>
         <Text style={styles.consentText}>
-          Súhlasím s{" "}
+          {t("consent.checkboxPrefix") || "Súhlasím s"}{" "}
           <Text style={styles.consentLink} onPress={() => Linking.openURL(TERMS_URL)}>
-            Podmienkami používania
+            {t("consent.termsLink") || "Podmienkami používania"}
           </Text>{" "}
-          a beriem na vedomie{" "}
+          {t("consent.checkboxMiddle") || "a beriem na vedomie"}{" "}
           <Text style={styles.consentLink} onPress={() => Linking.openURL(PRIVACY_URL)}>
-            Zásady ochrany osobných údajov (GDPR)
+            {t("consent.privacyLink") || "Zásady ochrany osobných údajov (GDPR)"}
           </Text>
           .
         </Text>
@@ -97,7 +97,7 @@ export function ConsentRequiredScreen({ onAccepted }: Props) {
         onPress={accept}
         disabled={!checked || submitting}
       >
-        {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>Pokračovať</Text>}
+        {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("consent.continue") || "Pokračovať"}</Text>}
       </TouchableOpacity>
     </View>
   );

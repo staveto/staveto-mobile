@@ -45,7 +45,12 @@ export function RoleChip({ project, currentUserId, showIcon = true }: RoleChipPr
   };
 
   return (
-    <View style={[styles.chip, { backgroundColor: roleColor + "15", borderColor: roleColor + "40" }]}>
+    <View
+      style={[styles.chip, { backgroundColor: roleColor + "15", borderColor: roleColor + "40" }]}
+      accessible
+      accessibilityRole="text"
+      accessibilityLabel={roleLabel}
+    >
       {showIcon && (
         <Ionicons
           name={getRoleIcon(roleKey)}
@@ -54,7 +59,9 @@ export function RoleChip({ project, currentUserId, showIcon = true }: RoleChipPr
           style={styles.icon}
         />
       )}
-      <Text style={[styles.label, { color: roleColor }]}>{roleLabel}</Text>
+      <Text style={[styles.label, { color: roleColor }]} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+        {roleLabel}
+      </Text>
     </View>
   );
 }

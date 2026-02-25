@@ -90,7 +90,7 @@ export function LoginScreen() {
   };
 
   return (
-    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+    <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : "height"}>
       <Image source={require("../../assets/logo.png")} style={styles.logo} resizeMode="contain" accessibilityLabel="Staveto logo" />
       <Text style={styles.title}>{t("login.title")}</Text>
       <TextInput
@@ -132,6 +132,7 @@ export function LoginScreen() {
 
       <Modal visible={showForgotPassword} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowForgotPassword(false)}>
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={0}>
           <TouchableOpacity style={styles.modalContent} activeOpacity={1} onPress={(e) => e.stopPropagation()}>
             <Text style={styles.modalTitle}>{t("login.forgotTitle")}</Text>
             <Text style={styles.modalSubtitle}>{t("login.forgotSubtitle")}</Text>
@@ -162,6 +163,7 @@ export function LoginScreen() {
               </TouchableOpacity>
             </View>
           </TouchableOpacity>
+          </KeyboardAvoidingView>
         </TouchableOpacity>
       </Modal>
     </KeyboardAvoidingView>

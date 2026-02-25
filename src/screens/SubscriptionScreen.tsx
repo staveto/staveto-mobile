@@ -18,12 +18,20 @@ import {
   Modal,
   TextInput,
   Pressable,
+  KeyboardAvoidingView,
+  Platform,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { redeemPromoCode as redeemPromoCodeService } from "../services/subscription";
-import { getEntitlement, purchaseMonthly, restorePurchases } from "../services/billing";
+import {
+  getEntitlement,
+  purchaseMonthly,
+  restorePurchases,
+  REVENUECAT_PACKAGE_MONTHLY_NOTRIAL,
+  REVENUECAT_PACKAGE_MONTHLY_TRIAL,
+} from "../services/billing";
 import { colors, radius, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
 import { showToast } from "../helpers/toast";
@@ -70,7 +78,11 @@ export function SubscriptionScreen() {
   const handleActivatePro = async () => {
     setPurchasing(true);
     try {
-      const { success } = await purchaseMonthly();
+      const isTrial = billing?.status === "trial";
+      const preferredPackageIds = isTrial
+        ? [REVENUECAT_PACKAGE_MONTHLY_NOTRIAL, REVENUECAT_PACKAGE_MONTHLY_TRIAL]
+        : [REVENUECAT_PACKAGE_MONTHLY_TRIAL, REVENUECAT_PACKAGE_MONTHLY_NOTRIAL];
+      const { success } = await purchaseMonthly(preferredPackageIds);
       if (success) {
         showToast(t("paywall.purchaseSuccess"));
         await refreshUser();
@@ -170,51 +182,77 @@ export function SubscriptionScreen() {
       refreshControl={<RefreshControl refreshing={refreshing} onRefresh={onRefresh} />}
     >
       <View style={styles.section}>
-        <Text style={styles.sectionTitle}>{t("subscription.currentPlan")}</Text>
+        <Text style={styles.sectionTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+          {t("subscription.currentPlan")}
+        </Text>
         <View style={styles.currentPlanCard}>
           <View style={styles.currentPlanHeader}>
-            <Text style={styles.currentPlanName}>{t("subscription.planSingle")}</Text>
-            <Text style={styles.currentPlanPrice}>€14.99</Text>
+            <Text style={styles.currentPlanName} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+              {t("subscription.planSingle")}
+            </Text>
+            <Text style={styles.currentPlanPrice} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+              €14.99
+            </Text>
           </View>
-          <Text style={styles.currentPlanPeriod}>/{t("subscription.planSingleDescription")}</Text>
+          <Text style={styles.currentPlanPeriod} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            /{t("subscription.planSingleDescription")}
+          </Text>
           <View style={[styles.statusBadge, status === "expired" && styles.statusBadgeExpired]}>
-            <Text style={[styles.statusBadgeText, status === "expired" && styles.statusBadgeTextExpired]}>
+            <Text style={[styles.statusBadgeText, status === "expired" && styles.statusBadgeTextExpired]} maxFontSizeMultiplier={1.1} numberOfLines={1}>
               {statusLabel}
             </Text>
           </View>
           {status === "trial" && (
-            <Text style={styles.trialRemaining}>
+            <Text style={styles.trialRemaining} maxFontSizeMultiplier={1.2} numberOfLines={2}>
               {t("subscription.trialRemainingDays", { count: String(billing?.remainingTrialDays ?? 0) })}
             </Text>
           )}
           {status === "expired" && (
-            <Text style={styles.trialExpiredText}>{t("subscription.trialExpired")}</Text>
+            <Text style={styles.trialExpiredText} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+              {t("subscription.trialExpired")}
+            </Text>
           )}
           {status === "active" && billing?.currentPeriodEndAt && (
-            <Text style={styles.renewsAt}>{t("subscription.renewsAt", { date: formatDate(billing.currentPeriodEndAt) })}</Text>
+            <Text style={styles.renewsAt} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+              {t("subscription.renewsAt", { date: formatDate(billing.currentPeriodEndAt) })}
+            </Text>
           )}
           {!isPro && (
             <TouchableOpacity
               style={[styles.activateButton, purchasing && styles.upgradeButtonDisabled]}
               onPress={handleActivatePro}
               disabled={purchasing}
+              accessibilityRole="button"
+              accessibilityLabel={t("subscription.activatePro")}
             >
               {purchasing ? (
                 <ActivityIndicator size="small" color="#fff" />
               ) : (
-                <Text style={styles.activateButtonText}>{t("subscription.activatePro")}</Text>
+                <Text style={styles.activateButtonText} maxFontSizeMultiplier={1.1} numberOfLines={1}>
+                  {t("subscription.activatePro")}
+                </Text>
               )}
             </TouchableOpacity>
           )}
           {!isPro && (
-            <TouchableOpacity style={styles.restoreButton} onPress={handleRestore} disabled={purchasing}>
-              <Text style={styles.restoreButtonText}>{t("paywall.restorePurchases")}</Text>
+            <TouchableOpacity
+              style={styles.restoreButton}
+              onPress={handleRestore}
+              disabled={purchasing}
+              accessibilityRole="button"
+              accessibilityLabel={t("paywall.restorePurchases")}
+            >
+              <Text style={styles.restoreButtonText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                {t("paywall.restorePurchases")}
+              </Text>
             </TouchableOpacity>
           )}
         </View>
 
         <View style={styles.usageSection}>
-          <Text style={styles.usageTitle}>{t("subscription.ocrUsed")}</Text>
+          <Text style={styles.usageTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            {t("subscription.ocrUsed")}
+          </Text>
           <View style={styles.usageItem}>
             <View style={styles.usageBarContainer}>
               <View
@@ -230,26 +268,41 @@ export function SubscriptionScreen() {
                 ]}
               />
             </View>
-            <Text style={styles.usageValue}>
+            <Text style={styles.usageValue} maxFontSizeMultiplier={1.1} numberOfLines={1}>
               {usage?.ocrUsed ?? 0} / {usage?.ocrLimit ?? 0}
             </Text>
           </View>
         </View>
 
-        <TouchableOpacity style={styles.promoButton} onPress={() => setShowPromoModal(true)}>
+        <TouchableOpacity
+          style={styles.promoButton}
+          onPress={() => setShowPromoModal(true)}
+          accessibilityRole="button"
+          accessibilityLabel={t("subscription.havePromoCode")}
+        >
           <Ionicons name="pricetag-outline" size={20} color={colors.primary} />
-          <Text style={styles.promoButtonText}>{t("subscription.havePromoCode")}</Text>
+          <Text style={styles.promoButtonText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            {t("subscription.havePromoCode")}
+          </Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.footer}>
-        <Text style={styles.footerText}>{t("subscription.footerText")}</Text>
+        <Text style={styles.footerText} maxFontSizeMultiplier={1.2}>
+          {t("subscription.footerText")}
+        </Text>
       </View>
 
       <Modal visible={showPromoModal} transparent animationType="fade">
         <Pressable style={styles.modalOverlay} onPress={() => !promoRedeeming && setShowPromoModal(false)}>
+          <KeyboardAvoidingView
+            behavior={Platform.OS === "ios" ? "padding" : "height"}
+            keyboardVerticalOffset={0}
+          >
           <Pressable style={styles.promoModal} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.promoModalTitle}>{t("subscription.havePromoCode")}</Text>
+            <Text style={styles.promoModalTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+              {t("subscription.havePromoCode")}
+            </Text>
             <TextInput
               style={styles.promoInput}
               placeholder={t("subscription.promoCodePlaceholder")}
@@ -259,6 +312,8 @@ export function SubscriptionScreen() {
               autoCapitalize="characters"
               autoCorrect={false}
               editable={!promoRedeeming}
+              accessibilityLabel={t("subscription.promoCodePlaceholder")}
+              maxFontSizeMultiplier={1.3}
             />
             <View style={styles.promoModalActions}>
               <TouchableOpacity
@@ -266,7 +321,9 @@ export function SubscriptionScreen() {
                 onPress={() => !promoRedeeming && setShowPromoModal(false)}
                 disabled={promoRedeeming}
               >
-                <Text style={styles.promoCancelText}>{t("common.cancel")}</Text>
+                <Text style={styles.promoCancelText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                  {t("common.cancel")}
+                </Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={[styles.promoApplyButton, promoRedeeming && styles.upgradeButtonDisabled]}
@@ -276,11 +333,14 @@ export function SubscriptionScreen() {
                 {promoRedeeming ? (
                   <ActivityIndicator size="small" color="#fff" />
                 ) : (
-                  <Text style={styles.promoApplyText}>{t("subscription.promoCodeApply")}</Text>
+                  <Text style={styles.promoApplyText} maxFontSizeMultiplier={1.1} numberOfLines={1}>
+                    {t("subscription.promoCodeApply")}
+                  </Text>
                 )}
               </TouchableOpacity>
             </View>
           </Pressable>
+          </KeyboardAvoidingView>
         </Pressable>
       </Modal>
     </ScrollView>

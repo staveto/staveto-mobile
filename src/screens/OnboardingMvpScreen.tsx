@@ -6,7 +6,7 @@ import { colors, radius, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
 import { useAuth } from "../context/AuthContext";
 import { updateUserProfileFromOnboarding } from "../services/auth";
-import { COUNTRY_CODES, COUNTRY_NAMES, getCountryCallingCode, getDeviceTimezone, getDeviceRegionCode } from "../utils/countries";
+import { COUNTRY_CODES, getCountryCallingCode, getDeviceTimezone, getDeviceRegionCode, getLocalizedCountryName } from "../utils/countries";
 
 type Props = {
   onFinished: () => void;
@@ -34,7 +34,7 @@ function buildPhoneE164(countryCode: string, nationalNumber: string): string | n
 const DEFAULT_COUNTRY = "SK";
 
 export function OnboardingMvpScreen({ onFinished }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { user, finishOnboarding } = useAuth();
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
   const [mode, setMode] = useState<Mode | null>(null);
@@ -186,7 +186,7 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
                 onPress={() => setPrimaryCountry(code)}
               >
                 <Text style={[styles.countryOptionText, primaryCountry === code && styles.optionTextActive]}>
-                  {COUNTRY_NAMES[code] ?? code}
+                  {getLocalizedCountryName(code, locale)}
                 </Text>
               </TouchableOpacity>
             ))}
@@ -270,7 +270,7 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
                       }}
                     >
                       <Text style={[styles.countryOptionText, phoneCountryCode === code && styles.optionTextActive]}>
-                        {COUNTRY_NAMES[code] ?? code} (+{getCountryCallingCode(code)})
+                        {getLocalizedCountryName(code, locale)} (+{getCountryCallingCode(code)})
                       </Text>
                     </TouchableOpacity>
                   ))}

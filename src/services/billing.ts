@@ -22,6 +22,8 @@ try {
 export const PLAN_ID = "staveto_monthly_1499";
 export const REVENUECAT_ENTITLEMENT_ID = "pro";
 export const REVENUECAT_OFFERING_ID = "default";
+export const REVENUECAT_PACKAGE_MONTHLY_TRIAL = "$rc_monthly";
+export const REVENUECAT_PACKAGE_MONTHLY_NOTRIAL = "monthly_notrial";
 
 export type SubscriptionStatus = "trial" | "active" | "expired" | "none";
 
@@ -185,7 +187,9 @@ export async function getOfferings(): Promise<{
   }
 }
 
-export async function purchaseMonthly(): Promise<{ success: boolean }> {
+export async function purchaseMonthly(
+  preferredPackageIds: string[] = []
+): Promise<{ success: boolean }> {
   if (!Purchases || !getApiKey() || typeof (Purchases as any).getOfferings !== "function" || typeof (Purchases as any).purchasePackage !== "function") {
     if (__DEV__) console.warn("[billing] RevenueCat not configured or missing native methods (use dev-client build)");
     return { success: false };
@@ -198,6 +202,9 @@ export async function purchaseMonthly(): Promise<{ success: boolean }> {
       return { success: false };
     }
     const pkg =
+      offering.availablePackages.find((p: { identifier?: string }) =>
+        preferredPackageIds.includes(String(p.identifier ?? ""))
+      ) ??
       offering.availablePackages.find((p: { packageType: string }) => p.packageType === "MONTHLY") ??
       offering.availablePackages[0];
     const { customerInfo } = await (Purchases as any).purchasePackage(pkg);

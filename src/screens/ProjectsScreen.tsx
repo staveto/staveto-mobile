@@ -15,6 +15,7 @@ import {
   Pressable,
   ActionSheetIOS,
   Platform,
+  KeyboardAvoidingView,
   useWindowDimensions,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -33,7 +34,7 @@ import { colors, radius, spacing } from "../theme";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
 import { ProjectTypeCrossroad, type SelectableProjectType } from "../components/ProjectTypeCrossroad";
 import { openInMaps } from "../lib/maps";
-import { COUNTRY_CODES, COUNTRY_NAMES } from "../utils/countries";
+import { COUNTRY_CODES, getLocalizedCountryName } from "../utils/countries";
 import { getCallable } from "../firebase";
 
 type Project = ProjectDoc;
@@ -86,7 +87,7 @@ function getLocationAnchor(project: ProjectDoc): string | null {
 export function ProjectsScreen() {
   const route = useRoute();
   const navigation = useNavigation();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { orgId, user } = useAuth();
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -958,7 +959,11 @@ export function ProjectsScreen() {
         </TouchableOpacity>
       </Modal>
       <Modal visible={showNew} transparent animationType="slide">
-        <View style={[styles.modalOverlay, newStep === 1 && styles.modalOverlayHero]}>
+        <KeyboardAvoidingView
+          style={[styles.modalOverlay, newStep === 1 && styles.modalOverlayHero]}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={0}
+        >
           <View style={[styles.modal, newStep === 1 && styles.modalHero, newStep === 1 && { height: heroModalHeight }]}>
             <Text style={styles.modalTitle}>{t("projects.modalTitle")}</Text>
             
@@ -1007,7 +1012,9 @@ export function ProjectsScreen() {
                       style={[styles.countryChip, newCountry === code && styles.countryChipActive]}
                       onPress={() => setNewCountry(code)}
                     >
-                      <Text style={[styles.countryChipText, newCountry === code && styles.countryChipTextActive]}>{code}</Text>
+                      <Text style={[styles.countryChipText, newCountry === code && styles.countryChipTextActive]}>
+                        {getLocalizedCountryName(code, locale)}
+                      </Text>
                     </TouchableOpacity>
                   ))}
                 </ScrollView>
@@ -1214,11 +1221,15 @@ export function ProjectsScreen() {
               </View>
             )}
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       <Modal visible={showEdit} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={0}
+        >
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>{t("projects.editTitle")}</Text>
             <TextInput
@@ -1244,7 +1255,7 @@ export function ProjectsScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );

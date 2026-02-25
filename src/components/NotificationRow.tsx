@@ -22,33 +22,37 @@ export function NotificationRow({ notification, onPress, timeLabel }: Props) {
   const iconName = (notification.entityType && entityIcons[notification.entityType]) ?? "notifications-outline";
   const displayTitle = notification.title ?? notification.message ?? "Notifikácia";
   const displayActor = notification.actorName ?? notification.fromUserName;
+  const accessibilitySummary = `${displayTitle}${isUnread ? ", unread" : ", read"}${displayActor ? `, ${displayActor}` : ""}`;
   return (
     <TouchableOpacity
       style={[styles.row, isUnread && styles.rowUnread]}
       onPress={onPress}
       activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={accessibilitySummary}
+      accessibilityHint={timeLabel}
     >
       <View style={styles.iconWrap}>
         <Ionicons name={iconName} size={22} color={colors.primary} />
       </View>
       <View style={styles.content}>
         <View style={styles.titleRow}>
-          <Text style={[styles.title, isUnread && styles.titleUnread]} numberOfLines={1}>
+          <Text style={[styles.title, isUnread && styles.titleUnread]} numberOfLines={1} maxFontSizeMultiplier={1.2}>
             {displayTitle}
           </Text>
           {isUnread && <View style={styles.unreadDot} />}
         </View>
         {displayActor ? (
-          <Text style={styles.actor} numberOfLines={1}>
+          <Text style={styles.actor} numberOfLines={1} maxFontSizeMultiplier={1.2}>
             {displayActor}
           </Text>
         ) : null}
         {notification.message ? (
-          <Text style={styles.message} numberOfLines={2}>
+          <Text style={styles.message} numberOfLines={2} maxFontSizeMultiplier={1.3}>
             {notification.message}
           </Text>
         ) : null}
-        <Text style={styles.meta} numberOfLines={1}>
+        <Text style={styles.meta} numberOfLines={1} maxFontSizeMultiplier={1.1}>
           {notification.projectId ? `Projekt • ${timeLabel}` : timeLabel}
         </Text>
       </View>

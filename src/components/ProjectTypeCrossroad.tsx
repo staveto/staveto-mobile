@@ -145,7 +145,7 @@ export function ProjectTypeCrossroad({ selectedType, onSelectType }: ProjectType
           },
         ]}
       >
-        <Text style={styles.centerText} numberOfLines={2}>
+        <Text style={styles.centerText} numberOfLines={2} maxFontSizeMultiplier={1.1}>
           {t("createProject.yourProject")}
         </Text>
       </View>
@@ -170,6 +170,10 @@ export function ProjectTypeCrossroad({ selectedType, onSelectType }: ProjectType
             ]}
             onPress={() => onSelectType(type)}
             activeOpacity={0.8}
+            accessibilityRole="button"
+            accessibilityLabel={t(`createProject.type.${type}.title`)}
+            accessibilityHint={t(`createProject.type.${type}.crossroadSubtitle`)}
+            accessibilityState={{ selected: isActive }}
           >
             <View style={[styles.cardIconWrap, isActive && styles.cardIconWrapActive]}>
               <Ionicons
@@ -181,12 +185,14 @@ export function ProjectTypeCrossroad({ selectedType, onSelectType }: ProjectType
             <Text
               style={[styles.cardTitle, isActive && styles.cardTitleActive]}
               numberOfLines={1}
+              maxFontSizeMultiplier={1.15}
             >
               {t(`createProject.type.${type}.title`)}
             </Text>
             <Text
               style={[styles.cardSubtitle, isActive && styles.cardSubtitleActive]}
               numberOfLines={2}
+              maxFontSizeMultiplier={1.2}
             >
               {t(`createProject.type.${type}.crossroadSubtitle`)}
             </Text>
@@ -255,7 +261,6 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
     zIndex: 1,
-    backgroundColor: colors.background,
     shadowColor: colors.primary,
     shadowOffset: { width: 0, height: 2 },
     shadowOpacity: 0.3,

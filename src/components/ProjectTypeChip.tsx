@@ -29,7 +29,7 @@ export function ProjectTypeChip({ projectType, label, showIcon = false }: Projec
   const displayLabel = label || projectType || "";
 
   return (
-    <View style={styles.chip}>
+    <View style={styles.chip} accessible accessibilityRole="text" accessibilityLabel={displayLabel}>
       {showIcon && projectType && (
         <Ionicons
           name={getProjectIcon()}
@@ -38,7 +38,9 @@ export function ProjectTypeChip({ projectType, label, showIcon = false }: Projec
           style={styles.icon}
         />
       )}
-      <Text style={styles.label}>{displayLabel}</Text>
+      <Text style={styles.label} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+        {displayLabel}
+      </Text>
     </View>
   );
 }

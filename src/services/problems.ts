@@ -57,6 +57,11 @@ export type ProblemDoc = {
   createdAt: string;
   updatedAt: string;
   dueDate?: string | null;
+  equipmentId?: string | null;
+  equipmentName?: string | null;
+  resolutionNote?: string | null;
+  archivedAt?: string | null;
+  archivedByUid?: string | null;
   photos: ProblemPhoto[];
   locationHint?: string | null;
   audit?: { lastStatusByUid?: string; lastStatusAt?: string };
@@ -108,6 +113,11 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     createdAt: convertTimestamp(d.createdAt) ?? new Date().toISOString(),
     updatedAt: convertTimestamp(d.updatedAt) ?? new Date().toISOString(),
     dueDate: convertTimestamp(d.dueDate) ?? (d.dueDate as string | null) ?? null,
+    equipmentId: (d.equipmentId as string) ?? null,
+    equipmentName: (d.equipmentName as string) ?? null,
+    resolutionNote: (d.resolutionNote as string) ?? null,
+    archivedAt: convertTimestamp(d.archivedAt) ?? (d.archivedAt as string | null) ?? null,
+    archivedByUid: (d.archivedByUid as string) ?? null,
     photos,
     locationHint: (d.locationHint as string) ?? null,
     audit: d.audit as { lastStatusByUid?: string; lastStatusAt?: string } | undefined,
@@ -200,6 +210,8 @@ export type CreateProblemInput = {
   assigneeUid: string;
   assigneeName?: string;
   dueDate?: Date | string | null;
+  equipmentId?: string | null;
+  equipmentName?: string | null;
   photos?: ProblemPhoto[];
   attachments?: string[];
 };
@@ -235,6 +247,8 @@ export async function createProblem(input: CreateProblemInput): Promise<ProblemD
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
     dueDate: dueDateTs,
+    equipmentId: input.equipmentId ?? null,
+    equipmentName: input.equipmentName ?? null,
     photos: input.photos ?? [],
     locationHint: input.location ?? null,
     attachments: input.attachments ?? [],
@@ -278,6 +292,11 @@ export type UpdateProblemInput = Partial<{
   assigneeUid: string;
   assigneeName: string;
   dueDate: Date | string | null;
+  equipmentId: string | null;
+  equipmentName: string | null;
+  resolutionNote: string | null;
+  archivedAt: Date | string | null;
+  archivedByUid: string | null;
   photos: ProblemPhoto[];
   attachments: string[];
 }>;
@@ -320,6 +339,18 @@ export async function updateProblem(
         ? Timestamp.fromDate(new Date(input.dueDate))
         : null;
   }
+  if (input.equipmentId !== undefined) updates.equipmentId = input.equipmentId;
+  if (input.equipmentName !== undefined) updates.equipmentName = input.equipmentName;
+  if (input.resolutionNote !== undefined) updates.resolutionNote = input.resolutionNote;
+  if (input.archivedByUid !== undefined) updates.archivedByUid = input.archivedByUid;
+  if (input.archivedAt !== undefined) {
+    updates.archivedAt =
+      input.archivedAt instanceof Date
+        ? Timestamp.fromDate(input.archivedAt)
+        : typeof input.archivedAt === "string" && input.archivedAt
+        ? Timestamp.fromDate(new Date(input.archivedAt))
+        : null;
+  }
   if (input.photos !== undefined) updates.photos = input.photos;
   if (input.attachments !== undefined) updates.attachments = input.attachments;
 
@@ -359,6 +390,19 @@ export async function deleteProblem(projectId: string, problemId: string): Promi
 
 export type ProblemWithProject = ProblemDoc & { projectName?: string };
 
+function normalizeDueDateToYmd(value: string | null | undefined): string | null {
+  if (!value) return null;
+  const raw = value.trim();
+  if (!raw) return null;
+  if (/^\d{4}-\d{2}-\d{2}$/.test(raw)) return raw;
+  const d = new Date(raw);
+  if (Number.isNaN(d.getTime())) return null;
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, "0");
+  const day = String(d.getDate()).padStart(2, "0");
+  return `${y}-${m}-${day}`;
+}
+
 /** List problems with dueDate in range [startYmd, endYmd] (inclusive) for user's projects. */
 export async function listProblemsWithDueDateInRange(
   ownerId: string,
@@ -372,8 +416,8 @@ export async function listProblemsWithDueDateInRange(
     try {
       const list = await listProblems(project.id);
       for (const p of list) {
-        const ymd = p.dueDate?.trim();
-        if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
+        const ymd = normalizeDueDateToYmd(p.dueDate);
+        if (!ymd) continue;
         if (ymd >= startYmd && ymd <= endYmd) {
           allProblems.push({ ...p, projectName: project.name });
         }

@@ -70,6 +70,34 @@ export const COUNTRY_NAMES: Record<string, string> = {
   CA: "Kanada",
 };
 
+const COUNTRY_LOCALE_MAP: Record<string, string> = {
+  en: "en-US",
+  sk: "sk-SK",
+  de: "de-DE",
+  cs: "cs-CZ",
+  es: "es-ES",
+  it: "it-IT",
+  pl: "pl-PL",
+};
+
+/**
+ * Localized country name for selected app language.
+ * Falls back to static map and then ISO code.
+ */
+export function getLocalizedCountryName(countryCode: string, appLocale?: string): string {
+  const code = String(countryCode || "").toUpperCase();
+  if (!code) return "";
+  try {
+    const localeTag = COUNTRY_LOCALE_MAP[String(appLocale || "").toLowerCase()] ?? "en-US";
+    const displayNames = new Intl.DisplayNames([localeTag], { type: "region" });
+    const localized = displayNames.of(code);
+    if (localized) return localized;
+  } catch {
+    // Fallbacks below.
+  }
+  return COUNTRY_NAMES[code] ?? code;
+}
+
 /** Country calling codes for phone input dropdown. Uses libphonenumber-js. */
 export function getCountryCallingCode(countryCode: string): string {
   try {

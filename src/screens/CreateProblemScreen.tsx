@@ -22,11 +22,14 @@ import * as problemsService from "../services/problems";
 import * as problemPhotosService from "../services/problemPhotos";
 import * as projectMembersService from "../services/projectMembers";
 import * as attachmentsService from "../services/attachments";
+import * as equipmentService from "../services/equipment";
 import type { ProblemCategory, ProblemPriority, ProblemPhoto } from "../services/problems";
 import type { ProjectMemberDoc } from "../services/projectMembers";
+import type { EquipmentDoc } from "../services/equipment";
 import { colors, radius, spacing } from "../theme";
 import { showToast } from "../helpers/toast";
 import { DescriptionInputModal } from "../components/DescriptionInputModal";
+import { ICON_HIT_SLOP } from "../utils/accessibility";
 
 let ImagePicker: typeof import("expo-image-picker") | null = null;
 let DateTimePicker: any = null;
@@ -72,6 +75,10 @@ export function CreateProblemScreen() {
   const [dueDate, setDueDate] = useState<Date | null>(null);
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [photos, setPhotos] = useState<{ uri: string }[]>([]);
+  const [equipmentList, setEquipmentList] = useState<EquipmentDoc[]>([]);
+  const [equipmentId, setEquipmentId] = useState("");
+  const [equipmentName, setEquipmentName] = useState("");
+  const [equipmentDropdownOpen, setEquipmentDropdownOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const projType = projectType ?? "BUILD";
@@ -100,6 +107,36 @@ export function CreateProblemScreen() {
   useEffect(() => {
     if (blocksWork) setPriority("high");
   }, [blocksWork]);
+
+  useEffect(() => {
+    let cancelled = false;
+    async function loadEquipment() {
+      if (!projectId || projType !== "MAINTENANCE") {
+        setEquipmentList([]);
+        setEquipmentId("");
+        setEquipmentName("");
+        setEquipmentDropdownOpen(false);
+        return;
+      }
+      try {
+        const list = await equipmentService.listEquipment(projectId, { status: "active" });
+        if (!cancelled) {
+          setEquipmentList(list);
+          if (list.length === 1) {
+            setEquipmentId(list[0].id);
+            setEquipmentName(list[0].name);
+            setLocation((prev) => prev.trim() || list[0].location || "");
+          }
+        }
+      } catch (e) {
+        console.warn("[CreateProblem] Failed to load equipment:", e);
+      }
+    }
+    loadEquipment();
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, projType]);
 
   const setQuickDate = useCallback((days: number) => {
     const d = new Date();
@@ -175,8 +212,12 @@ export function CreateProblemScreen() {
       Alert.alert(t("common.error"), t("problems.titleMinLength"));
       return;
     }
-    if (!location.trim()) {
+    if (projType !== "MAINTENANCE" && !location.trim()) {
       Alert.alert(t("common.error"), t("problems.locationRequired"));
+      return;
+    }
+    if (projType === "MAINTENANCE" && equipmentList.length > 0 && !equipmentId) {
+      Alert.alert(t("common.error"), t("equipment.selectEquipment"));
       return;
     }
     if (!assigneeUid) {
@@ -229,6 +270,8 @@ export function CreateProblemScreen() {
         assigneeUid,
         assigneeName: assigneeName || undefined,
         dueDate: dueDate ?? null,
+        equipmentId: equipmentId || null,
+        equipmentName: equipmentName || null,
         photos: [],
         attachments: attachmentIds,
       });
@@ -273,25 +316,32 @@ export function CreateProblemScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.field}>
-        <Text style={styles.label}>{t("problems.titleLabel")} *</Text>
+        <Text style={styles.label} maxFontSizeMultiplier={1.2}>
+          {t("problems.titleLabel")} *
+        </Text>
         <TextInput
           style={styles.inputSingle}
           value={title}
           onChangeText={setTitle}
           placeholder={t("problems.titlePlaceholder")}
           placeholderTextColor={colors.textMuted}
+          accessibilityLabel={t("problems.titleLabel")}
         />
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>{t("problems.noteOptional")}</Text>
+        <Text style={styles.label} maxFontSizeMultiplier={1.2}>
+          {t("problems.noteOptional")}
+        </Text>
         <TouchableOpacity
           style={styles.addNoteButton}
           onPress={() => setShowNoteModal(true)}
           activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={t("problems.addNote")}
         >
           <Ionicons name="add-circle-outline" size={24} color={colors.primary} />
-          <Text style={styles.addNoteButtonText}>
+          <Text style={styles.addNoteButtonText} maxFontSizeMultiplier={1.2} numberOfLines={2}>
             {problemNoteText?.trim() || problemNoteRecordingUri
               ? problemNoteText?.trim()
                 ? problemNoteText.slice(0, 80) + (problemNoteText.length > 80 ? "…" : "")
@@ -306,9 +356,14 @@ export function CreateProblemScreen() {
               setProblemNoteText(null);
               setProblemNoteRecordingUri(null);
             }}
+            accessibilityRole="button"
+            accessibilityLabel={t("common.delete")}
+            hitSlop={ICON_HIT_SLOP}
           >
             <Ionicons name="close-circle" size={20} color={colors.error} />
-            <Text style={styles.removeNoteText}>{t("common.delete")}</Text>
+            <Text style={styles.removeNoteText} maxFontSizeMultiplier={1.2}>
+              {t("common.delete")}
+            </Text>
           </TouchableOpacity>
         )}
       </View>
@@ -327,27 +382,98 @@ export function CreateProblemScreen() {
         title={t("problems.noteOptional")}
       />
 
-      <View style={styles.field}>
-        <Text style={styles.label}>{t("problems.locationLabel")} *</Text>
-        <TextInput
-          style={styles.inputSingle}
-          value={location}
-          onChangeText={setLocation}
-          placeholder={t("problems.locationPlaceholder")}
-          placeholderTextColor={colors.textMuted}
-        />
-      </View>
+      {projType === "MAINTENANCE" && (
+        <View style={styles.field}>
+          <Text style={styles.label} maxFontSizeMultiplier={1.2}>
+            {t("equipment.serviceRuleEquipmentLabel") || "Equipment"}
+            {equipmentList.length > 0 ? " *" : ""}
+          </Text>
+          {equipmentList.length === 0 ? (
+            <View style={styles.assigneeStatic}>
+              <Text style={styles.pickerPlaceholder}>{t("equipment.noEquipment")}</Text>
+            </View>
+          ) : (
+            <>
+              <TouchableOpacity
+                style={styles.picker}
+                onPress={() => setEquipmentDropdownOpen((v) => !v)}
+                accessibilityRole="button"
+                accessibilityLabel={t("equipment.selectEquipment")}
+                accessibilityState={{ expanded: equipmentDropdownOpen }}
+              >
+                <Text style={equipmentId ? styles.pickerText : styles.pickerPlaceholder}>
+                  {equipmentName || t("equipment.selectEquipment")}
+                </Text>
+                <Ionicons
+                  name={equipmentDropdownOpen ? "chevron-up" : "chevron-down"}
+                  size={20}
+                  color={colors.textMuted}
+                />
+              </TouchableOpacity>
+              {equipmentDropdownOpen && (
+                <View style={styles.dropdownList}>
+                  <ScrollView nestedScrollEnabled style={styles.dropdownScroll}>
+                    {equipmentList.map((eq) => {
+                      const selected = equipmentId === eq.id;
+                      return (
+                        <TouchableOpacity
+                          key={eq.id}
+                          style={[styles.dropdownItem, selected && styles.dropdownItemSelected]}
+                          onPress={() => {
+                            setEquipmentId(eq.id);
+                            setEquipmentName(eq.name);
+                            setEquipmentDropdownOpen(false);
+                            if (!location.trim() && eq.location) {
+                              setLocation(eq.location);
+                            }
+                          }}
+                        >
+                          <Text style={[styles.dropdownItemText, selected && styles.dropdownItemTextSelected]}>
+                            {eq.name}
+                          </Text>
+                          {selected ? <Ionicons name="checkmark" size={18} color={colors.primary} /> : null}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </ScrollView>
+                </View>
+              )}
+            </>
+          )}
+        </View>
+      )}
+
+      {projType !== "MAINTENANCE" && (
+        <View style={styles.field}>
+          <Text style={styles.label} maxFontSizeMultiplier={1.2}>
+            {t("problems.locationLabel")} *
+          </Text>
+          <TextInput
+            style={styles.inputSingle}
+            value={location}
+            onChangeText={setLocation}
+            placeholder={t("problems.locationPlaceholder")}
+            placeholderTextColor={colors.textMuted}
+            accessibilityLabel={t("problems.locationLabel")}
+          />
+        </View>
+      )}
 
       <View style={styles.field}>
-        <Text style={styles.label}>{t("problems.category")}</Text>
+        <Text style={styles.label} maxFontSizeMultiplier={1.2}>
+          {t("problems.category")}
+        </Text>
         <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.chipRow}>
           {categories.map((c) => (
             <TouchableOpacity
               key={c}
               style={[styles.chip, category === c && styles.chipActive]}
               onPress={() => setCategory(c)}
+              accessibilityRole="button"
+              accessibilityLabel={t(`problems.categories.${c}`)}
+              accessibilityState={{ selected: category === c }}
             >
-              <Text style={[styles.chipText, category === c && styles.chipTextActive]}>
+              <Text style={[styles.chipText, category === c && styles.chipTextActive]} maxFontSizeMultiplier={1.2} numberOfLines={1}>
                 {t(`problems.categories.${c}`)}
               </Text>
             </TouchableOpacity>
@@ -356,21 +482,26 @@ export function CreateProblemScreen() {
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>{t("problems.priority")}</Text>
+        <Text style={styles.label} maxFontSizeMultiplier={1.2}>
+          {t("problems.priority")}
+        </Text>
         <View style={styles.chipRow}>
           {(["low", "medium", "high"] as ProblemPriority[]).map((p) => (
             <TouchableOpacity
               key={p}
               style={[styles.chip, priority === p && styles.chipActive]}
               onPress={() => setPriority(p)}
+              accessibilityRole="button"
+              accessibilityLabel={t(`problems.priorities.${p}`)}
+              accessibilityState={{ selected: priority === p }}
             >
-              <Text style={[styles.chipText, priority === p && styles.chipTextActive]}>
+              <Text style={[styles.chipText, priority === p && styles.chipTextActive]} maxFontSizeMultiplier={1.2} numberOfLines={1}>
                 {t(`problems.priorities.${p}`)}
               </Text>
             </TouchableOpacity>
           ))}
         </View>
-        <Text style={styles.helperText}>
+        <Text style={styles.helperText} maxFontSizeMultiplier={1.2}>
           {priority === "low" && t("problems.priorityHelpLow")}
           {priority === "medium" && t("problems.priorityHelpMed")}
           {priority === "high" && t("problems.priorityHelpHigh")}
@@ -379,21 +510,26 @@ export function CreateProblemScreen() {
 
       <View style={styles.field}>
         <View style={styles.toggleRow}>
-          <Text style={styles.label}>{t("problems.blocksWork")}</Text>
+          <Text style={styles.label} maxFontSizeMultiplier={1.2}>
+            {t("problems.blocksWork")}
+          </Text>
           <Switch
             value={blocksWork}
             onValueChange={setBlocksWork}
             trackColor={{ false: "rgba(255,255,255,0.3)", true: colors.primary }}
             thumbColor="#fff"
+            accessibilityLabel={t("problems.blocksWork")}
           />
         </View>
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>{t("problems.assignee")} *</Text>
+        <Text style={styles.label} maxFontSizeMultiplier={1.2}>
+          {t("problems.assignee")} *
+        </Text>
         {singleMember ? (
           <View style={styles.assigneeStatic}>
-            <Text style={styles.pickerText}>
+            <Text style={styles.pickerText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
               {assigneeName || (assigneeUid === user?.id ? t("problems.you") : assigneeUid)}
             </Text>
           </View>
@@ -421,8 +557,10 @@ export function CreateProblemScreen() {
               ];
               Alert.alert(t("problems.assignee"), "", buttons);
             }}
+            accessibilityRole="button"
+            accessibilityLabel={t("problems.selectAssignee")}
           >
-            <Text style={assigneeUid ? styles.pickerText : styles.pickerPlaceholder}>
+            <Text style={assigneeUid ? styles.pickerText : styles.pickerPlaceholder} maxFontSizeMultiplier={1.2} numberOfLines={1}>
               {assigneeName ||
                 (assigneeUid === user?.id ? t("problems.you") : assigneeUid) ||
                 t("problems.selectAssignee")}
@@ -433,20 +571,22 @@ export function CreateProblemScreen() {
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>{t("problems.dueDate")}</Text>
+        <Text style={styles.label} maxFontSizeMultiplier={1.2}>
+          {t("problems.dueDate")}
+        </Text>
         <View style={styles.quickDateRow}>
-          <TouchableOpacity style={styles.quickChip} onPress={() => setQuickDate(0)}>
-            <Text style={styles.quickChipText}>{t("problems.quickToday")}</Text>
+          <TouchableOpacity style={styles.quickChip} onPress={() => setQuickDate(0)} accessibilityRole="button" accessibilityLabel={t("problems.quickToday")}>
+            <Text style={styles.quickChipText} maxFontSizeMultiplier={1.2} numberOfLines={1}>{t("problems.quickToday")}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.quickChip} onPress={() => setQuickDate(1)}>
-            <Text style={styles.quickChipText}>{t("problems.quickTomorrow")}</Text>
+          <TouchableOpacity style={styles.quickChip} onPress={() => setQuickDate(1)} accessibilityRole="button" accessibilityLabel={t("problems.quickTomorrow")}>
+            <Text style={styles.quickChipText} maxFontSizeMultiplier={1.2} numberOfLines={1}>{t("problems.quickTomorrow")}</Text>
           </TouchableOpacity>
-          <TouchableOpacity style={styles.quickChip} onPress={() => setQuickDate(7)}>
-            <Text style={styles.quickChipText}>{t("problems.quickPlus7")}</Text>
+          <TouchableOpacity style={styles.quickChip} onPress={() => setQuickDate(7)} accessibilityRole="button" accessibilityLabel={t("problems.quickPlus7")}>
+            <Text style={styles.quickChipText} maxFontSizeMultiplier={1.2} numberOfLines={1}>{t("problems.quickPlus7")}</Text>
           </TouchableOpacity>
         </View>
-        <TouchableOpacity style={styles.picker} onPress={() => setShowDatePicker(true)}>
-          <Text style={dueDate ? styles.pickerText : styles.pickerPlaceholder}>
+        <TouchableOpacity style={styles.picker} onPress={() => setShowDatePicker(true)} accessibilityRole="button" accessibilityLabel={t("problems.dueDate")}>
+          <Text style={dueDate ? styles.pickerText : styles.pickerPlaceholder} maxFontSizeMultiplier={1.2} numberOfLines={1}>
             {dueDate ? formatDateSk(dueDate) : t("problems.noDueDate")}
           </Text>
           <Ionicons name="calendar-outline" size={20} color={colors.textMuted} />
@@ -456,7 +596,7 @@ export function CreateProblemScreen() {
             value={dueDate ?? new Date()}
             mode="date"
             display="default"
-            onChange={(_, d) => {
+            onChange={(_: unknown, d?: Date) => {
               setShowDatePicker(false);
               if (d) setDueDate(d);
             }}
@@ -465,17 +605,25 @@ export function CreateProblemScreen() {
       </View>
 
       <View style={styles.field}>
-        <Text style={styles.label}>{t("problems.addPhoto")}</Text>
-        <TouchableOpacity style={styles.addPhotoBtn} onPress={showPhotoOptions}>
+        <Text style={styles.label} maxFontSizeMultiplier={1.2}>
+          {t("problems.addPhoto")}
+        </Text>
+        <TouchableOpacity style={styles.addPhotoBtn} onPress={showPhotoOptions} accessibilityRole="button" accessibilityLabel={t("problems.addPhoto")}>
           <Ionicons name="camera-outline" size={32} color={colors.primary} />
-          <Text style={styles.addPhotoText}>{t("problems.addPhoto")}</Text>
+          <Text style={styles.addPhotoText} maxFontSizeMultiplier={1.2} numberOfLines={1}>{t("problems.addPhoto")}</Text>
         </TouchableOpacity>
         {photos.length > 0 && (
           <View style={styles.photoGrid}>
             {photos.map((p, i) => (
               <View key={i} style={styles.photoWrap}>
                 <Image source={{ uri: p.uri }} style={styles.photoThumb} />
-                <TouchableOpacity style={styles.removePhoto} onPress={() => removePhoto(i)}>
+                <TouchableOpacity
+                  style={styles.removePhoto}
+                  onPress={() => removePhoto(i)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("common.delete")}
+                  hitSlop={ICON_HIT_SLOP}
+                >
                   <Ionicons name="close-circle" size={24} color={colors.error} />
                 </TouchableOpacity>
               </View>
@@ -488,14 +636,16 @@ export function CreateProblemScreen() {
         style={[styles.saveBtn, submitting && styles.saveBtnDisabled]}
         onPress={onSave}
         disabled={submitting}
+        accessibilityRole="button"
+        accessibilityLabel={t("problems.save")}
       >
         {submitting ? (
           <ActivityIndicator color="#fff" />
         ) : (
-          <Text style={styles.saveBtnText}>{t("problems.save")}</Text>
+          <Text style={styles.saveBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>{t("problems.save")}</Text>
         )}
       </TouchableOpacity>
-      <Text style={styles.saveHelperText}>{t("problems.saveHelperText")}</Text>
+      <Text style={styles.saveHelperText} maxFontSizeMultiplier={1.2}>{t("problems.saveHelperText")}</Text>
     </ScrollView>
   );
 }
@@ -552,6 +702,37 @@ const styles = StyleSheet.create({
   },
   pickerText: { color: colors.text, fontSize: 16 },
   pickerPlaceholder: { color: colors.textMuted, fontSize: 16 },
+  dropdownList: {
+    marginTop: spacing.xs,
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    overflow: "hidden",
+  },
+  dropdownScroll: {
+    maxHeight: 220,
+  },
+  dropdownItem: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm + 2,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.08)",
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  dropdownItemSelected: {
+    backgroundColor: "rgba(255,255,255,0.08)",
+  },
+  dropdownItemText: {
+    color: colors.text,
+    fontSize: 15,
+  },
+  dropdownItemTextSelected: {
+    color: colors.primary,
+    fontWeight: "600",
+  },
   quickDateRow: { flexDirection: "row", gap: spacing.sm, marginBottom: spacing.sm },
   quickChip: {
     paddingHorizontal: spacing.md,

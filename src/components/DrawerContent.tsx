@@ -26,6 +26,7 @@ import type { SubscriptionTier } from "../services/subscription";
 import { SUPPORT_EMAIL } from "../constants/consent";
 import { useUnreadCount } from "../hooks/useUnreadCount";
 import auth from "@react-native-firebase/auth";
+import { ICON_HIT_SLOP } from "../utils/accessibility";
 
 type NavItem = {
   id: string;
@@ -281,6 +282,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const { count: unreadCount } = useUnreadCount();
   const displayName = user?.name ?? user?.firstName ?? user?.email ?? "—";
   const initials = displayName !== "—" ? displayName.slice(0, 2).toUpperCase() : "?";
+  const isProTier = planTier === "PRO";
 
   const navItems: NavItem[] = [
     {
@@ -369,12 +371,17 @@ export function DrawerContent(props: DrawerContentComponentProps) {
           onPress={showProfilePhotoOptions}
           activeOpacity={0.8}
           disabled={uploadingPhoto}
+          accessibilityRole="button"
+          accessibilityLabel={t("nav.profilePhotoTitle")}
+          hitSlop={ICON_HIT_SLOP}
         >
           {photoURL ? (
             <Image source={{ uri: photoURL }} style={styles.avatar} />
           ) : (
             <View style={styles.avatarPlaceholder}>
-              <Text style={styles.avatarText}>{initials}</Text>
+              <Text style={styles.avatarText} maxFontSizeMultiplier={1.2}>
+                {initials}
+              </Text>
             </View>
           )}
           {uploadingPhoto && (
@@ -383,15 +390,19 @@ export function DrawerContent(props: DrawerContentComponentProps) {
             </View>
           )}
         </TouchableOpacity>
-        <Text style={styles.userName} numberOfLines={1}>
+        <Text style={styles.userName} numberOfLines={1} maxFontSizeMultiplier={1.2}>
           {displayName}
         </Text>
-        <View style={styles.planBadge}>
-          <Text style={styles.planText}>{getPlanLabel(planTier)}</Text>
+        <View style={[styles.planBadge, isProTier && styles.planBadgePro]}>
+          <Text style={[styles.planText, isProTier && styles.planTextPro]} maxFontSizeMultiplier={1.1} numberOfLines={1}>
+            {getPlanLabel(planTier)}
+          </Text>
         </View>
         <View style={styles.openToWorkRow}>
           <Ionicons name="briefcase-outline" size={20} color={colors.textOnDark} style={styles.openToWorkIcon} />
-          <Text style={styles.openToWorkLabel}>{t("nav.openToWork")}</Text>
+          <Text style={styles.openToWorkLabel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            {t("nav.openToWork")}
+          </Text>
           <Switch
             value={openToWork}
             onValueChange={handleOpenToWorkChange}
@@ -409,16 +420,22 @@ export function DrawerContent(props: DrawerContentComponentProps) {
             style={styles.navRow}
             onPress={item.action}
             activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={t(item.labelKey)}
           >
             <View style={styles.navIconWrap}>
               <Ionicons name={item.icon} size={24} color={colors.textOnDark} style={styles.navIcon} />
               {item.id === "notifications" && unreadCount > 0 && (
                 <View style={styles.navBadge}>
-                  <Text style={styles.navBadgeText}>{unreadCount > 99 ? "99+" : unreadCount}</Text>
+                  <Text style={styles.navBadgeText} maxFontSizeMultiplier={1.1} numberOfLines={1}>
+                    {unreadCount > 99 ? "99+" : unreadCount}
+                  </Text>
                 </View>
               )}
             </View>
-            <Text style={styles.navLabel}>{t(item.labelKey)}</Text>
+            <Text style={styles.navLabel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+              {t(item.labelKey)}
+            </Text>
             <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.6)" />
           </TouchableOpacity>
         ))}
@@ -431,11 +448,15 @@ export function DrawerContent(props: DrawerContentComponentProps) {
           logout();
         }}
         activeOpacity={0.7}
+        accessibilityRole="button"
+        accessibilityLabel={t("account.logout")}
       >
         <View style={styles.navIconWrap}>
           <Ionicons name="log-out-outline" size={24} color={colors.error} style={styles.navIcon} />
         </View>
-        <Text style={[styles.navLabel, styles.logoutText]}>{t("account.logout")}</Text>
+        <Text style={[styles.navLabel, styles.logoutText]} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+          {t("account.logout")}
+        </Text>
       </TouchableOpacity>
     </DrawerContentScrollView>
   );
@@ -497,10 +518,19 @@ const styles = StyleSheet.create({
     paddingVertical: 4,
     borderRadius: 8,
   },
+  planBadgePro: {
+    backgroundColor: "rgba(255,215,0,0.2)",
+    borderWidth: 1,
+    borderColor: "rgba(255,215,0,0.6)",
+  },
   planText: {
     fontSize: 12,
     fontWeight: "600",
     color: colors.textOnDark,
+  },
+  planTextPro: {
+    color: "#FFD700",
+    fontWeight: "700",
   },
   openToWorkRow: {
     flexDirection: "row",

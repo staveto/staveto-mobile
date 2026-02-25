@@ -16,14 +16,21 @@ export function ProjectBadgesRow({ isOwner, sharedWithCount, isSharedToMe }: Pro
   const { t } = useI18n();
   const n = sharedWithCount ?? 0;
   const showSharedBadge = n > 0 || !!isSharedToMe;
+  const sharedLabel = isSharedToMe && !isOwner ? t("home.sharedBadge") : String(n);
   return (
-    <View style={styles.row}>
-      <Text style={styles.roleIcon} accessibilityLabel={isOwner ? t("home.roleOwner") : t("home.roleSharedWithMe")}>
+    <View style={styles.row} accessible accessibilityRole="text">
+      <Text
+        style={styles.roleIcon}
+        accessibilityLabel={isOwner ? t("home.roleOwner") : t("home.roleSharedWithMe")}
+        maxFontSizeMultiplier={1.1}
+      >
         {isOwner ? "👑" : "👤"}
       </Text>
       {showSharedBadge && (
         <View style={styles.sharedPill}>
-          <Text style={styles.sharedText}>{isSharedToMe && !isOwner ? `👥 ${t("home.sharedBadge")}` : `👥 ${n}`}</Text>
+          <Text style={styles.sharedText} maxFontSizeMultiplier={1.2} numberOfLines={1} accessibilityLabel={`Shared ${sharedLabel}`}>
+            {isSharedToMe && !isOwner ? `👥 ${t("home.sharedBadge")}` : `👥 ${n}`}
+          </Text>
         </View>
       )}
     </View>

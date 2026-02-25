@@ -22,6 +22,7 @@ import type { NotificationDoc, NotificationType } from "../services/notification
 import * as invitesService from "../services/invites";
 import type { PendingInvite } from "../services/invites";
 import * as tasksService from "../services/tasks";
+import { ICON_HIT_SLOP } from "../utils/accessibility";
 
 export function NotificationsScreen() {
   const insets = useSafeAreaInsets();
@@ -384,8 +385,16 @@ export function NotificationsScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header */}
       <View style={styles.header}>
-        <Text style={styles.headerTitle}>Notifikácie</Text>
-        <TouchableOpacity style={styles.headerMenu} onPress={() => setShowMenu(true)}>
+        <Text style={styles.headerTitle} accessibilityRole="header" maxFontSizeMultiplier={1.2} numberOfLines={1}>
+          {t("tabs.notifications")}
+        </Text>
+        <TouchableOpacity
+          style={styles.headerMenu}
+          onPress={() => setShowMenu(true)}
+          accessibilityRole="button"
+          accessibilityLabel="Open actions"
+          hitSlop={ICON_HIT_SLOP}
+        >
           <Ionicons name="ellipsis-vertical" size={22} color={colors.textOnDark} />
         </TouchableOpacity>
       </View>
@@ -395,30 +404,40 @@ export function NotificationsScreen() {
         <TouchableOpacity
           style={[styles.filterChip, filter === "unread" && styles.filterChipActive, { marginRight: spacing.sm }]}
           onPress={() => setFilter("unread")}
+          accessibilityRole="button"
+          accessibilityState={{ selected: filter === "unread" }}
         >
-          <Text style={[styles.filterChipText, filter === "unread" && styles.filterChipTextActive]}>
-            Neprečítané {unreadCount > 0 && `(${unreadCount})`}
+          <Text style={[styles.filterChipText, filter === "unread" && styles.filterChipTextActive]} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            {t("notifications.unread")} {unreadCount > 0 && `(${unreadCount})`}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.filterChip, filter === "all" && styles.filterChipActive, { marginRight: spacing.sm }]}
           onPress={() => setFilter("all")}
+          accessibilityRole="button"
+          accessibilityState={{ selected: filter === "all" }}
         >
-          <Text style={[styles.filterChipText, filter === "all" && styles.filterChipTextActive]}>{t("projectOverview.allTasksFilter")}</Text>
+          <Text style={[styles.filterChipText, filter === "all" && styles.filterChipTextActive]} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            {t("projectOverview.allTasksFilter")}
+          </Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.filterChip, filter === "today" && styles.filterChipActive, { marginRight: spacing.sm }]}
           onPress={() => setFilter("today")}
+          accessibilityRole="button"
+          accessibilityState={{ selected: filter === "today" }}
         >
-          <Text style={[styles.filterChipText, filter === "today" && styles.filterChipTextActive]}>
+          <Text style={[styles.filterChipText, filter === "today" && styles.filterChipTextActive]} maxFontSizeMultiplier={1.2} numberOfLines={1}>
             {t("notifications.today")} {todayCount > 0 && `(${todayCount})`}
           </Text>
         </TouchableOpacity>
         <TouchableOpacity
           style={[styles.filterChip, filter === "overdue" && styles.filterChipActive]}
           onPress={() => setFilter("overdue")}
+          accessibilityRole="button"
+          accessibilityState={{ selected: filter === "overdue" }}
         >
-          <Text style={[styles.filterChipText, filter === "overdue" && styles.filterChipTextActive]}>
+          <Text style={[styles.filterChipText, filter === "overdue" && styles.filterChipTextActive]} maxFontSizeMultiplier={1.2} numberOfLines={1}>
             {t("notifications.overdue")} {overdueCount > 0 && `(${overdueCount})`}
           </Text>
         </TouchableOpacity>
@@ -490,7 +509,9 @@ export function NotificationsScreen() {
                 <TouchableOpacity
                   style={styles.chevronButton}
                   onPress={() => handleNavigateToNotification(item.notification)}
-                  hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                  hitSlop={ICON_HIT_SLOP}
+                  accessibilityRole="button"
+                  accessibilityLabel="Open notification"
                 >
                   <Ionicons name="chevron-forward" size={24} color={colors.primary} />
                 </TouchableOpacity>
@@ -501,7 +522,7 @@ export function NotificationsScreen() {
       ) : filteredNotifications.length === 0 ? (
         <View style={styles.emptyContainer}>
           <Ionicons name="notifications-off-outline" size={64} color={colors.textMuted} />
-          <Text style={styles.emptyText}>
+          <Text style={styles.emptyText} maxFontSizeMultiplier={1.2}>
             {filter === "unread" ? t("notifications.noUnread") : t("notifications.none")}
           </Text>
         </View>
@@ -539,7 +560,9 @@ export function NotificationsScreen() {
               <TouchableOpacity
                 style={styles.chevronButton}
                 onPress={() => handleNavigateToNotification(item)}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                hitSlop={ICON_HIT_SLOP}
+                accessibilityRole="button"
+                accessibilityLabel="Open notification"
               >
                 <Ionicons name="chevron-forward" size={24} color={colors.primary} />
               </TouchableOpacity>

@@ -35,6 +35,7 @@ import * as tasksService from "../services/tasks";
 import * as problemsService from "../services/problems";
 import type { TaskWithProject } from "../services/tasks";
 import type { ProblemWithProject } from "../services/problems";
+import { ICON_HIT_SLOP } from "../utils/accessibility";
 
 const SHEET_BG = "#1e2530";
 const SHEET_TEXT = "#ffffff";
@@ -174,6 +175,13 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
     if (type === "problem") return getProblemsForDay(day).length > 0;
     return getTasksForDay(day).some((t) => getTaskType(t) === type);
   };
+  const legendTypesInMonth = useMemo(
+    () =>
+      [...PROJECT_TYPES, "problem"].filter((type) =>
+        days.some((day) => isSameMonth(day, currentMonth) && hasTypeOnDay(day, type))
+      ),
+    [days, currentMonth, tasksByYmd, problemsByYmd]
+  );
 
   const handleTaskPress = useCallback(
     (task: TaskWithProject) => {
@@ -214,11 +222,16 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
         showsVerticalScrollIndicator
       >
         <View style={styles.header}>
-          <Text style={styles.title}>{t("home.sectionCalendar")}</Text>
+          <Text style={styles.title} maxFontSizeMultiplier={1.2} numberOfLines={1} accessibilityRole="header">
+            {t("home.sectionCalendar")}
+          </Text>
           <TouchableOpacity
             style={styles.closeBtn}
             onPress={() => sheetRef.current?.dismiss()}
             activeOpacity={0.7}
+            hitSlop={ICON_HIT_SLOP}
+            accessibilityRole="button"
+            accessibilityLabel={t("common.cancel")}
           >
             <Ionicons name="close" size={24} color={SHEET_ACTION} />
           </TouchableOpacity>
@@ -230,6 +243,9 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                 onPress={() => setCurrentMonth((m) => subMonths(m, 1))}
                 style={styles.navBtn}
                 activeOpacity={0.7}
+                hitSlop={ICON_HIT_SLOP}
+                accessibilityRole="button"
+                accessibilityLabel={t("home.sectionCalendar")}
               >
                 <Ionicons name="chevron-back" size={24} color={SHEET_ACTION} />
               </TouchableOpacity>
@@ -240,6 +256,9 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                 onPress={() => setCurrentMonth((m) => addMonths(m, 1))}
                 style={styles.navBtn}
                 activeOpacity={0.7}
+                hitSlop={ICON_HIT_SLOP}
+                accessibilityRole="button"
+                accessibilityLabel={t("home.sectionCalendar")}
               >
                 <Ionicons name="chevron-forward" size={24} color={SHEET_ACTION} />
               </TouchableOpacity>
@@ -290,18 +309,18 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
             </View>
         </View>
 
-        <View style={styles.legendRow}>
-            {PROJECT_TYPES.map((pt) => (
+        {legendTypesInMonth.length > 0 && (
+          <View style={styles.legendRow}>
+            {legendTypesInMonth.map((pt) => (
               <View key={pt} style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: COLOR_BY_TYPE[pt] ?? "#888" }]} />
-                <Text style={styles.legendText}>{t(`projectType.${pt}`)}</Text>
+                <Text style={styles.legendText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                  {pt === "problem" ? t("home.legendProblem") : t(`projectType.${pt}`)}
+                </Text>
               </View>
             ))}
-            <View style={styles.legendItem}>
-              <View style={[styles.legendDot, { backgroundColor: COLOR_BY_TYPE.problem }]} />
-              <Text style={styles.legendText}>{t("home.legendProblem")}</Text>
-            </View>
           </View>
+        )}
 
           <View style={styles.taskListSection}>
             <Text style={styles.taskListTitle}>

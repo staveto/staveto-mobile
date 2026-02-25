@@ -50,15 +50,21 @@ export function ProblemsListScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [statusFilter, setStatusFilter] = useState<ProblemStatus | "all">("all");
   const [priorityFilter, setPriorityFilter] = useState<ProblemPriority | "all">("all");
+  const [archivedFilter, setArchivedFilter] = useState<"active" | "archived">("active");
 
   const load = useCallback(async () => {
     if (!projectId) return;
     try {
-      const filters: Parameters<typeof problemsService.listProblems>[1] = {};
-      if (statusFilter !== "all") filters.status = statusFilter;
-      if (priorityFilter !== "all") filters.priority = priorityFilter;
-      const list = await problemsService.listProblems(projectId, filters);
-      setProblems(list);
+      const list = await problemsService.listProblems(projectId);
+      let filtered = list;
+      if (archivedFilter === "archived") {
+        filtered = filtered.filter((p) => !!p.archivedAt);
+      } else {
+        filtered = filtered.filter((p) => !p.archivedAt);
+      }
+      if (statusFilter !== "all") filtered = filtered.filter((p) => p.status === statusFilter);
+      if (priorityFilter !== "all") filtered = filtered.filter((p) => p.priority === priorityFilter);
+      setProblems(filtered);
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : "Chyba načítania.";
       Alert.alert(t("common.error"), msg);
@@ -67,7 +73,7 @@ export function ProblemsListScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [projectId, statusFilter, priorityFilter, t]);
+  }, [projectId, statusFilter, priorityFilter, archivedFilter, t]);
 
   useFocusEffect(
     useCallback(() => {
@@ -99,6 +105,11 @@ export function ProblemsListScreen() {
       <View style={styles.itemContent}>
         <Text style={styles.itemCategory}>{t(`problems.categories.${item.category}`)}</Text>
         <Text style={styles.itemDescription} numberOfLines={2}>{item.shortDescription}</Text>
+        {!!item.equipmentName && (
+          <Text style={styles.itemEquipment} numberOfLines={1}>
+            {item.equipmentName}
+          </Text>
+        )}
         <View style={styles.itemMeta}>
           {item.assigneeName && (
             <Text style={styles.itemAssignee}>{item.assigneeName}</Text>
@@ -122,6 +133,22 @@ export function ProblemsListScreen() {
   return (
     <View style={styles.container}>
       <View style={styles.filters}>
+        <TouchableOpacity
+          style={[styles.filterChip, archivedFilter === "active" && styles.filterChipActive]}
+          onPress={() => setArchivedFilter("active")}
+        >
+          <Text style={[styles.filterText, archivedFilter === "active" && styles.filterTextActive]}>
+            Active
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.filterChip, archivedFilter === "archived" && styles.filterChipActive]}
+          onPress={() => setArchivedFilter("archived")}
+        >
+          <Text style={[styles.filterText, archivedFilter === "archived" && styles.filterTextActive]}>
+            Archived
+          </Text>
+        </TouchableOpacity>
         <TouchableOpacity
           style={[styles.filterChip, statusFilter === "all" && styles.filterChipActive]}
           onPress={() => setStatusFilter("all")}
@@ -212,6 +239,7 @@ const styles = StyleSheet.create({
   itemContent: { flex: 1 },
   itemCategory: { fontSize: 11, color: colors.textMuted, textTransform: "uppercase", marginBottom: 2 },
   itemDescription: { fontSize: 15, color: colors.text, fontWeight: "500" },
+  itemEquipment: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   itemMeta: { flexDirection: "row", flexWrap: "wrap", marginTop: 4, gap: spacing.sm },
   itemAssignee: { fontSize: 12, color: colors.primary },
   itemStatus: { fontSize: 12, color: colors.textMuted },

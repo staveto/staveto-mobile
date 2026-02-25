@@ -10,6 +10,7 @@ import {
   Image,
   Linking,
   RefreshControl,
+  TextInput,
 } from "react-native";
 
 let AudioModule: typeof import("expo-av") | null = null;
@@ -27,6 +28,7 @@ import * as attachmentsService from "../services/attachments";
 import type { ProblemDoc, ProblemStatus } from "../services/problems";
 import { colors, radius, spacing } from "../theme";
 import { showToast } from "../helpers/toast";
+import { ICON_HIT_SLOP } from "../utils/accessibility";
 
 const PRIORITY_COLORS: Record<string, string> = {
   low: "#2e7d32",
@@ -57,6 +59,8 @@ export function ProblemDetailScreen() {
   const [photoUrls, setPhotoUrls] = useState<Map<string, string>>(new Map());
   const [audioUrl, setAudioUrl] = useState<string | null>(null);
   const [audioPlaying, setAudioPlaying] = useState(false);
+  const [showArchiveInput, setShowArchiveInput] = useState(false);
+  const [resolutionNote, setResolutionNote] = useState("");
   const soundRef = React.useRef<{ unloadAsync: () => Promise<void>; playAsync: () => Promise<void>; pauseAsync: () => Promise<void> } | null>(null);
 
   const canEdit =
@@ -175,6 +179,25 @@ export function ProblemDetailScreen() {
     }
   };
 
+  const archiveProblem = async () => {
+    if (!projectId || !problemId || !canEdit) return;
+    if (!resolutionNote.trim()) {
+      Alert.alert(t("common.error"), "Please add how the problem was fixed.");
+      return;
+    }
+    try {
+      await problemsService.updateProblem(projectId, problemId, {
+        resolutionNote: resolutionNote.trim(),
+        archivedAt: new Date(),
+        archivedByUid: user?.id ?? null,
+      });
+      showToast(t("problems.saved"));
+      navigation.goBack();
+    } catch (e) {
+      Alert.alert(t("common.error"), e instanceof Error ? e.message : "Chyba");
+    }
+  };
+
   const deleteProblem = () => {
     if (!access.isOwner) return;
     Alert.alert(
@@ -211,8 +234,7 @@ export function ProblemDetailScreen() {
     );
   }
 
-  const statusFlow: ProblemStatus[] = ["open", "in_progress", "fixed", "verified"];
-  const currentIndex = statusFlow.indexOf(problem.status);
+  const statusFlow: ProblemStatus[] = ["open", "in_progress", "fixed", "verified", "rejected"];
 
   return (
     <ScrollView
@@ -223,26 +245,50 @@ export function ProblemDetailScreen() {
       <View style={styles.card}>
         <View style={styles.header}>
           <View style={[styles.priorityDot, { backgroundColor: PRIORITY_COLORS[problem.priority] ?? "#888" }]} />
-          <Text style={styles.category}>{t(`problems.categories.${problem.category}`)}</Text>
-          <Text style={styles.priority}>{t(`problems.priorities.${problem.priority}`)}</Text>
+          <Text style={styles.category} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            {t(`problems.categories.${problem.category}`)}
+          </Text>
+          <Text style={styles.priority} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            {t(`problems.priorities.${problem.priority}`)}
+          </Text>
         </View>
 
-        <Text style={styles.description}>{problem.shortDescription}</Text>
+        <Text style={styles.description} maxFontSizeMultiplier={1.2}>
+          {problem.shortDescription}
+        </Text>
 
         {problem.location && (
           <View style={styles.meta}>
-            <Text style={styles.metaLabel}>{t("problems.locationLabel")}</Text>
-            <Text style={styles.metaValue}>{problem.location}</Text>
+            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+              {t("problems.locationLabel")}
+            </Text>
+            <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
+              {problem.location}
+            </Text>
+          </View>
+        )}
+        {!!problem.equipmentName && (
+          <View style={styles.meta}>
+            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+              {t("equipment.equipment")}
+            </Text>
+            <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
+              {problem.equipmentName}
+            </Text>
           </View>
         )}
         {(problem.detail || audioUrl) && (
           <View style={styles.meta}>
-            <Text style={styles.metaLabel}>{t("problems.noteOptional")}</Text>
+            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+              {t("problems.noteOptional")}
+            </Text>
             {problem.detail && problem.detail !== t("problems.voiceMessage") ? (
-              <Text style={styles.metaValue}>{problem.detail}</Text>
+              <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
+                {problem.detail}
+              </Text>
             ) : null}
             {audioUrl && (
-              <Text style={[styles.metaValue, !problem.detail && styles.voiceMessageLabel]}>
+              <Text style={[styles.metaValue, !problem.detail && styles.voiceMessageLabel]} maxFontSizeMultiplier={1.3}>
                 🎙 {t("problems.voiceMessage")}
               </Text>
             )}
@@ -250,67 +296,154 @@ export function ProblemDetailScreen() {
         )}
 
         <View style={styles.meta}>
-          <Text style={styles.metaLabel}>{t("problems.assignee")}</Text>
-          <Text style={styles.metaValue}>{problem.assigneeName || problem.assigneeUid || "—"}</Text>
+          <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+            {t("problems.assignee")}
+          </Text>
+          <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
+            {problem.assigneeName || problem.assigneeUid || "—"}
+          </Text>
         </View>
         <View style={styles.meta}>
-          <Text style={styles.metaLabel}>{t("problems.createdBy")}</Text>
-          <Text style={styles.metaValue}>{problem.createdByName || problem.createdByUid || "—"}</Text>
+          <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+            {t("problems.createdBy")}
+          </Text>
+          <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
+            {problem.createdByName || problem.createdByUid || "—"}
+          </Text>
         </View>
         <View style={styles.meta}>
-          <Text style={styles.metaLabel}>{t("problems.createdAt")}</Text>
-          <Text style={styles.metaValue}>{formatDate(problem.createdAt)}</Text>
+          <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+            {t("problems.createdAt")}
+          </Text>
+          <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
+            {formatDate(problem.createdAt)}
+          </Text>
         </View>
         {problem.dueDate && (
           <View style={styles.meta}>
-            <Text style={styles.metaLabel}>{t("problems.dueDate")}</Text>
-            <Text style={styles.metaValue}>{formatDate(problem.dueDate)}</Text>
+            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+              {t("problems.dueDate")}
+            </Text>
+            <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
+              {formatDate(problem.dueDate)}
+            </Text>
+          </View>
+        )}
+        {!!problem.archivedAt && (
+          <View style={styles.meta}>
+            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+              Archived
+            </Text>
+            <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
+              {formatDate(problem.archivedAt)}
+            </Text>
+            {!!problem.resolutionNote && (
+              <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
+                {problem.resolutionNote}
+              </Text>
+            )}
           </View>
         )}
 
         <View style={styles.statusSection}>
-          <Text style={styles.metaLabel}>{t("problems.status")}</Text>
-          <Text style={styles.statusValue}>{t(`problems.statuses.${problem.status}`)}</Text>
-          {canEdit && problem.status !== "rejected" && (
+          <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+            {t("problems.status")}
+          </Text>
+          <Text style={styles.statusValue} maxFontSizeMultiplier={1.2}>
+            {t(`problems.statuses.${problem.status}`)}
+          </Text>
+          {canEdit && (
             <View style={styles.statusButtons}>
-              {currentIndex >= 0 && currentIndex < statusFlow.length - 1 && (
+              {statusFlow.map((s) => (
                 <TouchableOpacity
-                  style={styles.statusBtn}
-                  onPress={() => updateStatus(statusFlow[currentIndex + 1])}
+                  key={s}
+                  style={[
+                    styles.statusBtn,
+                    s === "rejected" && styles.statusBtnReject,
+                    problem.status === s && styles.statusBtnSelected,
+                  ]}
+                  onPress={() => updateStatus(s)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t(`problems.statuses.${s}`)}
+                  accessibilityState={{ selected: problem.status === s }}
                 >
-                  <Text style={styles.statusBtnText}>
-                    → {t(`problems.statuses.${statusFlow[currentIndex + 1]}`)}
+                  <Text style={styles.statusBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                    {t(`problems.statuses.${s}`)}
                   </Text>
                 </TouchableOpacity>
-              )}
-              {problem.status !== "rejected" && (
-                <TouchableOpacity
-                  style={[styles.statusBtn, styles.statusBtnReject]}
-                  onPress={() => updateStatus("rejected")}
-                >
-                  <Text style={styles.statusBtnText}>{t("problems.statuses.rejected")}</Text>
-                </TouchableOpacity>
-              )}
+              ))}
             </View>
           )}
         </View>
 
+        {canEdit && !problem.archivedAt && (
+          <View style={styles.archiveSection}>
+            <TouchableOpacity
+              style={[styles.statusBtn, styles.archiveBtn]}
+              onPress={() => setShowArchiveInput((v) => !v)}
+              accessibilityRole="button"
+              accessibilityLabel="Archive"
+            >
+              <Text style={styles.statusBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                Archive
+              </Text>
+            </TouchableOpacity>
+            {showArchiveInput && (
+              <View style={styles.archiveInputWrap}>
+                <TextInput
+                  style={styles.archiveInput}
+                  value={resolutionNote}
+                  onChangeText={setResolutionNote}
+                  placeholder="How was the problem fixed?"
+                  placeholderTextColor={colors.textMuted}
+                  multiline
+                />
+                <TouchableOpacity
+                  style={[styles.statusBtn, styles.archiveConfirmBtn]}
+                  onPress={archiveProblem}
+                  accessibilityRole="button"
+                  accessibilityLabel="Archive now"
+                >
+                  <Text style={styles.statusBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                    Archive now
+                  </Text>
+                </TouchableOpacity>
+              </View>
+            )}
+          </View>
+        )}
+
         {access.isOwner && (
-          <TouchableOpacity style={[styles.deleteBtn, { marginTop: spacing.lg }]} onPress={deleteProblem}>
+          <TouchableOpacity
+            style={[styles.deleteBtn, { marginTop: spacing.lg }]}
+            onPress={deleteProblem}
+            accessibilityRole="button"
+            accessibilityLabel={t("common.delete")}
+          >
             <Ionicons name="trash-outline" size={20} color={colors.error} />
-            <Text style={styles.deleteBtnText}>{t("common.delete")}</Text>
+            <Text style={styles.deleteBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+              {t("common.delete")}
+            </Text>
           </TouchableOpacity>
         )}
 
         {problem.photos && problem.photos.length > 0 && (
           <View style={styles.photosSection}>
-            <Text style={styles.metaLabel}>{t("problems.photos")}</Text>
+            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+              {t("problems.photos")}
+            </Text>
             <View style={styles.photoGrid}>
               {problem.photos.map((ph) => {
                 const url = photoUrls.get(ph.path) ?? ph.downloadURL;
                 if (!url) return null;
                 return (
-                  <TouchableOpacity key={ph.path} onPress={() => openPhoto(url)}>
+                  <TouchableOpacity
+                    key={ph.path}
+                    onPress={() => openPhoto(url)}
+                    accessibilityRole="button"
+                    accessibilityLabel={t("problems.photos")}
+                    hitSlop={ICON_HIT_SLOP}
+                  >
                     <Image source={{ uri: url }} style={styles.photoThumb} />
                   </TouchableOpacity>
                 );
@@ -321,10 +454,17 @@ export function ProblemDetailScreen() {
 
         {audioUrl && AudioModule?.Audio && (
           <View style={styles.audioSection}>
-            <Text style={styles.metaLabel}>{t("problems.voiceNote")}</Text>
-            <TouchableOpacity style={styles.audioBtn} onPress={toggleAudio}>
+            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+              {t("problems.voiceNote")}
+            </Text>
+            <TouchableOpacity
+              style={styles.audioBtn}
+              onPress={toggleAudio}
+              accessibilityRole="button"
+              accessibilityLabel={audioPlaying ? (t("common.pause") || "Pause") : (t("common.play") || "Play")}
+            >
               <Ionicons name={audioPlaying ? "pause" : "play"} size={24} color={colors.primary} />
-              <Text style={styles.audioBtnText}>
+              <Text style={styles.audioBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
                 {audioPlaying ? (t("common.pause") || "Pause") : (t("common.play") || "Play")}
               </Text>
             </TouchableOpacity>
@@ -364,7 +504,25 @@ const styles = StyleSheet.create({
     borderRadius: 8,
   },
   statusBtnReject: { backgroundColor: colors.error },
+  statusBtnSelected: {
+    borderWidth: 2,
+    borderColor: "#fff",
+  },
   statusBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
+  archiveSection: { marginTop: spacing.md, gap: spacing.sm },
+  archiveBtn: { backgroundColor: "#6b7280" },
+  archiveInputWrap: { gap: spacing.sm },
+  archiveInput: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+    padding: spacing.md,
+    color: colors.text,
+    minHeight: 88,
+    textAlignVertical: "top",
+  },
+  archiveConfirmBtn: { backgroundColor: "#374151", alignSelf: "flex-start" },
   photosSection: { marginTop: spacing.lg },
   photoGrid: { flexDirection: "row", flexWrap: "wrap", marginTop: spacing.sm, gap: spacing.sm },
   photoThumb: { width: 100, height: 100, borderRadius: 8 },

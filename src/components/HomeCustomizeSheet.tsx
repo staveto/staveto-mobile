@@ -62,11 +62,16 @@ function SectionRow({
         disabled={isActive}
         activeOpacity={1}
         style={[styles.row, isActive && styles.rowActive]}
+        accessibilityRole="button"
+        accessibilityLabel={t(labelKey)}
+        accessibilityHint={isLocked ? "Locked section" : "Long press and drag to reorder"}
       >
         <View style={styles.dragHandle}>
           <Ionicons name="reorder-three" size={24} color="rgba(255,255,255,0.6)" />
         </View>
-        <Text style={styles.rowLabel}>{t(labelKey)}</Text>
+        <Text style={styles.rowLabel} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+          {t(labelKey)}
+        </Text>
         {isLocked ? (
           <Ionicons name="lock-closed" size={20} color="rgba(255,255,255,0.6)" />
         ) : (
@@ -148,21 +153,31 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged }: Props) {
       backgroundStyle={styles.sheet}
     >
       <View style={[styles.header, { paddingTop: spacing.lg }]}>
-        <TouchableOpacity style={styles.headerBtn} onPress={handleCancel}>
-          <Text style={styles.headerCancel}>{t("common.cancel")}</Text>
+        <TouchableOpacity style={styles.headerBtn} onPress={handleCancel} accessibilityRole="button" accessibilityLabel={t("common.cancel")}>
+          <Text style={styles.headerCancel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            {t("common.cancel")}
+          </Text>
         </TouchableOpacity>
-        <Text style={styles.headerTitle}>{t("home.customizeHomeTitle")}</Text>
-        <TouchableOpacity style={styles.headerBtn} onPress={handleSave}>
-          <Text style={styles.headerSave}>{t("common.save")}</Text>
+        <Text style={styles.headerTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+          {t("home.customizeHomeTitle")}
+        </Text>
+        <TouchableOpacity style={styles.headerBtn} onPress={handleSave} accessibilityRole="button" accessibilityLabel={t("common.save")}>
+          <Text style={styles.headerSave} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            {t("common.save")}
+          </Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.content}>
         {allDisabled ? (
           <View style={styles.emptyState}>
-            <Text style={styles.emptyText}>{t("home.resetToDefault")}</Text>
-            <TouchableOpacity style={styles.resetBtn} onPress={handleReset}>
-              <Text style={styles.resetBtnText}>{t("home.resetToDefault")}</Text>
+            <Text style={styles.emptyText} maxFontSizeMultiplier={1.2}>
+              {t("home.resetToDefault")}
+            </Text>
+            <TouchableOpacity style={styles.resetBtn} onPress={handleReset} accessibilityRole="button" accessibilityLabel={t("home.resetToDefault")}>
+              <Text style={styles.resetBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                {t("home.resetToDefault")}
+              </Text>
             </TouchableOpacity>
           </View>
         ) : (

@@ -71,7 +71,7 @@ import * as weatherService from "../services/weather";
 import { extractInvoiceData, type OcrParsed, type OcrStatus } from "../services/invoiceOCR";
 import { calculateRouteDistanceKm } from "../services/mapsDistance";
 import { EUROPEAN_COUNTRIES, buildAddressWithCountry, parseCountryFromAddress } from "../utils/europeanCountries";
-import { COUNTRY_CODES, getDeviceRegionCode } from "../utils/countries";
+import { COUNTRY_CODES, getDeviceRegionCode, getLocalizedCountryName } from "../utils/countries";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { exportProjectToCsv } from "../services/projectExport";
 import { updateTaskStatus } from "../services/taskService";
@@ -88,6 +88,7 @@ import type { EquipmentDoc } from "../services/equipment";
 import { colors, radius, spacing } from "../theme";
 import { showToast } from "../helpers/toast";
 import { openInMaps } from "../lib/maps";
+import { ICON_HIT_SLOP } from "../utils/accessibility";
 import { isFeatureEnabled } from "../services/features";
 import { formatEventSummary } from "../helpers/formatEvent";
 import type { ProjectEvent } from "../lib/types";
@@ -101,7 +102,7 @@ export function ProjectOverviewScreen() {
   const route = useRoute();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { user, orgId } = useAuth();
   const routeParams = (route.params as {
     projectId?: string;
@@ -161,7 +162,7 @@ export function ProjectOverviewScreen() {
   const [showEditTaskModal, setShowEditTaskModal] = useState(false);
   const [newTaskDueDate, setNewTaskDueDate] = useState("");
   const [showDatePicker, setShowDatePicker] = useState(false);
-  const [datePickerMode, setDatePickerMode] = useState<'new' | 'edit'>('new');
+  const [datePickerMode, setDatePickerMode] = useState<'new' | 'edit' | 'expense'>('new');
   const [datePickerDate, setDatePickerDate] = useState(new Date());
   const [projectType, setProjectType] = useState<string | undefined>(undefined);
   const [templateId, setTemplateId] = useState<string | undefined>(undefined);
@@ -223,6 +224,7 @@ export function ProjectOverviewScreen() {
   const [expenseAttachmentsMap, setExpenseAttachmentsMap] = useState<Map<string, number>>(new Map());
   const [attachmentThumbnails, setAttachmentThumbnails] = useState<Map<string, string>>(new Map());
   const [ocrLoading, setOcrLoading] = useState(false);
+  const expenseModalScrollRef = useRef<ScrollView | null>(null);
   const ocrRequestIdRef = useRef(0);
   const [ocrPendingReview, setOcrPendingReview] = useState<{
     projectId: string;
@@ -3032,7 +3034,13 @@ export function ProjectOverviewScreen() {
     <View style={[styles.container, { paddingTop: insets.top }]}>
       {/* Header: back | project name | members strip + menu */}
       <View style={styles.header}>
-        <TouchableOpacity onPress={goBack} style={styles.headerBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+        <TouchableOpacity
+          onPress={goBack}
+          style={styles.headerBack}
+          hitSlop={ICON_HIT_SLOP}
+          accessibilityRole="button"
+          accessibilityLabel="Back"
+        >
           <Ionicons name="arrow-back" size={24} color={colors.textOnDark} />
         </TouchableOpacity>
         <View style={styles.headerCenter}>
@@ -3053,7 +3061,12 @@ export function ProjectOverviewScreen() {
             )}
           </View>
         </View>
-        <TouchableOpacity onPress={goToMembers} style={styles.membersStrip}>
+        <TouchableOpacity
+          onPress={goToMembers}
+          style={styles.membersStrip}
+          accessibilityRole="button"
+          accessibilityLabel={t("projectOverview.members")}
+        >
           <View style={styles.avatar}>
             <Text style={styles.avatarText}>{initials}</Text>
           </View>
@@ -3062,7 +3075,9 @@ export function ProjectOverviewScreen() {
         <TouchableOpacity 
           style={styles.headerMenu} 
           onPress={handleMenuPress}
-          hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+          hitSlop={ICON_HIT_SLOP}
+          accessibilityRole="button"
+          accessibilityLabel="Open menu"
         >
           <Ionicons name="ellipsis-vertical" size={22} color={colors.textOnDark} />
         </TouchableOpacity>
@@ -4283,7 +4298,9 @@ export function ProjectOverviewScreen() {
                   style={[styles.editCountryChip, editProjectCountry === code && styles.editCountryChipActive]}
                   onPress={() => setEditProjectCountry(code)}
                 >
-                  <Text style={[styles.editCountryChipText, editProjectCountry === code && styles.editCountryChipTextActive]}>{code}</Text>
+                  <Text style={[styles.editCountryChipText, editProjectCountry === code && styles.editCountryChipTextActive]}>
+                    {getLocalizedCountryName(code, locale)}
+                  </Text>
                 </TouchableOpacity>
               ))}
             </ScrollView>
@@ -4332,7 +4349,7 @@ export function ProjectOverviewScreen() {
       <Modal visible={showExpenseModal} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
           keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
         >
           <View style={[styles.modal, styles.expenseModal]}>
@@ -4340,6 +4357,7 @@ export function ProjectOverviewScreen() {
               {editingExpense ? t("expense.edit") || 'Upraviť výdavok' : t("expense.add")}
             </Text>
             <ScrollView
+              ref={expenseModalScrollRef}
               style={styles.expenseModalScroll}
               contentContainerStyle={styles.expenseModalScrollContent}
               showsVerticalScrollIndicator={true}
@@ -4610,13 +4628,20 @@ export function ProjectOverviewScreen() {
                 </TouchableOpacity>
                 <View style={styles.travelDateRow}>
                   <Text style={styles.travelFormLabel}>{t("expense.travelDate")}</Text>
-                  <TextInput
-                    style={styles.input}
-                    value={expenseDate}
-                    onChangeText={setExpenseDate}
-                    placeholder={t("projectOverview.expenseDatePlaceholder")}
-                    placeholderTextColor={colors.textMuted}
-                  />
+                  <TouchableOpacity
+                    style={styles.dateInputButton}
+                    onPress={() => {
+                      const currentDate = expenseDate ? new Date(expenseDate) : new Date();
+                      setDatePickerDate(currentDate);
+                      setDatePickerMode("expense");
+                      setShowDatePicker(true);
+                    }}
+                  >
+                    <Text style={styles.dateInputText}>
+                      {expenseDate || t("projectOverview.selectDate")}
+                    </Text>
+                    <Ionicons name="calendar-outline" size={20} color={colors.primary} />
+                  </TouchableOpacity>
                 </View>
                 {(() => {
                   const km = parseFloat(expenseTravelDistanceKm.replace(",", "."));
@@ -4702,18 +4727,28 @@ export function ProjectOverviewScreen() {
               autoFocus
             />
             {expenseCategory !== 'TRAVEL' && (
-            <TextInput
-              style={styles.input}
-              value={expenseDate}
-              onChangeText={setExpenseDate}
-              placeholder={t("projectOverview.expenseDatePlaceholder")}
-              placeholderTextColor={colors.textMuted}
-            />
+            <TouchableOpacity
+              style={styles.dateInputButton}
+              onPress={() => {
+                const currentDate = expenseDate ? new Date(expenseDate) : new Date();
+                setDatePickerDate(currentDate);
+                setDatePickerMode("expense");
+                setShowDatePicker(true);
+              }}
+            >
+              <Text style={styles.dateInputText}>
+                {expenseDate || t("projectOverview.selectDate")}
+              </Text>
+              <Ionicons name="calendar-outline" size={20} color={colors.primary} />
+            </TouchableOpacity>
             )}
             <TextInput
               style={[styles.input, styles.textArea]}
               value={expenseNote}
               onChangeText={setExpenseNote}
+              onFocus={() => {
+                setTimeout(() => expenseModalScrollRef.current?.scrollToEnd({ animated: true }), 120);
+              }}
               placeholder={t("projectOverview.expenseNotePlaceholder")}
               placeholderTextColor={colors.textMuted}
               multiline
@@ -5082,8 +5117,10 @@ export function ProjectOverviewScreen() {
                           const dateStr = datePickerDate.toISOString().split('T')[0];
                           if (datePickerMode === 'new') {
                             setNewTaskDueDate(dateStr);
-                          } else {
+                          } else if (datePickerMode === 'edit') {
                             setEditTaskDueDate(dateStr);
+                          } else {
+                            setExpenseDate(dateStr);
                           }
                           setShowDatePicker(false);
                         }}
@@ -5107,8 +5144,10 @@ export function ProjectOverviewScreen() {
                     const dateStr = selectedDate.toISOString().split('T')[0];
                     if (datePickerMode === 'new') {
                       setNewTaskDueDate(dateStr);
-                    } else {
+                    } else if (datePickerMode === 'edit') {
                       setEditTaskDueDate(dateStr);
+                    } else {
+                      setExpenseDate(dateStr);
                     }
                   }
                 }}
@@ -5120,7 +5159,11 @@ export function ProjectOverviewScreen() {
 
       {/* New task modal */}
       <Modal visible={showNewTask} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={0}
+        >
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>{t("projectOverview.addTask")}</Text>
             
@@ -5219,14 +5262,14 @@ export function ProjectOverviewScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Construction Diary Modal */}
       <Modal visible={showDiaryModal} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
           keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 0}
         >
           <View style={[styles.modal, styles.diaryModal]}>
@@ -5399,7 +5442,11 @@ export function ProjectOverviewScreen() {
 
       {/* Project Document Modal */}
       <Modal visible={showDocumentModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={0}
+        >
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>
               {editingDocument ? 'Upraviť dokument' : 'Pridať dokument'}
@@ -5507,7 +5554,7 @@ export function ProjectOverviewScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Modal for creating new phase */}
@@ -5998,7 +6045,7 @@ const styles = StyleSheet.create({
   },
   phaseSelectorButtonText: {
     fontSize: 13,
-    color: colors.text,
+    color: colors.textOnDark,
   },
   phaseSelectorButtonTextActive: {
     color: "#fff",

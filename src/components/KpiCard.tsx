@@ -31,16 +31,25 @@ export function KpiCardComponent({ card, onPress }: KpiCardProps) {
       style={styles.card}
       onPress={() => onPress(card)}
       activeOpacity={0.7}
+      accessibilityRole="button"
+      accessibilityLabel={`${card.label}: ${formatValue(card.value, card.type)}`}
+      accessibilityHint={card.caption ?? undefined}
     >
       <Ionicons 
         name={card.icon as any} 
         size={20} 
         color={card.iconColor} 
       />
-      <Text style={styles.value}>{formatValue(card.value, card.type)}</Text>
-      <Text style={styles.label}>{card.label}</Text>
+      <Text style={styles.value} maxFontSizeMultiplier={1.2} numberOfLines={1} adjustsFontSizeToFit minimumFontScale={0.85}>
+        {formatValue(card.value, card.type)}
+      </Text>
+      <Text style={styles.label} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+        {card.label}
+      </Text>
       {card.caption && (
-        <Text style={styles.caption}>{card.caption}</Text>
+        <Text style={styles.caption} maxFontSizeMultiplier={1.1} numberOfLines={2}>
+          {card.caption}
+        </Text>
       )}
     </TouchableOpacity>
   );

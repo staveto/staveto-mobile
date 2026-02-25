@@ -1,0 +1,433 @@
+diff --git a/src/i18n/translations.ts b/src/i18n/translations.ts
+index ed5911d..bb12c9f 100644
+--- a/src/i18n/translations.ts
++++ b/src/i18n/translations.ts
+@@ -221,6 +221,18 @@ export const translations: Record<Locale, Record<string, string>> = {
+     "createProject.contains.documents": "Project documents",
+     "createProject.contains.equipment": "Equipment",
+     "createProject.contains.serviceTasks": "Service tasks",
++    "createProject.contains.serviceSchedules": "Service schedules",
++    "createProject.contains.maintenanceHistory": "Maintenance history",
++    "createProject.contains.costs": "Costs",
++    "createProject.maintenanceGroup.header": "New maintenance group",
++    "createProject.maintenanceGroup.subtitle": "Manage your tools, vehicles and machines in one place.",
++    "createProject.maintenanceGroup.groupNameLabel": "Group name",
++    "createProject.maintenanceGroup.groupNamePlaceholder": "e.g. Company fleet, Workshop tools",
++    "createProject.maintenanceGroup.baseLocationLabel": "Base location",
++    "createProject.maintenanceGroup.baseLocationPlaceholder": "e.g. Bratislava workshop",
++    "createProject.maintenanceGroup.noteLabel": "Note",
++    "createProject.maintenanceGroup.notePlaceholder": "Optional description",
++    "createProject.maintenanceGroup.groupNameRequired": "Enter a group name",
+     "createProject.howToStart": "How do you want to start?",
+     "createProject.method.template.title": "Use recommended template (SK)",
+     "createProject.method.template.helper": "Fastest start - creates a standard phase plan.",
+@@ -1338,6 +1350,18 @@ export const translations: Record<Locale, Record<string, string>> = {
+     "createProject.contains.documents": "Projektdokumente",
+     "createProject.contains.equipment": "Anlagen",
+     "createProject.contains.serviceTasks": "Serviceaufgaben",
++    "createProject.contains.serviceSchedules": "Servicepläne",
++    "createProject.contains.maintenanceHistory": "Wartungshistorie",
++    "createProject.contains.costs": "Kosten",
++    "createProject.maintenanceGroup.header": "Neue Wartungsgruppe",
++    "createProject.maintenanceGroup.subtitle": "Verwalten Sie Ihre Werkzeuge, Fahrzeuge und Maschinen an einem Ort.",
++    "createProject.maintenanceGroup.groupNameLabel": "Gruppenname",
++    "createProject.maintenanceGroup.groupNamePlaceholder": "z.B. Firmenflotte, Werkstattwerkzeuge",
++    "createProject.maintenanceGroup.baseLocationLabel": "Standort",
++    "createProject.maintenanceGroup.baseLocationPlaceholder": "z.B. Werkstatt Berlin",
++    "createProject.maintenanceGroup.noteLabel": "Notiz",
++    "createProject.maintenanceGroup.notePlaceholder": "Optionale Beschreibung",
++    "createProject.maintenanceGroup.groupNameRequired": "Gruppenname eingeben",
+     "createProject.howToStart": "Wie möchtest du starten?",
+     "createProject.method.template.title": "Empfohlene Vorlage verwenden (SK)",
+     "createProject.method.template.helper": "Schnellster Start - erstellt einen Standard-Phasenplan.",
+@@ -2563,6 +2587,18 @@ export const translations: Record<Locale, Record<string, string>> = {
+     "createProject.contains.documents": "Dokumenty projektu",
+     "createProject.contains.equipment": "Zariadenia",
+     "createProject.contains.serviceTasks": "Servisné úlohy",
++    "createProject.contains.serviceSchedules": "Servisné plány",
++    "createProject.contains.maintenanceHistory": "História údržby",
++    "createProject.contains.costs": "Náklady",
++    "createProject.maintenanceGroup.header": "Nová skupina údržby",
++    "createProject.maintenanceGroup.subtitle": "Spravujte svoje nástroje, vozidlá a stroje na jednom mieste.",
++    "createProject.maintenanceGroup.groupNameLabel": "Názov skupiny",
++    "createProject.maintenanceGroup.groupNamePlaceholder": "napr. Firemná flotila, Dielňové nástroje",
++    "createProject.maintenanceGroup.baseLocationLabel": "Základná lokalita",
++    "createProject.maintenanceGroup.baseLocationPlaceholder": "napr. Dielňa Bratislava",
++    "createProject.maintenanceGroup.noteLabel": "Poznámka",
++    "createProject.maintenanceGroup.notePlaceholder": "Voliteľný popis",
++    "createProject.maintenanceGroup.groupNameRequired": "Zadajte názov skupiny",
+     "createProject.howToStart": "Ako chceš začať?",
+     "createProject.method.template.title": "Použiť odporúčanú šablónu (SK)",
+     "createProject.method.template.helper": "Najrýchlejší štart - vytvorí sa štandardný plán fáz.",
+@@ -3711,6 +3747,18 @@ export const translations: Record<Locale, Record<string, string>> = {
+     "createProject.contains.documents": "Dokumenty projektu",
+     "createProject.contains.equipment": "Zařízení",
+     "createProject.contains.serviceTasks": "Servisní úkoly",
++    "createProject.contains.serviceSchedules": "Servisní plány",
++    "createProject.contains.maintenanceHistory": "Historie údržby",
++    "createProject.contains.costs": "Náklady",
++    "createProject.maintenanceGroup.header": "Nová skupina údržby",
++    "createProject.maintenanceGroup.subtitle": "Spravujte své nástroje, vozidla a stroje na jednom místě.",
++    "createProject.maintenanceGroup.groupNameLabel": "Název skupiny",
++    "createProject.maintenanceGroup.groupNamePlaceholder": "např. Firemní flotila, Dílenské nástroje",
++    "createProject.maintenanceGroup.baseLocationLabel": "Základní lokalita",
++    "createProject.maintenanceGroup.baseLocationPlaceholder": "např. Dílna Praha",
++    "createProject.maintenanceGroup.noteLabel": "Poznámka",
++    "createProject.maintenanceGroup.notePlaceholder": "Volitelný popis",
++    "createProject.maintenanceGroup.groupNameRequired": "Zadejte název skupiny",
+     "createProject.howToStart": "Jak chceš začít?",
+     "createProject.method.template.title": "Použít doporučenou šablonu (SK)",
+     "createProject.method.template.helper": "Nejrychlejší start - vytvoří se standardní plán fází.",
+@@ -5873,6 +5921,18 @@ export const translations: Record<Locale, Record<string, string>> = {
+     "createProject.contains.documents": "Project documents",
+     "createProject.contains.equipment": "Equipment",
+     "createProject.contains.serviceTasks": "Service tasks",
++    "createProject.contains.serviceSchedules": "Service schedules",
++    "createProject.contains.maintenanceHistory": "Maintenance history",
++    "createProject.contains.costs": "Costs",
++    "createProject.maintenanceGroup.header": "New maintenance group",
++    "createProject.maintenanceGroup.subtitle": "Manage your tools, vehicles and machines in one place.",
++    "createProject.maintenanceGroup.groupNameLabel": "Group name",
++    "createProject.maintenanceGroup.groupNamePlaceholder": "e.g. Company fleet, Workshop tools",
++    "createProject.maintenanceGroup.baseLocationLabel": "Base location",
++    "createProject.maintenanceGroup.baseLocationPlaceholder": "e.g. Bratislava workshop",
++    "createProject.maintenanceGroup.noteLabel": "Note",
++    "createProject.maintenanceGroup.notePlaceholder": "Optional description",
++    "createProject.maintenanceGroup.groupNameRequired": "Enter a group name",
+     "createProject.howToStart": "How do you want to start?",
+     "createProject.method.template.title": "Use recommended template (SK)",
+     "createProject.method.template.helper": "Fastest start - creates a standard phase plan.",
+@@ -7065,6 +7125,18 @@ export const translations: Record<Locale, Record<string, string>> = {
+     "createProject.contains.documents": "Project documents",
+     "createProject.contains.equipment": "Equipment",
+     "createProject.contains.serviceTasks": "Service tasks",
++    "createProject.contains.serviceSchedules": "Service schedules",
++    "createProject.contains.maintenanceHistory": "Maintenance history",
++    "createProject.contains.costs": "Costs",
++    "createProject.maintenanceGroup.header": "New maintenance group",
++    "createProject.maintenanceGroup.subtitle": "Manage your tools, vehicles and machines in one place.",
++    "createProject.maintenanceGroup.groupNameLabel": "Group name",
++    "createProject.maintenanceGroup.groupNamePlaceholder": "e.g. Company fleet, Workshop tools",
++    "createProject.maintenanceGroup.baseLocationLabel": "Base location",
++    "createProject.maintenanceGroup.baseLocationPlaceholder": "e.g. Bratislava workshop",
++    "createProject.maintenanceGroup.noteLabel": "Note",
++    "createProject.maintenanceGroup.notePlaceholder": "Optional description",
++    "createProject.maintenanceGroup.groupNameRequired": "Enter a group name",
+     "createProject.howToStart": "How do you want to start?",
+     "createProject.method.template.title": "Use recommended template (SK)",
+     "createProject.method.template.helper": "Fastest start - creates a standard phase plan.",
+@@ -8257,6 +8329,18 @@ export const translations: Record<Locale, Record<string, string>> = {
+     "createProject.contains.documents": "Project documents",
+     "createProject.contains.equipment": "Equipment",
+     "createProject.contains.serviceTasks": "Service tasks",
++    "createProject.contains.serviceSchedules": "Service schedules",
++    "createProject.contains.maintenanceHistory": "Maintenance history",
++    "createProject.contains.costs": "Costs",
++    "createProject.maintenanceGroup.header": "New maintenance group",
++    "createProject.maintenanceGroup.subtitle": "Manage your tools, vehicles and machines in one place.",
++    "createProject.maintenanceGroup.groupNameLabel": "Group name",
++    "createProject.maintenanceGroup.groupNamePlaceholder": "e.g. Company fleet, Workshop tools",
++    "createProject.maintenanceGroup.baseLocationLabel": "Base location",
++    "createProject.maintenanceGroup.baseLocationPlaceholder": "e.g. Bratislava workshop",
++    "createProject.maintenanceGroup.noteLabel": "Note",
++    "createProject.maintenanceGroup.notePlaceholder": "Optional description",
++    "createProject.maintenanceGroup.groupNameRequired": "Enter a group name",
+     "createProject.howToStart": "How do you want to start?",
+     "createProject.method.template.title": "Use recommended template (SK)",
+     "createProject.method.template.helper": "Fastest start - creates a standard phase plan.",
+diff --git a/src/screens/ProjectsScreen.tsx b/src/screens/ProjectsScreen.tsx
+index d5e9cc8..1ff594f 100644
+--- a/src/screens/ProjectsScreen.tsx
++++ b/src/screens/ProjectsScreen.tsx
+@@ -100,6 +100,7 @@ export function ProjectsScreen() {
+   const [newAddress, setNewAddress] = useState("");
+   const [newCountry, setNewCountry] = useState<string>("SK");
+   const [newCity, setNewCity] = useState("");
++  const [newNote, setNewNote] = useState("");
+   const [templateId, setTemplateId] = useState<string>("");
+   const [templatePhases, setTemplatePhases] = useState<CatalogPhase[]>([]);
+   const [phaseCustomizations, setPhaseCustomizations] = useState<Map<string, PhaseCustomization>>(new Map());
+@@ -165,13 +166,13 @@ export function ProjectsScreen() {
+ 
+   const getContainsItems = useCallback(
+     (type: ProjectCreationType | null) => {
++      if (type === "MAINTENANCE") {
++        return ["equipment", "serviceSchedules", "maintenanceHistory", "costs"];
++      }
+       const items = ["tasks", "expenses", "diary"];
+       if (type === "MANAGEMENT" || type === "BUILD") {
+         items.push("phases", "documents");
+       }
+-      if (type === "MAINTENANCE") {
+-        items.push("equipment", "serviceTasks");
+-      }
+       return items;
+     },
+     []
+@@ -333,6 +334,7 @@ export function ProjectsScreen() {
+     setNewStep(1);
+     setNewCountry("SK");
+     setNewCity("");
++    setNewNote("");
+     setSelectedType(null);
+     setCreationMethod("template");
+     setNewName("");
+@@ -389,7 +391,7 @@ export function ProjectsScreen() {
+       setNewStep(2);
+     } else if (newStep === 2) {
+       if (!newName.trim()) {
+-        setError(t("createProject.nameRequired"));
++        setError(selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.groupNameRequired") : t("createProject.nameRequired"));
+         return;
+       }
+ 
+@@ -426,7 +428,7 @@ export function ProjectsScreen() {
+     }
+     
+     if (!newName.trim()) {
+-      const errorMsg = t("createProject.nameRequired");
++      const errorMsg = selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.groupNameRequired") : t("createProject.nameRequired");
+       setError(errorMsg);
+       return;
+     }
+@@ -451,13 +453,20 @@ export function ProjectsScreen() {
+       console.log(`[ProjectsScreen] Phase customizations:`, customizationsArray);
+       
+       // Vytvor projekt - ownerId sa automaticky použije z auth.currentUser.uid v projectFactory
++      const addressTextForCreate =
++        selectedType === "MAINTENANCE"
++          ? [newAddress.trim(), newNote.trim()].filter(Boolean).join("\n") || undefined
++          : newAddress.trim() || undefined;
++      const countryCodeForCreate = selectedType === "MAINTENANCE" ? undefined : (newCountry.trim() || undefined);
++      const cityForCreate = selectedType === "MAINTENANCE" ? undefined : (newCity.trim() || undefined);
++
+       await projectFactory.createProjectFromTemplate({
+         projectType: selectedType,
+         templateId: finalTemplateId,
+         name: newName.trim(),
+-        addressText: newAddress.trim() || undefined,
+-        countryCode: newCountry.trim() || undefined,
+-        city: newCity.trim() || undefined,
++        addressText: addressTextForCreate,
++        countryCode: countryCodeForCreate,
++        city: cityForCreate,
+         phaseCustomizations: customizationsArray,
+       });
+       
+@@ -973,16 +982,21 @@ export function ProjectsScreen() {
+           keyboardVerticalOffset={0}
+         >
+           <View style={[styles.modal, newStep === 1 && styles.modalHero, newStep === 1 && { height: heroModalHeight }]}>
+-            <Text style={styles.modalTitle}>{t("projects.modalTitle")}</Text>
+-            
++            <Text style={styles.modalTitle}>
++              {selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.header") : t("projects.modalTitle")}
++            </Text>
+             {newStep === 1 ? (
+               <View style={styles.stepOneBody}>
+-                <Text style={styles.createHeader}>{t("createProject.header")}</Text>
++                <Text style={styles.createHeader}>
++                  {selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.header") : t("createProject.header")}
++                </Text>
+                 <ProjectTypeCrossroad
+                   selectedType={selectedType as SelectableProjectType | null}
+                   onSelectType={handleSelectType}
+                 />
+-                <Text style={styles.createSubtextHero}>{t("createProject.mainDirectionHint")}</Text>
++                <Text style={styles.createSubtextHero}>
++                  {selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.subtitle") : t("createProject.mainDirectionHint")}
++                </Text>
+                 {error && (
+                   <View style={styles.errorContainer}>
+                     <Text style={styles.errorText}>{error}</Text>
+@@ -998,55 +1012,100 @@ export function ProjectsScreen() {
+               >
+               {newStep === 2 ? (
+               <>
+-                <Text style={styles.modalLabel}>{t("projects.namePlaceholder")} *</Text>
+-                <TextInput
+-                  style={styles.inputWhite}
+-                  value={newName}
+-                  onChangeText={(text) => {
+-                    setNewName(text);
+-                    setError(null);
+-                  }}
+-                  placeholder={t("projects.namePlaceholder")}
+-                  placeholderTextColor="rgba(255, 255, 255, 0.7)"
+-                  editable={!submitting}
+-                  autoFocus={true}
+-                />
+-
+-                <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.country")}</Text>
+-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.sm }}>
+-                  {COUNTRY_CODES.slice(0, 12).map((code) => (
+-                    <TouchableOpacity
+-                      key={code}
+-                      style={[styles.countryChip, newCountry === code && styles.countryChipActive]}
+-                      onPress={() => setNewCountry(code)}
+-                    >
+-                      <Text style={[styles.countryChipText, newCountry === code && styles.countryChipTextActive]}>
+-                        {getLocalizedCountryName(code, locale)}
+-                      </Text>
+-                    </TouchableOpacity>
+-                  ))}
+-                </ScrollView>
+-                <Text style={[styles.modalLabel, { marginTop: spacing.xs }]}>{t("projects.city")}</Text>
+-                <TextInput
+-                  style={styles.inputWhite}
+-                  value={newCity}
+-                  onChangeText={(text) => { setNewCity(text); setError(null); }}
+-                  placeholder={t("projects.cityPlaceholder")}
+-                  placeholderTextColor="rgba(255, 255, 255, 0.7)"
+-                  editable={!submitting}
+-                />
+-                <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.address")}</Text>
+-                <TextInput
+-                  style={styles.inputWhite}
+-                  value={newAddress}
+-                  onChangeText={(text) => {
+-                    setNewAddress(text);
+-                    setError(null);
+-                  }}
+-                  placeholder={t("createProject.addressPlaceholder")}
+-                  placeholderTextColor="rgba(255, 255, 255, 0.7)"
+-                  editable={!submitting}
+-                />
++                {selectedType === "MAINTENANCE" ? (
++                  <>
++                    <Text style={styles.modalLabel}>{t("createProject.maintenanceGroup.groupNameLabel")} *</Text>
++                    <TextInput
++                      style={styles.inputWhite}
++                      value={newName}
++                      onChangeText={(text) => {
++                        setNewName(text);
++                        setError(null);
++                      }}
++                      placeholder={t("createProject.maintenanceGroup.groupNamePlaceholder")}
++                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
++                      editable={!submitting}
++                      autoFocus={true}
++                    />
++                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("createProject.maintenanceGroup.baseLocationLabel")}</Text>
++                    <TextInput
++                      style={styles.inputWhite}
++                      value={newAddress}
++                      onChangeText={(text) => {
++                        setNewAddress(text);
++                        setError(null);
++                      }}
++                      placeholder={t("createProject.maintenanceGroup.baseLocationPlaceholder")}
++                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
++                      editable={!submitting}
++                    />
++                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("createProject.maintenanceGroup.noteLabel")}</Text>
++                    <TextInput
++                      style={[styles.inputWhite, { minHeight: 64 }]}
++                      value={newNote}
++                      onChangeText={(text) => {
++                        setNewNote(text);
++                        setError(null);
++                      }}
++                      placeholder={t("createProject.maintenanceGroup.notePlaceholder")}
++                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
++                      editable={!submitting}
++                      multiline
++                      numberOfLines={3}
++                    />
++                  </>
++                ) : (
++                  <>
++                    <Text style={styles.modalLabel}>{t("projects.namePlaceholder")} *</Text>
++                    <TextInput
++                      style={styles.inputWhite}
++                      value={newName}
++                      onChangeText={(text) => {
++                        setNewName(text);
++                        setError(null);
++                      }}
++                      placeholder={t("projects.namePlaceholder")}
++                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
++                      editable={!submitting}
++                      autoFocus={true}
++                    />
++                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.country")}</Text>
++                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.sm }}>
++                      {COUNTRY_CODES.slice(0, 12).map((code) => (
++                        <TouchableOpacity
++                          key={code}
++                          style={[styles.countryChip, newCountry === code && styles.countryChipActive]}
++                          onPress={() => setNewCountry(code)}
++                        >
++                          <Text style={[styles.countryChipText, newCountry === code && styles.countryChipTextActive]}>
++                            {getLocalizedCountryName(code, locale)}
++                          </Text>
++                        </TouchableOpacity>
++                      ))}
++                    </ScrollView>
++                    <Text style={[styles.modalLabel, { marginTop: spacing.xs }]}>{t("projects.city")}</Text>
++                    <TextInput
++                      style={styles.inputWhite}
++                      value={newCity}
++                      onChangeText={(text) => { setNewCity(text); setError(null); }}
++                      placeholder={t("projects.cityPlaceholder")}
++                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
++                      editable={!submitting}
++                    />
++                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.address")}</Text>
++                    <TextInput
++                      style={styles.inputWhite}
++                      value={newAddress}
++                      onChangeText={(text) => {
++                        setNewAddress(text);
++                        setError(null);
++                      }}
++                      placeholder={t("createProject.addressPlaceholder")}
++                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
++                      editable={!submitting}
++                    />
++                  </>
++                )}
+ 
+                 {renderContainsChecklist()}
+ 
+@@ -1124,7 +1183,9 @@ export function ProjectsScreen() {
+                 <Text style={styles.modalLabel}>{t("createProject.summaryTitle")}</Text>
+                 <View style={styles.summaryContainer}>
+                   <View style={styles.summaryRow}>
+-                    <Text style={styles.summaryLabel}>{t("projects.namePlaceholder")}:</Text>
++                    <Text style={styles.summaryLabel}>
++                      {selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.groupNameLabel") : t("projects.namePlaceholder")}:
++                    </Text>
+                     <Text style={styles.summaryValue}>{newName}</Text>
+                   </View>
+                   <View style={styles.summaryRow}>
+@@ -1139,12 +1200,27 @@ export function ProjectsScreen() {
+                         : t("createProject.structureNoPhases")}
+                     </Text>
+                   </View>
+-                  {newAddress.trim() && (
++                  {selectedType === "MAINTENANCE" ? (
++                    <>
++                      {newAddress.trim() && (
++                        <View style={styles.summaryRow}>
++                          <Text style={styles.summaryLabel}>{t("createProject.maintenanceGroup.baseLocationLabel")}:</Text>
++                          <Text style={styles.summaryValue}>{newAddress.trim()}</Text>
++                        </View>
++                      )}
++                      {newNote.trim() && (
++                        <View style={styles.summaryRow}>
++                          <Text style={styles.summaryLabel}>{t("createProject.maintenanceGroup.noteLabel")}:</Text>
++                          <Text style={styles.summaryValue}>{newNote.trim()}</Text>
++                        </View>
++                      )}
++                    </>
++                  ) : newAddress.trim() ? (
+                     <View style={styles.summaryRow}>
+                       <Text style={styles.summaryLabel}>{t("projects.address")}:</Text>
+                       <Text style={styles.summaryValue}>{newAddress.trim()}</Text>
+                     </View>
+-                  )}
++                  ) : null}
+                   {selectedType === "MANAGEMENT" && (
+                     <View style={styles.summaryRow}>
+                       <Text style={styles.summaryLabel}>{t("createProject.howToStart")}</Text>

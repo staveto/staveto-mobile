@@ -100,6 +100,7 @@ export function ProjectsScreen() {
   const [newAddress, setNewAddress] = useState("");
   const [newCountry, setNewCountry] = useState<string>("SK");
   const [newCity, setNewCity] = useState("");
+  const [newNote, setNewNote] = useState("");
   const [templateId, setTemplateId] = useState<string>("");
   const [templatePhases, setTemplatePhases] = useState<CatalogPhase[]>([]);
   const [phaseCustomizations, setPhaseCustomizations] = useState<Map<string, PhaseCustomization>>(new Map());
@@ -165,12 +166,12 @@ export function ProjectsScreen() {
 
   const getContainsItems = useCallback(
     (type: ProjectCreationType | null) => {
+      if (type === "MAINTENANCE") {
+        return ["equipment", "serviceSchedules", "maintenanceHistory", "costs"];
+      }
       const items = ["tasks", "expenses", "diary"];
       if (type === "MANAGEMENT" || type === "BUILD") {
         items.push("phases", "documents");
-      }
-      if (type === "MAINTENANCE") {
-        items.push("equipment", "serviceTasks");
       }
       return items;
     },
@@ -333,6 +334,7 @@ export function ProjectsScreen() {
     setNewStep(1);
     setNewCountry("SK");
     setNewCity("");
+    setNewNote("");
     setSelectedType(null);
     setCreationMethod("template");
     setNewName("");
@@ -389,7 +391,7 @@ export function ProjectsScreen() {
       setNewStep(2);
     } else if (newStep === 2) {
       if (!newName.trim()) {
-        setError(t("createProject.nameRequired"));
+        setError(selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.groupNameRequired") : t("createProject.nameRequired"));
         return;
       }
 
@@ -426,7 +428,7 @@ export function ProjectsScreen() {
     }
     
     if (!newName.trim()) {
-      const errorMsg = t("createProject.nameRequired");
+      const errorMsg = selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.groupNameRequired") : t("createProject.nameRequired");
       setError(errorMsg);
       return;
     }
@@ -451,13 +453,20 @@ export function ProjectsScreen() {
       console.log(`[ProjectsScreen] Phase customizations:`, customizationsArray);
       
       // Vytvor projekt - ownerId sa automaticky použije z auth.currentUser.uid v projectFactory
+      const addressTextForCreate =
+        selectedType === "MAINTENANCE"
+          ? [newAddress.trim(), newNote.trim()].filter(Boolean).join("\n") || undefined
+          : newAddress.trim() || undefined;
+      const countryCodeForCreate = selectedType === "MAINTENANCE" ? undefined : (newCountry.trim() || undefined);
+      const cityForCreate = selectedType === "MAINTENANCE" ? undefined : (newCity.trim() || undefined);
+
       await projectFactory.createProjectFromTemplate({
         projectType: selectedType,
         templateId: finalTemplateId,
         name: newName.trim(),
-        addressText: newAddress.trim() || undefined,
-        countryCode: newCountry.trim() || undefined,
-        city: newCity.trim() || undefined,
+        addressText: addressTextForCreate,
+        countryCode: countryCodeForCreate,
+        city: cityForCreate,
         phaseCustomizations: customizationsArray,
       });
       
@@ -973,16 +982,21 @@ export function ProjectsScreen() {
           keyboardVerticalOffset={0}
         >
           <View style={[styles.modal, newStep === 1 && styles.modalHero, newStep === 1 && { height: heroModalHeight }]}>
-            <Text style={styles.modalTitle}>{t("projects.modalTitle")}</Text>
-            
+            <Text style={styles.modalTitle}>
+              {selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.header") : t("projects.modalTitle")}
+            </Text>
             {newStep === 1 ? (
               <View style={styles.stepOneBody}>
-                <Text style={styles.createHeader}>{t("createProject.header")}</Text>
+                <Text style={styles.createHeader}>
+                  {selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.header") : t("createProject.header")}
+                </Text>
                 <ProjectTypeCrossroad
                   selectedType={selectedType as SelectableProjectType | null}
                   onSelectType={handleSelectType}
                 />
-                <Text style={styles.createSubtextHero}>{t("createProject.mainDirectionHint")}</Text>
+                <Text style={styles.createSubtextHero}>
+                  {selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.subtitle") : t("createProject.mainDirectionHint")}
+                </Text>
                 {error && (
                   <View style={styles.errorContainer}>
                     <Text style={styles.errorText}>{error}</Text>
@@ -998,55 +1012,100 @@ export function ProjectsScreen() {
               >
               {newStep === 2 ? (
               <>
-                <Text style={styles.modalLabel}>{t("projects.namePlaceholder")} *</Text>
-                <TextInput
-                  style={styles.inputWhite}
-                  value={newName}
-                  onChangeText={(text) => {
-                    setNewName(text);
-                    setError(null);
-                  }}
-                  placeholder={t("projects.namePlaceholder")}
-                  placeholderTextColor="rgba(255, 255, 255, 0.7)"
-                  editable={!submitting}
-                  autoFocus={true}
-                />
-
-                <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.country")}</Text>
-                <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.sm }}>
-                  {COUNTRY_CODES.slice(0, 12).map((code) => (
-                    <TouchableOpacity
-                      key={code}
-                      style={[styles.countryChip, newCountry === code && styles.countryChipActive]}
-                      onPress={() => setNewCountry(code)}
-                    >
-                      <Text style={[styles.countryChipText, newCountry === code && styles.countryChipTextActive]}>
-                        {getLocalizedCountryName(code, locale)}
-                      </Text>
-                    </TouchableOpacity>
-                  ))}
-                </ScrollView>
-                <Text style={[styles.modalLabel, { marginTop: spacing.xs }]}>{t("projects.city")}</Text>
-                <TextInput
-                  style={styles.inputWhite}
-                  value={newCity}
-                  onChangeText={(text) => { setNewCity(text); setError(null); }}
-                  placeholder={t("projects.cityPlaceholder")}
-                  placeholderTextColor="rgba(255, 255, 255, 0.7)"
-                  editable={!submitting}
-                />
-                <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.address")}</Text>
-                <TextInput
-                  style={styles.inputWhite}
-                  value={newAddress}
-                  onChangeText={(text) => {
-                    setNewAddress(text);
-                    setError(null);
-                  }}
-                  placeholder={t("createProject.addressPlaceholder")}
-                  placeholderTextColor="rgba(255, 255, 255, 0.7)"
-                  editable={!submitting}
-                />
+                {selectedType === "MAINTENANCE" ? (
+                  <>
+                    <Text style={styles.modalLabel}>{t("createProject.maintenanceGroup.groupNameLabel")} *</Text>
+                    <TextInput
+                      style={styles.inputWhite}
+                      value={newName}
+                      onChangeText={(text) => {
+                        setNewName(text);
+                        setError(null);
+                      }}
+                      placeholder={t("createProject.maintenanceGroup.groupNamePlaceholder")}
+                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
+                      editable={!submitting}
+                      autoFocus={true}
+                    />
+                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("createProject.maintenanceGroup.baseLocationLabel")}</Text>
+                    <TextInput
+                      style={styles.inputWhite}
+                      value={newAddress}
+                      onChangeText={(text) => {
+                        setNewAddress(text);
+                        setError(null);
+                      }}
+                      placeholder={t("createProject.maintenanceGroup.baseLocationPlaceholder")}
+                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
+                      editable={!submitting}
+                    />
+                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("createProject.maintenanceGroup.noteLabel")}</Text>
+                    <TextInput
+                      style={[styles.inputWhite, { minHeight: 64 }]}
+                      value={newNote}
+                      onChangeText={(text) => {
+                        setNewNote(text);
+                        setError(null);
+                      }}
+                      placeholder={t("createProject.maintenanceGroup.notePlaceholder")}
+                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
+                      editable={!submitting}
+                      multiline
+                      numberOfLines={3}
+                    />
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.modalLabel}>{t("projects.namePlaceholder")} *</Text>
+                    <TextInput
+                      style={styles.inputWhite}
+                      value={newName}
+                      onChangeText={(text) => {
+                        setNewName(text);
+                        setError(null);
+                      }}
+                      placeholder={t("projects.namePlaceholder")}
+                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
+                      editable={!submitting}
+                      autoFocus={true}
+                    />
+                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.country")}</Text>
+                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.sm }}>
+                      {COUNTRY_CODES.slice(0, 12).map((code) => (
+                        <TouchableOpacity
+                          key={code}
+                          style={[styles.countryChip, newCountry === code && styles.countryChipActive]}
+                          onPress={() => setNewCountry(code)}
+                        >
+                          <Text style={[styles.countryChipText, newCountry === code && styles.countryChipTextActive]}>
+                            {getLocalizedCountryName(code, locale)}
+                          </Text>
+                        </TouchableOpacity>
+                      ))}
+                    </ScrollView>
+                    <Text style={[styles.modalLabel, { marginTop: spacing.xs }]}>{t("projects.city")}</Text>
+                    <TextInput
+                      style={styles.inputWhite}
+                      value={newCity}
+                      onChangeText={(text) => { setNewCity(text); setError(null); }}
+                      placeholder={t("projects.cityPlaceholder")}
+                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
+                      editable={!submitting}
+                    />
+                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.address")}</Text>
+                    <TextInput
+                      style={styles.inputWhite}
+                      value={newAddress}
+                      onChangeText={(text) => {
+                        setNewAddress(text);
+                        setError(null);
+                      }}
+                      placeholder={t("createProject.addressPlaceholder")}
+                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
+                      editable={!submitting}
+                    />
+                  </>
+                )}
 
                 {renderContainsChecklist()}
 
@@ -1124,7 +1183,9 @@ export function ProjectsScreen() {
                 <Text style={styles.modalLabel}>{t("createProject.summaryTitle")}</Text>
                 <View style={styles.summaryContainer}>
                   <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>{t("projects.namePlaceholder")}:</Text>
+                    <Text style={styles.summaryLabel}>
+                      {selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.groupNameLabel") : t("projects.namePlaceholder")}:
+                    </Text>
                     <Text style={styles.summaryValue}>{newName}</Text>
                   </View>
                   <View style={styles.summaryRow}>
@@ -1139,12 +1200,27 @@ export function ProjectsScreen() {
                         : t("createProject.structureNoPhases")}
                     </Text>
                   </View>
-                  {newAddress.trim() && (
+                  {selectedType === "MAINTENANCE" ? (
+                    <>
+                      {newAddress.trim() && (
+                        <View style={styles.summaryRow}>
+                          <Text style={styles.summaryLabel}>{t("createProject.maintenanceGroup.baseLocationLabel")}:</Text>
+                          <Text style={styles.summaryValue}>{newAddress.trim()}</Text>
+                        </View>
+                      )}
+                      {newNote.trim() && (
+                        <View style={styles.summaryRow}>
+                          <Text style={styles.summaryLabel}>{t("createProject.maintenanceGroup.noteLabel")}:</Text>
+                          <Text style={styles.summaryValue}>{newNote.trim()}</Text>
+                        </View>
+                      )}
+                    </>
+                  ) : newAddress.trim() ? (
                     <View style={styles.summaryRow}>
                       <Text style={styles.summaryLabel}>{t("projects.address")}:</Text>
                       <Text style={styles.summaryValue}>{newAddress.trim()}</Text>
                     </View>
-                  )}
+                  ) : null}
                   {selectedType === "MANAGEMENT" && (
                     <View style={styles.summaryRow}>
                       <Text style={styles.summaryLabel}>{t("createProject.howToStart")}</Text>
@@ -1616,7 +1692,7 @@ const styles = StyleSheet.create({
   },
   containsTitle: {
     fontSize: 14,
-    color: colors.text,
+    color: colors.textOnDark,
     fontWeight: "600",
     marginBottom: spacing.sm,
   },
@@ -1628,7 +1704,7 @@ const styles = StyleSheet.create({
   },
   containsItemText: {
     fontSize: 13,
-    color: colors.textSecondary,
+    color: colors.textOnDark,
   },
   templateChoiceColumn: {
     gap: spacing.sm,
@@ -1711,12 +1787,12 @@ const styles = StyleSheet.create({
   },
   summaryLabel: {
     fontSize: 14,
-    color: colors.textMuted,
+    color: colors.textOnDark,
     fontWeight: "500",
   },
   summaryValue: {
     fontSize: 14,
-    color: colors.text,
+    color: colors.textOnDark,
     fontWeight: "600",
   },
 });

@@ -7,6 +7,7 @@ import { db, getCallable } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
 import { configurePurchases } from "../services/billing";
 import { setupPushNotifications, removePushToken } from "../services/pushNotifications";
+import { getExtraEnv } from "../lib/env";
 
 export type BillingStatus = {
   status: "trial" | "active" | "expired";
@@ -51,9 +52,6 @@ type AuthContextValue = AuthState & {
 const AuthContext = createContext<AuthContextValue | null>(null);
 
 const ONBOARDING_KEY = "staveto_onboarding_done";
-const GOOGLE_WEB_CLIENT_ID =
-  process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID ??
-  "255961550157-gaueraial600f02qa3qadki41fhvabit.apps.googleusercontent.com";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
   const claimedInviteSessionsRef = useRef<Set<string>>(new Set());
@@ -94,11 +92,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    if (!GOOGLE_WEB_CLIENT_ID) {
+    const webClientId = getExtraEnv("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID");
+    if (!webClientId) {
       console.warn("[auth] Missing EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID");
       return;
     }
-    GoogleSignin.configure({ webClientId: GOOGLE_WEB_CLIENT_ID });
+    GoogleSignin.configure({ webClientId });
   }, []);
 
   useEffect(() => {

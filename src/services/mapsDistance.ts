@@ -7,10 +7,12 @@
  * Enable in Google Cloud Console: Directions API
  */
 
+import { getExtraEnv } from "../lib/env";
+
 const MIN_ADDRESS_LENGTH = 3;
 
 function getApiKey(): string | null {
-  return process.env.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY?.trim() || null;
+  return getExtraEnv("EXPO_PUBLIC_GOOGLE_MAPS_API_KEY") ?? null;
 }
 
 function encodeAddress(addr: string): string {

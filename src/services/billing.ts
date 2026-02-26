@@ -5,6 +5,7 @@
  */
 
 import { Platform } from "react-native";
+import { getExtraEnv } from "../lib/env";
 import { getCallable } from "../firebase";
 
 let Purchases: typeof import("react-native-purchases").default | null = null;
@@ -60,9 +61,9 @@ let purchasesConfigured = false;
 function getApiKey(): string | null {
   const key =
     Platform.OS === "android"
-      ? process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY?.trim()
-      : process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY?.trim();
-  return key || null;
+      ? getExtraEnv("EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY")
+      : getExtraEnv("EXPO_PUBLIC_REVENUECAT_IOS_API_KEY");
+  return key ?? null;
 }
 
 export async function configurePurchases(userId?: string | null): Promise<void> {

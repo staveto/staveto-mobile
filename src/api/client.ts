@@ -1,8 +1,10 @@
+import { getExtraEnv } from "../lib/env";
+
 /** Dev: LAN/localhost. Production: MUSÍ byť EXPO_PUBLIC_API_URL (nastaviť v EAS env). */
 const DEV_FALLBACK = "http://127.0.0.1:8787";
-const envApiUrl = process.env.EXPO_PUBLIC_API_URL?.trim();
+const envApiUrl = getExtraEnv("EXPO_PUBLIC_API_URL");
 const baseURL =
-  envApiUrl && envApiUrl.length > 0 ? envApiUrl : (__DEV__ ? DEV_FALLBACK : "https://staveto-app-api.workers.dev");
+  envApiUrl ? envApiUrl : (__DEV__ ? DEV_FALLBACK : "https://staveto-app-api.workers.dev");
 
 const REQUEST_TIMEOUT_MS = 15000;
 

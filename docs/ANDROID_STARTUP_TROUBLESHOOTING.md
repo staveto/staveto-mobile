@@ -1,5 +1,11 @@
 # Android – Aplikácia sa nespustí
 
+## "Startup Error" / "Missing env: EXPO_PUBLIC_..."
+
+Ak stiahnutá produkčná appka zobrazuje **Missing env: EXPO_PUBLIC_FIREBASE_API_KEY, ...** – premenné neboli nastavené v EAS pri buildi. Pozri **docs/EAS_ENVIRONMENT_VARIABLES.md** a vytvor nový build po pridaní premenných.
+
+---
+
 ## Dôležité: Projekt používa expo-dev-client
 
 **Expo Go nestačí.** Potrebuješ **development build** – vlastnú zostavenú APK s dev klientom. Chyba `unable to resolve Intent exp+stavetoapp://expo-development-client` znamená, že na emulátore nie je nainštalovaná Staveto app.

@@ -18,6 +18,20 @@ import Constants from "expo-constants";
 const BOOT_TIMEOUT_MS = 15_000;
 const SPLASH_FALLBACK_MS = 5_000;
 
+/** Required env keys per platform – must be set via EAS env vars/secrets for production builds. */
+const REQUIRED_ENV_KEYS: readonly string[] =
+  Platform.OS === "ios"
+    ? [
+        "EXPO_PUBLIC_FIREBASE_API_KEY",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID",
+        "EXPO_PUBLIC_REVENUECAT_IOS_API_KEY",
+      ]
+    : [
+        "EXPO_PUBLIC_FIREBASE_API_KEY",
+        "EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID",
+        "EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY",
+      ];
+
 type BootState = "booting" | "ready" | "error";
 
 type BootStep =
@@ -43,15 +57,11 @@ function runStep<T>(name: BootStep, fn: () => T): T {
 function stepEnvCheck(): void {
   runStep("envCheck", () => {
     const missing: string[] = [];
-    const v1 = process.env.EXPO_PUBLIC_FIREBASE_API_KEY;
-    const v2 = process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID;
-    const v3 = Platform.OS === "ios"
-      ? process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY
-      : process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY;
-    if (!v1 || (typeof v1 === "string" && !v1.trim())) missing.push("EXPO_PUBLIC_FIREBASE_API_KEY");
-    if (!v2 || (typeof v2 === "string" && !v2.trim())) missing.push("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID");
-    if (!v3 || (typeof v3 === "string" && !v3.trim())) {
-      missing.push(Platform.OS === "ios" ? "EXPO_PUBLIC_REVENUECAT_IOS_API_KEY" : "EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY");
+    for (const key of REQUIRED_ENV_KEYS) {
+      const val = process.env[key];
+      if (!val || (typeof val === "string" && !val.trim())) {
+        missing.push(key);
+      }
     }
     if (missing.length > 0) {
       throw new Error(`Missing env: ${missing.join(", ")}`);
@@ -84,12 +94,10 @@ function stepDiagnostics(): void {
   runStep("diagnostics", () => {
     const build = Constants.expoConfig?.version ?? "?";
     const platform = Platform.OS;
-    const envChecks = {
-      EXPO_PUBLIC_FIREBASE_API_KEY: !!process.env.EXPO_PUBLIC_FIREBASE_API_KEY,
-      EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID: !!process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID,
-      EXPO_PUBLIC_REVENUECAT_IOS_API_KEY: !!process.env.EXPO_PUBLIC_REVENUECAT_IOS_API_KEY,
-      EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY: !!process.env.EXPO_PUBLIC_REVENUECAT_ANDROID_API_KEY,
-    };
+    const envChecks: Record<string, boolean> = {};
+    for (const key of REQUIRED_ENV_KEYS) {
+      envChecks[key] = !!(process.env[key]?.trim?.() ?? process.env[key]);
+    }
     if (__DEV__) {
       console.log("[boot] platform:", platform, "build:", build, "env:", envChecks);
     }
@@ -268,16 +276,23 @@ function BootLoader({ children }: { children: React.ReactNode }) {
   }
 
   if (state === "error") {
+    const isEnvError = errorStep === "envCheck" && error?.includes("Missing env");
+    const userMessage = !__DEV__ && isEnvError
+      ? "Technická chyba. Prosím kontaktujte podporu."
+      : (error ?? "Unknown error");
+    if (!__DEV__ && isEnvError) {
+      console.error("[boot] envCheck failed:", error);
+    }
     return (
       <View style={[styles.loading, { padding: 24 }]}>
         <Text style={styles.errorTitle}>Startup Error</Text>
-        {errorStep && (
+        {__DEV__ && errorStep && (
           <Text style={[styles.errorMessage, { fontSize: 11, color: "rgba(255,255,255,0.6)", marginBottom: 8 }]}>
             Step: {errorStep}
           </Text>
         )}
         <Text style={styles.errorMessage} selectable>
-          {error ?? "Unknown error"}
+          {userMessage}
         </Text>
         <TouchableOpacity style={styles.retryButton} onPress={handleRetry}>
           <Text style={styles.retryButtonText}>Retry</Text>

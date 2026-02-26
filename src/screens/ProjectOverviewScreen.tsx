@@ -3091,36 +3091,30 @@ export function ProjectOverviewScreen() {
         </TouchableOpacity>
       </View>
 
-      {/* MAINTENANCE: Equipment section first (above Address) - asset-centric hierarchy */}
+      {/* MAINTENANCE: Equipment section first - same card pattern as Service plans, Expenses */}
       {projectType === 'MAINTENANCE' && (
-        <View style={styles.equipmentSectionMaintenanceTop}>
-          <View style={styles.equipmentSectionHeaderRow}>
-            <Text style={styles.equipmentSectionTitleMaintenance}>
-              {t("equipment.title")} ({equipmentList.length})
-            </Text>
-            {access.canWrite && (
-              <TouchableOpacity
-                style={styles.equipmentAddPrimary}
-                onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
-                activeOpacity={0.8}
-              >
-                <Ionicons name="add" size={20} color="#FFFFFF" />
-                <Text style={styles.equipmentAddPrimaryText}>{t("equipment.addEquipment")}</Text>
-              </TouchableOpacity>
-            )}
-          </View>
+        <View style={styles.equipmentSectionCard}>
+          <TouchableOpacity
+            style={styles.equipmentSectionHeader}
+            onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
+            activeOpacity={0.7}
+          >
+            <View style={styles.equipmentSectionHeaderLeft}>
+              <Ionicons name="construct-outline" size={20} color={colors.text} style={{ marginRight: spacing.sm }} />
+              <Text style={styles.equipmentSectionHeaderText}>{t("equipment.title")}</Text>
+              <Text style={styles.equipmentSectionCount}>({equipmentList.length})</Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+          </TouchableOpacity>
           {equipmentList.length === 0 ? (
-            <TouchableOpacity
-              style={styles.equipmentCta}
-              onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
-            >
-              <Ionicons name="add-circle-outline" size={24} color={colors.primary} />
-              <Text style={styles.equipmentCtaText}>{t("equipment.addEquipment")}</Text>
-            </TouchableOpacity>
+            <View style={styles.equipmentEmptyContent}>
+              <Text style={styles.equipmentEmptyText}>{t("equipment.noEquipment") || "Žiadne zariadenia"}</Text>
+              <Text style={styles.equipmentEmptyHint}>{t("equipment.emptySubtext") || "Pridajte zariadenie pomocou tlačidla nižšie"}</Text>
+            </View>
           ) : (
-            <>
+            <View style={styles.equipmentContent}>
               <View style={styles.equipmentListRow}>
-                {equipmentList.slice(0, 2).map((eq) => (
+                {equipmentList.slice(0, 3).map((eq) => (
                   <TouchableOpacity
                     key={eq.id}
                     style={styles.equipmentChip}
@@ -3153,7 +3147,11 @@ export function ProjectOverviewScreen() {
                         style={styles.equipmentChipImage}
                         resizeMode="cover"
                       />
-                    ) : null}
+                    ) : (
+                      <View style={[styles.equipmentChipImage, styles.equipmentChipImagePlaceholder]}>
+                        <Ionicons name="construct-outline" size={18} color={colors.textMuted} />
+                      </View>
+                    )}
                     <Text style={styles.equipmentChipText} numberOfLines={1}>{eq.labelCode || eq.name}</Text>
                   </TouchableOpacity>
                 ))}
@@ -3162,10 +3160,10 @@ export function ProjectOverviewScreen() {
                 style={styles.equipmentViewAll}
                 onPress={() => (navigation as any).navigate('EquipmentList', { projectId, projectName })}
               >
-                <Text style={styles.equipmentViewAllText}>{t("projectOverview.viewAll") || "Zobraziť všetky"}</Text>
+                <Text style={styles.equipmentViewAllText}>{t("projectOverview.viewAll") || "Zobraziť všetko"}</Text>
                 <Ionicons name="chevron-forward" size={16} color={colors.primary} />
               </TouchableOpacity>
-            </>
+            </View>
           )}
         </View>
       )}
@@ -4036,8 +4034,7 @@ export function ProjectOverviewScreen() {
 
         {/* MAINTENANCE: Address section at end of scroll (Equipment-first hierarchy) */}
         {projectType === 'MAINTENANCE' && (addressText || isOwner) && (
-          <View style={[styles.expensesSection, { marginTop: spacing.lg }]}>
-            <View style={[styles.addressSection, { marginHorizontal: 0, marginTop: 0 }]}>
+          <View style={[styles.addressSection, styles.addressSectionMaintenance]}>
             <View style={styles.addressTopRow}>
               <View style={styles.addressContent}>
                 <Ionicons name="location" size={20} color={colors.primary} />
@@ -4091,7 +4088,6 @@ export function ProjectOverviewScreen() {
             ) : (
               <Text style={styles.weatherErrorText}>{weatherError || t("projectOverview.weatherLoadFailed")}</Text>
             )}
-            </View>
           </View>
         )}
 
@@ -5853,6 +5849,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
     gap: spacing.xs,
+    overflow: 'hidden',
+  },
+  addressSectionMaintenance: {
+    marginTop: spacing.lg,
+    marginBottom: spacing.md,
   },
   addressTopRow: {
     flexDirection: "row",
@@ -5860,14 +5861,15 @@ const styles = StyleSheet.create({
     justifyContent: "space-between",
     flexWrap: "nowrap",
     gap: spacing.sm,
+    overflow: 'hidden',
   },
   addressContent: {
     flex: 1,
     flexShrink: 1,
     minWidth: 0,
     flexDirection: "row",
-    alignItems: "flex-start",
-    marginRight: spacing.md,
+    alignItems: "center",
+    overflow: 'hidden',
   },
   addressText: {
     flex: 1,
@@ -6269,46 +6271,38 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  equipmentSectionMaintenanceTop: {
+  equipmentSectionCard: {
     marginHorizontal: spacing.md,
-    marginBottom: spacing.md,
     marginTop: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.lg,
+    marginBottom: spacing.md,
     backgroundColor: colors.card,
     borderRadius: radius,
-    borderWidth: 2,
-    borderColor: colors.primary + "50",
-    shadowColor: colors.primary,
-    shadowOffset: { width: 0, height: 3 },
-    shadowOpacity: 0.18,
-    shadowRadius: 10,
-    elevation: 6,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: 'hidden',
   },
-  equipmentSectionHeaderRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    marginBottom: spacing.sm,
+  equipmentSectionHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    padding: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
   },
-  equipmentSectionTitleMaintenance: {
-    fontSize: 22,
-    fontWeight: "800",
+  equipmentSectionHeaderLeft: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    flex: 1,
+  },
+  equipmentSectionHeaderText: {
+    fontSize: 16,
+    fontWeight: '600',
     color: colors.text,
   },
-  equipmentAddPrimary: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 8,
-    backgroundColor: colors.primary,
-    paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.md,
-    borderRadius: radius,
-  },
-  equipmentAddPrimaryText: {
-    fontSize: 15,
-    fontWeight: "600",
-    color: "#FFFFFF",
+  equipmentSectionCount: {
+    fontSize: 14,
+    color: colors.textMuted,
+    marginLeft: spacing.xs,
   },
   equipmentSectionTitle: {
     fontSize: 16,
@@ -6328,21 +6322,23 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  equipmentCta: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.md,
-    borderRadius: radius,
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
+  equipmentEmptyContent: {
+    padding: spacing.lg,
+    alignItems: 'center',
   },
-  equipmentCtaText: {
+  equipmentEmptyText: {
     fontSize: 15,
-    color: colors.primary,
-    fontWeight: "500",
+    color: colors.textMuted,
+    fontWeight: '500',
+    marginBottom: spacing.xs,
+  },
+  equipmentEmptyHint: {
+    fontSize: 13,
+    color: colors.textMuted,
+  },
+  equipmentContent: {
+    padding: spacing.md,
+    paddingTop: spacing.sm,
   },
   equipmentListRow: {
     flexDirection: "row",
@@ -6356,22 +6352,28 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.sm,
     borderRadius: radius,
-    backgroundColor: colors.card,
+    backgroundColor: colors.background,
     borderWidth: 1,
     borderColor: colors.border,
-    maxWidth: 160,
+    minWidth: 0,
+    flex: 1,
+    maxWidth: '48%',
     gap: spacing.sm,
   },
   equipmentChipImage: {
-    width: 36,
-    height: 36,
-    borderRadius: 6,
+    width: 40,
+    height: 40,
+    borderRadius: 8,
     backgroundColor: colors.border,
+  },
+  equipmentChipImagePlaceholder: {
+    justifyContent: 'center',
+    alignItems: 'center',
   },
   equipmentChipText: {
     flex: 1,
     fontSize: 13,
-    color: colors.text,
+    color: colors.textOnDark,
     fontWeight: "500",
   },
   equipmentViewAll: {

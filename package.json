@@ -8,6 +8,7 @@
     "start": "npm run ensure-logo && expo start",
     "android": "npm run ensure-logo && expo start --android",
     "dev:android": "node scripts/run-android.js",
+    "run:android:emulator": "node scripts/run-android.js",
     "start:emulator": "powershell -ExecutionPolicy Bypass -File ./scripts/start-emulator.ps1",
     "dev:android:external": "powershell -ExecutionPolicy Bypass -File ./scripts/build-android-external.ps1",
     "ios": "expo run:ios",

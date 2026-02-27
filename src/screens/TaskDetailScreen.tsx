@@ -11,8 +11,9 @@ import {
   Linking,
   Alert,
   TextInput,
+  Platform,
 } from "react-native";
-import { useRoute } from "@react-navigation/native";
+import { useRoute, useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { Ionicons } from "@expo/vector-icons";
 import * as tasksService from "../services/tasks";
@@ -26,6 +27,14 @@ import {
   normalizeStatusValue,
   type StoredStatusValue,
 } from "../helpers/taskStatusMapping";
+import { toYmd } from "../utils/date";
+
+let DateTimePicker: any = null;
+try {
+  DateTimePicker = require("@react-native-community/datetimepicker").default;
+} catch {
+  // ignore
+}
 
 function genId() {
   return "st_" + Date.now() + "_" + Math.random().toString(36).slice(2, 9);
@@ -37,9 +46,10 @@ type Task = TaskDoc;
 
 export function TaskDetailScreen() {
   const route = useRoute();
+  const navigation = useNavigation();
   const { orgId } = useAuth();
   const { t } = useI18n();
-  const task = (route.params as { task: Task })?.task;
+  const { task, onSaveComplete } = (route.params as { task: Task; onSaveComplete?: () => void }) ?? {};
   const [status, setStatus] = useState((task?.status ?? "OPEN").toUpperCase());
   const [subtasks, setSubtasks] = useState<Array<{ id: string; title: string; done: boolean; order: number }>>(() => {
     if (task?.subtasks && task.subtasks.length > 0) return task.subtasks;
@@ -53,7 +63,14 @@ export function TaskDetailScreen() {
   const [viewingAttachment, setViewingAttachment] = useState<AttachmentDoc | null>(null);
   const [viewingAttachmentURL, setViewingAttachmentURL] = useState<string | null>(null);
   const [loadingAttachments, setLoadingAttachments] = useState(false);
+  const [savingStatus, setSavingStatus] = useState(false);
+  const [showDatePicker, setShowDatePicker] = useState(false);
+  const [dueDate, setDueDate] = useState<string | null>(task?.dueDate ?? null);
+  const [savingDate, setSavingDate] = useState(false);
   const statusMappings = getStatusMappingsForUI();
+
+  const todayYmd = toYmd(new Date());
+  const isOverdue = !!dueDate && dueDate < todayYmd && normalizeStatusValue(status) !== "DONE";
 
   useEffect(() => {
     if (task?.projectId && task?.id) {
@@ -61,13 +78,16 @@ export function TaskDetailScreen() {
     }
   }, [task?.projectId, task?.id]);
 
-  // Update status when task changes (e.g., from navigation or refresh)
+  // Update status and dueDate when task changes (e.g., from navigation or refresh)
   useEffect(() => {
     if (task?.status) {
       const normalizedStatus = normalizeStatusValue(task.status);
       setStatus(normalizedStatus);
     }
-  }, [task?.status]);
+    if (task?.dueDate !== undefined) {
+      setDueDate(task.dueDate ?? null);
+    }
+  }, [task?.status, task?.dueDate]);
 
   const loadAttachments = async () => {
     if (!task?.projectId || !task?.id) return;
@@ -175,10 +195,43 @@ export function TaskDetailScreen() {
   const doStatusChange = async (normalizedStatus: StoredStatusValue) => {
     if (!orgId || !task.projectId) return;
     setStatus(normalizedStatus);
+    setSavingStatus(true);
     try {
       await tasksService.updateTaskStatus(orgId, task.projectId, task.id, normalizedStatus);
     } catch {
       setStatus(normalizeStatusValue(task.status));
+    } finally {
+      setSavingStatus(false);
+    }
+  };
+
+  const handleDateChange = (_ev: any, selectedDate?: Date) => {
+    setShowDatePicker(Platform.OS === "ios");
+    if (selectedDate) {
+      const ymd = toYmd(selectedDate);
+      setDueDate(ymd);
+      if (Platform.OS === "android") {
+        saveDueDate(ymd);
+      }
+    }
+  };
+
+  const saveDueDate = async (ymd?: string) => {
+    const targetYmd = ymd ?? dueDate;
+    if (!targetYmd) return;
+    if (!orgId || !task?.projectId) {
+      Alert.alert(t("common.error") || "Chyba", t("taskDetail.failedToSaveDate") || "Nepodarilo sa uložiť dátum. Skontrolujte pripojenie.");
+      return;
+    }
+    setSavingDate(true);
+    try {
+      await tasksService.updateTaskTitle(orgId, task.projectId, task.id, task.title ?? "", targetYmd);
+      onSaveComplete?.();
+    } catch (err: any) {
+      setDueDate(task.dueDate ?? null);
+      Alert.alert(t("common.error") || "Chyba", err?.message || t("taskDetail.failedToSaveDate") || "Nepodarilo sa uložiť dátum.");
+    } finally {
+      setSavingDate(false);
     }
   };
 
@@ -211,10 +264,80 @@ export function TaskDetailScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
-      <View style={styles.card}>
+      <View style={[styles.card, isOverdue && styles.cardOverdue]}>
         <Text style={styles.title}>{task.title || t("taskDetail.noTitle")}</Text>
-        {task.dueDate ? <Text style={styles.muted}>{t("taskDetail.dueDate", { date: task.dueDate })}</Text> : null}
+        {dueDate ? (
+          <TouchableOpacity
+            style={styles.dueDateRow}
+            onPress={() => setShowDatePicker(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="calendar-outline" size={18} color={isOverdue ? "#ef4444" : colors.textMuted} />
+            <Text style={[styles.dueDateText, isOverdue && styles.dueDateOverdue]}>
+              {t("taskDetail.dueDate", { date: dueDate })}
+            </Text>
+            <Text style={styles.changeDateHint}>{t("taskDetail.changeDate")}</Text>
+          </TouchableOpacity>
+        ) : (
+          <TouchableOpacity
+            style={styles.dueDateRow}
+            onPress={() => setShowDatePicker(true)}
+            activeOpacity={0.7}
+          >
+            <Ionicons name="calendar-outline" size={18} color={colors.textMuted} />
+            <Text style={styles.addDateHint}>{t("taskDetail.addDate")}</Text>
+          </TouchableOpacity>
+        )}
       </View>
+
+      {showDatePicker && DateTimePicker && (
+        Platform.OS === "ios" ? (
+          <Modal transparent visible>
+            <View style={styles.datePickerOverlay}>
+              <View style={styles.datePickerContent}>
+                <DateTimePicker
+                  value={dueDate ? new Date(dueDate + "T12:00:00") : new Date()}
+                  mode="date"
+                  display="spinner"
+                  onChange={handleDateChange}
+                />
+                <View style={styles.datePickerActions}>
+                  <TouchableOpacity
+                    style={styles.datePickerCancelBtn}
+                    onPress={() => {
+                      setShowDatePicker(false);
+                      setDueDate(task.dueDate ?? null);
+                    }}
+                  >
+                    <Text style={styles.datePickerCancelText}>{t("common.cancel")}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity
+                    style={styles.datePickerSaveBtn}
+                    onPress={() => {
+                      setShowDatePicker(false);
+                      saveDueDate();
+                    }}
+                    disabled={savingDate}
+                  >
+                    {savingDate ? (
+                      <ActivityIndicator size="small" color="#fff" />
+                    ) : (
+                      <Text style={styles.datePickerSaveText}>{t("taskDetail.save")}</Text>
+                    )}
+                  </TouchableOpacity>
+                </View>
+              </View>
+            </View>
+          </Modal>
+        ) : (
+          <DateTimePicker
+            value={dueDate ? new Date(dueDate + "T12:00:00") : new Date()}
+            mode="date"
+            display="default"
+            onChange={handleDateChange}
+          />
+        )
+      )}
 
       {/* Subúlohy */}
       <Text style={styles.sectionLabel}>{t("taskDetail.subtasks") || "Subúlohy"}</Text>
@@ -299,27 +422,49 @@ export function TaskDetailScreen() {
         {statusMappings.map((mapping) => {
           const isActive = status === mapping.storedValue || 
                           normalizeStatusValue(status) === normalizeStatusValue(mapping.storedValue);
+          const isDone = normalizeStatusValue(mapping.storedValue) === "DONE";
           
           return (
             <TouchableOpacity
               key={mapping.storedValue}
               style={[styles.statusBtn, isActive && styles.statusBtnActive]}
               onPress={() => onStatusChange(mapping.storedValue)}
+              disabled={savingStatus}
             >
               <View style={styles.statusBtnContent}>
-                <Text style={[styles.statusBtnText, isActive && styles.statusBtnTextActive]}>
-                  {mapping.uiLabel}
-                </Text>
-                {mapping.caption && (
-                  <Text style={[styles.statusBtnCaption, isActive && styles.statusBtnCaptionActive]}>
-                    {mapping.caption}
-                  </Text>
+                {savingStatus && isActive ? (
+                  <ActivityIndicator size="small" color={isDone ? "#fff" : colors.primary} />
+                ) : (
+                  <>
+                    <Text style={[styles.statusBtnText, isActive && styles.statusBtnTextActive]}>
+                      {mapping.uiLabel}
+                    </Text>
+                    {mapping.caption && (
+                      <Text style={[styles.statusBtnCaption, isActive && styles.statusBtnCaptionActive]}>
+                        {mapping.caption}
+                      </Text>
+                    )}
+                  </>
                 )}
               </View>
             </TouchableOpacity>
           );
         })}
       </View>
+
+      <TouchableOpacity
+        style={styles.confirmButton}
+        onPress={async () => {
+          const hasUnsavedDate = dueDate !== (task.dueDate ?? null);
+          if (hasUnsavedDate && dueDate) {
+            await saveDueDate();
+          }
+          navigation.goBack();
+        }}
+        activeOpacity={0.8}
+      >
+        <Text style={styles.confirmButtonText}>{t("taskDetail.confirmAndBack")}</Text>
+      </TouchableOpacity>
 
       {/* Image Viewer Modal */}
       <Modal
@@ -370,8 +515,62 @@ const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   contentContainer: { padding: spacing.lg },
   card: { backgroundColor: colors.card, borderRadius: radius, padding: spacing.lg, marginBottom: spacing.lg, borderWidth: 1, borderColor: colors.border },
+  cardOverdue: { borderColor: "#ef4444", borderWidth: 2 },
   title: { fontSize: 20, fontWeight: "600", color: colors.text },
   muted: { fontSize: 14, color: colors.textMuted, marginTop: 4 },
+  dueDateRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: spacing.sm,
+    gap: spacing.sm,
+  },
+  dueDateText: { fontSize: 14, color: colors.textMuted },
+  dueDateOverdue: { color: "#ef4444", fontWeight: "600" },
+  changeDateHint: { fontSize: 12, color: colors.primary, marginLeft: spacing.xs },
+  addDateHint: { fontSize: 14, color: colors.textMuted, fontStyle: "italic" },
+  datePickerOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  datePickerContent: {
+    backgroundColor: colors.card,
+    borderTopLeftRadius: radius,
+    borderTopRightRadius: radius,
+    paddingBottom: spacing.xl,
+  },
+  datePickerActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    gap: spacing.md,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.md,
+  },
+  datePickerCancelBtn: { paddingVertical: spacing.sm, paddingHorizontal: spacing.md },
+  datePickerCancelText: { fontSize: 16, color: colors.textMuted },
+  datePickerSaveBtn: {
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius,
+    minWidth: 80,
+    alignItems: "center",
+  },
+  datePickerSaveText: { fontSize: 16, fontWeight: "600", color: "#fff" },
+  confirmButton: {
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius,
+    alignItems: "center",
+    marginTop: spacing.xl,
+    marginBottom: spacing.lg,
+  },
+  confirmButtonText: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#fff",
+  },
   sectionLabel: { fontSize: 12, color: colors.textMuted, marginBottom: spacing.sm, marginTop: spacing.md },
   subtasksContainer: { marginBottom: spacing.md },
   subtaskRow: {

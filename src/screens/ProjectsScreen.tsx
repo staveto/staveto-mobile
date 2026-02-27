@@ -20,6 +20,7 @@ import {
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useFocusEffect, useRoute, useNavigation } from "@react-navigation/native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
@@ -32,10 +33,12 @@ import type { CatalogPhase } from "../lib/types";
 import type { ProjectDoc } from "../services/projects";
 import { colors, radius, spacing } from "../theme";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
+import { CloneProjectModal } from "../components/CloneProjectModal";
 import { ProjectTypeCrossroad, type SelectableProjectType } from "../components/ProjectTypeCrossroad";
 import { openInMaps } from "../lib/maps";
 import { COUNTRY_CODES, getLocalizedCountryName } from "../utils/countries";
 import { getCallable } from "../firebase";
+import { showToast } from "../helpers/toast";
 
 type Project = ProjectDoc;
 
@@ -43,6 +46,7 @@ function showError(msg: string) {
   Alert.alert("", msg);
 }
 
+const ALLOWED_CLONE_TYPES = ["BUILD", "RESIDENTIAL", "TRADE", "MANAGEMENT"] as const;
 const PROJECTS_FILTER_KEY = "projects_filter_v1";
 const TYPE_FILTER_KEY = "projects_type_filter_v1";
 type ProjectFilter = "all" | "mine" | "shared";
@@ -112,9 +116,13 @@ export function ProjectsScreen() {
   const [editName, setEditName] = useState("");
   const [menuProject, setMenuProject] = useState<Project | null>(null);
   const [showMenu, setShowMenu] = useState(false);
+  const [showCloneModal, setShowCloneModal] = useState(false);
+  const [cloneSourceProject, setCloneSourceProject] = useState<Project | null>(null);
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<TypeFilter>("ALL");
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
+  const insets = useSafeAreaInsets();
+  const menuBottomInset = Platform.OS === "android" ? Math.max(insets.bottom, 48) : insets.bottom;
   const heroModalHeightRef = useRef<number | null>(null);
   if (showNew && heroModalHeightRef.current === null) {
     heroModalHeightRef.current = Math.min(Math.max(Math.round(windowHeight * 0.86), 520), windowHeight - spacing.md);
@@ -543,6 +551,24 @@ export function ProjectsScreen() {
     closeProjectMenu();
   };
 
+  const onMenuClone = () => {
+    if (!menuProject) return;
+    setCloneSourceProject(menuProject);
+    setShowCloneModal(true);
+    closeProjectMenu();
+  };
+
+  const onCloneSuccess = useCallback(
+    (newProjectId: string) => {
+      setShowCloneModal(false);
+      setCloneSourceProject(null);
+      load();
+      showToast(t("projects.cloneSuccess"));
+      (navigation as any).navigate("ProjectOverview", { projectId: newProjectId });
+    },
+    [load, navigation, t, showToast]
+  );
+
   const onMenuArchive = async () => {
     if (!menuProject || !orgId) return;
     const isArchived = !!menuProject.archivedAt;
@@ -954,9 +980,24 @@ export function ProjectsScreen() {
         />
         </>
       )}
+      <CloneProjectModal
+        visible={showCloneModal}
+        onClose={() => {
+          setShowCloneModal(false);
+          setCloneSourceProject(null);
+        }}
+        sourceProjectId={cloneSourceProject?.id ?? ""}
+        sourceProjectName={cloneSourceProject?.name ?? ""}
+        sourceProjectType={cloneSourceProject?.projectType}
+        sourceCountryCode={cloneSourceProject?.countryCode}
+        sourceCity={cloneSourceProject?.city}
+        sourceAddressText={cloneSourceProject?.addressText}
+        isOwner={!!cloneSourceProject?.ownerId && cloneSourceProject.ownerId === user?.id}
+        onSuccess={onCloneSuccess}
+      />
       <Modal visible={showMenu} transparent animationType="fade">
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={closeProjectMenu}>
-          <View style={styles.menuCard}>
+          <View style={[styles.menuCard, { paddingBottom: menuBottomInset + spacing.md }]}>
             <Text style={styles.menuTitle}>{menuProject?.name || t("projects.noName")}</Text>
             <TouchableOpacity style={styles.menuItem} onPress={closeProjectMenu}>
               <Text style={styles.menuText}>{t("projects.cancel")}</Text>
@@ -964,6 +1005,14 @@ export function ProjectsScreen() {
             <TouchableOpacity style={styles.menuItem} onPress={onMenuEdit}>
               <Text style={styles.menuText}>{t("projects.edit")}</Text>
             </TouchableOpacity>
+            {menuProject &&
+              !!menuProject.ownerId &&
+              menuProject.ownerId === user?.id &&
+              ALLOWED_CLONE_TYPES.includes(menuProject.projectType as (typeof ALLOWED_CLONE_TYPES)[number]) && (
+                <TouchableOpacity style={styles.menuItem} onPress={onMenuClone}>
+                  <Text style={styles.menuText}>{t("projects.cloneStructure")}</Text>
+                </TouchableOpacity>
+              )}
             <TouchableOpacity style={styles.menuItem} onPress={onMenuArchive}>
               <Text style={styles.menuText}>
                 {menuProject?.archivedAt ? t("projects.unarchive") : t("projects.archive")}

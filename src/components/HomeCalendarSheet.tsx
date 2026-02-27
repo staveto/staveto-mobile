@@ -15,6 +15,8 @@ import {
   isSameDay,
   format,
   isToday,
+  isBefore,
+  parseISO,
 } from "date-fns";
 import {
   sk,
@@ -31,6 +33,7 @@ import type { Locale } from "../i18n/translations";
 import { useAuth } from "../context/AuthContext";
 import { colors, spacing } from "../theme";
 import { toYmd, ymdToDate } from "../utils/date";
+import { normalizeStatusValue } from "../helpers/taskStatusMapping";
 import * as tasksService from "../services/tasks";
 import * as problemsService from "../services/problems";
 import type { TaskWithProject } from "../services/tasks";
@@ -41,7 +44,7 @@ const SHEET_BG = "#1e2530";
 const SHEET_TEXT = "#ffffff";
 const SHEET_ACTION = "#7dd3fc";
 
-/** Farba podľa typu – legenda pre všetky typy projektov + problémy */
+/** Farba podľa typu – legenda pre všetky typy projektov + problémy + overdue */
 const COLOR_BY_TYPE: Record<string, string> = {
   MANAGEMENT: "#6b7280",
   RESIDENTIAL: "#8b5cf6",
@@ -49,6 +52,7 @@ const COLOR_BY_TYPE: Record<string, string> = {
   BUILD: colors.primary,
   MAINTENANCE: "#60a5fa",
   problem: "#ef4444",
+  overdue: "#ef4444",
   /** Spätná kompatibilita */
   COLOR_SERVICE: "#60a5fa",
   COLOR_CONSTRUCTION: colors.primary,
@@ -65,6 +69,8 @@ type Props = {
   onTaskPress?: (task: TaskWithProject) => void;
   onProblemPress?: (problem: ProblemWithProject) => void;
   onSeeAllForDate?: (dueDateYmd: string) => void;
+  /** When changed, triggers a refresh of tasks/problems (e.g. after returning from TaskDetail) */
+  refreshTrigger?: number;
 };
 
 const LOCALE_MAP: Record<Locale, DateFnsLocale> = {
@@ -90,7 +96,7 @@ const WEEKDAYS_BY_LOCALE: Record<Locale, string[]> = {
 
 const PROJECT_TYPES = ["MANAGEMENT", "RESIDENTIAL", "TRADE", "BUILD", "MAINTENANCE"] as const;
 
-export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSeeAllForDate }: Props) {
+export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSeeAllForDate, refreshTrigger }: Props) {
   const { t, locale } = useI18n();
   const dateFnsLocale = LOCALE_MAP[locale] ?? enUS;
   const weekdays = WEEKDAYS_BY_LOCALE[locale] ?? WEEKDAYS_BY_LOCALE.en;
@@ -111,7 +117,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
     if (!user?.id) return;
     setLoading(true);
     try {
-      const start = new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1);
+      const start = subMonths(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1), 2);
       const end = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 2, 0);
       const startYmd = toYmd(start);
       const endYmd = toYmd(end);
@@ -144,7 +150,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
     } finally {
       setLoading(false);
     }
-  }, [user?.id, currentMonth]);
+  }, [user?.id, currentMonth, refreshTrigger]);
 
   useEffect(() => {
     loadTasks();
@@ -167,17 +173,23 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
   const tasksForSelected = selectedYmd ? (tasksByYmd.get(selectedYmd) ?? []) : [];
   const problemsForSelected = selectedYmd ? (problemsByYmd.get(selectedYmd) ?? []) : [];
 
+  const todayYmd = toYmd(new Date());
+  const isTaskOverdue = (t: TaskWithProject) =>
+    !!t.dueDate && t.dueDate < todayYmd && normalizeStatusValue(t.status) !== "DONE";
   const getTasksForDay = (day: Date) => tasksByYmd.get(toYmd(day)) ?? [];
   const getProblemsForDay = (day: Date) => problemsByYmd.get(toYmd(day)) ?? [];
+  const hasOverdueOnDay = (day: Date) =>
+    getTasksForDay(day).some(isTaskOverdue);
   const getTaskType = (t: TaskWithProject) =>
     t.projectType === "MAINTENANCE" || !!t.equipmentId || !!t.serviceRuleId ? "MAINTENANCE" : (t.projectType ?? "BUILD");
   const hasTypeOnDay = (day: Date, type: string) => {
     if (type === "problem") return getProblemsForDay(day).length > 0;
+    if (type === "overdue") return hasOverdueOnDay(day);
     return getTasksForDay(day).some((t) => getTaskType(t) === type);
   };
   const legendTypesInMonth = useMemo(
     () =>
-      [...PROJECT_TYPES, "problem"].filter((type) =>
+      [...PROJECT_TYPES, "problem", "overdue"].filter((type) =>
         days.some((day) => isSameMonth(day, currentMonth) && hasTypeOnDay(day, type))
       ),
     [days, currentMonth, tasksByYmd, problemsByYmd]
@@ -275,7 +287,11 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                 const inMonth = isSameMonth(day, currentMonth);
                 const selected = selectedDate && isSameDay(day, selectedDate);
                 const today = isToday(day);
-                const typesPresent = [...PROJECT_TYPES, "problem"].filter((t) => hasTypeOnDay(day, t));
+                const hasOverdue = hasOverdueOnDay(day);
+                let typesPresent = [...PROJECT_TYPES, "problem", "overdue"].filter((t) => hasTypeOnDay(day, t));
+                if (hasOverdue) {
+                  typesPresent = ["overdue", ...typesPresent.filter((t) => t !== "overdue")];
+                }
                 return (
                   <TouchableOpacity
                     key={day.toISOString()}
@@ -283,7 +299,8 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                       styles.dayCell,
                       !inMonth && styles.dayCellDisabled,
                       selected && styles.dayCellSelected,
-                      today && !selected && styles.dayCellToday,
+                      today && !selected && !hasOverdue && styles.dayCellToday,
+                      hasOverdue && !selected && styles.dayCellOverdue,
                     ]}
                     onPress={() => setSelectedDate(day)}
                     activeOpacity={0.7}
@@ -294,13 +311,21 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                         !inMonth && styles.dayTextDisabled,
                         selected && styles.dayTextSelected,
                         today && !selected && styles.dayTextToday,
+                        hasOverdue && !selected && styles.dayTextOverdue,
                       ]}
                     >
                       {format(day, "d")}
                     </Text>
                     <View style={styles.dayDotsRow}>
                       {typesPresent.slice(0, 6).map((t) => (
-                        <View key={t} style={[styles.dayDot, { backgroundColor: COLOR_BY_TYPE[t] ?? "#888" }]} />
+                        <View
+                          key={t}
+                          style={[
+                            styles.dayDot,
+                            t === "overdue" && styles.dayDotOverdue,
+                            { backgroundColor: t === "overdue" ? COLOR_BY_TYPE.overdue : (COLOR_BY_TYPE[t] ?? "#888") },
+                          ]}
+                        />
                       ))}
                     </View>
                   </TouchableOpacity>
@@ -315,7 +340,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
               <View key={pt} style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: COLOR_BY_TYPE[pt] ?? "#888" }]} />
                 <Text style={styles.legendText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-                  {pt === "problem" ? t("home.legendProblem") : t(`projectType.${pt}`)}
+                  {pt === "problem" ? t("home.legendProblem") : pt === "overdue" ? t("home.legendOverdue") : t(`projectType.${pt}`)}
                 </Text>
               </View>
             ))}
@@ -357,22 +382,24 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                     {tasksForSelected.length > 0 &&
                       tasksForSelected
                         .slice(0, 5 - problemsForSelected.length)
-                        .map((task) => (
+                        .map((task) => {
+                          const overdue = isTaskOverdue(task);
+                          return (
                           <TouchableOpacity
                             key={`task-${task.projectId}-${task.id}`}
-                            style={styles.taskRow}
+                            style={[styles.taskRow, overdue && styles.taskRowOverdue]}
                             onPress={() => handleTaskPress(task)}
                             activeOpacity={0.7}
                           >
-                            <Ionicons name="checkbox-outline" size={18} color={SHEET_ACTION} />
-                            <Text style={styles.taskTitle} numberOfLines={1}>
+                            <Ionicons name="checkbox-outline" size={18} color={overdue ? COLOR_BY_TYPE.overdue : SHEET_ACTION} />
+                            <Text style={[styles.taskTitle, overdue && styles.taskTitleOverdue]} numberOfLines={1}>
                               {task.title || t("tasks.noTitle")}
                             </Text>
-                            <Text style={styles.taskProject} numberOfLines={1}>
+                            <Text style={[styles.taskProject, overdue && styles.taskProjectOverdue]} numberOfLines={1}>
                               {task.projectName ?? ""}
                             </Text>
                           </TouchableOpacity>
-                        ))}
+                        );})}
                     {(tasksForSelected.length + problemsForSelected.length) > 5 && (
                       <TouchableOpacity
                         style={styles.seeAllBtn}
@@ -480,6 +507,11 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.primary,
   },
+  dayCellOverdue: {
+    backgroundColor: "rgba(239, 68, 68, 0.75)",
+    borderWidth: 2,
+    borderColor: "#ef4444",
+  },
   dayText: {
     fontSize: 14,
     color: SHEET_TEXT,
@@ -495,6 +527,10 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontWeight: "600",
   },
+  dayTextOverdue: {
+    color: "#ef4444",
+    fontWeight: "700",
+  },
   dayDotsRow: {
     position: "absolute",
     bottom: 4,
@@ -509,6 +545,11 @@ const styles = StyleSheet.create({
     width: 5,
     height: 5,
     borderRadius: 2.5,
+  },
+  dayDotOverdue: {
+    width: 6,
+    height: 6,
+    borderRadius: 3,
   },
   legendRow: {
     flexDirection: "row",
@@ -560,16 +601,28 @@ const styles = StyleSheet.create({
     borderRadius: 8,
     marginBottom: spacing.xs,
   },
+  taskRowOverdue: {
+    borderLeftWidth: 3,
+    borderLeftColor: "#ef4444",
+    backgroundColor: "rgba(239, 68, 68, 0.12)",
+  },
   taskTitle: {
     flex: 1,
     fontSize: 14,
     color: SHEET_TEXT,
     marginLeft: spacing.sm,
   },
+  taskTitleOverdue: {
+    color: "#ef4444",
+    fontWeight: "600",
+  },
   taskProject: {
     fontSize: 12,
     color: "rgba(255,255,255,0.6)",
     maxWidth: 80,
+  },
+  taskProjectOverdue: {
+    color: "#ef4444",
   },
   seeAllBtn: {
     paddingVertical: spacing.sm,

@@ -366,6 +366,7 @@ export function HomeScreen() {
   const [photoURL, setPhotoURL] = useState<string | null>(null);
   const customizeSheetRef = useRef<BottomSheetModal | null>(null);
   const calendarSheetRef = useRef<BottomSheetModal | null>(null);
+  const [calendarRefreshTrigger, setCalendarRefreshTrigger] = useState(0);
 
   useEffect(() => {
     loadHomeLayout().then((layout) => setHomeLayout(layout));
@@ -536,6 +537,13 @@ export function HomeScreen() {
         }
       }
       const data = await dashboardService.loadDashboardData(orgId, { forceServerRead: isRefresh });
+
+      // Ensure overdue notifications exist (for tasks past due date)
+      if (typeof tasksService.ensureOverdueNotificationsIfNeeded === "function") {
+        tasksService.ensureOverdueNotificationsIfNeeded(orgId).catch((e) =>
+          console.warn("[HomeScreen] ensureOverdueNotificationsIfNeeded failed:", e)
+        );
+      }
 
       // Enrich today tasks with project names and phase names
       // Filter out tasks from BUILD projects
@@ -716,6 +724,7 @@ export function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       loadDashboard(false);
+      setCalendarRefreshTrigger((prev) => prev + 1);
       (async () => {
         await trackPaywallEvent("app_opened");
         try {
@@ -1104,11 +1113,12 @@ export function HomeScreen() {
     }
     setPendingAction(null);
     setPendingExpenseType(null);
+    setActionProjectId(null);
     setFabProjectSelectionMode(false);
-    setShowProjectSelector(false);
     setShowExpenseTypeModal(false);
-    setShowActionSheet(true);
-  }, [dashboardData, t, goToProjects]);
+    setShowActionSheet(false);
+    setShowProjectSelector(true);
+  }, [dashboardData, goToProjects]);
 
   const handleTaskClick = useCallback(
     (task: TaskDoc & { projectName: string }) => {
@@ -1468,6 +1478,7 @@ export function HomeScreen() {
               <TouchableOpacity onPress={() => {
                 setShowProjectSelector(false);
                 setPendingAction(null);
+                setActionProjectId(null);
                 setFabProjectSelectionMode(false);
               }}>
                 <Ionicons name="close" size={24} color="#FFFFFF" />
@@ -1496,6 +1507,9 @@ export function HomeScreen() {
                       executeAction(pendingAction, project.id);
                       return;
                     }
+                    setActionProjectId(project.id);
+                    setShowProjectSelector(false);
+                    setShowActionSheet(true);
                   }}
                 >
                   <Ionicons name={getProjectIcon(project.projectType)} size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
@@ -1535,6 +1549,7 @@ export function HomeScreen() {
               <TouchableOpacity onPress={() => {
                 setShowExpenseTypeModal(false);
                 setPendingAction(null);
+                setActionProjectId(null);
               }}>
                 <Ionicons name="close" size={24} color="#FFFFFF" />
               </TouchableOpacity>
@@ -1546,15 +1561,17 @@ export function HomeScreen() {
               style={styles.expenseTypeChoice}
               onPress={() => {
                 setShowExpenseTypeModal(false);
-                const project = focusProject ?? dashboardData?.projects?.[0];
-                if (project) {
+                setPendingExpenseType("WORK");
+                if (actionProjectId) {
+                  const projectData = dashboardData?.projects.find((p) => p.id === actionProjectId);
                   stackNav.navigate("ProjectOverview", {
-                    projectId: project.id,
-                    projectName: project.name,
+                    projectId: actionProjectId,
+                    projectName: projectData?.name,
                     openExpenseModal: true,
+                    initialExpenseCategory: "WORK",
                   });
+                  setActionProjectId(null);
                 } else {
-                  setPendingExpenseType("WORK");
                   setShowProjectSelector(true);
                 }
               }}
@@ -1567,15 +1584,17 @@ export function HomeScreen() {
               style={styles.expenseTypeChoice}
               onPress={() => {
                 setShowExpenseTypeModal(false);
-                const project = focusProject ?? dashboardData?.projects?.[0];
-                if (project) {
+                setPendingExpenseType("TRAVEL");
+                if (actionProjectId) {
+                  const projectData = dashboardData?.projects.find((p) => p.id === actionProjectId);
                   stackNav.navigate("ProjectOverview", {
-                    projectId: project.id,
-                    projectName: project.name,
+                    projectId: actionProjectId,
+                    projectName: projectData?.name,
                     openExpenseModal: true,
+                    initialExpenseCategory: "TRAVEL",
                   });
+                  setActionProjectId(null);
                 } else {
-                  setPendingExpenseType("TRAVEL");
                   setShowProjectSelector(true);
                 }
               }}
@@ -1592,16 +1611,27 @@ export function HomeScreen() {
         visible={showActionSheet}
         transparent
         animationType="slide"
-        onRequestClose={() => setShowActionSheet(false)}
+        onRequestClose={() => {
+          setShowActionSheet(false);
+          setActionProjectId(null);
+        }}
       >
-        <Pressable style={styles.sheetBackdrop} onPress={() => setShowActionSheet(false)}>
+        <Pressable style={styles.sheetBackdrop} onPress={() => {
+          setShowActionSheet(false);
+          setActionProjectId(null);
+        }}>
           <Pressable style={[styles.sheetPanel, { paddingBottom: insets.bottom + spacing.md }]} onPress={() => {}}>
             <TouchableOpacity
               style={styles.sheetActionRow}
               onPress={() => {
                 setShowActionSheet(false);
-                setPendingAction("photo");
-                setShowProjectSelector(true);
+                if (actionProjectId) {
+                  executeAction("photo", actionProjectId);
+                  setActionProjectId(null);
+                } else {
+                  setPendingAction("photo");
+                  setShowProjectSelector(true);
+                }
               }}
             >
               <Text style={styles.sheetActionIcon}>📷</Text>
@@ -1611,8 +1641,13 @@ export function HomeScreen() {
               style={styles.sheetActionRow}
               onPress={() => {
                 setShowActionSheet(false);
-                setPendingAction("task");
-                setShowProjectSelector(true);
+                if (actionProjectId) {
+                  executeAction("task", actionProjectId);
+                  setActionProjectId(null);
+                } else {
+                  setPendingAction("task");
+                  setShowProjectSelector(true);
+                }
               }}
             >
               <Text style={styles.sheetActionIcon}>✅</Text>
@@ -1622,13 +1657,13 @@ export function HomeScreen() {
               style={styles.sheetActionRow}
               onPress={() => {
                 setShowActionSheet(false);
-                const project = focusProject ?? dashboardData?.projects?.[0];
-                if (project) {
-                  stackNav.navigate("ProjectOverview", {
-                    projectId: project.id,
-                    projectName: project.name,
-                    openExpenseModal: true,
-                  });
+                if (!dashboardData?.projects?.length) {
+                  Alert.alert(t("common.error"), t("home.noProjects"));
+                  return;
+                }
+                if (actionProjectId) {
+                  setPendingExpenseType(null);
+                  setShowExpenseTypeModal(true);
                 } else {
                   setPendingAction("expense");
                   setShowExpenseTypeModal(true);
@@ -1642,8 +1677,13 @@ export function HomeScreen() {
               style={styles.sheetActionRow}
               onPress={() => {
                 setShowActionSheet(false);
-                setPendingAction("problem");
-                setShowProjectSelector(true);
+                if (actionProjectId) {
+                  executeAction("problem", actionProjectId);
+                  setActionProjectId(null);
+                } else {
+                  setPendingAction("problem");
+                  setShowProjectSelector(true);
+                }
               }}
             >
               <Text style={styles.sheetActionIcon}>⚠️</Text>
@@ -1857,12 +1897,16 @@ export function HomeScreen() {
       />
       <HomeCalendarSheet
         sheetRef={calendarSheetRef}
+        refreshTrigger={calendarRefreshTrigger}
         onTaskPress={(task) => {
           calendarSheetRef.current?.dismiss();
           (navigation.getParent() as { getParent: () => { navigate: (n: string, p: object) => void } } | undefined)
             ?.getParent()
             ?.getParent()
-            ?.navigate("TaskDetail", { task });
+            ?.navigate("TaskDetail", {
+              task,
+              onSaveComplete: () => setCalendarRefreshTrigger((prev) => prev + 1),
+            });
         }}
         onProblemPress={(problem) => {
           calendarSheetRef.current?.dismiss();

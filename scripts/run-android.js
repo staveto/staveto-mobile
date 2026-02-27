@@ -18,7 +18,16 @@ try {
   // ignore
 }
 
-const env = { ...process.env, GRADLE_USER_HOME: gradleHome, TMP: gradleHome, TEMP: gradleHome };
+// Force x86_64 only (avoids arm64-v8a which causes "path longer than 260 chars" on Windows)
+const env = {
+  ...process.env,
+  GRADLE_USER_HOME: gradleHome,
+  TMP: gradleHome,
+  TEMP: gradleHome,
+  EXPO_ANDROID_ARCHITECTURES: "x86_64",
+  REACT_NATIVE_ARCHITECTURES: "x86_64",
+  ORG_GRADLE_PROJECT_reactNativeArchitectures: "x86_64",
+};
 const androidDir = path.resolve(__dirname, "..", "android");
 // Stop existing Gradle daemon so it picks up new GRADLE_USER_HOME
 const gradlew = process.platform === "win32" ? path.join(androidDir, "gradlew.bat") : path.join(androidDir, "gradlew");

@@ -317,26 +317,30 @@ export async function upsertTaskDueNotification(data: {
   const id = `task_${data.userId}_${data.taskId}_${type}`;
   const ref = doc(db, "notifications", id);
   const existing = await getDoc(ref);
-  if (existing.exists()) {
-    return toDoc({ id, data: existing.data.bind(existing) });
-  }
-
   const dueTimestamp = data.dueDate ? Timestamp.fromDate(parseDateOnly(data.dueDate) ?? new Date()) : null;
-
-  await setDoc(ref, {
+  const payload = {
     userId: data.userId,
     type,
-    createdAt: serverTimestamp(),
-    readAt: null,
     projectId: data.projectId ?? null,
     projectName: data.projectName ?? null,
     taskId: data.taskId,
     taskTitle: data.taskTitle ?? null,
     dueDate: dueTimestamp,
+    severity: type === "TASK_OVERDUE" ? "warning" : "info" as const,
+  };
+
+  if (existing.exists()) {
+    await updateDoc(ref, { ...payload, updatedAt: serverTimestamp() });
+    return toDoc({ id, data: () => ({ ...existing.data(), ...payload }) });
+  }
+
+  await setDoc(ref, {
+    ...payload,
+    createdAt: serverTimestamp(),
+    readAt: null,
     expenseId: null,
     amount: null,
     currency: "EUR",
-    severity: type === "TASK_OVERDUE" ? "warning" : "info",
   });
 
   if (type === "TASK_OVERDUE") {

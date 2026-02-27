@@ -9,9 +9,11 @@ import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import * as projectMembersService from "../services/projectMembers";
 import * as projectsService from "../services/projects";
+import * as equipmentService from "../services/equipment";
 import { getCallable } from "../firebase";
 import type { ProjectMemberDoc } from "../services/projectMembers";
 import type { ProjectPhaseDoc } from "../services/projects";
+import type { EquipmentDoc } from "../services/equipment";
 
 export function ProjectMembersScreen() {
   const route = useRoute();
@@ -19,7 +21,7 @@ export function ProjectMembersScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const { user } = useAuth();
-  const { projectId, projectName } = (route.params as { projectId?: string; projectName?: string }) ?? {};
+  const { projectId, projectName, projectType: paramProjectType } = (route.params as { projectId?: string; projectName?: string; projectType?: string }) ?? {};
   const access = useProjectAccess(projectId ?? "");
 
   const [showAddMember, setShowAddMember] = useState(false);
@@ -32,12 +34,17 @@ export function ProjectMembersScreen() {
   const [editShareExpenses, setEditShareExpenses] = useState(false);
   const [editShareDiary, setEditShareDiary] = useState(false);
   const [editShareDocuments, setEditShareDocuments] = useState(false);
+  const [editShareEquipment, setEditShareEquipment] = useState(false);
   const [editSelectedPhaseIds, setEditSelectedPhaseIds] = useState<string[]>([]);
   const [members, setMembers] = useState<ProjectMemberDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [submitting, setSubmitting] = useState(false);
   const [projectOwnerId, setProjectOwnerId] = useState<string | null>(null);
+  const [projectType, setProjectType] = useState<string | undefined>(paramProjectType);
   const [phases, setPhases] = useState<ProjectPhaseDoc[]>([]);
+  const [equipmentList, setEquipmentList] = useState<EquipmentDoc[]>([]);
+  const [selectedEquipmentIds, setSelectedEquipmentIds] = useState<string[]>([]);
+  const [editSelectedEquipmentIds, setEditSelectedEquipmentIds] = useState<string[]>([]);
   
   // Permission level: 'viewer' = read-only, 'editor' = read-write
   const [permissionLevel, setPermissionLevel] = useState<'viewer' | 'editor'>('editor');
@@ -48,6 +55,7 @@ export function ProjectMembersScreen() {
   const [shareExpenses, setShareExpenses] = useState(false);
   const [shareDiary, setShareDiary] = useState(false);
   const [shareDocuments, setShareDocuments] = useState(false);
+  const [shareEquipment, setShareEquipment] = useState(false);
   const [selectedPhaseIds, setSelectedPhaseIds] = useState<string[]>([]);
 
   const goBack = () => navigation.goBack();
@@ -57,10 +65,11 @@ export function ProjectMembersScreen() {
     
     setLoading(true);
     try {
-      // Load project to get owner
+      // Load project to get owner and projectType
       const project = await projectsService.getProject(projectId);
       if (project) {
         setProjectOwnerId(project.ownerId || null);
+        if (!paramProjectType) setProjectType(project.projectType || undefined);
       }
 
       // Load phases (for sharing selection)
@@ -70,6 +79,20 @@ export function ProjectMembersScreen() {
       } catch (error: any) {
         console.warn('[ProjectMembersScreen] Could not load phases:', error);
         setPhases([]);
+      }
+
+      // Load equipment for MAINTENANCE projects (for sharing selection)
+      const pType = project?.projectType ?? paramProjectType ?? projectType;
+      if (pType === 'MAINTENANCE') {
+        try {
+          const eq = await equipmentService.listEquipment(projectId, { status: 'active' });
+          setEquipmentList(eq);
+        } catch (error: any) {
+          console.warn('[ProjectMembersScreen] Could not load equipment:', error);
+          setEquipmentList([]);
+        }
+      } else {
+        setEquipmentList([]);
       }
 
       // Load members (force from server after add/remove to bypass cache)
@@ -95,7 +118,9 @@ export function ProjectMembersScreen() {
     setShareExpenses(false);
     setShareDiary(false);
     setShareDocuments(false);
+    setShareEquipment(false);
     setSelectedPhaseIds([]);
+    setSelectedEquipmentIds([]);
     setShowAddMember(true);
   };
   
@@ -109,7 +134,9 @@ export function ProjectMembersScreen() {
     setShareExpenses(false);
     setShareDiary(false);
     setShareDocuments(false);
+    setShareEquipment(false);
     setSelectedPhaseIds([]);
+    setSelectedEquipmentIds([]);
   };
 
   const handleInviteMember = async () => {
@@ -143,7 +170,8 @@ export function ProjectMembersScreen() {
           diary: shareDiary,
           documents: shareDocuments,
         },
-        sharePhases ? selectedPhaseIds : []
+        sharePhases ? selectedPhaseIds : [],
+        projectType === 'MAINTENANCE' ? (shareEquipment ? selectedEquipmentIds : []) : undefined
       );
 
       const inviterName = user?.name || user?.firstName || user?.email || "";
@@ -204,7 +232,9 @@ export function ProjectMembersScreen() {
     setEditShareExpenses(member.sharedItems?.expenses ?? false);
     setEditShareDiary(member.sharedItems?.diary ?? false);
     setEditShareDocuments(member.sharedItems?.documents ?? false);
+    setEditShareEquipment((member.sharedEquipmentIds?.length ?? 0) > 0);
     setEditSelectedPhaseIds(member.sharedPhaseIds ?? []);
+    setEditSelectedEquipmentIds(member.sharedEquipmentIds ?? []);
   };
 
   const closeEditMember = () => {
@@ -227,7 +257,8 @@ export function ProjectMembersScreen() {
           diary: editShareDiary,
           documents: editShareDocuments,
         },
-        editSharePhases ? editSelectedPhaseIds : []
+        editSharePhases ? editSelectedPhaseIds : [],
+        projectType === 'MAINTENANCE' ? (editShareEquipment ? editSelectedEquipmentIds : []) : undefined
       );
       try {
         await getCallable("syncMembersByUidForProject")({ projectId });
@@ -409,6 +440,9 @@ export function ProjectMembersScreen() {
                       {m.sharedItems.documents && (
                         <Text style={styles.sharedItemTag}>{t('projectMembers.shareDocuments') || 'Dokumenty'}</Text>
                       )}
+                      {m.sharedEquipmentIds && m.sharedEquipmentIds.length > 0 && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareEquipment') || 'Zariadenia'}</Text>
+                      )}
                     </View>
                   )}
                 </View>
@@ -489,6 +523,9 @@ export function ProjectMembersScreen() {
                       )}
                       {m.sharedItems.documents && (
                         <Text style={styles.sharedItemTag}>{t('projectMembers.shareDocuments') || 'Dokumenty'}</Text>
+                      )}
+                      {m.sharedEquipmentIds && m.sharedEquipmentIds.length > 0 && (
+                        <Text style={styles.sharedItemTag}>{t('projectMembers.shareEquipment') || 'Zariadenia'}</Text>
                       )}
                     </View>
                   )}
@@ -728,6 +765,62 @@ export function ProjectMembersScreen() {
                   {t('projectMembers.shareDocuments') || 'Dokumenty'}
                 </Text>
               </TouchableOpacity>
+
+              {projectType === 'MAINTENANCE' && (
+                <>
+                  <TouchableOpacity
+                    style={styles.shareOption}
+                    onPress={() => setShareEquipment(!shareEquipment)}
+                    activeOpacity={0.7}
+                  >
+                    <View style={[styles.checkbox, shareEquipment && styles.checkboxChecked]}>
+                      {shareEquipment && <Ionicons name="checkmark" size={16} color="#fff" />}
+                    </View>
+                    <Text style={styles.shareOptionLabel}>
+                      {t('projectMembers.shareEquipment') || 'Zariadenia'}
+                    </Text>
+                  </TouchableOpacity>
+                  {shareEquipment && (
+                    <View style={styles.equipmentSelectionContainer}>
+                      <Text style={styles.equipmentSelectionLabel}>
+                        {t('projectMembers.selectEquipment') || 'Vyber konkrétne zariadenia na zdieľanie:'}
+                      </Text>
+                      {equipmentList.length === 0 ? (
+                        <Text style={styles.equipmentEmptyText}>
+                          {t('projectMembers.noEquipmentInProject') || 'V projekte zatiaľ nie sú žiadne zariadenia.'}
+                        </Text>
+                      ) : (
+                        <ScrollView style={styles.equipmentSelectionList} nestedScrollEnabled>
+                          {equipmentList.map((eq) => {
+                            const isSelected = selectedEquipmentIds.includes(eq.id);
+                            return (
+                              <TouchableOpacity
+                                key={eq.id}
+                                style={styles.equipmentOption}
+                                onPress={() => {
+                                  if (isSelected) {
+                                    setSelectedEquipmentIds(selectedEquipmentIds.filter(id => id !== eq.id));
+                                  } else {
+                                    setSelectedEquipmentIds([...selectedEquipmentIds, eq.id]);
+                                  }
+                                }}
+                                activeOpacity={0.7}
+                              >
+                                <View style={[styles.checkbox, styles.checkboxSmall, isSelected && styles.checkboxChecked]}>
+                                  {isSelected && <Ionicons name="checkmark" size={14} color="#fff" />}
+                                </View>
+                                <Text style={styles.equipmentOptionLabel} numberOfLines={1}>
+                                  {eq.labelCode || eq.name}
+                                </Text>
+                              </TouchableOpacity>
+                            );
+                          })}
+                        </ScrollView>
+                      )}
+                    </View>
+                  )}
+                </>
+              )}
             </View>
             
             <Text style={styles.addMemberHint}>
@@ -916,6 +1009,62 @@ export function ProjectMembersScreen() {
                   </View>
                   <Text style={styles.shareOptionLabel}>{t('projectMembers.shareDocuments') || 'Dokumenty'}</Text>
                 </TouchableOpacity>
+
+                {projectType === 'MAINTENANCE' && (
+                  <>
+                    <TouchableOpacity
+                      style={styles.shareOption}
+                      onPress={() => setEditShareEquipment(!editShareEquipment)}
+                      activeOpacity={0.7}
+                    >
+                      <View style={[styles.checkbox, editShareEquipment && styles.checkboxChecked]}>
+                        {editShareEquipment && <Ionicons name="checkmark" size={16} color="#fff" />}
+                      </View>
+                      <Text style={styles.shareOptionLabel}>
+                        {t('projectMembers.shareEquipment') || 'Zariadenia'}
+                      </Text>
+                    </TouchableOpacity>
+                    {editShareEquipment && (
+                      <View style={styles.equipmentSelectionContainer}>
+                        <Text style={styles.equipmentSelectionLabel}>
+                          {t('projectMembers.selectEquipment') || 'Vyber konkrétne zariadenia na zdieľanie:'}
+                        </Text>
+                        {equipmentList.length === 0 ? (
+                          <Text style={styles.equipmentEmptyText}>
+                            {t('projectMembers.noEquipmentInProject') || 'V projekte zatiaľ nie sú žiadne zariadenia.'}
+                          </Text>
+                        ) : (
+                          <ScrollView style={styles.equipmentSelectionList} nestedScrollEnabled>
+                            {equipmentList.map((eq) => {
+                              const isSelected = editSelectedEquipmentIds.includes(eq.id);
+                              return (
+                                <TouchableOpacity
+                                  key={eq.id}
+                                  style={styles.equipmentOption}
+                                  onPress={() => {
+                                    if (isSelected) {
+                                      setEditSelectedEquipmentIds(editSelectedEquipmentIds.filter(id => id !== eq.id));
+                                    } else {
+                                      setEditSelectedEquipmentIds([...editSelectedEquipmentIds, eq.id]);
+                                    }
+                                  }}
+                                  activeOpacity={0.7}
+                                >
+                                  <View style={[styles.checkbox, styles.checkboxSmall, isSelected && styles.checkboxChecked]}>
+                                    {isSelected && <Ionicons name="checkmark" size={14} color="#fff" />}
+                                  </View>
+                                  <Text style={styles.equipmentOptionLabel} numberOfLines={1}>
+                                    {eq.labelCode || eq.name}
+                                  </Text>
+                                </TouchableOpacity>
+                              );
+                            })}
+                          </ScrollView>
+                        )}
+                      </View>
+                    )}
+                  </>
+                )}
               </View>
 
               <View style={styles.addMemberButtons}>
@@ -1126,6 +1275,36 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.text,
     flex: 1,
+  },
+  equipmentSelectionContainer: {
+    marginLeft: spacing.xl,
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
+  },
+  equipmentSelectionLabel: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginBottom: spacing.xs,
+  },
+  equipmentSelectionList: {
+    maxHeight: 140,
+  },
+  equipmentOption: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.xs,
+  },
+  equipmentOptionLabel: {
+    fontSize: 14,
+    color: colors.text,
+    flex: 1,
+  },
+  equipmentEmptyText: {
+    fontSize: 13,
+    color: colors.textMuted,
+    fontStyle: "italic",
+    marginTop: spacing.xs,
   },
   addMemberHint: { 
     fontSize: 13, 

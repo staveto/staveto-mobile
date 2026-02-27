@@ -17,6 +17,7 @@ import {
 } from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
+import { normalizeDueDateToYmd } from "../utils/date";
 import { upsertTaskDueNotification, markTaskNotificationsRead, recordSyncIssue } from "./notifications";
 import { runServiceAutoNextOnDone } from "./serviceAutoNext";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
@@ -84,7 +85,7 @@ function toDoc(
     trade: d.trade as string | undefined,
     priority: d.priority as string | undefined,
     required: d.required as boolean | undefined,
-    dueDate: d.dueDate as string | undefined,
+    dueDate: normalizeDueDateToYmd(d.dueDate as string | undefined) ?? undefined,
     assigneeId: (d.assigneeId as string | null) ?? undefined,
     assigneeName: (d.assigneeName as string | null) ?? undefined, // Use assigneeName (consistent with types)
     assignedTo: (d.assignedTo as string | null) ?? undefined,
@@ -437,6 +438,42 @@ export async function listTasksWithDueDateInRange(
   });
 }
 
+/**
+ * Ensure overdue notifications exist for all overdue tasks.
+ * Call on app focus / dashboard load so user sees notifications for tasks past due date.
+ */
+export async function ensureOverdueNotificationsIfNeeded(userId: string): Promise<void> {
+  const todayYmd = new Date().toISOString().split("T")[0];
+  const { listMyProjects } = await import("./projects");
+  const { getProject } = await import("./projects");
+  const projects = await listMyProjects(userId);
+  for (const project of projects) {
+    try {
+      const tasks = await listTasksByProject(project.id);
+      for (const task of tasks) {
+        if (task.isActive === false) continue;
+        if (!task.dueDate || typeof task.dueDate !== "string") continue;
+        const ymd = task.dueDate.trim();
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
+        if (ymd >= todayYmd) continue;
+        const status = (task.status ?? "OPEN").toUpperCase();
+        if (status === "DONE") continue;
+        const proj = await getProject(project.id);
+        await upsertTaskDueNotification({
+          userId,
+          taskId: task.id,
+          taskTitle: task.title ?? "",
+          dueDate: ymd,
+          projectId: project.id,
+          projectName: proj?.name ?? null,
+        });
+      }
+    } catch (error: any) {
+      console.warn(`[tasks] ensureOverdueNotificationsIfNeeded failed for project ${project.id}:`, error);
+    }
+  }
+}
+
 export async function updateTaskStatus(
   _ownerId: string,
   projectId: string,
@@ -728,7 +765,7 @@ export async function updateTaskTitle(
       if (dueDate) {
         const { getProject } = await import("./projects");
         const project = await getProject(projectId);
-        await upsertTaskDueNotification({
+        const notification = await upsertTaskDueNotification({
           userId: currentUser.uid,
           taskId,
           taskTitle: title.trim(),
@@ -736,6 +773,10 @@ export async function updateTaskTitle(
           projectId,
           projectName: project?.name ?? null,
         });
+        // Ak nový dátum je v budúcnosti, označ staré overdue notifikácie ako prečítané
+        if (!notification) {
+          await markTaskNotificationsRead(currentUser.uid, taskId);
+        }
       } else {
         await markTaskNotificationsRead(currentUser.uid, taskId);
       }

@@ -41,9 +41,13 @@ function getPlanLabel(tier: SubscriptionTier | undefined): string {
   return tier;
 }
 
+/** Minimum bottom inset for Android – edge-to-edge can report 0, causing Log out to overlap system nav bar. */
+const ANDROID_MIN_BOTTOM_INSET = 48;
+
 export function DrawerContent(props: DrawerContentComponentProps) {
   const { navigation } = props;
   const insets = useSafeAreaInsets();
+  const bottomInset = Platform.OS === "android" ? Math.max(insets.bottom, ANDROID_MIN_BOTTOM_INSET) : insets.bottom;
   const { t } = useI18n();
   const { user, logout } = useAuth();
   const [photoURL, setPhotoURL] = useState<string | null>(null);
@@ -284,86 +288,32 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const initials = displayName !== "—" ? displayName.slice(0, 2).toUpperCase() : "?";
   const isProTier = planTier === "PRO";
 
-  const navItems: NavItem[] = [
-    {
-      id: "projects",
-      icon: "folder-open-outline",
-      labelKey: "tabs.projects",
-      action: () => {
-        closeDrawer();
-        navigation.navigate("Main", { screen: "Projects" });
-      },
-    },
-    {
-      id: "tasks",
-      icon: "checkbox-outline",
-      labelKey: "home.myTasks",
-      action: () => {
-        closeDrawer();
-        navigation.navigate("Main", { screen: "Home", params: { screen: "Tasks" } });
-      },
-    },
-    {
-      id: "expenses",
-      icon: "cash-outline",
-      labelKey: "home.expenses",
-      action: () => {
-        closeDrawer();
-        navigation.navigate("Main", { screen: "Home", params: { screen: "ExpensesKpiScreen" } });
-      },
-    },
-    {
-      id: "notifications",
-      icon: "notifications-outline",
-      labelKey: "tabs.notifications",
-      action: () => {
-        closeDrawer();
-        navigation.navigate("Main", { screen: "Notifications" });
-      },
-    },
-    {
-      id: "messages",
-      icon: "chatbubbles-outline",
-      labelKey: "nav.messages",
-      action: () => {
-        closeDrawer();
-        // TODO: navigate to Messages screen
-      },
-    },
-    {
-      id: "settings",
-      icon: "settings-outline",
-      labelKey: "account.settings",
-      action: () => {
-        closeDrawer();
-        navigation.navigate("Main", { screen: "Account" });
-      },
-    },
-    {
-      id: "support",
-      icon: "help-circle-outline",
-      labelKey: "home.support",
-      action: () => {
-        closeDrawer();
-        openSupportEmail();
-      },
-    },
-    {
-      id: "knowhow",
-      icon: "document-text-outline",
-      labelKey: "nav.knowhow",
-      action: () => {
-        closeDrawer();
-        // TODO: navigate to Knowhow screen (technical docs / guides)
-      },
-    },
+  const mainNavItems: NavItem[] = [
+    { id: "projects", icon: "folder-open-outline", labelKey: "tabs.projects", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Projects" }); } },
+    { id: "tasks", icon: "checkbox-outline", labelKey: "home.myTasks", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Home", params: { screen: "Tasks" } }); } },
+    { id: "expenses", icon: "cash-outline", labelKey: "home.expenses", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Home", params: { screen: "ExpensesKpiScreen" } }); } },
+    { id: "notifications", icon: "notifications-outline", labelKey: "tabs.notifications", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Notifications" }); } },
+    { id: "messages", icon: "chatbubbles-outline", labelKey: "nav.messages", action: () => { closeDrawer(); /* TODO: Messages */ } },
   ];
+
+  const bottomNavItems: NavItem[] = [
+    { id: "settings", icon: "settings-outline", labelKey: "account.settings", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Account" }); } },
+    { id: "support", icon: "help-circle-outline", labelKey: "home.support", action: () => { closeDrawer(); openSupportEmail(); } },
+    { id: "knowhow", icon: "document-text-outline", labelKey: "nav.knowhow", action: () => { closeDrawer(); /* TODO: Knowhow */ } },
+  ];
+
+  const handleLogout = useCallback(() => {
+    closeDrawer();
+    logout();
+  }, [closeDrawer, logout]);
 
   return (
     <DrawerContentScrollView
       {...props}
-      contentContainerStyle={[styles.container, { paddingTop: insets.top + spacing.lg, paddingBottom: insets.bottom + spacing.lg }]}
+      contentContainerStyle={[styles.container, styles.contentContainer, { paddingTop: insets.top + spacing.lg, paddingBottom: bottomInset + spacing.lg }]}
       scrollEnabled={true}
+      keyboardShouldPersistTaps="handled"
+      nestedScrollEnabled={true}
     >
       <View style={styles.header}>
         <TouchableOpacity
@@ -414,7 +364,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       </View>
 
       <View style={styles.navSection}>
-        {navItems.map((item) => (
+        {mainNavItems.map((item) => (
           <TouchableOpacity
             key={item.id}
             style={styles.navRow}
@@ -441,31 +391,72 @@ export function DrawerContent(props: DrawerContentComponentProps) {
         ))}
       </View>
 
-      <TouchableOpacity
-        style={[styles.logoutRow, { marginBottom: insets.bottom }]}
-        onPress={() => {
-          closeDrawer();
-          logout();
-        }}
-        activeOpacity={0.7}
-        accessibilityRole="button"
-        accessibilityLabel={t("account.logout")}
-      >
-        <View style={styles.navIconWrap}>
-          <Ionicons name="log-out-outline" size={24} color={colors.error} style={styles.navIcon} />
-        </View>
-        <Text style={[styles.navLabel, styles.logoutText]} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-          {t("account.logout")}
-        </Text>
-      </TouchableOpacity>
+      <View style={styles.separator} />
+
+      <View style={styles.bottomSection}>
+        <TouchableOpacity
+          style={styles.navRow}
+          onPress={bottomNavItems[0].action}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={t(bottomNavItems[0].labelKey)}
+        >
+          <View style={styles.navIconWrap}>
+            <Ionicons name={bottomNavItems[0].icon} size={24} color={colors.textOnDark} style={styles.navIcon} />
+          </View>
+          <Text style={styles.navLabel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            {t(bottomNavItems[0].labelKey)}
+          </Text>
+          <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.6)" />
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.logoutRow}
+          onPress={handleLogout}
+          activeOpacity={0.7}
+          accessibilityRole="button"
+          accessibilityLabel={t("account.logout")}
+          hitSlop={{ top: 16, bottom: 16, left: 12, right: 12 }}
+        >
+          <View style={styles.navIconWrap}>
+            <Ionicons name="log-out-outline" size={24} color={colors.error} style={styles.navIcon} />
+          </View>
+          <Text style={[styles.navLabel, styles.logoutText]} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+            {t("account.logout")}
+          </Text>
+          <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.6)" />
+        </TouchableOpacity>
+        {bottomNavItems.slice(1).map((item) => (
+          <TouchableOpacity
+            key={item.id}
+            style={styles.navRow}
+            onPress={item.action}
+            activeOpacity={0.7}
+            accessibilityRole="button"
+            accessibilityLabel={t(item.labelKey)}
+          >
+            <View style={styles.navIconWrap}>
+              <Ionicons name={item.icon} size={24} color={colors.textOnDark} style={styles.navIcon} />
+            </View>
+            <Text style={styles.navLabel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+              {t(item.labelKey)}
+            </Text>
+            <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.6)" />
+          </TouchableOpacity>
+        ))}
+      </View>
+
+      <View style={[styles.spacer, { paddingBottom: bottomInset }]} />
     </DrawerContentScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flex: 1,
+    flexGrow: 1,
     backgroundColor: colors.background,
+  },
+  contentContainer: {
+    flex: 1,
   },
   header: {
     paddingHorizontal: spacing.lg,
@@ -552,8 +543,21 @@ const styles = StyleSheet.create({
     color: colors.textOnDark,
   },
   navSection: {
-    flex: 1,
     paddingTop: spacing.md,
+  },
+  separator: {
+    height: 1,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    marginHorizontal: spacing.lg,
+    marginVertical: spacing.sm,
+  },
+  bottomSection: {
+    paddingTop: spacing.xs,
+    paddingBottom: spacing.md,
+  },
+  spacer: {
+    flex: 1,
+    minHeight: 24,
   },
   navRow: {
     flexDirection: "row",
@@ -597,9 +601,7 @@ const styles = StyleSheet.create({
     alignItems: "center",
     paddingVertical: spacing.md,
     paddingHorizontal: spacing.lg,
-    marginTop: "auto",
-    borderTopWidth: 1,
-    borderTopColor: "rgba(255,255,255,0.2)",
+    minHeight: 56,
   },
   logoutText: {
     color: colors.error,

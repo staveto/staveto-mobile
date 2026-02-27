@@ -224,7 +224,8 @@ export type ProjectEventType =
   | "member_joined"
   | "member_left"
   | "member_removed"
-  | "diary_added";
+  | "diary_added"
+  | "project_cloned";
 
 export interface ProjectEvent {
   id: string;
@@ -246,6 +247,8 @@ export interface ProjectEvent {
     targetEmail?: string;
     targetName?: string;
     text?: string;
+    sourceProjectId?: string;
+    sourceProjectName?: string;
   };
   ref?: {
     kind?: string;

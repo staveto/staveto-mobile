@@ -24,7 +24,6 @@ export function AppDrawer() {
         drawerType: "front",
         drawerStyle: {
           width: drawerWidth,
-          overflow: "hidden",
         },
         swipeEdgeWidth: 0,
         swipeEnabled: false,

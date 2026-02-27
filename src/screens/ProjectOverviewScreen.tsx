@@ -757,7 +757,7 @@ export function ProjectOverviewScreen() {
   }, [paramOpenNewTask, projectId, paramSelectedPhaseId, access.canWrite, access.sharedItems.tasks, access.sharedItems.phases]);
 
   const goBack = () => navigation.goBack();
-  const goToMembers = () => (navigation as { navigate: (n: string, p?: object) => void }).navigate("ProjectMembers", { projectId, projectName });
+  const goToMembers = () => (navigation as { navigate: (n: string, p?: object) => void }).navigate("ProjectMembers", { projectId, projectName, projectType });
 
   const handleCalculateDistanceKm = useCallback(async () => {
     const from = expenseTravelFromAddress.trim();
@@ -4454,8 +4454,8 @@ export function ProjectOverviewScreen() {
       <Modal visible={showExpenseModal} transparent animationType="slide">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
-          behavior={Platform.OS === "ios" ? "padding" : undefined}
-          keyboardVerticalOffset={0}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 24}
         >
           <View style={[styles.modal, styles.expenseModal]}>
             <Text style={styles.modalTitle}>
@@ -4852,7 +4852,7 @@ export function ProjectOverviewScreen() {
               value={expenseNote}
               onChangeText={setExpenseNote}
               onFocus={() => {
-                setTimeout(() => expenseModalScrollRef.current?.scrollToEnd({ animated: true }), 120);
+                setTimeout(() => expenseModalScrollRef.current?.scrollToEnd({ animated: true }), 300);
               }}
               placeholder={t("projectOverview.expenseNotePlaceholder")}
               placeholderTextColor={colors.textMuted}
@@ -6583,7 +6583,7 @@ const styles = StyleSheet.create({
     alignSelf: "stretch",
   },
   expenseModalScroll: { flex: 1, minHeight: 0 },
-  expenseModalScrollContent: { paddingBottom: spacing.md },
+  expenseModalScrollContent: { paddingBottom: 320 },
   diaryModal: {
     height: Dimensions.get("window").height * 0.9,
     alignSelf: "stretch",

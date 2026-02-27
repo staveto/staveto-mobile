@@ -26,6 +26,7 @@ export type ProjectMemberDoc = {
     documents?: boolean;
   };
   sharedPhaseIds?: string[]; // Specific phases to share (if phases=true)
+  sharedEquipmentIds?: string[]; // Specific equipment to share (MAINTENANCE projects only)
 };
 
 /**
@@ -78,6 +79,7 @@ export async function listProjectMembers(
           documents: true,
         },
         sharedPhaseIds: data.sharedPhaseIds || [],
+        sharedEquipmentIds: data.sharedEquipmentIds || [],
       };
     });
   } catch (error: any) {
@@ -103,7 +105,8 @@ export async function inviteMemberByEmail(
     diary?: boolean;
     documents?: boolean;
   },
-  sharedPhaseIds?: string[]
+  sharedPhaseIds?: string[],
+  sharedEquipmentIds?: string[]
 ): Promise<void> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
@@ -146,6 +149,7 @@ export async function inviteMemberByEmail(
         documents: true,
       },
       sharedPhaseIds: sharedPhaseIds || [],
+      sharedEquipmentIds: sharedEquipmentIds || [],
     };
 
     await addDoc(membersRef, memberData);
@@ -251,6 +255,7 @@ export async function updateMemberPermissions(
       documents: false,
     },
     sharedPhaseIds: sharedPhaseIds || [],
+    sharedEquipmentIds: sharedEquipmentIds || [],
   };
 
   const res = await getCallable("updateMemberPermissions")(payload);

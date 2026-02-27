@@ -1,15 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from "react";
-import { StatusBar } from "expo-status-bar";
 import { SafeAreaProvider } from "react-native-safe-area-context";
-import { NavigationContainer } from "@react-navigation/native";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
-import { BottomSheetModalProvider } from "@gorhom/bottom-sheet";
-import { I18nProvider, useI18n } from "./src/i18n/I18nContext";
-import { AuthProvider } from "./src/context/AuthContext";
-import { UnreadCountProvider } from "./src/context/UnreadCountContext";
-import { RootNavigator } from "./src/navigation/RootNavigator";
-import { PushNotificationHandler, navigationRef } from "./src/components/PushNotificationHandler";
-import { configurePurchases } from "./src/services/billing";
+import { LazyAppWithI18n } from "./src/components/LazyAppWithI18n";
 import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity, Platform, Pressable } from "react-native";
 import { colors } from "./src/theme";
 import * as SplashScreen from "expo-splash-screen";
@@ -370,47 +361,6 @@ function BootLoader({ children }: { children: React.ReactNode }) {
   return <>{children}</>;
 }
 
-function AppShell() {
-  const { loaded } = useI18n();
-
-  useEffect(() => {
-    configurePurchases().catch(() => {});
-  }, []);
-
-  if (!loaded) {
-    return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
-    );
-  }
-
-  const linking = {
-    prefixes: ["staveto://"],
-    config: {
-      screens: {
-        EquipmentLinkHandler: "equipment/:qrToken",
-      },
-    },
-  };
-
-  return (
-    <GestureHandlerRootView style={{ flex: 1 }}>
-      <BottomSheetModalProvider>
-        <NavigationContainer ref={navigationRef} linking={linking}>
-          <AuthProvider>
-            <UnreadCountProvider>
-              <PushNotificationHandler />
-              <StatusBar style="light" />
-              <RootNavigator />
-            </UnreadCountProvider>
-          </AuthProvider>
-        </NavigationContainer>
-      </BottomSheetModalProvider>
-    </GestureHandlerRootView>
-  );
-}
-
 export default function App() {
   const handleError = useCallback((err: Error) => {
     console.error("[App] ErrorBoundary error:", err);
@@ -420,9 +370,7 @@ export default function App() {
     <AppErrorBoundary onError={handleError}>
       <SafeAreaProvider>
         <BootLoader>
-          <I18nProvider>
-            <AppShell />
-          </I18nProvider>
+          <LazyAppWithI18n enabled={true} />
         </BootLoader>
       </SafeAreaProvider>
     </AppErrorBoundary>

@@ -12,7 +12,6 @@ module.exports = ({ config }) => ({
   },
   android: {
     ...config.android,
-    buildArchs: ["x86_64"],
     adaptiveIcon: {
       foregroundImage: "./assets/adaptive-icon.png",
       backgroundColor: "#253a6a",

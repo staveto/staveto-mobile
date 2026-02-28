@@ -22,7 +22,7 @@ import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { getBaseURL, api } from "../api/client";
 import { colors, radius, spacing } from "../theme";
-import { PRIVACY_URL, SUPPORT_EMAIL, TERMS_URL } from "../constants/consent";
+import { DPA_URL, PRIVACY_URL, SUBPROCESSORS_URL, SUPPORT_EMAIL, TERMS_URL } from "../constants/consent";
 import { requestAccountDeletion } from "../services/account";
 import { isFeatureEnabled } from "../services/features";
 import { db, storage, getCallable } from "../firebase";
@@ -561,32 +561,8 @@ export function AccountScreen() {
         />
         <Row icon="eye-outline" label={t("account.privacyPolicy")} onPress={() => openUrl(PRIVACY_URL)} />
         <Row icon="document-text-outline" label={t("account.termsOfService")} onPress={() => openUrl(TERMS_URL)} />
-        <Row
-          icon="people-outline"
-          label={t("account.subprocessors")}
-          onPress={async () => {
-            const url = "https://www.staveto.com/subprocessors";
-            const supported = await Linking.canOpenURL(url);
-            if (supported) {
-              await Linking.openURL(url);
-            } else {
-              Alert.alert(t("common.error"), t("account.linkOpenFailed"));
-            }
-          }}
-        />
-        <Row
-          icon="document-outline"
-          label={t("account.privacyStatement")}
-          onPress={async () => {
-            const url = "https://www.staveto.com/privacy-statement";
-            const supported = await Linking.canOpenURL(url);
-            if (supported) {
-              await Linking.openURL(url);
-            } else {
-              Alert.alert(t("common.error"), t("account.linkOpenFailed"));
-            }
-          }}
-        />
+        <Row icon="people-outline" label={t("account.subprocessors")} onPress={() => openUrl(SUBPROCESSORS_URL)} />
+        <Row icon="document-outline" label={t("account.privacyStatement")} onPress={() => openUrl(DPA_URL)} />
         <Row icon="list-outline" label={t("account.licenses")} onPress={() => Alert.alert(t("account.comingSoon"))} />
         <View style={[rowStyles.row, { borderBottomWidth: 0 }]}>
           <Ionicons name="phone-portrait-outline" size={22} color={colors.textMuted} style={rowStyles.icon} />

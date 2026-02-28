@@ -1,3 +1,5 @@
+console.log("[ENTRY] index.ts start");
+
 /**
  * App Entry Point
  *

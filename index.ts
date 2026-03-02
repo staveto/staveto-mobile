@@ -1,5 +1,3 @@
-console.log("[ENTRY] index.ts start");
-
 /**
  * App Entry Point
  *
@@ -10,11 +8,40 @@ console.log("[ENTRY] index.ts start");
  * 4. registerRootComponent IMMEDIATELY with lazy App (never wait for async)
  */
 
+// 1) GLOBAL ERROR HANDLER – must be set before any code that might throw
+// AsyncStorage deferred (môže crashnúť ak error pred init)
+try {
+  const RN = require("react-native");
+  if (RN.ErrorUtils && typeof RN.ErrorUtils.setGlobalHandler === "function") {
+    RN.ErrorUtils.setGlobalHandler((error: unknown, isFatal?: boolean) => {
+      const msg = error instanceof Error ? error.message : String(error);
+      const stack = error instanceof Error ? error.stack : "";
+      console.error("[FATAL]", isFatal, msg, stack);
+      setTimeout(() => {
+        try {
+          const payload = JSON.stringify({ msg, stack, isFatal, ts: Date.now() });
+          require("@react-native-async-storage/async-storage").default
+            .setItem("staveto_last_error", payload)
+            .catch(() => {});
+          require("./src/lib/bootLogger").bootFail({ msg, stack, isFatal }).catch(() => {});
+        } catch {}
+      }, 0);
+    });
+  }
+} catch {}
+console.log("[ENTRY] index.ts start");
+
 // Suppress Firebase modular deprecation warnings (we use modular API; lib internals may still log)
 (globalThis as any).RNFB_SILENCE_MODULAR_DEPRECATION_WARNINGS = true;
 
 // Initialize gesture handler (required by React Navigation)
 import "react-native-gesture-handler";
+// #region agent log
+try {
+  require("./src/lib/bootLogger").bootStep("entry_start", "H1", {}).catch(() => {});
+  require("./src/lib/bootLogger").bootStep("entry_gesture_ok", "H2", {}).catch(() => {});
+} catch {}
+// #endregion
 import { registerRootComponent } from "expo";
 
 // Prevent auto-hide (fire-and-forget – must NOT block; iOS can hang here)
@@ -46,9 +73,28 @@ registerRootComponent(() => {
     const [App, setApp] = useState<React.ComponentType | null>(null);
 
     useEffect(() => {
+      // #region agent log
+      try {
+        require("./src/lib/bootLogger").bootStep("entry_mounted", "H2", {}).catch(() => {});
+      } catch {}
+      // #endregion
+      // #region agent log
+      try {
+        require("./src/lib/bootLogger").bootStep("entry_app_loading", "H3", {}).catch(() => {});
+      } catch {}
+      // #endregion
       import("./App")
         .then((m) => setApp(() => m.default))
-        .catch(() => {});
+        .catch((e) => {
+          try {
+            require("./src/lib/bootLogger").bootFail(e).catch(() => {});
+          } catch {}
+        })
+        .finally(() => {
+          try {
+            require("expo-splash-screen").hideAsync?.().catch(() => {});
+          } catch {}
+        });
     }, []);
 
     if (!App) return null;

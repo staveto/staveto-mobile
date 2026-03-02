@@ -13,10 +13,16 @@ import {
   TextInput,
 } from "react-native";
 
+// Lazy-load expo-av only when playing audio (avoids iOS mic indicator at startup)
 let AudioModule: typeof import("expo-av") | null = null;
-try {
-  AudioModule = require("expo-av");
-} catch {}
+function getAudioModule(): typeof import("expo-av") | null {
+  if (!AudioModule) {
+    try {
+      AudioModule = require("expo-av");
+    } catch {}
+  }
+  return AudioModule;
+}
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
@@ -134,7 +140,8 @@ export function ProblemDetailScreen() {
 
   const toggleAudio = useCallback(async () => {
     const url = audioUrl;
-    if (!url || !AudioModule?.Audio) return;
+    const mod = getAudioModule();
+    if (!url || !mod?.Audio) return;
     try {
       if (soundRef.current) {
         if (audioPlaying) {
@@ -145,7 +152,7 @@ export function ProblemDetailScreen() {
         setAudioPlaying(!audioPlaying);
         return;
       }
-      const { sound } = await AudioModule.Audio.Sound.createAsync(
+      const { sound } = await mod.Audio.Sound.createAsync(
         { uri: url },
         { shouldPlay: true }
       );

@@ -7,7 +7,7 @@ Ak sa ikona na emulátore nezobrazuje správne (stará/nesprávna ikona), treba 
 - **icon.png** – 1024×1024 px, PNG
 - **adaptive-icon.png** – 1024×1024 px, PNG s **priehľadným pozadím**
   - Logo umiestni do stredu (bezpečná zóna ~66 %), Android aplikuje kruhovú masku
-  - Farba pozadia: `#253a6a` (nastavená v `app.json`)
+  - Farba pozadia: `#1D376A` (nastavená v `app.json`)
 - **splash-icon.png** – 1024×1024 px, PNG
 
 ## Kroky na obnovenie ikony
@@ -32,8 +32,9 @@ Ak sa ikona na emulátore nezobrazuje správne (stará/nesprávna ikona), treba 
    npx expo run:android
    ```
 
-## Ak ikona stále nepasuje
+## Ak ikona stále nepasuje / text sa orezáva
 
+- Spusti `npm run fix-adaptive-icon` – zmenší obsah na 66 % (bezpečná zóna) a vycentruje
 - **adaptive-icon.png** musí mať priehľadné pozadie – logo na priehľadnom PNG
 - Dôležitý obsah musí byť v strede obrázka (v ~66 % plochy)
 - Po zmene obrazkov vždy spusti `npx expo prebuild --platform android --clean`

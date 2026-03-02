@@ -21,26 +21,12 @@ import {
 // Conditional imports - only load if packages are installed
 let ImagePicker: typeof import('expo-image-picker') | null = null;
 let DocumentPicker: typeof import('expo-document-picker') | null = null;
-let AudioModule: typeof import('expo-av') | null = null;
 
 try {
   ImagePicker = require('expo-image-picker');
   DocumentPicker = require('expo-document-picker');
 } catch (e) {
   console.warn('expo-image-picker or expo-document-picker not installed. Attachment features will be disabled.');
-}
-
-try {
-  AudioModule = require('expo-av');
-} catch (e) {
-  console.warn('expo-av not installed. Voice recording features will be disabled.');
-}
-
-let SpeechModule: typeof import('expo-speech') | null = null;
-try {
-  SpeechModule = require('expo-speech');
-} catch (e) {
-  console.warn('expo-speech not installed. Speech-to-text conversion will be disabled.');
 }
 
 let DateTimePicker: any = null;
@@ -3362,7 +3348,7 @@ export function ProjectOverviewScreen() {
                   onPress={() => openTaskDetail(task)} 
                   activeOpacity={0.7}
                 >
-                  <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={2}>
+                  <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={3}>
                     {task.title || t("tasks.noTitle")}
                   </Text>
                   {(task.subtasks?.length ?? 0) > 0 && (
@@ -3573,7 +3559,7 @@ export function ProjectOverviewScreen() {
                                   onPress={() => openTaskDetail(task)} 
                                   activeOpacity={0.7}
                                 >
-                                  <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={2}>
+                                  <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={3}>
                                     {task.title || t("tasks.noTitle")}
                                   </Text>
                                   {(task.subtasks?.length ?? 0) > 0 && (
@@ -3686,7 +3672,7 @@ export function ProjectOverviewScreen() {
                           onPress={() => openTaskDetail(task)} 
                           activeOpacity={0.7}
                         >
-                          <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={2}>
+                          <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={3}>
                             {task.title || t("tasks.noTitle")}
                           </Text>
                           {(task.subtasks?.length ?? 0) > 0 && (
@@ -6055,7 +6041,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
   },
   tableHeaderText: { fontSize: 12, fontWeight: "600", color: colors.textMuted },
-  colAssignee: { width: 100, textAlign: "right" },
+  colAssignee: { width: 88, flexShrink: 0, textAlign: "right" },
   loader: { marginVertical: spacing.lg },
   empty: { fontSize: 14, color: colors.textMuted, marginVertical: spacing.md },
   emptyContainer: { paddingVertical: spacing.lg, alignItems: "center" },
@@ -6172,19 +6158,20 @@ const styles = StyleSheet.create({
   taskRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xs,
     borderBottomWidth: 1,
     borderBottomColor: colors.border,
-    minHeight: 44, // Ensure minimum height for multi-line text
+    minHeight: 56,
   },
-  taskNameCell: { flex: 1, flexDirection: "row", alignItems: "flex-start", paddingTop: 2 },
+  taskNameCell: { flex: 1, flexDirection: "row", alignItems: "flex-start", paddingTop: 2, minWidth: 0 },
   statusToggle: { 
     padding: spacing.xs,
     marginRight: spacing.sm,
-    marginTop: 2, // Align checkbox with first line of text
+    marginTop: 2,
   },
-  taskTitleContainer: { flex: 1 },
-  taskTitle: { fontSize: 15, color: colors.text, flex: 1, lineHeight: 20 },
+  taskTitleContainer: { flex: 1, minWidth: 0 },
+  taskTitle: { fontSize: 16, color: colors.text, lineHeight: 22, fontWeight: "500" },
   taskTitleDone: {
     textDecorationLine: "line-through",
     textDecorationColor: DONE_COLOR,
@@ -6215,8 +6202,8 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   filterChipText: { fontSize: 13, color: colors.text },
-  assigneeCell: { flexDirection: "row", alignItems: "flex-start", justifyContent: "flex-end", gap: 4, paddingTop: 2 },
-  assigneeText: { fontSize: 13, color: colors.textMuted, maxWidth: 70 },
+  assigneeCell: { flexDirection: "row", alignItems: "center", justifyContent: "flex-end", gap: 4, paddingTop: 2 },
+  assigneeText: { fontSize: 12, color: colors.textMuted, maxWidth: 60 },
   taskActions: {
     flexDirection: "row",
     alignItems: "center",

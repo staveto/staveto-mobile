@@ -13,9 +13,26 @@ export function LazyAppWithI18n({ enabled }: { enabled: boolean }) {
   useEffect(() => {
     if (!enabled) return;
 
+    // #region agent log
+    try {
+      require("../lib/bootLogger").bootStep("lazy_i18n_loading", "H5", {}).catch(() => {});
+    } catch {}
+    // #endregion
     import("../AppWithI18n")
-      .then((m) => setMod(() => m.default))
-      .catch((e) => setErr(String(e?.message ?? e)));
+      .then((m) => {
+        // #region agent log
+        try {
+          require("../lib/bootLogger").bootStep("lazy_i18n_loaded", "H5", {}).catch(() => {});
+        } catch {}
+        // #endregion
+        setMod(() => m.default);
+      })
+      .catch((e) => {
+        try {
+          require("../lib/bootLogger").bootFail(e).catch(() => {});
+        } catch {}
+        setErr(String((e as Error)?.message ?? e));
+      });
   }, [enabled]);
 
   if (!enabled) return null;

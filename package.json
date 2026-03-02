@@ -2,9 +2,15 @@
   "name": "mobile",
   "version": "1.0.0",
   "main": "index.ts",
+  "expo": {
+    "install": {
+      "exclude": ["react-native-reanimated"]
+    }
+  },
   "scripts": {
     "ensure-logo": "node scripts/ensure-logo.js",
     "postinstall": "node scripts/ensure-logo.js",
+    "fix-adaptive-icon": "node scripts/fix-adaptive-icon.js",
     "start": "npm run ensure-logo && expo start",
     "android": "npm run ensure-logo && expo start --android",
     "dev:android": "node scripts/run-android.js",
@@ -75,6 +81,7 @@
   "devDependencies": {
     "@types/react": "~19.1.0",
     "babel-preset-expo": "~54.0.10",
+    "sharp": "^0.34.5",
     "typescript": "~5.9.2"
   },
   "private": true

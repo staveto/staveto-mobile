@@ -41,7 +41,7 @@ import { colors, spacing } from "../theme";
 import { db } from "../firebase";
 import { doc, getDoc } from "../lib/rnFirestore";
 import { CONSENT_PRIVACY_VERSION, CONSENT_TERMS_VERSION, PENDING_CONSENT_KEY } from "../constants/consent";
-import { registerForPushNotifications } from "../services/pushNotifications";
+import { getExtraEnv } from "../lib/env";
 
 const FIRST_LOGIN_TRIAL_POPUP_KEY = "first_login_trial_popup_shown";
 const TRIAL_REMINDER_3D_LAST_SHOWN_KEY = "trial_reminder_3d_last_shown";
@@ -60,6 +60,13 @@ function LoadingScreen() {
 
 /** Order: loading → (language/intro if new) → auth → Tabs. Home/Notifications are stack screens reachable from Account. */
 export function RootNavigator() {
+  // #region agent log
+  useEffect(() => {
+    try {
+      require("../lib/bootLogger").bootStep("root_nav_ready", "H6", {}).catch(() => {});
+    } catch {}
+  }, []);
+  // #endregion
   const { token, loading, onboardingDone, onboardingLoaded, user } = useAuth();
   const { t } = useI18n();
   const [gateLoading, setGateLoading] = useState(true);
@@ -151,11 +158,14 @@ export function RootNavigator() {
 
   // Request notification permission at first app entry (after consent + onboarding) – like camera/microphone
   useEffect(() => {
+    if (getExtraEnv("EXPO_PUBLIC_DISABLE_PUSH") === "1") return;
     const shouldRequest = token && user?.id && !gateLoading && consentOk && onboardingOk;
     if (!shouldRequest) return;
     // Small delay so trial popup can show first; then native permission dialog
     const t = setTimeout(() => {
-      registerForPushNotifications().catch((err) => console.warn("[RootNavigator] push register failed:", err));
+      import("../services/pushNotifications").then((m) =>
+        m.registerForPushNotifications().catch((err) => console.warn("[RootNavigator] push register failed:", err))
+      );
     }, 600);
     return () => clearTimeout(t);
   }, [token, user?.id, gateLoading, consentOk, onboardingOk]);
@@ -193,6 +203,16 @@ export function RootNavigator() {
       cancelled = true;
     };
   }, [token, user?.id, user?.billing, gateLoading, consentOk, onboardingOk, t]);
+
+  // #region agent log
+  useEffect(() => {
+    if (!loading && onboardingLoaded) {
+      try {
+        require("../lib/bootLogger").bootStep("boot_complete", "H6", {}).catch(() => {});
+      } catch {}
+    }
+  }, [loading, onboardingLoaded]);
+  // #endregion
 
   if (loading || !onboardingLoaded) {
     return <LoadingScreen />;

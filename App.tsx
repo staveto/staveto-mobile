@@ -1,5 +1,8 @@
+console.log("[App] App.tsx module load");
 import React, { useCallback, useEffect, useRef, useState } from "react";
 import { SafeAreaProvider } from "react-native-safe-area-context";
+import { bootStep, bootFail } from "./src/lib/bootLogger";
+import { DiagnosticScreen } from "./src/screens/DiagnosticScreen";
 import { LazyAppWithI18n } from "./src/components/LazyAppWithI18n";
 import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity, Platform, Pressable } from "react-native";
 import { colors } from "./src/theme";
@@ -7,7 +10,16 @@ import * as SplashScreen from "expo-splash-screen";
 import Constants from "expo-constants";
 import { getExtraEnv, hasExtraEnv } from "./src/lib/env";
 
-const BOOT_TIMEOUT_MS = 15_000;
+const BOOT_TIMEOUT_MS = 8_000;
+
+import { BootContext } from "./src/lib/bootContext";
+
+function DiagnosticScreenWithSplashHide({ onContinue }: { onContinue: () => void }) {
+  useEffect(() => {
+    SplashScreen.hideAsync?.().catch(() => {});
+  }, []);
+  return <DiagnosticScreen onContinue={onContinue} />;
+}
 
 /** Build info for diagnostics – always logged at startup (prod + dev). */
 function logBuildInfo(): void {
@@ -75,25 +87,14 @@ function getEnvPresence(): Record<string, boolean> {
   return presence;
 }
 
-/** Reads env from Constants.expoConfig.extra (injected by app.config.js). Keys must match EAS dashboard exactly. */
-function stepEnvCheck(): void {
-  runStep("envCheck", () => {
-    const presence: Record<string, boolean> = {};
-    const missing: string[] = [];
-    for (const key of REQUIRED_ENV_KEYS) {
-      const hasValue = hasExtraEnv(key);
-      presence[key] = hasValue;
-      if (!hasValue) missing.push(key);
-    }
-    console.log("[boot] env presence:", presence);
-    if (missing.length > 0) {
-      const msg = `Missing env: ${missing.join(", ")}`;
-      if (!__DEV__) {
-        console.error("[boot] envCheck failed:", msg, "missing keys:", missing);
-      }
-      throw new Error(`${ENV_ERROR_CODE} ${msg}`);
-    }
-  });
+/** Validates env – DO NOT throw. Returns missing keys; caller shows fallback UI. */
+function validateEnv(): { ok: boolean; missing: string[] } {
+  const missing: string[] = [];
+  for (const key of REQUIRED_ENV_KEYS) {
+    if (!hasExtraEnv(key)) missing.push(key);
+  }
+  console.log("[boot] env check:", missing.length === 0 ? "ok" : "missing", missing);
+  return { ok: missing.length === 0, missing };
 }
 
 function stepSimulateFailure(): void {
@@ -147,6 +148,7 @@ class AppErrorBoundary extends React.Component<
 
   componentDidCatch(error: Error) {
     console.error("[App] ErrorBoundary caught:", error);
+    require("./src/lib/bootLogger").bootFail(error).catch(() => {});
     this.props.onError?.(error);
   }
 
@@ -180,6 +182,9 @@ function BootLoader({ children }: { children: React.ReactNode }) {
   const [errorStep, setErrorStep] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
+  const [lastBootStep, setLastBootStep] = useState<{ step: string; ts: number } | null>(null);
+  const [timeoutState, setTimeoutState] = useState<"none" | "timeout">("none");
+  const lastStepRef = useRef<string>("boot_start");
   const debugTapCountRef = useRef(0);
   const debugTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const splashHiddenRef = useRef(false);
@@ -188,11 +193,27 @@ function BootLoader({ children }: { children: React.ReactNode }) {
   const isBootingRef = useRef(true);
   const failedRef = useRef(false);
 
+  useEffect(() => {
+    require("./src/lib/bootLogger").getLastBootStep().then((s) => {
+      if (s && s.step !== "boot_complete") setLastBootStep(s);
+    }).catch(() => {});
+  }, []);
+
+  const onAppReady = useCallback(() => {
+    if (bootTimeoutRef.current) {
+      clearTimeout(bootTimeoutRef.current);
+      bootTimeoutRef.current = null;
+    }
+    lastStepRef.current = "app_ready";
+    bootStep("app_ready", "H4", {}).catch(() => {});
+  }, []);
+
   const hideSplash = useCallback(async (): Promise<boolean> => {
     if (splashHiddenRef.current) return true;
     try {
       await SplashScreen.hideAsync?.();
       splashHiddenRef.current = true;
+      bootStep("splash_hidden", "H7", {}).catch(() => {});
       if (splashFallbackRef.current) {
         clearTimeout(splashFallbackRef.current);
         splashFallbackRef.current = null;
@@ -232,19 +253,29 @@ function BootLoader({ children }: { children: React.ReactNode }) {
       hideSplash();
     };
 
-    const failBoot = (step: string, err: unknown) => {
+    const failBoot = async (step: string, err: unknown) => {
       failedRef.current = true;
       const msg = err instanceof Error ? err.message : String(err);
       setError(msg);
       setErrorStep(step);
       setState("error");
       console.error("[boot] Init failed:", msg, "step:", step);
+      try {
+        await bootFail(err);
+      } catch {}
+      await hideSplash();
     };
 
     bootTimeoutRef.current = setTimeout(async () => {
       if (!isBootingRef.current) return;
       bootTimeoutRef.current = null;
-      failBoot("timeout", new Error("Boot timeout"));
+      const lastStep = lastStepRef.current;
+      bootFail(`BOOT_TIMEOUT at ${lastStep}`).catch(() => {});
+      setTimeoutState("timeout");
+      setLastBootStep({ step: lastStep, ts: Date.now() });
+      setError("Boot timeout");
+      setErrorStep("timeout");
+      setState("error");
       await hideSplash();
     }, BOOT_TIMEOUT_MS);
 
@@ -256,7 +287,15 @@ function BootLoader({ children }: { children: React.ReactNode }) {
     let cancelled = false;
     (async () => {
       try {
-        stepEnvCheck();
+        lastStepRef.current = "boot_start";
+        bootStep("boot_start", "H4", {}).catch(() => {});
+        const envResult = validateEnv();
+        if (!envResult.ok) {
+          await failBoot("envCheck", new Error(`${ENV_ERROR_CODE} Missing: ${envResult.missing.join(", ")}`));
+          return;
+        }
+        lastStepRef.current = "env_validated";
+        bootStep("env_validated", "H4", {}).catch(() => {});
         if (cancelled) return;
         stepSimulateFailure();
         if (cancelled) return;
@@ -266,11 +305,14 @@ function BootLoader({ children }: { children: React.ReactNode }) {
         if (cancelled) return;
         stepComplete();
         if (cancelled || failedRef.current) return;
+        lastStepRef.current = "providers_mounted";
+        bootStep("providers_mounted", "H4", {}).catch(() => {});
         isBootingRef.current = false;
         if (bootTimeoutRef.current) {
           clearTimeout(bootTimeoutRef.current);
           bootTimeoutRef.current = null;
         }
+        bootStep("boot_ready", "H4", {}).catch(() => {});
         setState("ready");
       } catch (e) {
         if (cancelled) return;
@@ -279,8 +321,11 @@ function BootLoader({ children }: { children: React.ReactNode }) {
           clearTimeout(bootTimeoutRef.current);
           bootTimeoutRef.current = null;
         }
-        const isEnvErr = e instanceof Error && (e.message.includes("Missing env") || e.message.startsWith("ENV_MISSING_"));
-        failBoot(isEnvErr ? "envCheck" : "boot", e);
+        try {
+          await bootFail(e);
+        } catch {}
+        const isEnvErr = e instanceof Error && (e.message.includes("Missing") || e.message.startsWith("ENV_MISSING_"));
+        await failBoot(isEnvErr ? "envCheck" : "boot", e);
       } finally {
         await hideSplash();
       }
@@ -313,17 +358,28 @@ function BootLoader({ children }: { children: React.ReactNode }) {
 
   if (state === "booting") {
     return (
-      <View style={styles.loading}>
-        <ActivityIndicator size="large" color={colors.primary} />
-      </View>
+      <Pressable onPress={handleDebugTap} style={[styles.loading, { backgroundColor: "#112233" }]}>
+        <Text style={styles.bootingText}>Booting...</Text>
+        <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 12 }} />
+        {lastBootStep && (
+          <View style={[styles.debugOverlay, { position: "absolute", bottom: 24 }]}>
+            <Text style={[styles.debugText, { color: "#ff9" }]}>
+              Previous run stopped at: {lastBootStep.step}
+            </Text>
+          </View>
+        )}
+      </Pressable>
     );
   }
 
   if (state === "error") {
-    const isEnvError = errorStep === "envCheck" && (error?.includes("Missing env") || error?.startsWith("ENV_MISSING_"));
-    const userMessage = !__DEV__ && isEnvError
-      ? "Technická chyba. Prosím kontaktujte podporu."
-      : (error ?? "Unknown error");
+    const isTimeout = errorStep === "timeout";
+    const isEnvError = errorStep === "envCheck" && (error?.includes("Missing") || error?.startsWith("ENV_MISSING_"));
+    const userMessage = isTimeout
+      ? "Boot timeout"
+      : !__DEV__ && isEnvError
+        ? "Technická chyba. Prosím kontaktujte podporu."
+        : (error ?? "Unknown error");
     const errorCode = !__DEV__ && isEnvError ? ENV_ERROR_CODE : null;
     const buildInfo = getBuildInfoForDisplay();
     const envPresence = getEnvPresence();
@@ -344,10 +400,20 @@ function BootLoader({ children }: { children: React.ReactNode }) {
               {errorCode}
             </Text>
           )}
-          {(showDebugOverlay || __DEV__) && (
+          {(showDebugOverlay || __DEV__ || isTimeout) && (
             <View style={styles.debugOverlay}>
+              {isTimeout && lastBootStep && (
+                <Text style={[styles.debugText, { color: "#ff9", marginBottom: 8 }]}>
+                  Last step: {lastBootStep.step}
+                </Text>
+              )}
               <Text style={styles.debugText}>version: {buildInfo.version} | build: {String(buildInfo.buildNumber)}</Text>
               <Text style={styles.debugText}>env: {JSON.stringify(envPresence)}</Text>
+              {lastBootStep && !isTimeout && (
+                <Text style={[styles.debugText, { color: "#ff9", marginTop: 8 }]}>
+                  Previous run stopped at: {lastBootStep.step}
+                </Text>
+              )}
             </View>
           )}
         </Pressable>
@@ -358,13 +424,31 @@ function BootLoader({ children }: { children: React.ReactNode }) {
     );
   }
 
-  return <>{children}</>;
+  return (
+    <BootContext.Provider value={{ onAppReady }}>
+      {children}
+    </BootContext.Provider>
+  );
 }
 
 export default function App() {
+  useEffect(() => {
+    bootStep("app_loaded", "H3", {}).catch(() => {});
+  }, []);
   const handleError = useCallback((err: Error) => {
     console.error("[App] ErrorBoundary error:", err);
   }, []);
+
+  const isDiagnosticMode = getExtraEnv("EXPO_PUBLIC_IOS_DIAGNOSTIC") === "1";
+  const [diagnosticActive, setDiagnosticActive] = useState(isDiagnosticMode);
+
+  if (isDiagnosticMode && diagnosticActive) {
+    return (
+      <SafeAreaProvider>
+        <DiagnosticScreenWithSplashHide onContinue={() => setDiagnosticActive(false)} />
+      </SafeAreaProvider>
+    );
+  }
 
   return (
     <AppErrorBoundary onError={handleError}>
@@ -419,4 +503,5 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.8)",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
+  bootingText: { color: "#fff", fontSize: 16 },
 });

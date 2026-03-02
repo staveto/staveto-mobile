@@ -1,11 +1,11 @@
 export const colors = {
-  background: "#253a6a",
+  background: "#1D376A",
   primary: "#e06737",
   accent: "#e06737",
   card: "#f0f4f8",
   text: "#111111",
   textMuted: "#555555",
-  border: "#3a5280",
+  border: "#2d4a7a",
   /** Text na modrom pozadí (header, status) – kvôli čitateľnosti */
   textOnDark: "#ffffff",
   /** Error/destructive actions (e.g. leave project, remove) */

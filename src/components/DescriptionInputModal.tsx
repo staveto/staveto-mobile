@@ -16,17 +16,17 @@ import { useI18n } from "../i18n/I18nContext";
 import { colors, spacing } from "../theme";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
 
+// Lazy-load mic/speech modules only when user taps record (avoids iOS privacy termination at startup)
 let SpeechRecognition: typeof import("expo-speech-recognition") | null = null;
 let AudioModule: typeof import("expo-av") | null = null;
-try {
-  SpeechRecognition = require("expo-speech-recognition");
-} catch (e) {
-  // expo-speech-recognition not installed
-}
-try {
-  AudioModule = require("expo-av");
-} catch (e) {
-  // expo-av not installed
+function ensureAudioModules(): void {
+  if (AudioModule && SpeechRecognition) return;
+  try {
+    if (!AudioModule) AudioModule = require("expo-av");
+  } catch {}
+  try {
+    if (!SpeechRecognition) SpeechRecognition = require("expo-speech-recognition");
+  } catch {}
 }
 
 const LOCALE_MAP: Record<string, string> = {
@@ -90,6 +90,7 @@ export function DescriptionInputModal({
 
   useEffect(() => {
     if (visible) {
+      ensureAudioModules();
       setText(initialText);
       setRecordingUri(initialRecordingUri);
       setIsRecording(false);
@@ -145,6 +146,7 @@ export function DescriptionInputModal({
   }, [text, recordingUri, onConfirm, onClose]);
 
   const startRecording = useCallback(async () => {
+    ensureAudioModules();
     if (!AudioModule?.Audio) {
       Alert.alert(t("common.error"), t("projectOverview.voiceRecordingNotAvailable"));
       return;

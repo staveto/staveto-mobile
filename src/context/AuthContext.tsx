@@ -1,13 +1,12 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import auth from "@react-native-firebase/auth";
-import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import { doc, getDoc } from "../lib/rnFirestore";
 import { db, getCallable } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
 import { configurePurchases } from "../services/billing";
-import { setupPushNotifications, removePushToken } from "../services/pushNotifications";
 import { getExtraEnv } from "../lib/env";
+import { IOS_SKIP_GOOGLE_SIGNIN } from "../lib/iosDiagnostic";
 
 export type BillingStatus = {
   status: "trial" | "active" | "expired";
@@ -54,6 +53,13 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const ONBOARDING_KEY = "staveto_onboarding_done";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
+  // #region agent log
+  useEffect(() => {
+    try {
+      require("../lib/bootLogger").bootStep("auth_provider_mount", "H6", {}).catch(() => {});
+    } catch {}
+  }, []);
+  // #endregion
   const claimedInviteSessionsRef = useRef<Set<string>>(new Set());
   const [state, setState] = useState<AuthState>({
     token: null,
@@ -92,18 +98,24 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const webClientId = getExtraEnv("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID");
-    if (!webClientId) {
-      console.warn("[auth] Missing EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID");
-      return;
-    }
-    GoogleSignin.configure({ webClientId });
+    if (IOS_SKIP_GOOGLE_SIGNIN) return;
+    import("@react-native-google-signin/google-signin").then(({ GoogleSignin }) => {
+      const webClientId = getExtraEnv("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID");
+      if (webClientId) GoogleSignin.configure({ webClientId });
+    }).catch(() => {});
   }, []);
 
   useEffect(() => {
     const unsubscribe = auth().onAuthStateChanged(async (fbUser) => {
+      // #region agent log
+      try {
+        require("../lib/bootLogger").bootStep("auth_state_listener", "H6", { hasUser: !!fbUser }).catch(() => {});
+      } catch {}
+      // #endregion
       if (!fbUser) {
-        removePushToken().catch(() => {});
+        if (getExtraEnv("EXPO_PUBLIC_DISABLE_PUSH") !== "1") {
+          import("../services/pushNotifications").then((m) => m.removePushToken().catch(() => {})).catch(() => {});
+        }
         setState((s) => ({ ...s, token: null, user: null, orgId: null, loading: false }));
         return;
       }
@@ -129,7 +141,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         // ignore profile fetch errors
       }
       // Push notification permission is requested from RootNavigator at first app entry (after onboarding)
-      configurePurchases(fbUser.uid).catch(() => {});
+      // #region agent log
+      try {
+        require("../lib/bootLogger").bootStep("revenuecat_configure_before", "H6", {}).catch(() => {});
+      } catch {}
+      // #endregion
+      configurePurchases(fbUser.uid)
+        .then(() => {
+          // #region agent log
+          try {
+            require("../lib/bootLogger").bootStep("revenuecat_configure_after", "H6", {}).catch(() => {});
+          } catch {}
+          // #endregion
+        })
+        .catch(() => {});
       const billing = await fetchBillingStatus(fbUser.uid);
       user = { ...user, billing: billing ?? undefined };
       if (!claimedInviteSessionsRef.current.has(fbUser.uid)) {

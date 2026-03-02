@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from "react";
 import { View, Text, ActivityIndicator } from "react-native";
 import { colors } from "../theme";
+import { IOS_SKIP_AUTH } from "../lib/iosDiagnostic";
 
 export function LazyAuthedApp({ enabled }: { enabled: boolean }) {
   const [Mod, setMod] = useState<React.ComponentType | null>(null);
@@ -9,9 +10,28 @@ export function LazyAuthedApp({ enabled }: { enabled: boolean }) {
   useEffect(() => {
     if (!enabled) return;
 
-    import("../AppShellAuthed")
-      .then((m) => setMod(() => m.default))
-      .catch((e) => setErr(String(e?.message ?? e)));
+    // #region agent log
+    try {
+      require("../lib/bootLogger").bootStep("lazy_authed_loading", "H6" as any, {}).catch(() => {});
+    } catch {}
+    // #endregion
+    const loadShell = (m: { default: React.ComponentType }) => {
+      try {
+        require("../lib/bootLogger").bootStep("lazy_authed_loaded", "H6", {}).catch(() => {});
+      } catch {}
+      setMod(() => m.default);
+    };
+    const onErr = (e: unknown) => {
+      try {
+        require("../lib/bootLogger").bootFail(e).catch(() => {});
+      } catch {}
+      setErr(String((e as Error)?.message ?? e));
+    };
+    if (IOS_SKIP_AUTH) {
+      import("../AppShellMinimal").then(loadShell).catch(onErr);
+    } else {
+      import("../AppShellAuthed").then(loadShell).catch(onErr);
+    }
   }, [enabled]);
 
   if (!enabled) return null;

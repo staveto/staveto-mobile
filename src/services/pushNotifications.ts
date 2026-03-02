@@ -2,6 +2,12 @@ import messaging from "@react-native-firebase/messaging";
 import { Platform, PermissionsAndroid } from "react-native";
 import { doc, setDoc } from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
+import { getExtraEnv } from "../lib/env";
+
+/** When EXPO_PUBLIC_DISABLE_PUSH=1, all messaging is disabled (test for iOS boot crash). */
+function isPushDisabled(): boolean {
+  return getExtraEnv("EXPO_PUBLIC_DISABLE_PUSH") === "1";
+}
 
 const ANDROID_NOTIFICATION_PERMISSION_API_LEVEL = 33;
 
@@ -50,6 +56,10 @@ async function requestNotificationPermission(): Promise<boolean> {
  * Shows native permission dialog at first login (like camera/microphone).
  */
 export async function registerForPushNotifications(): Promise<string | null> {
+  if (isPushDisabled()) {
+    if (__DEV__) console.log("[push] Push disabled via env");
+    return null;
+  }
   const uid = auth().currentUser?.uid;
   if (!uid) return null;
 
@@ -93,6 +103,7 @@ export async function registerForPushNotifications(): Promise<string | null> {
  * Remove device token on logout (optional - tokens expire).
  */
 export async function removePushToken(): Promise<void> {
+  if (isPushDisabled()) return;
   const uid = auth().currentUser?.uid;
   if (!uid) return;
 
@@ -112,6 +123,10 @@ export function setupPushNotifications(
   onTokenRefresh?: (token: string) => void,
   onNotificationOpened?: (data: Record<string, string>) => void
 ): () => void {
+  if (isPushDisabled()) {
+    if (__DEV__) console.log("[push] Push disabled via env");
+    return () => {};
+  }
   const unsubscribeToken = messaging().onTokenRefresh(async (token) => {
     const uid = auth().currentUser?.uid;
     if (!uid) return;

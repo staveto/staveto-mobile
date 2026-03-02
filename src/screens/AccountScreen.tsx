@@ -29,7 +29,7 @@ import { db, getStorage, getCallable } from "../firebase";
 import { doc, getDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import * as ImagePicker from "expo-image-picker";
 import { getDeviceRegionCode } from "../utils/countries";
-import auth from "@react-native-firebase/auth";
+import { auth } from "../firebase";
 import Constants from "expo-constants";
 import {
   PROFESSION_CODES,
@@ -259,7 +259,7 @@ export function AccountScreen() {
         photoURL: profilePhotoURL ?? null,
         updatedAt: serverTimestamp(),
       });
-      const fbUser = auth().currentUser;
+      const fbUser = auth()?.currentUser;
       if (fbUser?.uid === user.id && displayName) {
         await fbUser.updateProfile({ displayName });
       }

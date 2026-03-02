@@ -18,14 +18,13 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, spacing } from "../theme";
-import { db, getStorage } from "../firebase";
+import { auth, db, getStorage } from "../firebase";
 import * as ImagePicker from "expo-image-picker";
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import { getUserSubscription } from "../services/subscription";
 import type { SubscriptionTier } from "../services/subscription";
 import { SUPPORT_EMAIL } from "../constants/consent";
 import { useUnreadCount } from "../hooks/useUnreadCount";
-import auth from "@react-native-firebase/auth";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
 
 type NavItem = {
@@ -174,7 +173,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       // #region agent log
       sendAgentDebugLog("H3", "DrawerContent.pickProfilePhoto.uploadStart", "Starting Firebase Storage upload", {
         storagePath: `users/${user.id}/profile/${fileName}`,
-        authUid: auth().currentUser?.uid ?? null,
+        authUid: auth()?.currentUser?.uid ?? null,
         appUserId: user.id,
         userDocExistsBeforeWrite: userSnap.exists(),
         hasUri: Boolean(asset.uri),
@@ -192,7 +191,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       await setDoc(userRef, { photoURL: url, updatedAt: serverTimestamp() }, { merge: true });
       // #region agent log
       sendAgentDebugLog("H5", "DrawerContent.pickProfilePhoto.firestoreUpdate", "User profile photoURL updated in Firestore", {
-        authUid: auth().currentUser?.uid ?? null,
+        authUid: auth()?.currentUser?.uid ?? null,
         userIdSuffix: user.id.slice(-6),
         updated: true,
       });

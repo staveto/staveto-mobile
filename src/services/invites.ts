@@ -1,5 +1,4 @@
-import auth from "@react-native-firebase/auth";
-import { getCallable } from "../firebase";
+import { auth, getCallable } from "../firebase";
 
 type ClaimInvitesResult = {
   claimedCount: number;

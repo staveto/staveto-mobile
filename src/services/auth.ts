@@ -1,8 +1,7 @@
 import { Platform } from "react-native";
-import auth from "@react-native-firebase/auth";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import { doc, setDoc, getDoc, serverTimestamp } from "../lib/rnFirestore";
-import { db } from "../firebase";
+import { db, getAuth } from "../firebase";
 import { getDeviceRegionCode } from "../utils/countries";
 
 export type AuthUser = { id: string; email: string; name?: string; firstName?: string; lastName?: string; phoneE164?: string };
@@ -104,7 +103,7 @@ export async function updateUserProfileFromOnboarding(
   }
   await setDoc(ref, update, { merge: true });
 
-  const currentUser = auth().currentUser;
+  const currentUser = getAuth()?.currentUser;
   if (currentUser?.uid === uid && data.displayName) {
     await currentUser.updateProfile({ displayName: data.displayName });
   }
@@ -116,7 +115,9 @@ export async function register(
   displayName?: string
 ): Promise<{ user: AuthUser; token: string }> {
   const trimEmail = email.trim().toLowerCase();
-  const cred = await auth().createUserWithEmailAndPassword(trimEmail, password);
+  const fbAuth = getAuth();
+  if (!fbAuth) throw new Error("FIREBASE_DISABLED");
+  const cred = await fbAuth.createUserWithEmailAndPassword(trimEmail, password);
   if (displayName?.trim()) {
     await cred.user.updateProfile({ displayName: displayName.trim() });
   }
@@ -132,7 +133,9 @@ export async function register(
 
 export async function login(email: string, password: string): Promise<{ user: AuthUser; token: string }> {
   const trimEmail = email.trim().toLowerCase();
-  const cred = await auth().signInWithEmailAndPassword(trimEmail, password);
+  const fbAuth = getAuth();
+  if (!fbAuth) throw new Error("FIREBASE_DISABLED");
+  const cred = await fbAuth.signInWithEmailAndPassword(trimEmail, password);
   const user = toAuthUser(cred.user);
   await ensureUserProfile(user);
   const token = await cred.user.getIdToken();
@@ -153,8 +156,9 @@ export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string
   }
 
   const idToken = response.data.idToken;
-  const googleCredential = auth.GoogleAuthProvider.credential(idToken);
-  const cred = await auth().signInWithCredential(googleCredential);
+  const authMod = require("@react-native-firebase/auth").default;
+  const googleCredential = authMod.GoogleAuthProvider.credential(idToken);
+  const cred = await authMod().signInWithCredential(googleCredential);
   const user = toAuthUser(cred.user);
   await ensureUserProfile(user);
   const token = await cred.user.getIdToken();
@@ -162,7 +166,7 @@ export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string
 }
 
 export async function logout(): Promise<void> {
-  await auth().signOut();
+  await getAuth()?.signOut();
 }
 
 /** Send password reset email to the given address. */
@@ -171,7 +175,9 @@ export async function sendPasswordResetEmail(email: string): Promise<void> {
   if (!trimEmail || !trimEmail.includes("@")) {
     throw new Error("Zadajte platný email.");
   }
-  await auth().sendPasswordResetEmail(trimEmail);
+  const fbAuth = getAuth();
+  if (!fbAuth) throw new Error("FIREBASE_DISABLED");
+  await fbAuth.sendPasswordResetEmail(trimEmail);
 }
 
 /** Maps Firebase auth/ error codes to user-friendly messages. */

@@ -11,7 +11,7 @@ import {
 } from "react-native";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
-import auth from "@react-native-firebase/auth";
+import { auth } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { showToast } from "../helpers/toast";
@@ -40,7 +40,7 @@ export function ProjectInvitesScreen() {
   const [actionProjectId, setActionProjectId] = useState<string | null>(null);
 
   const load = useCallback(async (isRefresh = false) => {
-    const fbUser = auth().currentUser;
+    const fbUser = auth()?.currentUser;
     if (__DEV__) {
       console.log("[invites] currentUser", fbUser?.uid ?? null, fbUser?.email ?? null);
     }
@@ -81,7 +81,7 @@ export function ProjectInvitesScreen() {
   );
 
   useEffect(() => {
-    if (user?.id && auth().currentUser) {
+    if (user?.id && auth()?.currentUser) {
       load();
     }
   }, [user?.id, load]);

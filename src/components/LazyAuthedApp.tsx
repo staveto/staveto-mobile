@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from "react";
-import { View, Text, ActivityIndicator } from "react-native";
+import { View, Text, ActivityIndicator, InteractionManager, Platform } from "react-native";
 import { colors } from "../theme";
 import { IOS_SKIP_AUTH } from "../lib/iosDiagnostic";
 
@@ -27,11 +27,21 @@ export function LazyAuthedApp({ enabled }: { enabled: boolean }) {
       } catch {}
       setErr(String((e as Error)?.message ?? e));
     };
-    if (IOS_SKIP_AUTH) {
-      import("../AppShellMinimal").then(loadShell).catch(onErr);
-    } else {
-      import("../AppShellAuthed").then(loadShell).catch(onErr);
+    const doLoad = () => {
+      if (IOS_SKIP_AUTH) {
+        import("../AppShellMinimal").then(loadShell).catch(onErr);
+      } else {
+        import("../AppShellAuthed").then(loadShell).catch(onErr);
+      }
+    };
+    // Defer Firebase load on iOS until after first frame (prevents native crash)
+    if (Platform.OS === "ios" && !IOS_SKIP_AUTH) {
+      const task = InteractionManager.runAfterInteractions(() => {
+        setTimeout(doLoad, 100);
+      });
+      return () => task.cancel();
     }
+    doLoad();
   }, [enabled]);
 
   if (!enabled) return null;

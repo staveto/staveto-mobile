@@ -34,6 +34,11 @@ console.log("[ENTRY] index.ts start");
 // Suppress Firebase modular deprecation warnings (we use modular API; lib internals may still log)
 (globalThis as any).RNFB_SILENCE_MODULAR_DEPRECATION_WARNINGS = true;
 
+// Initialize Firebase App before any other Firebase modules (prevents iOS Auth crash)
+try {
+  require("@react-native-firebase/app").getApp();
+} catch {}
+
 // Initialize gesture handler (required by React Navigation)
 import "react-native-gesture-handler";
 // #region agent log

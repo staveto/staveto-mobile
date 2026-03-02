@@ -1,6 +1,6 @@
 import React, { useEffect, useRef } from "react";
 import { createNavigationContainerRef } from "@react-navigation/native";
-import auth from "@react-native-firebase/auth";
+import { auth } from "../firebase";
 import { IOS_SKIP_PUSH } from "../lib/iosDiagnostic";
 import { getExtraEnv } from "../lib/env";
 
@@ -32,7 +32,7 @@ export function PushNotificationHandler() {
     import("../services/pushNotifications").then(({ setupPushNotifications }) => {
       unsubscribe = setupPushNotifications(undefined, (data) => {
         const type = data?.type;
-        if (!auth().currentUser) return;
+        if (!auth()?.currentUser) return;
         if (!navigationRef.isReady()) return;
         if (type === "PROJECT_INVITE" || type === "project_invite") {
           try {

@@ -1,4 +1,4 @@
-import auth from "@react-native-firebase/auth";
+import { auth } from "../firebase";
 import { getCallable } from "../firebase";
 import { extractTotalFromRawText, parseMoneyToNumber } from "../helpers/parseMoney";
 import { addProjectEvent } from "./projectEvents";
@@ -134,7 +134,7 @@ export async function runInvoiceOCR(payload: {
 }) {
   console.log("[invoiceOCR] RUN_INVOICE_OCR_START");
 
-  const user = auth().currentUser;
+  const user = auth()?.currentUser;
   console.log("[invoiceOCR] PRE uid:", user?.uid ?? null);
 
   if (user) {

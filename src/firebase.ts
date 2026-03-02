@@ -1,5 +1,5 @@
-import authModule from "@react-native-firebase/auth";
-import firestoreModule, { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
+import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
+import firestoreModule from "@react-native-firebase/firestore";
 import storageModule from "@react-native-firebase/storage";
 import { getApp } from "@react-native-firebase/app";
 import { getFunctions, httpsCallable } from "@react-native-firebase/functions";
@@ -7,7 +7,7 @@ import { IOS_SKIP_AUTH } from "./lib/iosDiagnostic";
 
 const REGION = "europe-west1";
 
-let _auth: ReturnType<typeof authModule> | null = null;
+let _auth: ReturnType<typeof import("@react-native-firebase/auth")["default"]> | null = null;
 let _firestore: FirebaseFirestoreTypes.Module | null = null;
 let _storage: ReturnType<typeof storageModule> | null = null;
 let _functions: ReturnType<typeof getFunctions> | null = null;
@@ -16,6 +16,9 @@ export function getAuth() {
   if (IOS_SKIP_AUTH) return null;
   if (_auth) return _auth;
   try {
+    getApp();
+    // Lazy-load auth module (prevents iOS native crash when loaded at app startup)
+    const authModule = require("@react-native-firebase/auth").default;
     _auth = authModule();
     return _auth;
   } catch (e) {
@@ -78,7 +81,7 @@ Object.defineProperty(authFn, "currentUser", {
   configurable: true,
   enumerable: true,
 });
-export const auth = authFn as typeof authModule;
+export const auth = authFn as typeof import("@react-native-firebase/auth")["default"];
 /** Back-compat: storage() returns getStorage() - no top-level init */
 export const storage = () => getStorage();
 /** Back-compat: firestore() returns getFirestore() - no top-level init */

@@ -15,7 +15,7 @@ import {
   where,
   serverTimestamp,
 } from '../lib/rnFirestore';
-import { db, storage } from '../firebase';
+import { db, getStorage } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 
 const ALPHABET = 'ABCDEFGHJKLMNPQRSTUVWXYZ23456789'; // No ambiguous chars
@@ -132,7 +132,9 @@ export async function uploadEquipmentPhoto(
 ): Promise<{ photoUrl: string; photoPath: string }> {
   const ext = mimeType.includes('png') ? 'png' : 'jpg';
   const storagePath = `projects/${projectId}/equipment/${equipmentId}/photo_${Date.now()}.${ext}`;
-  const storageRef = storage.ref(storagePath);
+  const storageInstance = getStorage();
+  if (!storageInstance) throw new Error('Firebase Storage nie je dostupný.');
+  const storageRef = storageInstance.ref(storagePath);
   await storageRef.putFile(localUri, { contentType: mimeType });
   const photoUrl = await storageRef.getDownloadURL();
   return { photoUrl, photoPath: storagePath };
@@ -143,7 +145,9 @@ export async function removeEquipmentPhoto(
   _equipmentId: string,
   photoPath: string
 ): Promise<void> {
-  const storageRef = storage.ref(photoPath);
+  const storageInstance = getStorage();
+  if (!storageInstance) return;
+  const storageRef = storageInstance.ref(photoPath);
   await storageRef.delete();
 }
 

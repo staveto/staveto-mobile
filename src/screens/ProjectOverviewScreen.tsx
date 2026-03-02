@@ -263,7 +263,7 @@ export function ProjectOverviewScreen() {
   const [showDiaryDescriptionModal, setShowDiaryDescriptionModal] = useState(false);
   const [diaryMaterials, setDiaryMaterials] = useState("");
   const [diaryPhaseId, setDiaryPhaseId] = useState<string | null>(null);
-  const [diaryAttachment, setDiaryAttachment] = useState<{ uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' } | null>(null);
+  const [diaryAttachments, setDiaryAttachments] = useState<{ uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' }[]>([]);
   const [uploadingDiaryAttachment, setUploadingDiaryAttachment] = useState(false);
   
   // Project documents state
@@ -899,7 +899,7 @@ export function ProjectOverviewScreen() {
     setShowDiaryDescriptionModal(false);
     setDiaryMaterials("");
     setDiaryPhaseId(null);
-    setDiaryAttachment(null);
+    setDiaryAttachments([]);
     setShowDiaryModal(true);
   }, [access.canWrite, access.sharedItems.diary, t]);
 
@@ -1059,6 +1059,44 @@ export function ProjectOverviewScreen() {
         },
       ]
     );
+  };
+
+  const showTaskActionsMenu = (task: TaskDoc, showMoveOption: boolean) => {
+    const moveLabel = t("projectOverview.moveTaskTitle");
+    const editLabel = t("projectOverview.editTask");
+    const deleteLabel = t("projectOverview.deleteTask");
+    const options: string[] = [t("common.cancel")];
+    const actions: (() => void)[] = [];
+    if (showMoveOption) {
+      options.push(moveLabel);
+      actions.push(() => handleMoveTask(task));
+    }
+    options.push(editLabel);
+    actions.push(() => handleEditTask(task));
+    options.push(deleteLabel);
+    actions.push(() => handleDeleteTask(task));
+
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        { options, cancelButtonIndex: 0, destructiveButtonIndex: options.length - 1 },
+        (buttonIndex) => {
+          if (buttonIndex === 0) return;
+          const action = actions[buttonIndex - 1];
+          if (action) action();
+        }
+      );
+    } else {
+      Alert.alert(
+        task.title || t("tasks.noTitle"),
+        undefined,
+        [
+          { text: t("common.cancel"), style: "cancel" },
+          ...(showMoveOption ? [{ text: moveLabel, onPress: () => handleMoveTask(task) }] : []),
+          { text: editLabel, onPress: () => handleEditTask(task) },
+          { text: deleteLabel, style: "destructive", onPress: () => handleDeleteTask(task) },
+        ]
+      );
+    }
   };
 
   const handleReorderTask = async (task: TaskDoc, direction: 'up' | 'down') => {
@@ -1746,29 +1784,29 @@ export function ProjectOverviewScreen() {
       return;
     }
     try {
-      // Show action sheet to choose between camera and gallery
+      // Gallery first (allows multiple photos), then camera
       if (Platform.OS === 'ios') {
         ActionSheetIOS.showActionSheetWithOptions(
           {
-            options: [t("common.cancel"), t("projectOverview.takePhoto"), t("projectOverview.selectFromGallery")],
+            options: [t("common.cancel"), t("projectOverview.selectMultiplePhotos"), t("projectOverview.takePhoto")],
             cancelButtonIndex: 0,
           },
           async (buttonIndex) => {
             if (buttonIndex === 1) {
-              await launchCameraForDiary();
-            } else if (buttonIndex === 2) {
               await launchGalleryForDiary();
+            } else if (buttonIndex === 2) {
+              await launchCameraForDiary();
             }
           }
         );
       } else {
         Alert.alert(
-          'Vyberte zdroj',
-          'Odkiaľ chcete pridať fotku?',
+          t("projectOverview.selectSource") || 'Vyberte zdroj',
+          t("projectOverview.selectSourceMessage") || 'Odkiaľ chcete pridať fotky?',
           [
             { text: t("common.cancel"), style: 'cancel' },
-            { text: 'Odfotiť', onPress: launchCameraForDiary },
-            { text: 'Vybrať z galérie', onPress: launchGalleryForDiary },
+            { text: t("projectOverview.selectMultiplePhotos"), onPress: launchGalleryForDiary },
+            { text: t("projectOverview.takePhoto"), onPress: launchCameraForDiary },
           ]
         );
       }
@@ -1796,12 +1834,15 @@ export function ProjectOverviewScreen() {
 
       if (!result.canceled && result.assets[0]) {
         const asset = result.assets[0];
-        setDiaryAttachment({
-          uri: asset.uri,
-          fileName: asset.fileName || `dennik_${Date.now()}.jpg`,
-          mimeType: asset.mimeType || 'image/jpeg',
-          kind: 'image',
-        });
+        setDiaryAttachments((prev) => [
+          ...prev,
+          {
+            uri: asset.uri,
+            fileName: asset.fileName || `dennik_${Date.now()}.jpg`,
+            mimeType: asset.mimeType || 'image/jpeg',
+            kind: 'image' as const,
+          },
+        ]);
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error launching camera for diary:`, error);
@@ -1821,18 +1862,18 @@ export function ProjectOverviewScreen() {
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
+        allowsMultipleSelection: true,
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
-        setDiaryAttachment({
+      if (!result.canceled && result.assets.length > 0) {
+        const newAttachments = result.assets.map((asset) => ({
           uri: asset.uri,
-          fileName: asset.fileName || `dennik_${Date.now()}.jpg`,
+          fileName: asset.fileName || `dennik_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`,
           mimeType: asset.mimeType || 'image/jpeg',
-          kind: 'image',
-        });
+          kind: 'image' as const,
+        }));
+        setDiaryAttachments((prev) => [...prev, ...newAttachments]);
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error picking diary image from gallery:`, error);
@@ -2347,21 +2388,23 @@ export function ProjectOverviewScreen() {
       const entryDate = new Date(diaryDate);
       let attachmentIds: string[] = [];
       
-      // Upload photo attachment if provided
-      if (diaryAttachment) {
+      // Upload photo attachments if provided
+      if (diaryAttachments.length > 0) {
         try {
           setUploadingDiaryAttachment(true);
-          const attachment = await attachmentsService.uploadAttachment(projectId, {
-            expenseId: null,
-            taskId: null,
-            phaseId: diaryPhaseId,
-            localUri: diaryAttachment.uri,
-            fileName: diaryAttachment.fileName,
-            mimeType: diaryAttachment.mimeType,
-            kind: diaryAttachment.kind,
-          });
-          attachmentIds.push(attachment.id);
-          console.log(`[ProjectOverview] Uploaded diary attachment: ${attachment.id}`);
+          for (const att of diaryAttachments) {
+            const attachment = await attachmentsService.uploadAttachment(projectId, {
+              expenseId: null,
+              taskId: null,
+              phaseId: diaryPhaseId,
+              localUri: att.uri,
+              fileName: att.fileName,
+              mimeType: att.mimeType,
+              kind: att.kind,
+            });
+            attachmentIds.push(attachment.id);
+            console.log(`[ProjectOverview] Uploaded diary attachment: ${attachment.id}`);
+          }
         } catch (error: any) {
           console.error(`[ProjectOverview] Error uploading diary attachment:`, error);
           Alert.alert(t("common.error"), t("projectOverview.failedToUploadPhoto"));
@@ -2445,7 +2488,7 @@ export function ProjectOverviewScreen() {
       setShowDiaryDescriptionModal(false);
       setDiaryMaterials("");
       setDiaryPhaseId(null);
-      setDiaryAttachment(null);
+      setDiaryAttachments([]);
       await load(true);
     } catch (error: any) {
       console.error(`[ProjectOverview] Error saving diary entry:`, error);
@@ -3396,18 +3439,11 @@ export function ProjectOverviewScreen() {
                     />
                   </TouchableOpacity>
                   <TouchableOpacity
-                    style={styles.taskActionButton}
-                    onPress={() => handleEditTask(task)}
+                    style={styles.taskMenuButton}
+                    onPress={() => showTaskActionsMenu(task, false)}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                   >
-                    <Ionicons name="create-outline" size={20} color={colors.textMuted} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.taskActionButton}
-                    onPress={() => handleDeleteTask(task)}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  >
-                    <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
+                    <Ionicons name="ellipsis-vertical" size={20} color={colors.textMuted} />
                   </TouchableOpacity>
                 </>
               ) : null}
@@ -3599,29 +3635,11 @@ export function ProjectOverviewScreen() {
                                     />
                                   </TouchableOpacity>
                                   <TouchableOpacity
-                                    style={styles.taskMoveButton}
-                                    onPress={() => handleMoveTask(task)}
+                                    style={styles.taskMenuButton}
+                                    onPress={() => showTaskActionsMenu(task, true)}
                                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                                   >
-                                    <Ionicons 
-                                      name="swap-horizontal-outline" 
-                                      size={20} 
-                                      color="#000000" 
-                                    />
-                                  </TouchableOpacity>
-                                  <TouchableOpacity
-                                    style={styles.taskActionButton}
-                                    onPress={() => handleEditTask(task)}
-                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                  >
-                                    <Ionicons name="create-outline" size={20} color={colors.textMuted} />
-                                  </TouchableOpacity>
-                                  <TouchableOpacity
-                                    style={styles.taskActionButton}
-                                    onPress={() => handleDeleteTask(task)}
-                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                  >
-                                    <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
+                                    <Ionicons name="ellipsis-vertical" size={20} color={colors.textMuted} />
                                   </TouchableOpacity>
                                 </>
                               ) : null}
@@ -3712,29 +3730,11 @@ export function ProjectOverviewScreen() {
                             />
                           </TouchableOpacity>
                           <TouchableOpacity
-                            style={styles.taskMoveButton}
-                            onPress={() => handleMoveTask(task)}
+                            style={styles.taskMenuButton}
+                            onPress={() => showTaskActionsMenu(task, true)}
                             hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
                           >
-                            <Ionicons 
-                              name="swap-horizontal-outline" 
-                              size={20} 
-                              color="#000000" 
-                            />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.taskActionButton}
-                            onPress={() => handleEditTask(task)}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                          >
-                            <Ionicons name="create-outline" size={20} color={colors.textMuted} />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.taskActionButton}
-                            onPress={() => handleDeleteTask(task)}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                          >
-                            <Ionicons name="trash-outline" size={20} color={colors.textMuted} />
+                            <Ionicons name="ellipsis-vertical" size={20} color={colors.textMuted} />
                           </TouchableOpacity>
                         </>
                       ) : null}
@@ -3944,7 +3944,7 @@ export function ProjectOverviewScreen() {
                           setDiaryWorkDescriptionRecordingUri(null);
                           setDiaryMaterials(entry.materials || "");
                           setDiaryPhaseId(entry.phaseId || null);
-                          setDiaryAttachment(null); // Reset attachment when editing (existing attachments are already saved)
+                          setDiaryAttachments([]); // Reset new attachments when editing (existing attachments are already saved)
                           setShowDiaryModal(true);
                         }}
                         hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -5455,7 +5455,7 @@ export function ProjectOverviewScreen() {
               </View>
             )}
             
-            {/* Diary Photo Attachment */}
+            {/* Diary Photo Attachments - multiple photos */}
             <View style={styles.expenseAttachmentSection}>
               <Text style={styles.expenseAttachmentLabel}>{t("projectOverview.photoOptional")}</Text>
               <View style={styles.expenseAttachmentButtons}>
@@ -5465,11 +5465,11 @@ export function ProjectOverviewScreen() {
                   disabled={uploadingDiaryAttachment || submitting}
                 >
                   <Ionicons name="image-outline" size={20} color={colors.primary} />
-                  <Text style={styles.expenseAttachmentButtonText}>{t("projectOverview.addPhoto")}</Text>
+                  <Text style={styles.expenseAttachmentButtonText}>{t("projectOverview.addPhotos")}</Text>
                 </TouchableOpacity>
               </View>
-              {diaryAttachment && (
-                <View style={styles.expenseAttachmentPreview}>
+              {diaryAttachments.length > 0 && diaryAttachments.map((att, idx) => (
+                <View key={`${att.uri}-${idx}`} style={styles.expenseAttachmentPreview}>
                   <Ionicons
                     name="image-outline"
                     size={20}
@@ -5477,16 +5477,16 @@ export function ProjectOverviewScreen() {
                     style={{ marginRight: spacing.sm }}
                   />
                   <Text style={styles.expenseAttachmentPreviewText} numberOfLines={1}>
-                    {diaryAttachment.fileName}
+                    {att.fileName}
                   </Text>
                   <TouchableOpacity
-                    onPress={() => setDiaryAttachment(null)}
+                    onPress={() => setDiaryAttachments((prev) => prev.filter((_, i) => i !== idx))}
                     style={styles.expenseAttachmentRemove}
                   >
                     <Ionicons name="close-circle" size={20} color={colors.textMuted} />
                   </TouchableOpacity>
                 </View>
-              )}
+              ))}
               {uploadingDiaryAttachment && (
                 <View style={styles.expenseAttachmentUploading}>
                   <ActivityIndicator size="small" color={colors.primary} />
@@ -5509,7 +5509,7 @@ export function ProjectOverviewScreen() {
                   setDiaryWorkDescriptionRecordingUri(null);
                   setDiaryMaterials("");
                   setDiaryPhaseId(null);
-                  setDiaryAttachment(null);
+                  setDiaryAttachments([]);
                 }}
               >
                 <Text style={styles.modalCancelText}>{t("tasks.cancel")}</Text>
@@ -6117,7 +6117,7 @@ const styles = StyleSheet.create({
   },
   phaseChipText: {
     fontSize: 14,
-    color: colors.text,
+    color: colors.textOnDark,
     fontWeight: "500",
   },
   phaseChipTextSelected: {
@@ -6881,7 +6881,7 @@ const styles = StyleSheet.create({
   },
   expenseAttachmentButtonText: {
     fontSize: 14,
-    color: "#000000",
+    color: colors.textOnDark,
     fontWeight: '500',
   },
   expenseAttachmentPreview: {
@@ -6923,7 +6923,7 @@ const styles = StyleSheet.create({
     padding: spacing.xs,
     marginLeft: spacing.xs,
   },
-  taskMoveButton: {
+  taskMenuButton: {
     padding: spacing.xs,
     marginLeft: spacing.xs,
   },
@@ -6977,7 +6977,7 @@ const styles = StyleSheet.create({
   },
   attachmentAddButtonText: {
     fontSize: 14,
-    color: colors.primary,
+    color: colors.textOnDark,
     fontWeight: '500',
   },
   uploadingIndicator: {

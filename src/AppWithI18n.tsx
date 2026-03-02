@@ -1,10 +1,10 @@
 /**
- * App shell with I18n + LazyAuthedApp.
- * Loaded lazily after boot to avoid blocking splash with translations/Firebase.
+ * App shell with LazyAuthedApp.
+ * I18nProvider is mounted in App.tsx so useI18n is available before lazy load.
  */
 import React from "react";
 import { View, ActivityIndicator } from "react-native";
-import { I18nProvider, useI18n } from "./i18n/I18nContext";
+import { useI18n } from "./i18n/I18nContext";
 import { LazyAuthedApp } from "./components/LazyAuthedApp";
 import { colors } from "./theme";
 
@@ -23,9 +23,5 @@ function AppShell() {
 }
 
 export default function AppWithI18n() {
-  return (
-    <I18nProvider>
-      <AppShell />
-    </I18nProvider>
-  );
+  return <AppShell />;
 }

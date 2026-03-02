@@ -1,4 +1,4 @@
-import { storage, auth } from "../firebase";
+import { getStorage, auth } from "../firebase";
 import type { ProblemPhoto } from "./problems";
 
 const MAX_SIZE_BYTES = 15 * 1024 * 1024; // 15MB
@@ -32,7 +32,9 @@ export async function uploadProblemPhoto(
   const mimeType = options?.mimeType ?? "image/jpeg";
 
   const storagePath = `projects/${projectId}/problems/${problemId}/${fileName}`;
-  const storageRef = storage.ref(storagePath);
+  const storageInstance = getStorage();
+  if (!storageInstance) throw new Error("Firebase Storage nie je dostupný.");
+  const storageRef = storageInstance.ref(storagePath);
 
   try {
     await storageRef.putFile(localUri, { contentType: mimeType });
@@ -60,7 +62,9 @@ export async function uploadProblemPhoto(
  */
 export async function getProblemPhotoURL(storagePath: string): Promise<string> {
   try {
-    const storageRef = storage.ref(storagePath);
+    const storageInstance = getStorage();
+    if (!storageInstance) throw new Error("Firebase Storage nie je dostupný.");
+    const storageRef = storageInstance.ref(storagePath);
     return await storageRef.getDownloadURL();
   } catch (error: any) {
     const code = String(error?.code ?? "").toLowerCase();

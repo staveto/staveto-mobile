@@ -5,7 +5,7 @@ import {
   writeBatch,
   serverTimestamp
 } from '../lib/rnFirestore';
-import { db, auth } from '../firebase';
+import { db, getAuth } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 import { getTemplatePhases, getTemplateTasks } from './templateService';
 import { createProjectCreatedNotification } from './notifications';
@@ -42,17 +42,16 @@ export async function instantiateTemplate(
 ): Promise<string> {
   const { projectType, templateId, name } = params;
   
-  // CRITICAL FIX: Always use auth.currentUser.uid, never trust ownerId from params
-  // Use the exported auth instance from firebase.ts (not getAuth())
+  // CRITICAL FIX: Always use getAuth()?.currentUser.uid, never trust ownerId from params
   // Wait a bit for auth state to be ready (React Native Firebase sometimes needs a moment)
-  let currentUser = auth.currentUser;
+  let currentUser = getAuth()?.currentUser ?? null;
   
   // If currentUser is null, wait a bit and check again (max 3 attempts, 100ms each)
   if (!currentUser) {
     console.warn(`[projectFactory] WARNING: auth.currentUser is null, waiting for auth state...`);
     for (let i = 0; i < 3; i++) {
       await new Promise(resolve => setTimeout(resolve, 100));
-      currentUser = auth.currentUser;
+      currentUser = getAuth()?.currentUser ?? null;
       if (currentUser) {
         console.log(`[projectFactory] Auth state ready after ${i + 1} attempt(s)`);
         break;
@@ -60,14 +59,12 @@ export async function instantiateTemplate(
     }
   }
   
-  console.log(`[projectFactory] DEBUG: auth object:`, auth);
-  console.log(`[projectFactory] DEBUG: auth.currentUser:`, currentUser);
-  console.log(`[projectFactory] DEBUG: auth.currentUser?.uid:`, currentUser?.uid);
+  console.log(`[projectFactory] DEBUG: currentUser:`, currentUser);
+  console.log(`[projectFactory] DEBUG: currentUser?.uid:`, currentUser?.uid);
   
   if (!currentUser || !currentUser.uid) {
     console.error(`[projectFactory] ERROR: auth.currentUser is null or uid is missing after waiting!`);
-    console.error(`[projectFactory] ERROR: auth.currentUser =`, currentUser);
-    console.error(`[projectFactory] ERROR: auth object =`, auth);
+    console.error(`[projectFactory] ERROR: currentUser =`, currentUser);
     throw new Error('Musíte byť prihlásený na vytvorenie projektu. auth.currentUser je null.');
   }
   

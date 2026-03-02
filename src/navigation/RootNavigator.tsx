@@ -38,7 +38,7 @@ import { ProblemDetailScreen } from "../screens/ProblemDetailScreen";
 import { CreateProblemScreen } from "../screens/CreateProblemScreen";
 import { AppDrawer } from "./AppDrawer";
 import { colors, spacing } from "../theme";
-import { db } from "../firebase";
+import { getFirestore, db } from "../firebase";
 import { doc, getDoc } from "../lib/rnFirestore";
 import { CONSENT_PRIVACY_VERSION, CONSENT_TERMS_VERSION, PENDING_CONSENT_KEY } from "../constants/consent";
 import { getExtraEnv } from "../lib/env";
@@ -76,6 +76,10 @@ export function RootNavigator() {
 
   const checkGate = useCallback(async () => {
     if (!token || !user?.id) return;
+    if (!getFirestore()) {
+      setGateLoading(false);
+      return;
+    }
     setGateLoading(true);
     try {
       const pendingConsentRaw = await AsyncStorage.getItem(PENDING_CONSENT_KEY);

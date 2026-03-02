@@ -3,7 +3,7 @@
  * Storage path: projects/{projectId}/cover/{timestamp}.jpg
  * Firestore fields: coverImageUrl, coverImageUpdatedAt, coverImagePath
  */
-import { storage, auth, db } from "../firebase";
+import { getStorage, auth, db } from "../firebase";
 import { doc, getDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 
 const COLLECTION = "projects";
@@ -129,7 +129,9 @@ export async function uploadProjectCover(
 
   const timestamp = Date.now();
   const storagePath = `projects/${projectId}/cover/${timestamp}.jpg`;
-  const storageRef = storage.ref(storagePath);
+  const storageInstance = getStorage();
+  if (!storageInstance) throw new Error("Firebase Storage nie je dostupný.");
+  const storageRef = storageInstance.ref(storagePath);
 
   try {
     await storageRef.putFile(localUri, { contentType: "image/jpeg" });
@@ -159,9 +161,12 @@ export async function setProjectCover(
 
   if (oldPath?.trim()) {
     try {
-      const oldRef = storage.ref(oldPath);
-      await oldRef.delete();
-      console.log("[projectCover] Deleted old cover:", oldPath);
+      const storageInstance = getStorage();
+      if (storageInstance) {
+        const oldRef = storageInstance.ref(oldPath);
+        await oldRef.delete();
+        console.log("[projectCover] Deleted old cover:", oldPath);
+      }
     } catch (e) {
       console.warn("[projectCover] Failed to delete old cover (non-fatal):", e);
     }
@@ -199,9 +204,12 @@ export async function removeProjectCover(projectId: string): Promise<void> {
   const oldPath = (data?.coverImagePath as string) || undefined;
   if (oldPath?.trim()) {
     try {
-      const storageRef = storage.ref(oldPath);
-      await storageRef.delete();
-      console.log("[projectCover] Deleted cover file:", oldPath);
+      const storageInstance = getStorage();
+      if (storageInstance) {
+        const storageRef = storageInstance.ref(oldPath);
+        await storageRef.delete();
+        console.log("[projectCover] Deleted cover file:", oldPath);
+      }
     } catch (e) {
       console.warn("[projectCover] Failed to delete cover file (non-fatal):", e);
     }

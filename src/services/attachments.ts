@@ -1,5 +1,5 @@
 import { collection, addDoc, query, where, getDocs, deleteDoc, doc, orderBy, serverTimestamp, Timestamp, getDoc, updateDoc } from "../lib/rnFirestore";
-import { storage, db, auth } from "../firebase";
+import { getStorage, db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { AttachmentMetadata, AttachmentKind } from "../lib/attachmentTypes";
 import { addProjectEvent } from "./projectEvents";
@@ -87,7 +87,9 @@ export async function uploadAttachment(
   
   // Storage path: projects/{projectId}/attachments/{attachmentId}/{fileName}
   const storagePath = `projects/${projectId}/attachments/${attachmentId}/${options.fileName}`;
-  const storageRef = storage.ref(storagePath);
+  const storageInstance = getStorage();
+  if (!storageInstance) throw new Error('Firebase Storage nie je dostupný.');
+  const storageRef = storageInstance.ref(storagePath);
 
   // Upload to Storage
   console.log(`[attachments] Uploading to Storage: ${storagePath}`);
@@ -230,7 +232,9 @@ export async function listAttachments(
  */
 export async function getAttachmentURL(attachment: AttachmentDoc): Promise<string> {
   try {
-    const storageRef = storage.ref(attachment.storagePath);
+    const storageInstance = getStorage();
+    if (!storageInstance) throw new Error('Firebase Storage nie je dostupný.');
+    const storageRef = storageInstance.ref(attachment.storagePath);
     return await storageRef.getDownloadURL();
   } catch (error: any) {
     const code = String(error?.code ?? "").toLowerCase();
@@ -253,9 +257,12 @@ export async function deleteAttachment(
 ): Promise<void> {
   // Delete from Storage
   try {
-    const storageRef = storage.ref(storagePath);
-    await storageRef.delete();
-    console.log(`[attachments] Deleted from Storage: ${storagePath}`);
+    const storageInstance = getStorage();
+    if (storageInstance) {
+      const storageRef = storageInstance.ref(storagePath);
+      await storageRef.delete();
+      console.log(`[attachments] Deleted from Storage: ${storagePath}`);
+    }
   } catch (error: any) {
     console.warn(`[attachments] Error deleting from Storage (may not exist):`, error);
     // Continue to delete Firestore doc even if Storage delete fails

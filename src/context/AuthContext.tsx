@@ -1,8 +1,7 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import auth from "@react-native-firebase/auth";
 import { doc, getDoc } from "../lib/rnFirestore";
-import { db, getCallable } from "../firebase";
+import { getAuth, db, getCallable } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
 import { configurePurchases } from "../services/billing";
 import { getExtraEnv } from "../lib/env";
@@ -106,7 +105,12 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   useEffect(() => {
-    const unsubscribe = auth().onAuthStateChanged(async (fbUser) => {
+    const fbAuth = getAuth();
+    if (!fbAuth) {
+      setState((s) => ({ ...s, loading: false }));
+      return;
+    }
+    const unsubscribe = fbAuth.onAuthStateChanged(async (fbUser) => {
       // #region agent log
       try {
         require("../lib/bootLogger").bootStep("auth_state_listener", "H6", { hasUser: !!fbUser }).catch(() => {});
@@ -181,18 +185,23 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = async (email: string, password: string) => {
-    await auth().signInWithEmailAndPassword(email, password);
+    const fbAuth = getAuth();
+    if (!fbAuth) throw new Error("FIREBASE_DISABLED");
+    await fbAuth.signInWithEmailAndPassword(email, password);
   };
 
   const register = async (email: string, password: string, displayName?: string) => {
-    const cred = await auth().createUserWithEmailAndPassword(email, password);
+    const fbAuth = getAuth();
+    if (!fbAuth) throw new Error("FIREBASE_DISABLED");
+    const cred = await fbAuth.createUserWithEmailAndPassword(email, password);
     if (displayName?.trim()) {
       await cred.user.updateProfile({ displayName: displayName.trim() });
     }
   };
 
   const logout = async () => {
-    await auth().signOut();
+    const fbAuth = getAuth();
+    if (fbAuth) await fbAuth.signOut();
   };
 
   const finishOnboarding = async () => {
@@ -201,7 +210,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const refreshUser = async () => {
-    const fbUser = auth().currentUser;
+    const fbUser = getAuth()?.currentUser ?? null;
     if (!fbUser) return;
     try {
       const token = await fbUser.getIdToken();

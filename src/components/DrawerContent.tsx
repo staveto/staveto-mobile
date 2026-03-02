@@ -18,7 +18,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, spacing } from "../theme";
-import { db, storage } from "../firebase";
+import { db, getStorage } from "../firebase";
 import * as ImagePicker from "expo-image-picker";
 import { doc, getDoc, setDoc, updateDoc, serverTimestamp } from "../lib/rnFirestore";
 import { getUserSubscription } from "../services/subscription";
@@ -166,7 +166,9 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       setUploadingPhoto(true);
       const asset = result.assets[0];
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
-      const storageRef = storage.ref(`users/${user.id}/profile/${fileName}`);
+      const storageInstance = getStorage();
+      if (!storageInstance) throw new Error("Firebase Storage nie je dostupný.");
+      const storageRef = storageInstance.ref(`users/${user.id}/profile/${fileName}`);
       const userRef = doc(db, "users", user.id);
       const userSnap = await getDoc(userRef);
       // #region agent log
@@ -232,7 +234,9 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       setUploadingPhoto(true);
       const asset = result.assets[0];
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
-      const storageRef = storage.ref(`users/${user.id}/profile/${fileName}`);
+      const storageInstance = getStorage();
+      if (!storageInstance) throw new Error("Firebase Storage nie je dostupný.");
+      const storageRef = storageInstance.ref(`users/${user.id}/profile/${fileName}`);
       await storageRef.putFile(asset.uri);
       const url = await storageRef.getDownloadURL();
       await setDoc(doc(db, "users", user.id), { photoURL: url, updatedAt: serverTimestamp() }, { merge: true });

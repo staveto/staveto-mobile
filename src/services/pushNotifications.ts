@@ -1,7 +1,7 @@
 import messaging from "@react-native-firebase/messaging";
 import { Platform, PermissionsAndroid } from "react-native";
 import { doc, setDoc } from "../lib/rnFirestore";
-import { db, auth } from "../firebase";
+import { getAuth, getFirestore, db } from "../firebase";
 import { getExtraEnv } from "../lib/env";
 
 /** When EXPO_PUBLIC_DISABLE_PUSH=1, all messaging is disabled (test for iOS boot crash). */
@@ -60,8 +60,9 @@ export async function registerForPushNotifications(): Promise<string | null> {
     if (__DEV__) console.log("[push] Push disabled via env");
     return null;
   }
-  const uid = auth().currentUser?.uid;
+  const uid = getAuth()?.currentUser?.uid ?? null;
   if (!uid) return null;
+  if (!getFirestore()) return null;
 
   try {
     const granted = await requestNotificationPermission();
@@ -104,8 +105,9 @@ export async function registerForPushNotifications(): Promise<string | null> {
  */
 export async function removePushToken(): Promise<void> {
   if (isPushDisabled()) return;
-  const uid = auth().currentUser?.uid;
+  const uid = getAuth()?.currentUser?.uid ?? null;
   if (!uid) return;
+  if (!getFirestore()) return;
 
   try {
     const userRef = doc(db, "users", uid);
@@ -128,8 +130,9 @@ export function setupPushNotifications(
     return () => {};
   }
   const unsubscribeToken = messaging().onTokenRefresh(async (token) => {
-    const uid = auth().currentUser?.uid;
+    const uid = getAuth()?.currentUser?.uid ?? null;
     if (!uid) return;
+    if (!getFirestore()) return;
 
     try {
       const deviceId = getDeviceId();

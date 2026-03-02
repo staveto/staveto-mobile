@@ -10,6 +10,8 @@ import {
   ActivityIndicator,
   KeyboardAvoidingView,
   Platform,
+  ScrollView,
+  Pressable,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
@@ -284,12 +286,25 @@ export function DescriptionInputModal({
   const displayTitle = title ?? t("projectOverview.descriptionModalTitle");
 
   return (
-    <Modal visible={visible} transparent animationType="slide">
-      <KeyboardAvoidingView
-        style={styles.overlay}
-        behavior={Platform.OS === "ios" ? "padding" : "height"}
-        keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 20}
-      >
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      statusBarTranslucent
+      onRequestClose={handleClose}
+    >
+      <Pressable style={styles.overlay} onPress={handleClose}>
+        <Pressable style={styles.modalPressable} onPress={() => {}}>
+          <KeyboardAvoidingView
+            style={styles.keyboardWrap}
+            behavior={Platform.OS === "ios" ? "padding" : "padding"}
+            keyboardVerticalOffset={0}
+          >
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={styles.scrollContent}
+            >
         <View style={styles.modal}>
           <View style={styles.header}>
             <Text style={styles.title} numberOfLines={1} maxFontSizeMultiplier={1.2}>
@@ -346,13 +361,11 @@ export function DescriptionInputModal({
                 >
                   {isRecording ? `${t("projectOverview.recording")} • ${formatDuration(recordingMs)}` : "Tap to record"}
                 </Text>
-                {isRecording && (
-                  <View style={styles.waveWrap}>
-                    {waveBars.length === 0
-                      ? Array.from({ length: 24 }).map((_, i) => <View key={i} style={[styles.waveBar, { height: 10 }]} />)
-                      : waveBars.map((h, i) => <View key={i} style={[styles.waveBar, { height: h }]} />)}
-                  </View>
-                )}
+                <View style={[styles.waveWrap, !isRecording && styles.waveWrapHidden]}>
+                  {waveBars.length === 0
+                    ? Array.from({ length: 24 }).map((_, i) => <View key={i} style={[styles.waveBar, { height: 10 }]} />)
+                    : waveBars.map((h, i) => <View key={i} style={[styles.waveBar, { height: h }]} />)}
+                </View>
               </View>
             ) : (
               <Text style={styles.recordUnavailable} maxFontSizeMultiplier={1.2} numberOfLines={2}>
@@ -373,7 +386,10 @@ export function DescriptionInputModal({
             </Text>
           </TouchableOpacity>
         </View>
-      </KeyboardAvoidingView>
+            </ScrollView>
+          </KeyboardAvoidingView>
+        </Pressable>
+      </Pressable>
     </Modal>
   );
 }
@@ -382,6 +398,19 @@ const styles = StyleSheet.create({
   overlay: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    alignItems: "center",
+  },
+  modalPressable: {
+    width: "100%",
+    maxWidth: 400,
+    maxHeight: "90%",
+  },
+  keyboardWrap: {
+    width: "100%",
+  },
+  scrollContent: {
+    flexGrow: 1,
     justifyContent: "center",
   },
   modal: {
@@ -452,6 +481,10 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "flex-end",
     justifyContent: "space-between",
+  },
+  waveWrapHidden: {
+    opacity: 0,
+    pointerEvents: "none",
   },
   waveBar: {
     width: 4,

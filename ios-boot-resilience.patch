@@ -1,0 +1,196 @@
+From: iOS Boot Resilience Patch
+Subject: iOS boot resilience - non-blocking invites, member projects, API timeout, boot diagnostics
+
+Touched files:
+- src/services/invites.ts
+- src/services/projects.ts
+- src/api/client.ts
+- src/lib/bootLogger.ts
+- src/context/AuthContext.tsx
+- App.tsx
+
+---
+diff --git a/App.tsx b/App.tsx
+--- a/App.tsx
++++ b/App.tsx
+@@ -183,6 +183,7 @@ function BootLoader({ children }: { children: React.ReactNode }) {
+   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
++  const [bootExceeded6s, setBootExceeded6s] = useState(false);
+   const [lastBootStep, setLastBootStep] = useState<{ step: string; ts: number } | null>(null);
+   const bootTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
++  const boot6sRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+@@ -235,6 +236,12 @@ function BootLoader({ children }: { children: React.ReactNode }) {
+       }
+     };
++    boot6sRef.current = setTimeout(() => {
++      if (isBootingRef.current) setBootExceeded6s(true);
++      boot6sRef.current = null;
++    }, 6000);
+@@ -355,8 +362,9 @@ function BootLoader({ children }: { children: React.ReactNode }) {
+   if (state === "booting") {
++    const showLastStep = (showDebugOverlay && bootExceeded6s) && lastBootStep;
+     return (
+       <Pressable onPress={handleDebugTap} style={[styles.loading, styles.bootingScreen]}>
+-        {__DEV__ && lastBootStep && (
++        {showLastStep && (
+           <View style={[styles.debugOverlay, { position: "absolute", bottom: 24 }]}>
+             <Text style={[styles.debugText, { color: "#ff9" }]}>
+-              Previous run stopped at: {lastBootStep.step}
++              Last step: {lastBootStep.step}
+             </Text>
+           </View>
+         )}
+diff --git a/src/api/client.ts b/src/api/client.ts
+--- a/src/api/client.ts
++++ b/src/api/client.ts
+@@ -6,7 +6,7 @@ const envApiUrl = getExtraEnv("EXPO_PUBLIC_API_URL");
+ const baseURL =
+   envApiUrl ? envApiUrl : (__DEV__ ? DEV_FALLBACK : "https://staveto-app-api.workers.dev");
+ 
+-const REQUEST_TIMEOUT_MS = 15000;
++const REQUEST_TIMEOUT_MS = 8000;
+@@ -81,6 +81,10 @@ async function request<T>(
+     if (e instanceof Error) {
+       if (e.name === "AbortError") throw new Error(`Timeout after ${REQUEST_TIMEOUT_MS / 1000}s – skontroluj sieť a ${getBaseURL()}`);
++      const msg = e.message ?? String(e);
++      if (msg.includes("-1004") || msg.includes("Could not connect") || msg.includes("network") || msg.includes("ECONNREFUSED")) {
++        throw new Error(`Sieťová chyba – server nedostupný (${getBaseURL()})`);
++      }
+       throw e;
+     }
+diff --git a/src/context/AuthContext.tsx b/src/context/AuthContext.tsx
+--- a/src/context/AuthContext.tsx
++++ b/src/context/AuthContext.tsx
+@@ -6,6 +6,7 @@ import { claimProjectInvites } from "../services/invites";
+ import { getExtraEnv } from "../lib/env";
+ import { IOS_SKIP_GOOGLE_SIGNIN } from "../lib/iosDiagnostic";
++import { bootStep, setLastBootStep } from "../lib/bootLogger";
+@@ -108,8 +108,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
+     const unsubscribe = fbAuth.onAuthStateChanged(async (fbUser) => {
++      setLastBootStep("auth_state_received");
+       bootStep("auth_state_listener", "H6", { hasUser: !!fbUser }).catch(() => {});
+@@ -124,7 +124,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
+       try {
++        setLastBootStep("user_doc_loading");
+         const snap = await getDoc(doc(db, "users", fbUser.uid));
++        setLastBootStep("user_doc_loaded");
+@@ -138,31 +138,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
+       } catch {
++        setLastBootStep("user_doc_error");
+       }
+       bootStep("revenuecat_configure_before", "H6", {}).catch(() => {});
+       configurePurchases(fbUser.uid)
+         .then(() => bootStep("revenuecat_configure_after", "H6", {}).catch(() => {}))
+         .catch(() => {});
++      setLastBootStep("billing_loading");
+       const billing = await fetchBillingStatus(fbUser.uid);
++      setLastBootStep("billing_loaded");
+       user = { ...user, billing: billing ?? undefined };
+       if (!claimedInviteSessionsRef.current.has(fbUser.uid)) {
+         claimedInviteSessionsRef.current.add(fbUser.uid);
++        setLastBootStep("invites_started");
+         claimProjectInvites()
+           .then((result) => {
++            setLastBootStep("invites_done");
+             if (result.claimedCount > 0 && __DEV__) {
+               console.log("[auth] claimed project invites:", result.claimedCount, result.projectIds);
+             }
+           })
+-          .catch((error) => {
+-            console.warn("[auth] claimProjectInvites failed:", error);
++          .catch(() => {
++            setLastBootStep("invites_failed");
+           });
+       }
++      setLastBootStep("boot_done");
+       setState((s) => ({
+diff --git a/src/lib/bootLogger.ts b/src/lib/bootLogger.ts
+--- a/src/lib/bootLogger.ts
++++ b/src/lib/bootLogger.ts
+@@ -26,6 +26,24 @@ export type BootStep =
+   | "auth_provider_mount"
++  | "auth_state_received"
+   | "auth_state_listener"
++  | "user_doc_loaded"
++  | "billing_loaded"
++  | "invites_started"
++  | "invites_done"
++  | "invites_failed"
+   | "revenuecat_configure_before"
+   | "revenuecat_configure_after"
++  | "boot_done"
+   | "boot_complete";
+ 
++let lastBootStepMem: { step: string; ts: number } | null = null;
++
++/** Sync setter for last boot step (for milestones). bootStep() also persists. */
++export function setLastBootStep(step: string): void {
++  lastBootStepMem = { step, ts: Date.now() };
++}
++
+ export async function bootStep(
+@@ -66,6 +82,7 @@ export async function bootFail(err: unknown): Promise<void> {
+ }
+ 
+ export async function getLastBootStep(): Promise<{ step: string; ts: number } | null> {
++  if (lastBootStepMem) return lastBootStepMem;
+   try {
+diff --git a/src/services/invites.ts b/src/services/invites.ts
+--- a/src/services/invites.ts
++++ b/src/services/invites.ts
+@@ -60,21 +60,30 @@ async function ensureAuthAndCall<T>(
+   }
+ }
+ 
++const CLAIM_INVITES_TIMEOUT_MS = 2000;
++
+ export async function claimProjectInvites(): Promise<ClaimInvitesResult> {
++  const empty: ClaimInvitesResult = { claimedCount: 0, projectIds: [] };
++  const timeoutPromise = new Promise<never>((_, rej) =>
++    setTimeout(() => rej(new Error("claimProjectInvites timeout")), CLAIM_INVITES_TIMEOUT_MS)
++  );
+   try {
+-    const data = await ensureAuthAndCall(
++    const data = await Promise.race([
++      ensureAuthAndCall(
+         "claimProjectInvites",
+         {},
+         (d) => (d ?? {}) as Partial<ClaimInvitesResult>,
+         true
+-    );
++      ),
++      timeoutPromise,
++    ]);
+     return {
+       claimedCount: typeof data.claimedCount === "number" ? data.claimedCount : 0,
+       projectIds: Array.isArray(data.projectIds) ? data.projectIds.filter((x): x is string => typeof x === "string") : [],
+     };
+   } catch (error) {
+-    console.warn("[invites] claimProjectInvites failed:", error);
+-    return { claimedCount: 0, projectIds: [] };
++    if (__DEV__) console.warn("[invites] claimProjectInvites failed (non-blocking):", error);
++    return empty;
+   }
+ }
+diff --git a/src/services/projects.ts b/src/services/projects.ts
+--- a/src/services/projects.ts
++++ b/src/services/projects.ts
+@@ -315,11 +315,16 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
+       } catch (error: unknown) {
+         const code = (error as { code?: string })?.code;
+-        if (code === "permission-denied") {
++        const msg = (error as { message?: string })?.message ?? "";
++        const isPermDenied =
++          code === "permission-denied" ||
++          code === "firestore/permission-denied" ||
++          (typeof msg === "string" && msg.includes("permission-denied"));
++        if (isPermDenied) {
+           memberQueryPermissionDenied = true;
+-          if (__DEV__) console.warn("[projects] collectionGroup('members') permission-denied, skipping for session");
++          // Silent: return empty member projects, no warn spam
+         } else {
+-          console.warn("[projects] Failed to load member projects via collectionGroup:", error);
++          if (__DEV__) console.warn("[projects] Failed to load member projects via collectionGroup:", error);
+         }
+       }
+     }

@@ -82,6 +82,7 @@ export async function updateUserProfileFromOnboarding(
   const existing = (snap.exists() ? snap.data() : {}) as Record<string, unknown>;
   const update: Record<string, unknown> = {
     updatedAt: serverTimestamp(),
+    onboardingCompletedAt: serverTimestamp(),
   };
   if (!hasField(existing, "firstName") || !existing.firstName) {
     update.firstName = data.firstName;

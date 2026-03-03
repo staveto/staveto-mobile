@@ -21,6 +21,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { getBaseURL, api } from "../api/client";
+import { IOS_DIAGNOSTIC, getDiagnosticEnvRaw } from "../lib/iosDiagnostic";
 import { colors, radius, spacing } from "../theme";
 import { DPA_URL, PRIVACY_URL, SUBPROCESSORS_URL, SUPPORT_EMAIL, TERMS_URL } from "../constants/consent";
 import { requestAccountDeletion } from "../services/account";
@@ -31,6 +32,7 @@ import * as ImagePicker from "expo-image-picker";
 import { getDeviceRegionCode } from "../utils/countries";
 import { auth } from "../firebase";
 import Constants from "expo-constants";
+import { FeedbackModal } from "../components/FeedbackModal";
 import {
   PROFESSION_CODES,
   mapExistingFreeTextToCodeForMigration,
@@ -122,6 +124,7 @@ export function AccountScreen() {
   const [savingProfile, setSavingProfile] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [contractorsEnabled, setContractorsEnabled] = useState(false);
+  const [showFeedbackModal, setShowFeedbackModal] = useState(false);
 
   const nav = navigation as { navigate: (name: string) => void };
   const displayName = user?.name ?? user?.email ?? "—";
@@ -498,6 +501,11 @@ export function AccountScreen() {
       <View style={styles.card}>
         <Row icon="information-circle-outline" label={t("account.androidGuide")} onPress={() => Alert.alert(t("account.comingSoon"))} />
         <Row
+          icon="chatbubble-ellipses-outline"
+          label={t("account.sendFeedback") || "Send Feedback"}
+          onPress={() => setShowFeedbackModal(true)}
+        />
+        <Row
           icon="help-circle-outline"
           label={t("account.contactSupport")}
           onPress={() =>
@@ -582,6 +590,8 @@ export function AccountScreen() {
       {showDebug && (
         <View style={[styles.card, { borderColor: colors.primary, marginTop: spacing.sm }]}>
           <Text style={styles.debugLine}>baseURL: {getBaseURL()}</Text>
+          <Text style={styles.debugLine}>IOS_DIAGNOSTIC: {String(IOS_DIAGNOSTIC)}</Text>
+          <Text style={styles.debugLine}>EXPO_PUBLIC_IOS_DIAGNOSTIC: "{getDiagnosticEnvRaw() || "(empty)"}"</Text>
           <Text style={styles.debugLine}>Token: {token ? "áno" : "nie"}</Text>
           <Text style={styles.debugLine}>orgId: {orgId ?? "—"}</Text>
           <View style={styles.debugButtons}>
@@ -793,6 +803,15 @@ export function AccountScreen() {
           </View>
         </View>
       </Modal>
+
+      <FeedbackModal
+        visible={showFeedbackModal}
+        onClose={() => setShowFeedbackModal(false)}
+        source="account"
+        userId={user?.id ?? ""}
+        orgId={orgId}
+        currentScreen="Account"
+      />
     </ScrollView>
   );
 }

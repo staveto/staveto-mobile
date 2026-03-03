@@ -26,13 +26,27 @@ export type BootStep =
   | "lazy_authed_loaded"
   | "app_shell_mounted"
   | "auth_provider_mount"
+  | "auth_state_received"
   | "auth_state_listener"
+  | "user_doc_loaded"
+  | "billing_loaded"
+  | "invites_started"
+  | "invites_done"
+  | "invites_failed"
   | "revenuecat_configure_before"
   | "revenuecat_configure_after"
   | "root_nav_ready"
   | "splash_hide_before"
   | "splash_hide_after"
+  | "boot_done"
   | "boot_complete";
+
+let lastBootStepMem: { step: string; ts: number } | null = null;
+
+/** Sync setter for last boot step (for milestones). bootStep() also persists. */
+export function setLastBootStep(step: string): void {
+  lastBootStepMem = { step, ts: Date.now() };
+}
 
 export async function bootStep(
   step: BootStep | string,
@@ -40,7 +54,9 @@ export async function bootStep(
   data?: Record<string, unknown>
 ): Promise<void> {
   const ts = Date.now();
-  const entry = { step, ts, hypothesisId, data: data ?? {} };
+  const stepStr = String(step);
+  setLastBootStep(stepStr);
+  const entry = { step: stepStr, ts, hypothesisId, data: data ?? {} };
   try {
     const raw = await AsyncStorage.getItem(BOOT_LOG_KEY);
     const entries: Array<{ step: string; ts: number }> = raw ? JSON.parse(raw) : [];
@@ -66,6 +82,7 @@ export async function bootFail(err: unknown): Promise<void> {
 }
 
 export async function getLastBootStep(): Promise<{ step: string; ts: number } | null> {
+  if (lastBootStepMem) return lastBootStepMem;
   try {
     const raw = await AsyncStorage.getItem(BOOT_LOG_KEY + "_last");
     if (raw) {

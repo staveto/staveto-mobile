@@ -92,19 +92,23 @@ export async function trackPaywallEvent(event: PaywallEvent): Promise<void> {
  * billing.isPro => never show.
  * billing.status==="expired" => show with 24h cooldown.
  * billing.status==="trial" => engagement trigger (projects>=1 && tasks>=3) + 24h cooldown.
+ * @param source – analytics source (e.g. project_created, task_created, app_opened)
  */
 export async function checkAndShowPaywall(
   billing: BillingStatus | null | undefined,
-  navigation: NavigationProp<Record<string, object>>
+  navigation: NavigationProp<Record<string, object>>,
+  source?: PaywallEvent
 ): Promise<boolean> {
   if (billing?.isPro) return false;
   if (await isWithinCooldown()) return false;
+
+  const navSource = source ?? "app_opened";
 
   if (billing?.status === "expired") {
     await markPaywallShown();
     if (navigationRef.isReady()) {
       try {
-        (navigationRef as any).navigate("Paywall");
+        (navigationRef as any).navigate("Paywall", { source: navSource });
       } catch (e) {
         if (__DEV__) console.warn("[paywall] Navigate to Paywall failed:", e);
       }
@@ -121,7 +125,7 @@ export async function checkAndShowPaywall(
     await markPaywallShown();
     if (navigationRef.isReady()) {
       try {
-        (navigationRef as any).navigate("Paywall");
+        (navigationRef as any).navigate("Paywall", { source: navSource });
       } catch (e) {
         if (__DEV__) console.warn("[paywall] Navigate to Paywall failed:", e);
       }

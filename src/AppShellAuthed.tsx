@@ -1,7 +1,8 @@
-import React, { useEffect, useState } from "react";
-import { View, Text } from "react-native";
+import React, { useEffect, useState, useRef } from "react";
+import { View } from "react-native";
 import { StatusBar } from "expo-status-bar";
 import { NavigationContainer } from "@react-navigation/native";
+import type { NavigationState } from "@react-navigation/native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { AuthProvider } from "./context/AuthContext";
@@ -12,6 +13,16 @@ import { PushNotificationHandler, navigationRef } from "./components/PushNotific
 import { configurePurchases } from "./services/billing";
 import { useBootContext } from "./lib/bootContext";
 import { bootStep } from "./lib/bootLogger";
+import { logScreenSafe } from "./services/analytics";
+
+function getActiveRouteName(state: NavigationState | undefined): string | null {
+  if (!state) return null;
+  const route = state.routes[state.index];
+  if (route?.state && typeof (route.state as NavigationState).routes !== "undefined") {
+    return getActiveRouteName(route.state as NavigationState);
+  }
+  return route?.name ?? null;
+}
 
 export default function AppShellAuthed() {
   const [navReady, setNavReady] = useState(false);
@@ -33,6 +44,8 @@ export default function AppShellAuthed() {
     config: { screens: { EquipmentLinkHandler: "equipment/:qrToken" } },
   };
 
+  const lastScreenRef = useRef<string | null>(null);
+
   const content = (
     <NavigationContainer
       ref={navigationRef}
@@ -41,6 +54,13 @@ export default function AppShellAuthed() {
         bootStep("navigation_mounted", "H6", {}).catch(() => {});
         bootCtx?.onAppReady();
         setNavReady(true);
+      }}
+      onStateChange={(state) => {
+        const name = getActiveRouteName(state);
+        if (name && name !== lastScreenRef.current) {
+          lastScreenRef.current = name;
+          logScreenSafe(name);
+        }
       }}
     >
       <AuthProvider>
@@ -63,14 +83,10 @@ export default function AppShellAuthed() {
             left: 0,
             right: 0,
             bottom: 0,
-            backgroundColor: "#112233",
-            justifyContent: "center",
-            alignItems: "center",
+            backgroundColor: "#1D376A",
             zIndex: 9999,
           }}
-        >
-          <Text style={{ color: "#fff", fontSize: 16 }}>Booting...</Text>
-        </View>
+        />
       )}
       {content}
     </>

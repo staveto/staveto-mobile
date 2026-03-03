@@ -1,10 +1,12 @@
 {
   "name": "mobile",
-  "version": "1.0.0",
+  "version": "1.5.0",
   "main": "index.ts",
   "expo": {
     "install": {
-      "exclude": ["react-native-reanimated"]
+      "exclude": [
+        "react-native-reanimated"
+      ]
     }
   },
   "scripts": {
@@ -25,6 +27,7 @@
     "submit:ios": "eas submit --platform ios --profile production --latest",
     "clean:android": "powershell -ExecutionPolicy Bypass -File ./scripts/clean-android.ps1",
     "prebuild:android": "npx expo prebuild --platform android --clean",
+    "test:ios-diagnostic": "node scripts/test-ios-diagnostic.js",
     "i18n:audit": "node scripts/i18n-audit.js",
     "i18n:add-missing": "node scripts/i18n-add-missing.js",
     "repo-status": "powershell -ExecutionPolicy Bypass -File ./scripts/repo-status.ps1"
@@ -35,6 +38,7 @@
     "@react-native-async-storage/async-storage": "2.2.0",
     "@react-native-community/datetimepicker": "8.4.4",
     "@react-native-community/netinfo": "11.4.1",
+    "@react-native-firebase/analytics": "^23.8.6",
     "@react-native-firebase/app": "^23.8.6",
     "@react-native-firebase/auth": "^23.8.6",
     "@react-native-firebase/firestore": "^23.8.6",
@@ -55,6 +59,7 @@
     "expo-clipboard": "~8.0.8",
     "expo-constants": "~18.0.13",
     "expo-dev-client": "~6.0.20",
+    "expo-device": "^55.0.9",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.21",
     "expo-image-picker": "~17.0.10",

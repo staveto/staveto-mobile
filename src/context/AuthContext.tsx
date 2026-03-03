@@ -6,6 +6,7 @@ import { claimProjectInvites } from "../services/invites";
 import { configurePurchases } from "../services/billing";
 import { getExtraEnv } from "../lib/env";
 import { IOS_SKIP_GOOGLE_SIGNIN } from "../lib/iosDiagnostic";
+import { bootStep, setLastBootStep } from "../lib/bootLogger";
 
 export type BillingStatus = {
   status: "trial" | "active" | "expired";
@@ -52,13 +53,9 @@ const AuthContext = createContext<AuthContextValue | null>(null);
 const ONBOARDING_KEY = "staveto_onboarding_done";
 
 export function AuthProvider({ children }: { children: React.ReactNode }) {
-  // #region agent log
   useEffect(() => {
-    try {
-      require("../lib/bootLogger").bootStep("auth_provider_mount", "H6", {}).catch(() => {});
-    } catch {}
+    bootStep("auth_provider_mount", "H6", {}).catch(() => {});
   }, []);
-  // #endregion
   const claimedInviteSessionsRef = useRef<Set<string>>(new Set());
   const [state, setState] = useState<AuthState>({
     token: null,
@@ -111,11 +108,8 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       return;
     }
     const unsubscribe = fbAuth.onAuthStateChanged(async (fbUser) => {
-      // #region agent log
-      try {
-        require("../lib/bootLogger").bootStep("auth_state_listener", "H6", { hasUser: !!fbUser }).catch(() => {});
-      } catch {}
-      // #endregion
+      setLastBootStep("auth_state_received");
+      bootStep("auth_state_listener", "H6", { hasUser: !!fbUser }).catch(() => {});
       if (!fbUser) {
         if (getExtraEnv("EXPO_PUBLIC_DISABLE_PUSH") !== "1") {
           import("../services/pushNotifications").then((m) => m.removePushToken().catch(() => {})).catch(() => {});
@@ -130,7 +124,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         name: fbUser.displayName ?? undefined,
       };
       try {
+        setLastBootStep("user_doc_loading");
         const snap = await getDoc(doc(db, "users", fbUser.uid));
+        setLastBootStep("user_doc_loaded");
         if (snap.exists()) {
           const d = snap.data() as Record<string, unknown>;
           const fn = d.firstName as string | undefined;
@@ -142,37 +138,31 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           if (!user.name && fn && ln) user = { ...user, name: `${fn} ${ln}`.trim() };
         }
       } catch {
-        // ignore profile fetch errors
+        setLastBootStep("user_doc_error");
       }
-      // Push notification permission is requested from RootNavigator at first app entry (after onboarding)
-      // #region agent log
-      try {
-        require("../lib/bootLogger").bootStep("revenuecat_configure_before", "H6", {}).catch(() => {});
-      } catch {}
-      // #endregion
+      bootStep("revenuecat_configure_before", "H6", {}).catch(() => {});
       configurePurchases(fbUser.uid)
-        .then(() => {
-          // #region agent log
-          try {
-            require("../lib/bootLogger").bootStep("revenuecat_configure_after", "H6", {}).catch(() => {});
-          } catch {}
-          // #endregion
-        })
+        .then(() => bootStep("revenuecat_configure_after", "H6", {}).catch(() => {}))
         .catch(() => {});
+      setLastBootStep("billing_loading");
       const billing = await fetchBillingStatus(fbUser.uid);
+      setLastBootStep("billing_loaded");
       user = { ...user, billing: billing ?? undefined };
       if (!claimedInviteSessionsRef.current.has(fbUser.uid)) {
         claimedInviteSessionsRef.current.add(fbUser.uid);
+        setLastBootStep("invites_started");
         claimProjectInvites()
           .then((result) => {
-            if (result.claimedCount > 0) {
+            setLastBootStep("invites_done");
+            if (result.claimedCount > 0 && __DEV__) {
               console.log("[auth] claimed project invites:", result.claimedCount, result.projectIds);
             }
           })
-          .catch((error) => {
-            console.warn("[auth] claimProjectInvites failed:", error);
+          .catch(() => {
+            setLastBootStep("invites_failed");
           });
       }
+      setLastBootStep("boot_done");
       setState((s) => ({
         ...s,
         token,

@@ -5,7 +5,7 @@ import { bootStep, bootFail } from "./src/lib/bootLogger";
 import { DiagnosticScreen } from "./src/screens/DiagnosticScreen";
 import { I18nProvider } from "./src/i18n/I18nContext";
 import { LazyAppWithI18n } from "./src/components/LazyAppWithI18n";
-import { View, ActivityIndicator, StyleSheet, Text, TouchableOpacity, Platform, Pressable } from "react-native";
+import { View, StyleSheet, Text, TouchableOpacity, Platform, Pressable } from "react-native";
 import { colors } from "./src/theme";
 import * as SplashScreen from "expo-splash-screen";
 import Constants from "expo-constants";
@@ -183,6 +183,7 @@ function BootLoader({ children }: { children: React.ReactNode }) {
   const [errorStep, setErrorStep] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
   const [showDebugOverlay, setShowDebugOverlay] = useState(false);
+  const [bootExceeded6s, setBootExceeded6s] = useState(false);
   const [lastBootStep, setLastBootStep] = useState<{ step: string; ts: number } | null>(null);
   const [timeoutState, setTimeoutState] = useState<"none" | "timeout">("none");
   const lastStepRef = useRef<string>("boot_start");
@@ -190,6 +191,7 @@ function BootLoader({ children }: { children: React.ReactNode }) {
   const debugTapTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const splashHiddenRef = useRef(false);
   const bootTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+  const boot6sRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const splashFallbackRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const isBootingRef = useRef(true);
   const failedRef = useRef(false);
@@ -199,6 +201,14 @@ function BootLoader({ children }: { children: React.ReactNode }) {
       if (s && s.step !== "boot_complete") setLastBootStep(s);
     }).catch(() => {});
   }, []);
+
+  useEffect(() => {
+    if (showDebugOverlay && bootExceeded6s) {
+      require("./src/lib/bootLogger").getLastBootStep().then((s) => {
+        if (s) setLastBootStep(s);
+      }).catch(() => {});
+    }
+  }, [showDebugOverlay, bootExceeded6s]);
 
   const onAppReady = useCallback(() => {
     if (bootTimeoutRef.current) {
@@ -238,11 +248,20 @@ function BootLoader({ children }: { children: React.ReactNode }) {
         clearTimeout(bootTimeoutRef.current);
         bootTimeoutRef.current = null;
       }
+      if (boot6sRef.current) {
+        clearTimeout(boot6sRef.current);
+        boot6sRef.current = null;
+      }
       if (splashFallbackRef.current) {
         clearTimeout(splashFallbackRef.current);
         splashFallbackRef.current = null;
       }
     };
+
+    boot6sRef.current = setTimeout(() => {
+      if (isBootingRef.current) setBootExceeded6s(true);
+      boot6sRef.current = null;
+    }, 6000);
 
     const onBootRejection = (err: unknown) => {
       if (!isBootingRef.current || failedRef.current) return;
@@ -343,6 +362,7 @@ function BootLoader({ children }: { children: React.ReactNode }) {
     setError(null);
     setErrorStep(null);
     setShowDebugOverlay(false);
+    setBootExceeded6s(false);
     setRetryCount((c) => c + 1);
   }, []);
 
@@ -358,14 +378,13 @@ function BootLoader({ children }: { children: React.ReactNode }) {
   }, []);
 
   if (state === "booting") {
+    const showLastStep = (showDebugOverlay && bootExceeded6s) && lastBootStep;
     return (
-      <Pressable onPress={handleDebugTap} style={[styles.loading, { backgroundColor: "#112233" }]}>
-        <Text style={styles.bootingText}>Booting...</Text>
-        <ActivityIndicator size="large" color={colors.primary} style={{ marginTop: 12 }} />
-        {lastBootStep && (
+      <Pressable onPress={handleDebugTap} style={[styles.loading, styles.bootingScreen]}>
+        {showLastStep && (
           <View style={[styles.debugOverlay, { position: "absolute", bottom: 24 }]}>
             <Text style={[styles.debugText, { color: "#ff9" }]}>
-              Previous run stopped at: {lastBootStep.step}
+              Last step: {lastBootStep.step}
             </Text>
           </View>
         )}
@@ -506,5 +525,6 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.8)",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
-  bootingText: { color: "#fff", fontSize: 16 },
+  /** Matches splash backgroundColor – seamless transition, no "Booting..." text */
+  bootingScreen: { backgroundColor: "#1D376A" },
 });

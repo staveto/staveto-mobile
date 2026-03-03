@@ -315,11 +315,16 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
         }
       } catch (error: unknown) {
         const code = (error as { code?: string })?.code;
-        if (code === "permission-denied") {
+        const msg = (error as { message?: string })?.message ?? "";
+        const isPermDenied =
+          code === "permission-denied" ||
+          code === "firestore/permission-denied" ||
+          (typeof msg === "string" && msg.includes("permission-denied"));
+        if (isPermDenied) {
           memberQueryPermissionDenied = true;
-          if (__DEV__) console.warn("[projects] collectionGroup('members') permission-denied, skipping for session");
+          // Silent: return empty member projects, no warn spam
         } else {
-          console.warn("[projects] Failed to load member projects via collectionGroup:", error);
+          if (__DEV__) console.warn("[projects] Failed to load member projects via collectionGroup:", error);
         }
       }
     }

@@ -862,9 +862,11 @@ export function ProjectOverviewScreen() {
       setRecordingUri(null);
       setShowTaskDescriptionModal(false);
       await load(true); // Reload with refresh
+      const { logTaskCreateSuccess } = require("../services/analytics");
+      logTaskCreateSuccess("project_overview");
       console.log(`[ProjectOverview] Custom task created successfully`);
       trackPaywallEvent("task_created").then(() =>
-        checkAndShowPaywall(user?.billing, navigation)
+        checkAndShowPaywall(user?.billing, navigation, "task_created")
       );
     } catch (e: unknown) {
       console.error(`[ProjectOverview] Error creating task:`, e);
@@ -6563,14 +6565,14 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
 
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "center", padding: spacing.lg },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-start", padding: spacing.lg, paddingTop: spacing.xl },
   modal: { backgroundColor: colors.card, borderRadius: radius, padding: spacing.lg, borderWidth: 1, borderColor: colors.border },
   expenseModal: {
     height: Dimensions.get("window").height * 0.88,
     alignSelf: "stretch",
   },
   expenseModalScroll: { flex: 1, minHeight: 0 },
-  expenseModalScrollContent: { paddingBottom: 320 },
+  expenseModalScrollContent: { paddingTop: spacing.sm, paddingBottom: 320 },
   diaryModal: {
     height: Dimensions.get("window").height * 0.9,
     alignSelf: "stretch",
@@ -6842,7 +6844,7 @@ const styles = StyleSheet.create({
   },
   expenseCategoryButtonText: {
     fontSize: 14,
-    color: colors.textMuted,
+    color: colors.textOnDark,
     fontWeight: "500",
   },
   expenseCategoryButtonTextActive: {
@@ -7140,7 +7142,7 @@ const styles = StyleSheet.create({
   },
   expenseTypeChoiceButtonText: {
     fontSize: 15,
-    color: colors.textMuted,
+    color: colors.textOnDark,
     fontWeight: "600",
   },
   expenseTypeChoiceButtonTextActive: {

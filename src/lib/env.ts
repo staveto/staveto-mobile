@@ -22,3 +22,9 @@ export function getExtraEnv(key: string): string | undefined {
 export function hasExtraEnv(key: string): boolean {
   return getExtraEnv(key) !== undefined;
 }
+
+/** Returns raw string value for key (for display/debug). Empty/missing returns "". */
+export function getExtraEnvRaw(key: string): string {
+  const val = getExtra()[key];
+  return typeof val === "string" ? val : "";
+}

@@ -513,6 +513,12 @@ export async function updateTaskStatus(
 
   if (currentUser?.uid && status === "DONE") {
     try {
+      const { logTaskComplete } = require("./analytics");
+      logTaskComplete("app");
+    } catch {
+      // ignore analytics
+    }
+    try {
       await markTaskNotificationsRead(currentUser.uid, taskId);
     } catch (error) {
       console.warn("[tasks] Failed to mark task notifications as read:", error);

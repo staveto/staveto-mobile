@@ -57,12 +57,12 @@ import { registerRootComponent } from "expo";
   } catch {}
 })();
 
-// Failsafe: always hide splash even if App never mounts (runs regardless of async above)
+// Failsafe: hide splash if BootLoader never completes (matches BOOT_TIMEOUT_MS so normal boot hides first)
 setTimeout(() => {
   try {
     require("expo-splash-screen").hideAsync?.().catch(() => {});
   } catch {}
-}, 3000);
+}, 8000);
 setTimeout(() => {
   try {
     require("expo-splash-screen").hideAsync?.().catch(() => {});
@@ -94,12 +94,8 @@ registerRootComponent(() => {
           try {
             require("./src/lib/bootLogger").bootFail(e).catch(() => {});
           } catch {}
-        })
-        .finally(() => {
-          try {
-            require("expo-splash-screen").hideAsync?.().catch(() => {});
-          } catch {}
         });
+      // Splash is hidden by BootLoader when boot completes (not here – avoids "Booting..." flash)
     }, []);
 
     if (!App) return null;

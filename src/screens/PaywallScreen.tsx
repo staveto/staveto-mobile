@@ -13,12 +13,13 @@ import {
   ScrollView,
   Platform,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
-import { getEntitlement, getOfferings, purchaseMonthly, restorePurchases } from "../services/billing";
+import { getEntitlement, getOfferings, purchaseMonthly, restorePurchases, PLAN_ID } from "../services/billing";
 import { colors, radius, spacing } from "../theme";
 import { showToast } from "../helpers/toast";
+import { logEventSafe, type PurchaseFailureReason } from "../services/analytics";
 
 const BENEFITS = [
   { icon: "folder-open-outline" as const, key: "paywall.benefit1" },
@@ -27,16 +28,36 @@ const BENEFITS = [
   { icon: "document-text-outline" as const, key: "paywall.benefit4" },
 ];
 
+const DEFAULT_SOURCE = "unknown";
+
+function mapErrorToReason(e: unknown): { reason: PurchaseFailureReason; code?: string } {
+  const err = e as { userCancelled?: boolean; code?: number; message?: string };
+  if (err?.userCancelled === true) return { reason: "cancelled" };
+  const msg = (err?.message ?? String(e)).toLowerCase();
+  const code = err?.code != null ? String(err.code) : undefined;
+  if (msg.includes("network") || msg.includes("internet") || msg.includes("connection"))
+    return { reason: "network", code };
+  if (msg.includes("not allowed") || msg.includes("permission") || msg.includes("restricted"))
+    return { reason: "not_allowed", code };
+  return { reason: "store_error", code };
+}
+
 export function PaywallScreen() {
   const { t } = useI18n();
   const navigation = useNavigation();
+  const route = useRoute<{ params?: { source?: string } }>();
   const { goBack } = navigation;
+  const source = route.params?.source ?? DEFAULT_SOURCE;
   const [loading, setLoading] = useState(true);
   const [purchasing, setPurchasing] = useState(false);
   const [restoring, setRestoring] = useState(false);
   const [hasOfferings, setHasOfferings] = useState(false);
   const [isEntitled, setIsEntitled] = useState(false);
   const [debugInfo, setDebugInfo] = useState<string>("");
+
+  useEffect(() => {
+    logEventSafe("paywall_opened", { source });
+  }, [source]);
 
   useEffect(() => {
     let cancelled = false;
@@ -48,6 +69,7 @@ export function PaywallScreen() {
         const current = offerings?.current;
         const pkgCount = current?.availablePackages?.length ?? 0;
         setHasOfferings(pkgCount > 0);
+        logEventSafe("paywall_offerings_loaded", { source, packages_count: pkgCount });
         if (__DEV__) {
           const info = [
             `offerings.current: ${current?.identifier ?? "null"}`,
@@ -60,17 +82,25 @@ export function PaywallScreen() {
       } catch (e) {
         if (__DEV__) console.error("[PaywallScreen] load error:", e);
         setHasOfferings(false);
+        const reason = (e instanceof Error ? e.message : String(e)).slice(0, 80);
+        logEventSafe("paywall_offerings_failed", { source, reason, code: (e as { code?: number })?.code });
       } finally {
         if (!cancelled) setLoading(false);
       }
     })();
     return () => { cancelled = true; };
-  }, []);
+  }, [source]);
 
   const handleSelectPlan = async () => {
+    logEventSafe("plan_selected", { source, plan_id: PLAN_ID });
+    logEventSafe("purchase_tap", { source, plan_id: PLAN_ID });
     setPurchasing(true);
     try {
+      logEventSafe("purchase_started", { source, plan_id: PLAN_ID });
       const { success } = await purchaseMonthly();
+      const ent = await getEntitlement();
+      const entitlementActive = !!ent?.entitlement;
+      logEventSafe("purchase_success", { source, plan_id: PLAN_ID, entitlement_active: entitlementActive });
       if (success) {
         showToast(t("paywall.purchaseSuccess"));
         goBack();
@@ -78,9 +108,10 @@ export function PaywallScreen() {
         showToast(t("paywall.purchaseFailed"));
       }
     } catch (e: unknown) {
-      const err = e as { userCancelled?: boolean; code?: number };
-      if (err?.userCancelled === true) {
-        return; // User closed purchase sheet – no toast
+      const { reason, code } = mapErrorToReason(e);
+      logEventSafe("purchase_failed", { source, plan_id: PLAN_ID, reason, ...(code != null && { code }) });
+      if (reason === "cancelled") {
+        return;
       }
       const msg = e instanceof Error ? e.message : String(e);
       if (__DEV__) console.error("[PaywallScreen] purchase error:", e);

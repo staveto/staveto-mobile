@@ -11,6 +11,7 @@ import { auth } from '../firebase';
 import { getStatusLabel } from '../helpers/taskStatusMapping';
 import { createNotification } from './notifications';
 import { runServiceAutoNextOnDone } from './serviceAutoNext';
+import { logTaskComplete } from './analytics';
 
 /**
  * Update task status with proper doneAt handling
@@ -43,6 +44,7 @@ export async function updateTaskStatus(
   // Handle doneAt based on status transition
   if (newStatus === 'DONE') {
     updateData.doneAt = serverTimestamp();
+    logTaskComplete("app");
   } else if (currentStatus === 'DONE') {
     // Reverting from DONE to another status
     updateData.doneAt = null;

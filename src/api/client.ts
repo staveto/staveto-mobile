@@ -6,7 +6,7 @@ const envApiUrl = getExtraEnv("EXPO_PUBLIC_API_URL");
 const baseURL =
   envApiUrl ? envApiUrl : (__DEV__ ? DEV_FALLBACK : "https://staveto-app-api.workers.dev");
 
-const REQUEST_TIMEOUT_MS = 15000;
+const REQUEST_TIMEOUT_MS = 8000;
 
 let authToken: string | null = null;
 let on401: (() => void) | null = null;
@@ -81,6 +81,10 @@ async function request<T>(
     clearTimeout(to);
     if (e instanceof Error) {
       if (e.name === "AbortError") throw new Error(`Timeout after ${REQUEST_TIMEOUT_MS / 1000}s – skontroluj sieť a ${getBaseURL()}`);
+      const msg = e.message ?? String(e);
+      if (msg.includes("-1004") || msg.includes("Could not connect") || msg.includes("network") || msg.includes("ECONNREFUSED")) {
+        throw new Error(`Sieťová chyba – server nedostupný (${getBaseURL()})`);
+      }
       throw e;
     }
     throw new Error(String(e));

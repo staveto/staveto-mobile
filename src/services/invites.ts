@@ -60,21 +60,30 @@ async function ensureAuthAndCall<T>(
   }
 }
 
+const CLAIM_INVITES_TIMEOUT_MS = 2000;
+
 export async function claimProjectInvites(): Promise<ClaimInvitesResult> {
+  const empty: ClaimInvitesResult = { claimedCount: 0, projectIds: [] };
+  const timeoutPromise = new Promise<never>((_, rej) =>
+    setTimeout(() => rej(new Error("claimProjectInvites timeout")), CLAIM_INVITES_TIMEOUT_MS)
+  );
   try {
-    const data = await ensureAuthAndCall(
-      "claimProjectInvites",
-      {},
-      (d) => (d ?? {}) as Partial<ClaimInvitesResult>,
-      true
-    );
+    const data = await Promise.race([
+      ensureAuthAndCall(
+        "claimProjectInvites",
+        {},
+        (d) => (d ?? {}) as Partial<ClaimInvitesResult>,
+        true
+      ),
+      timeoutPromise,
+    ]);
     return {
       claimedCount: typeof data.claimedCount === "number" ? data.claimedCount : 0,
       projectIds: Array.isArray(data.projectIds) ? data.projectIds.filter((x): x is string => typeof x === "string") : [],
     };
   } catch (error) {
-    console.warn("[invites] claimProjectInvites failed:", error);
-    return { claimedCount: 0, projectIds: [] };
+    if (__DEV__) console.warn("[invites] claimProjectInvites failed (non-blocking):", error);
+    return empty;
   }
 }
 

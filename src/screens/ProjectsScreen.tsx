@@ -477,13 +477,14 @@ export function ProjectsScreen() {
         city: cityForCreate,
         phaseCustomizations: customizationsArray,
       });
-      
+      const { logProjectCreateSuccess } = await import("../services/analytics");
+      logProjectCreateSuccess(selectedType, "projects");
       console.log(`${selectedType} project created successfully`);
       closeNewModal();
       load();
       const { trackPaywallEvent, checkAndShowPaywall } = await import("../services/paywallTrigger");
       await trackPaywallEvent("project_created");
-      await checkAndShowPaywall(user?.billing, navigation);
+      await checkAndShowPaywall(user?.billing, navigation, "project_created");
     } catch (e: unknown) {
       console.error('Error creating project:', e);
       const error = e as { code?: string; message?: string };

@@ -47,7 +47,7 @@ module.exports = ({ config }) => {
       ["expo-image-picker", { photosPermission: "Aplikácia potrebuje prístup k vašim fotkám na pridanie príloh.", cameraPermission: "Aplikácia potrebuje prístup ku kamere na fotografovanie faktúr a dokumentov." }],
       ["expo-av", { microphonePermission: "Aplikácia potrebuje prístup k mikrofónu na nahrávanie hlasových správ a zápisov do denníka." }],
       ["expo-speech-recognition", { speechRecognitionPermission: "This app uses speech recognition for voice notes and diary entries." }],
-      ["expo-build-properties", { ios: { useFrameworks: "static", forceStaticLinking: ["RNFBApp", "RNFBAuth", "RNFBFirestore", "RNFBFunctions", "RNFBMessaging", "RNFBStorage"], buildReactNativeFromSource: true } }],
+      ["expo-build-properties", { ios: { useFrameworks: "static", forceStaticLinking: ["RNFBApp", "RNFBAuth", "RNFBFirestore", "RNFBFunctions", "RNFBMessaging", "RNFBStorage", "RNFBAnalytics"], buildReactNativeFromSource: true } }],
       "./plugins/withFirebaseModularHeaders",
       "@react-native-community/datetimepicker",
     ],

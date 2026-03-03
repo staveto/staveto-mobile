@@ -47,6 +47,7 @@ import { normalizeRoleKey } from "../helpers/role";
 import type { RoleKey } from "../helpers/role";
 import { getKpiCardsWithTasks } from "../helpers/kpi/getKpiCards";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
+import analytics from "@react-native-firebase/analytics";
 import { hasShownFirstProjectPrompt, markFirstProjectPromptShown } from "../utils/firstProjectPrompt";
 import { KpiCardComponent } from "../components/KpiCard";
 import type { KpiCard } from "../helpers/kpi/getKpiCards";
@@ -281,6 +282,17 @@ export function HomeScreen() {
   const [roleFilter, setRoleFilter] = useState<RoleKey | "ALL">("ALL");
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<TypeFilter>("ALL");
+
+  // Firebase Analytics test event (first screen after login)
+  useEffect(() => {
+    (async () => {
+      try {
+        await analytics().logEvent("staveto_test_event", { where: "after_login", screen: "Home" });
+      } catch (e) {
+        if (__DEV__) console.log("[analytics] test event failed:", e);
+      }
+    })();
+  }, []);
 
   // Load persisted role filter on mount
   useEffect(() => {
@@ -728,7 +740,7 @@ export function HomeScreen() {
       (async () => {
         await trackPaywallEvent("app_opened");
         try {
-          await checkAndShowPaywall(user?.billing, navigation);
+          await checkAndShowPaywall(user?.billing, navigation, "app_opened");
         } catch {
           // ignore
         }
@@ -2143,7 +2155,7 @@ const styles = StyleSheet.create({
   },
   filterChipText: {
     fontSize: 14,
-    color: colors.textSecondary,
+    color: colors.text,
   },
   filterChipTextActive: {
     color: "#fff",

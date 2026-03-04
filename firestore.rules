@@ -70,7 +70,12 @@ service cloud.firestore {
       return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.documents == true) || (isMember(projectId) && !hasAccessDoc(projectId));
     }
     function canWriteAsEditor(projectId) {
-      return isOwner(projectId) || (hasAccessDoc(projectId) && (access(projectId).permissionLevel == 'editor' || access(projectId).permissionLevel == 'admin'));
+      return isOwner(projectId)
+        || (hasAccessDoc(projectId) && (access(projectId).permissionLevel == 'editor' || access(projectId).permissionLevel == 'admin'))
+        || (isMember(projectId) && !hasAccessDoc(projectId)
+            && exists(/databases/$(database)/documents/projects/$(projectId)/members/$(uid()))
+            && (get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.permissionLevel == 'editor'
+                || get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.permissionLevel == 'admin'));
     }
 
     // Users (každý len svoj)
@@ -261,6 +266,16 @@ service cloud.firestore {
           && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
       }
 
+    }
+
+    // Time entries (time tracking / attendance)
+    match /timeEntries/{entryId} {
+      allow create: if signedIn()
+        && request.resource.data.userId == uid()
+        && canWriteAsEditor(request.resource.data.projectId);
+      allow read: if signedIn()
+        && (resource.data.userId == uid() || canWriteAsEditor(resource.data.projectId));
+      allow update, delete: if signedIn() && resource.data.userId == uid();
     }
 
     // Notifications (inbox)

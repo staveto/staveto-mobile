@@ -38,7 +38,9 @@ import { doc, getDoc } from "../lib/rnFirestore";
 import { loadHomeLayout, getDefaultLayout, type HomeSectionConfig } from "../services/homeLayout";
 import { HomeCustomizeSheet } from "../components/HomeCustomizeSheet";
 import { HomeCalendarSheet } from "../components/HomeCalendarSheet";
+import { QuickTimeModal } from "../components/QuickTimeModal";
 import { BottomSheetModal } from "@gorhom/bottom-sheet";
+import * as timeTracking from "../services/timeTracking";
 import { openInMaps } from "../lib/maps";
 import { RoleChip } from "../components/RoleChip";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
@@ -61,6 +63,12 @@ try {
   DocumentPicker = require('expo-document-picker');
 } catch (e) {
   console.warn('expo-image-picker or expo-document-picker not installed. Attachment features will be disabled.');
+}
+
+function formatMinutesToHours(minutes: number): string {
+  const h = Math.floor(minutes / 60);
+  const m = minutes % 60;
+  return m > 0 ? `${h}h ${m}min` : `${h}h`;
 }
 
 const LAST_USED_PROJECT_KEY = "@staveto:lastUsedProjectId";
@@ -378,7 +386,11 @@ export function HomeScreen() {
   const [photoURL, setPhotoURL] = useState<string | null>(null);
   const customizeSheetRef = useRef<BottomSheetModal | null>(null);
   const calendarSheetRef = useRef<BottomSheetModal | null>(null);
+  const quickTimeSheetRef = useRef<BottomSheetModal | null>(null);
   const [calendarRefreshTrigger, setCalendarRefreshTrigger] = useState(0);
+  const [activeTimer, setActiveTimer] = useState<timeTracking.ActiveTimer | null>(null);
+  const [timerTick, setTimerTick] = useState(0);
+  const [monthlyMinutes, setMonthlyMinutes] = useState<number>(0);
 
   useEffect(() => {
     loadHomeLayout().then((layout) => setHomeLayout(layout));
@@ -405,6 +417,37 @@ export function HomeScreen() {
   const openCalendarSheet = useCallback(() => {
     calendarSheetRef.current?.present();
   }, []);
+
+  const openQuickTimeSheet = useCallback(() => {
+    quickTimeSheetRef.current?.present();
+  }, []);
+
+  const refreshActiveTimer = useCallback(async () => {
+    const t = await timeTracking.getActiveTimer();
+    setActiveTimer(t);
+  }, []);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!user?.id) return;
+      refreshActiveTimer();
+      timeTracking.checkAutoStopOnAppOpen().then((entry) => {
+        if (entry) {
+          setActiveTimer(null);
+          Alert.alert(
+            "Časovač zastavený",
+            "Časovač sa automaticky zastavil po 12 hodinách."
+          );
+        }
+      });
+    }, [user?.id, refreshActiveTimer])
+  );
+
+  useEffect(() => {
+    if (!activeTimer) return;
+    const interval = setInterval(() => setTimerTick((n) => n + 1), 1000);
+    return () => clearInterval(interval);
+  }, [activeTimer]);
 
   const effectiveLayout = homeLayout ?? getDefaultLayout();
   const enabledSectionIds = useMemo(
@@ -548,7 +591,13 @@ export function HomeScreen() {
           }
         }
       }
-      const data = await dashboardService.loadDashboardData(orgId, { forceServerRead: isRefresh });
+      const [data, monthlyMins] = await Promise.all([
+        dashboardService.loadDashboardData(orgId, { forceServerRead: isRefresh }),
+        user?.id
+          ? timeTracking.getMonthlyMinutes(user.id, new Date().getFullYear(), new Date().getMonth() + 1)
+          : Promise.resolve(0),
+      ]);
+      setMonthlyMinutes(monthlyMins);
 
       // Ensure overdue notifications exist (for tasks past due date)
       if (typeof tasksService.ensureOverdueNotificationsIfNeeded === "function") {
@@ -605,7 +654,7 @@ export function HomeScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [orgId]);
+  }, [orgId, user?.id]);
 
   const loadLiveActivity = useCallback(async () => {
     if (!user?.id || !dashboardData?.projects?.length) {
@@ -1303,6 +1352,15 @@ export function HomeScreen() {
               <TouchableOpacity style={styles.statChip} onPress={() => goToProjects()} activeOpacity={0.8}>
                 <Text style={styles.statChipText}>{t("home.projectsCount", { count: String(data.projects.length) })}</Text>
               </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.statChip}
+                onPress={() => stackNav.navigate("AttendanceReportScreen")}
+                activeOpacity={0.8}
+              >
+                <Text style={styles.statChipText}>
+                  {t("home.attendanceChip", { hours: formatMinutesToHours(monthlyMinutes) })}
+                </Text>
+              </TouchableOpacity>
               {data.kpis.hasExpensesAccess && (
                 <TouchableOpacity
                   style={styles.statChip}
@@ -1539,6 +1597,31 @@ export function HomeScreen() {
         onPress={startFabFlow}
       >
         <Text style={styles.fabText}>+</Text>
+      </TouchableOpacity>
+
+      {/* Timer FAB - above calendar */}
+      <TouchableOpacity
+        style={[
+          styles.timerFab,
+          {
+            bottom: enabledSectionIds.has("calendar")
+              ? insets.bottom + spacing.md + 64 + 8
+              : insets.bottom + spacing.md,
+          },
+        ]}
+        onPress={openQuickTimeSheet}
+        activeOpacity={0.8}
+      >
+        {activeTimer ? (
+          <View key={timerTick} style={styles.timerFabContent}>
+            <Text style={styles.timerFabElapsed}>
+              {`${String(Math.floor((Date.now() - new Date(activeTimer.startedAt).getTime()) / 3600000)).padStart(2, "0")}:${String(Math.floor(((Date.now() - new Date(activeTimer.startedAt).getTime()) % 3600000) / 60000)).padStart(2, "0")}`}
+            </Text>
+            <Ionicons name="stop" size={16} color="#1a1a1a" />
+          </View>
+        ) : (
+          <Ionicons name="time-outline" size={22} color="#1a1a1a" />
+        )}
       </TouchableOpacity>
 
       {/* Semi-circular calendar button on right edge - minimal hitbox (28x64) */}
@@ -1936,6 +2019,19 @@ export function HomeScreen() {
           calendarSheetRef.current?.dismiss();
           navigation.navigate("Tasks", { dueDateYmd });
         }}
+      />
+      <QuickTimeModal
+        sheetRef={quickTimeSheetRef}
+        projects={dashboardData?.projects ?? []}
+        activeTimer={activeTimer}
+        onRefreshActiveTimer={refreshActiveTimer}
+        onSaved={() => {
+          if (user?.id) {
+            const now = new Date();
+            timeTracking.getMonthlyMinutes(user.id, now.getFullYear(), now.getMonth() + 1).then(setMonthlyMinutes);
+          }
+        }}
+        t={t}
       />
     </View>
   );
@@ -2768,6 +2864,35 @@ const styles = StyleSheet.create({
     fontSize: 28,
     fontWeight: "bold",
     color: "#FFFFFF",
+  },
+  timerFab: {
+    position: "absolute",
+    right: 0,
+    width: 36,
+    height: 64,
+    borderTopLeftRadius: 32,
+    borderBottomLeftRadius: 32,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "column",
+    gap: 2,
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: -2, height: 0 },
+    shadowOpacity: 0.25,
+    shadowRadius: 3,
+  },
+  timerFabContent: {
+    alignItems: "center",
+    justifyContent: "center",
+    flexDirection: "column",
+    gap: 2,
+  },
+  timerFabElapsed: {
+    fontSize: 11,
+    color: "#1a1a1a",
+    fontWeight: "700",
   },
   calendarFab: {
     position: "absolute",

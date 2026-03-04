@@ -68,4 +68,8 @@ export const paths = {
   userProjectRefs: (uid: string) => `users/${uid}/projectRefs`,
   userProjectRef: (uid: string, projectId: string) =>
     `users/${uid}/projectRefs/${projectId}`,
+  // Time tracking
+  userDoc: (uid: string) => `users/${uid}`,
+  timeEntries: () => `timeEntries`,
+  timeEntry: (id: string) => `timeEntries/${id}`,
 };

@@ -1,6 +1,37 @@
 import { Linking, Platform, Alert } from 'react-native';
 
 /**
+ * Open coordinates (lat, lng) in external maps app.
+ * Used for time tracking check-in/check-out locations.
+ */
+export async function openLatLngInMaps(lat: number, lng: number): Promise<void> {
+  if (typeof lat !== 'number' || typeof lng !== 'number' || isNaN(lat) || isNaN(lng)) {
+    return;
+  }
+  const googleMapsUrl = `https://www.google.com/maps/search/?api=1&query=${lat},${lng}`;
+  const geoUrl = `geo:${lat},${lng}`;
+  const appleMapsUrl = `http://maps.apple.com/?ll=${lat},${lng}`;
+  try {
+    if (Platform.OS === 'android') {
+      if (await Linking.canOpenURL(geoUrl)) {
+        await Linking.openURL(geoUrl);
+        return;
+      }
+      await Linking.openURL(googleMapsUrl);
+      return;
+    }
+    if (await Linking.canOpenURL(appleMapsUrl)) {
+      await Linking.openURL(appleMapsUrl);
+      return;
+    }
+    await Linking.openURL(googleMapsUrl);
+  } catch (error) {
+    console.error('[maps] Error opening maps:', error);
+    Alert.alert('Chyba', 'Nepodarilo sa otvoriť mapy.');
+  }
+}
+
+/**
  * Open address in external maps app
  * Prefers Google Maps, falls back to Apple Maps on iOS if Google Maps is not available
  * 

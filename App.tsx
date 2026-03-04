@@ -462,23 +462,19 @@ export default function App() {
   const isDiagnosticMode = getExtraEnv("EXPO_PUBLIC_IOS_DIAGNOSTIC") === "1";
   const [diagnosticActive, setDiagnosticActive] = useState(isDiagnosticMode);
 
-  if (isDiagnosticMode && diagnosticActive) {
-    return (
-      <SafeAreaProvider>
-        <DiagnosticScreenWithSplashHide onContinue={() => setDiagnosticActive(false)} />
-      </SafeAreaProvider>
-    );
-  }
-
   return (
     <AppErrorBoundary onError={handleError}>
-      <SafeAreaProvider>
-        <I18nProvider>
-          <BootLoader>
-            <LazyAppWithI18n enabled={true} />
-          </BootLoader>
-        </I18nProvider>
-      </SafeAreaProvider>
+      <I18nProvider>
+        <SafeAreaProvider>
+          {isDiagnosticMode && diagnosticActive ? (
+            <DiagnosticScreenWithSplashHide onContinue={() => setDiagnosticActive(false)} />
+          ) : (
+            <BootLoader>
+              <LazyAppWithI18n enabled={true} />
+            </BootLoader>
+          )}
+        </SafeAreaProvider>
+      </I18nProvider>
     </AppErrorBoundary>
   );
 }

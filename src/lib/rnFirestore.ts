@@ -106,6 +106,12 @@ export function writeBatch(_db?: unknown) {
   return firestore().batch();
 }
 
+export function runTransaction<T>(
+  updateFunction: (transaction: FirebaseFirestore.Transaction) => Promise<T>
+): Promise<T> {
+  return firestore().runTransaction(updateFunction);
+}
+
 export function serverTimestamp() {
   return firestore.FieldValue.serverTimestamp();
 }

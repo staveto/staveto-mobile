@@ -11,6 +11,17 @@ export function toYmd(date: Date): string {
   return `${y}-${m}-${d}`;
 }
 
+/** Get first day of month as YYYY-MM-DD */
+export function getMonthStartYmd(year: number, month: number): string {
+  return `${year}-${String(month).padStart(2, "0")}-01`;
+}
+
+/** Get last day of month as YYYY-MM-DD */
+export function getMonthEndYmd(year: number, month: number): string {
+  const lastDay = new Date(year, month, 0).getDate();
+  return `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+}
+
 /** Parse "YYYY-MM-DD" to Date at local midnight (no timezone shift) */
 export function ymdToDate(ymd: string): Date | null {
   if (!ymd || typeof ymd !== "string") return null;

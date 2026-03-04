@@ -177,6 +177,8 @@ export function NotificationsScreen() {
         return "person-remove-outline";
       case "SYNC_ISSUE":
         return "cloud-offline-outline";
+      case "TIME_TRACKING_STOPPED":
+        return "time-outline";
       default:
         return "notifications-outline";
     }
@@ -210,6 +212,8 @@ export function NotificationsScreen() {
         return t("notifications.memberRemoved");
       case "SYNC_ISSUE":
         return t("notifications.syncError");
+      case "TIME_TRACKING_STOPPED":
+        return t("notifications.timeTrackingStopped");
       default:
         return t("notifications.default");
     }
@@ -323,7 +327,8 @@ export function NotificationsScreen() {
           notification.type === "PROJECT_CREATED" ||
           notification.type === "MEMBER_JOINED" ||
           notification.type === "MEMBER_LEFT" ||
-          notification.type === "MEMBER_REMOVED") &&
+          notification.type === "MEMBER_REMOVED" ||
+          notification.type === "TIME_TRACKING_STOPPED") &&
         notification.projectId
       ) {
         // Navigate to root stack ProjectOverview screen

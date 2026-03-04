@@ -1,0 +1,388 @@
+/**
+ * Time tracking service: start/stop timer, manual entry, active timer state.
+ * Uses users/{uid}.activeTimer and timeEntries collection.
+ */
+
+import {
+  collection,
+  addDoc,
+  doc,
+  getDoc,
+  updateDoc,
+  serverTimestamp,
+  runTransaction,
+  Timestamp,
+  query,
+  where,
+  orderBy,
+  limit,
+  getDocs,
+} from "../lib/rnFirestore";
+import firestore from "@react-native-firebase/firestore";
+import { db, auth } from "../firebase";
+import { paths } from "../lib/firestorePaths";
+import { getCurrentPositionSafe, requestLocationPermission, type GpsPoint } from "../lib/location";
+import { scheduleEvery2hReminder, cancelReminders } from "./timerReminders";
+import { fetchProjectAccess } from "../hooks/useProjectAccess";
+import { createTimeTrackingStoppedNotification } from "./notifications";
+
+const AUTO_STOP_HOURS = 12;
+
+export type ActiveTimer = {
+  projectId: string;
+  projectNameSnapshot: string;
+  startedAt: string;
+  source: string;
+  gpsStart?: GpsPoint | null;
+  reminderIds?: string[];
+};
+
+export type TimeEntryDoc = {
+  id: string;
+  projectId: string;
+  projectNameSnapshot: string;
+  userId: string;
+  userNameSnapshot: string;
+  startedAt: string;
+  endedAt: string;
+  durationMinutes: number;
+  mode: "timer" | "manual";
+  date?: string; // YYYY-MM-DD for manual entries
+  note?: string;
+  gpsStart?: GpsPoint | null;
+  gpsEnd?: GpsPoint | null;
+  flags?: { reminded?: boolean; autoStopped?: boolean; lowAccuracy?: boolean };
+  createdAt?: string;
+  updatedAt?: string;
+};
+
+function toIso(ts: unknown): string | undefined {
+  if (!ts) return undefined;
+  if (ts instanceof Timestamp) return ts.toDate().toISOString();
+  if (typeof ts === "string") return ts;
+  if (typeof ts === "object" && ts !== null && "toDate" in ts) {
+    return (ts as { toDate: () => Date }).toDate().toISOString();
+  }
+  return undefined;
+}
+
+async function ensureCanWriteTime(projectId: string, uid: string): Promise<void> {
+  const access = await fetchProjectAccess(projectId, uid);
+  if (!access.canWrite && !access.isOwner) {
+    throw new Error("Nemáte oprávnenie zapisovať hodiny do tohto projektu.");
+  }
+}
+
+/**
+ * Get current user's active timer from users/{uid}.
+ */
+export async function getActiveTimer(): Promise<ActiveTimer | null> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) return null;
+  try {
+    const userRef = doc(db, paths.userDoc(uid));
+    const snap = await getDoc(userRef);
+    const data = snap.data();
+    const at = data?.activeTimer;
+    if (!at || typeof at !== "object") return null;
+    const startedAt = toIso(at.startedAt) ?? at.startedAt;
+    if (!startedAt) return null;
+    return {
+      projectId: at.projectId ?? "",
+      projectNameSnapshot: at.projectNameSnapshot ?? at.projectName ?? "",
+      startedAt,
+      source: at.source ?? "home_quick_timer",
+      gpsStart: at.gpsStart ?? null,
+      reminderIds: Array.isArray(at.reminderIds) ? at.reminderIds : [],
+    };
+  } catch (err) {
+    console.warn("[timeTracking] getActiveTimer error:", err);
+    return null;
+  }
+}
+
+/**
+ * Start timer for project. Gets GPS if permission granted.
+ */
+export async function startTimer(projectId: string, projectName: string): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error("Musíte byť prihlásený.");
+  await ensureCanWriteTime(projectId, uid);
+
+  const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
+  await requestLocationPermission();
+  const gpsStart = await getCurrentPositionSafe();
+  const startedAt = new Date().toISOString();
+
+  const reminderIds = await scheduleEvery2hReminder(projectName);
+
+  const userRef = doc(db, paths.userDoc(uid));
+  await updateDoc(userRef, {
+    activeTimer: {
+      projectId,
+      projectNameSnapshot: projectName,
+      startedAt,
+      source: "home_quick_timer",
+      gpsStart: gpsStart ?? null,
+      reminderIds,
+    },
+  });
+}
+
+/**
+ * Stop timer and create time entry.
+ */
+export async function stopTimer(note?: string): Promise<TimeEntryDoc> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error("Musíte byť prihlásený.");
+
+  const active = await getActiveTimer();
+  if (!active) throw new Error("Žiadny aktívny časovač.");
+
+  await ensureCanWriteTime(active.projectId, uid);
+
+  const endedAt = new Date().toISOString();
+  const startDate = new Date(active.startedAt).getTime();
+  const endDate = new Date(endedAt).getTime();
+  let durationMinutes = Math.round((endDate - startDate) / 60000);
+
+  const flags: { reminded?: boolean; autoStopped?: boolean; lowAccuracy?: boolean } = {};
+  if (active.gpsStart && active.gpsStart.accuracyM > 50) {
+    flags.lowAccuracy = true;
+  }
+
+  await requestLocationPermission();
+  const gpsEnd = await getCurrentPositionSafe();
+  if (gpsEnd && gpsEnd.accuracyM > 50) {
+    flags.lowAccuracy = true;
+  }
+
+  await cancelReminders(active.reminderIds ?? []);
+
+  const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
+
+  const entryData = {
+    projectId: active.projectId,
+    projectNameSnapshot: active.projectNameSnapshot,
+    userId: uid,
+    userNameSnapshot: userName,
+    startedAt: active.startedAt,
+    endedAt,
+    durationMinutes,
+    mode: "timer" as const,
+    note: note?.trim() || null,
+    gpsStart: active.gpsStart ?? null,
+    gpsEnd: gpsEnd ?? null,
+    flags: Object.keys(flags).length > 0 ? flags : null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  const userRef = doc(db, paths.userDoc(uid));
+  const newEntryRef = firestore().collection(paths.timeEntries()).doc();
+
+  const entryId = await runTransaction<string>(async (transaction) => {
+    transaction.set(newEntryRef, entryData);
+    transaction.update(userRef, { activeTimer: firestore.FieldValue.delete() });
+    return newEntryRef.id;
+  });
+
+  try {
+    await createTimeTrackingStoppedNotification({
+      userId: uid,
+      projectId: active.projectId,
+      projectName: active.projectNameSnapshot,
+      durationMinutes,
+      timeEntryId: entryId,
+    });
+  } catch (err) {
+    console.warn("[timeTracking] Failed to create stopped notification:", err);
+  }
+
+  return {
+    id: entryId,
+    ...entryData,
+    createdAt: endedAt,
+    updatedAt: endedAt,
+  } as TimeEntryDoc;
+}
+
+/**
+ * Add manual time entry (no GPS, no timer).
+ */
+export async function addManualEntry(
+  projectId: string,
+  projectName: string,
+  dateYmd: string,
+  durationMinutes: number,
+  note?: string
+): Promise<TimeEntryDoc> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error("Musíte byť prihlásený.");
+  await ensureCanWriteTime(projectId, uid);
+
+  const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
+  const startedAt = `${dateYmd}T00:00:00.000Z`;
+  const endedAt = `${dateYmd}T00:00:00.000Z`;
+
+  const entryData = {
+    projectId,
+    projectNameSnapshot: projectName,
+    userId: uid,
+    userNameSnapshot: userName,
+    startedAt,
+    endedAt,
+    durationMinutes,
+    mode: "manual" as const,
+    date: dateYmd,
+    note: note?.trim() || null,
+    gpsStart: null,
+    gpsEnd: null,
+    flags: null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  const ref = await addDoc(collection(db, paths.timeEntries()), entryData);
+  const now = new Date().toISOString();
+  return {
+    id: ref.id,
+    ...entryData,
+    createdAt: now,
+    updatedAt: now,
+  } as TimeEntryDoc;
+}
+
+/**
+ * Check if active timer exceeded 12h. If so, auto-stop and return the entry.
+ * Call on app open.
+ */
+export async function checkAutoStopOnAppOpen(): Promise<TimeEntryDoc | null> {
+  const active = await getActiveTimer();
+  if (!active) return null;
+
+  const elapsedMs = Date.now() - new Date(active.startedAt).getTime();
+  const elapsedHours = elapsedMs / (60 * 60 * 1000);
+  if (elapsedHours <= AUTO_STOP_HOURS) return null;
+
+  await cancelReminders(active.reminderIds ?? []);
+
+  const uid = auth.currentUser?.uid;
+  if (!uid) return null;
+
+  const endedAt = new Date().toISOString();
+  const durationMinutes = Math.round((new Date(endedAt).getTime() - new Date(active.startedAt).getTime()) / 60000);
+  const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
+
+  const entryData = {
+    projectId: active.projectId,
+    projectNameSnapshot: active.projectNameSnapshot,
+    userId: uid,
+    userNameSnapshot: userName,
+    startedAt: active.startedAt,
+    endedAt,
+    durationMinutes,
+    mode: "timer" as const,
+    note: null,
+    gpsStart: active.gpsStart ?? null,
+    gpsEnd: null,
+    flags: { autoStopped: true },
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  const userRef = doc(db, paths.userDoc(uid));
+  const newEntryRef = firestore().collection(paths.timeEntries()).doc();
+
+  const entryId = await runTransaction<string>(async (transaction) => {
+    transaction.set(newEntryRef, entryData);
+    transaction.update(userRef, { activeTimer: firestore.FieldValue.delete() });
+    return newEntryRef.id;
+  });
+
+  return {
+    id: entryId,
+    ...entryData,
+    createdAt: endedAt,
+    updatedAt: endedAt,
+  } as TimeEntryDoc;
+}
+
+/**
+ * List time entries for a user within a date range.
+ * @param userId - Current user ID
+ * @param fromYmd - Start date YYYY-MM-DD (inclusive)
+ * @param toYmd - End date YYYY-MM-DD (inclusive)
+ */
+export async function listTimeEntries(
+  userId: string,
+  fromYmd: string,
+  toYmd: string
+): Promise<TimeEntryDoc[]> {
+  if (!userId) return [];
+  const fromIso = `${fromYmd}T00:00:00.000Z`;
+  const endIso = `${toYmd}T23:59:59.999Z`;
+
+  const c = collection(db, paths.timeEntries());
+  const q = query(
+    c,
+    where("userId", "==", userId),
+    where("startedAt", ">=", fromIso),
+    where("startedAt", "<=", endIso),
+    orderBy("startedAt", "desc"),
+    limit(500)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => {
+    const data = d.data();
+    const startedAt = toIso(data.startedAt) ?? (data.startedAt as string) ?? "";
+    const endedAt = toIso(data.endedAt) ?? (data.endedAt as string) ?? "";
+    return {
+      id: d.id,
+      projectId: (data.projectId as string) ?? "",
+      projectNameSnapshot: (data.projectNameSnapshot as string) ?? "",
+      userId: (data.userId as string) ?? "",
+      userNameSnapshot: (data.userNameSnapshot as string) ?? "",
+      startedAt,
+      endedAt,
+      durationMinutes: (data.durationMinutes as number) ?? 0,
+      mode: (data.mode as "timer" | "manual") ?? "timer",
+      date: data.date as string | undefined,
+      note: (data.note as string) ?? undefined,
+      gpsStart: data.gpsStart ?? null,
+      gpsEnd: data.gpsEnd ?? null,
+      flags: data.flags ?? undefined,
+      createdAt: toIso(data.createdAt) ?? undefined,
+      updatedAt: toIso(data.updatedAt) ?? undefined,
+    } as TimeEntryDoc;
+  });
+}
+
+/**
+ * List time entries for a user in a given month.
+ * One query per month; use for Daily Protocol calendar.
+ * @param userId - User ID (MVP: current user; structure allows team view later)
+ * @param year - Year
+ * @param month - Month 1-12
+ */
+export async function listTimeEntriesForMonth(
+  userId: string,
+  year: number,
+  month: number
+): Promise<TimeEntryDoc[]> {
+  const fromYmd = `${year}-${String(month).padStart(2, "0")}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const toYmd = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  return listTimeEntries(userId, fromYmd, toYmd);
+}
+
+/**
+ * Get total minutes for current user in a given month.
+ */
+export async function getMonthlyMinutes(userId: string, year: number, month: number): Promise<number> {
+  const fromYmd = `${year}-${String(month).padStart(2, "0")}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const toYmd = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+  const entries = await listTimeEntries(userId, fromYmd, toYmd);
+  return entries.reduce((sum, e) => sum + (e.durationMinutes ?? 0), 0);
+}

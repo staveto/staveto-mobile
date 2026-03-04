@@ -30,6 +30,7 @@ module.exports = ({ config }) => {
         NSMicrophoneUsageDescription: "Staveto needs microphone access for voice features.",
         NSCameraUsageDescription: "Staveto needs camera access to take project photos.",
         NSPhotoLibraryUsageDescription: "Staveto needs photo library access to upload project images.",
+        NSLocationWhenInUseUsageDescription: "Staveto potrebuje polohu pre check-in/check-out a evidenciu času na stavenisku.",
       },
     },
 
@@ -39,11 +40,18 @@ module.exports = ({ config }) => {
         foregroundImage: "./assets/adaptive-icon.png",
         backgroundColor: "#1D376A",
       },
+      permissions: [
+        ...(config.android?.permissions ?? []),
+        "android.permission.ACCESS_FINE_LOCATION",
+        "android.permission.ACCESS_COARSE_LOCATION",
+      ].filter((p, i, arr) => arr.indexOf(p) === i),
     },
 
     plugins: [
       "@react-native-firebase/app",
       "@react-native-firebase/messaging",
+      ["expo-location", { locationWhenInUsePermission: "Staveto potrebuje polohu pre check-in/check-out a evidenciu času na stavenisku." }],
+      ["expo-notifications", { sounds: [] }],
       ["expo-image-picker", { photosPermission: "Aplikácia potrebuje prístup k vašim fotkám na pridanie príloh.", cameraPermission: "Aplikácia potrebuje prístup ku kamere na fotografovanie faktúr a dokumentov." }],
       ["expo-av", { microphonePermission: "Aplikácia potrebuje prístup k mikrofónu na nahrávanie hlasových správ a zápisov do denníka." }],
       ["expo-speech-recognition", { speechRecognitionPermission: "This app uses speech recognition for voice notes and diary entries." }],

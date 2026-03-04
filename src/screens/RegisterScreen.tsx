@@ -10,6 +10,7 @@ import {
   Platform,
   Image,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
@@ -104,6 +105,7 @@ export function RegisterScreen() {
         {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("register.button")}</Text>}
       </TouchableOpacity>
       <TouchableOpacity style={styles.googleBtn} onPress={onGoogleRegister} disabled={submitting}>
+        <Ionicons name="logo-google" size={20} color="#fff" />
         <Text style={styles.googleBtnText}>{t("register.google")}</Text>
       </TouchableOpacity>
       <TouchableOpacity style={styles.link} onPress={() => (navigation as any).navigate("Login")}>
@@ -156,11 +158,13 @@ const styles = StyleSheet.create({
     marginTop: spacing.md,
     padding: spacing.md,
     borderRadius: radius,
-    borderWidth: 1,
-    borderColor: colors.border,
+    flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    backgroundColor: "#4285F4",
   },
-  googleBtnText: { color: colors.text },
+  googleBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   link: { marginTop: spacing.lg, alignItems: "center" },
   linkText: { color: colors.primary, fontSize: 14 },
 });

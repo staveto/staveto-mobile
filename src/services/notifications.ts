@@ -30,7 +30,8 @@ export type NotificationType =
   | "MEMBER_JOINED"
   | "MEMBER_LEFT"
   | "MEMBER_REMOVED"
-  | "SYNC_ISSUE";
+  | "SYNC_ISSUE"
+  | "TIME_TRACKING_STOPPED";
 
 export type NotificationSeverity = "info" | "warning" | "error";
 
@@ -447,6 +448,40 @@ export async function createDiaryAddedNotification(data: {
     },
     severity: "info",
   });
+}
+
+export async function createTimeTrackingStoppedNotification(data: {
+  userId: string;
+  projectId: string;
+  projectName: string;
+  durationMinutes: number;
+  timeEntryId?: string;
+}): Promise<{ id: string }> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+  if (currentUser.uid !== data.userId) {
+    throw new Error("Nemáte oprávnenie na vytvorenie notifikácie.");
+  }
+
+  const h = Math.floor(data.durationMinutes / 60);
+  const m = data.durationMinutes % 60;
+  const durationStr = h > 0 ? `${h}h ${m}min` : `${m} min`;
+
+  const c = collection(db, "notifications");
+  const ref = await addDoc(c, {
+    userId: data.userId,
+    type: "TIME_TRACKING_STOPPED",
+    createdAt: serverTimestamp(),
+    readAt: null,
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    message: durationStr,
+    severity: "info",
+    meta: { durationMinutes: data.durationMinutes, timeEntryId: data.timeEntryId ?? null },
+  });
+  return { id: ref.id };
 }
 
 export async function createProjectCreatedNotification(data: {

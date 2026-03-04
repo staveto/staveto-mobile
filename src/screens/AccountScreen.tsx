@@ -16,6 +16,7 @@ import {
   ActivityIndicator,
   FlatList,
 } from "react-native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
@@ -125,6 +126,8 @@ export function AccountScreen() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [contractorsEnabled, setContractorsEnabled] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
+  const [primaryUsageMode, setPrimaryUsageMode] = useState<"build" | "trade" | "maintenance" | null>(null);
+  const [showUsageModeModal, setShowUsageModeModal] = useState(false);
 
   const nav = navigation as { navigate: (name: string) => void };
   const displayName = user?.name ?? user?.email ?? "—";
@@ -185,10 +188,26 @@ export function AccountScreen() {
           firstName?: string;
           lastName?: string;
           phoneE164?: string | null;
+          primaryUsageMode?: "build" | "trade" | "maintenance" | null;
         };
         setProfileFirstName(data.firstName ?? user.firstName ?? "");
         setProfileLastName(data.lastName ?? user.lastName ?? "");
         setProfilePhone(data.phoneE164 ?? "");
+        if (data.primaryUsageMode && ["build", "trade", "maintenance"].includes(data.primaryUsageMode)) {
+          setPrimaryUsageMode(data.primaryUsageMode);
+        } else {
+          const pending = await AsyncStorage.getItem("pending_onboarding");
+          if (pending) {
+            try {
+              const parsed = JSON.parse(pending) as { mode?: "build" | "trade" | "maintenance" };
+              if (parsed?.mode && ["build", "trade", "maintenance"].includes(parsed.mode)) {
+                setPrimaryUsageMode(parsed.mode);
+              }
+            } catch {
+              // ignore
+            }
+          }
+        }
         if (data.primaryProfessionCode != null) {
           setProfileProfessionCode(data.primaryProfessionCode as ProfessionCode);
           setProfileProfessionOtherText(data.primaryProfessionOtherText ?? "");
@@ -207,6 +226,17 @@ export function AccountScreen() {
       } else {
         setProfileFirstName(user.firstName ?? "");
         setProfileLastName(user.lastName ?? "");
+        const pending = await AsyncStorage.getItem("pending_onboarding");
+        if (pending) {
+          try {
+            const parsed = JSON.parse(pending) as { mode?: "build" | "trade" | "maintenance" };
+            if (parsed?.mode && ["build", "trade", "maintenance"].includes(parsed.mode)) {
+              setPrimaryUsageMode(parsed.mode);
+            }
+          } catch {
+            // ignore
+          }
+        }
       }
     } catch (error) {
       console.warn("[account] Failed to load profile data:", error);
@@ -275,6 +305,23 @@ export function AccountScreen() {
       setSavingProfile(false);
     }
   }, [user?.id, profileFirstName, profileLastName, profilePhone, profileProfessionCode, profileProfessionOtherText, profilePhotoURL, t]);
+
+  const saveUsageMode = useCallback(
+    async (mode: "build" | "trade" | "maintenance") => {
+      if (!user?.id) return;
+      setPrimaryUsageMode(mode);
+      setShowUsageModeModal(false);
+      try {
+        await updateDoc(doc(db, "users", user.id), {
+          primaryUsageMode: mode,
+          updatedAt: serverTimestamp(),
+        });
+      } catch (error) {
+        console.warn("[account] Failed to save primaryUsageMode:", error);
+      }
+    },
+    [user?.id]
+  );
 
   const pickProfilePhoto = useCallback(async () => {
     if (!user?.id) return;
@@ -391,6 +438,18 @@ export function AccountScreen() {
         />
         <Row icon="chatbubble-outline" label={t("account.sendMessage")} onPress={() => Alert.alert(t("account.comingSoon"))} />
         <Row icon="checkbox-outline" label={t("account.viewTasks")} onPress={() => nav.navigate("Tasks")} />
+        <Row
+          icon="construct-outline"
+          label={t("account.primaryUsageMode")}
+          onPress={() => setShowUsageModeModal(true)}
+          right={
+            <Text style={styles.localeBadge}>
+              {primaryUsageMode
+                ? t(`onboardingMvp.option${primaryUsageMode.charAt(0).toUpperCase() + primaryUsageMode.slice(1)}`)
+                : t("account.primaryUsageModeNotSet")}
+            </Text>
+          }
+        />
       </View>
 
       {/* Organizácie */}
@@ -755,6 +814,32 @@ export function AccountScreen() {
             ))}
             <TouchableOpacity style={styles.languageCancel} onPress={() => setShowLanguageModal(false)}>
               <Text style={styles.languageCancelText}>{t("tasks.cancel")}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal visible={showUsageModeModal} transparent animationType="fade">
+        <View style={styles.modalBackdrop}>
+          <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowUsageModeModal(false)} />
+          <View style={styles.languageModal}>
+            <Text style={styles.languageModalTitle}>{t("account.primaryUsageMode")}</Text>
+            {(["build", "trade", "maintenance"] as const).map((mode) => (
+              <TouchableOpacity
+                key={mode}
+                style={[styles.languageOption, primaryUsageMode === mode && styles.languageOptionActive]}
+                onPress={() => saveUsageMode(mode)}
+              >
+                <Text style={[styles.languageOptionText, primaryUsageMode === mode && styles.languageOptionTextActive]}>
+                  {t(`onboardingMvp.option${mode.charAt(0).toUpperCase() + mode.slice(1)}`)}
+                </Text>
+                {primaryUsageMode === mode ? (
+                  <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
+                ) : null}
+              </TouchableOpacity>
+            ))}
+            <TouchableOpacity style={styles.languageCancel} onPress={() => setShowUsageModeModal(false)}>
+              <Text style={styles.languageCancelText}>{t("common.cancel")}</Text>
             </TouchableOpacity>
           </View>
         </View>

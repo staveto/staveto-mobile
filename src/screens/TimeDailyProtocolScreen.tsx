@@ -2,6 +2,7 @@
  * Daily protocol (Tagesprotokoll) for Time Tracking.
  * Month calendar with markers on days that have entries.
  * Tap a day to see entries with Start/End location buttons.
+ * Me/Team mode: members see only their time; owners/editors see Me + Team (grouped by person).
  */
 import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
@@ -63,12 +64,12 @@ const WEEKDAYS: Record<Locale, string[]> = {
 const CALENDAR_PADDING = spacing.md * 2;
 const DAY_CELL_SIZE = Math.max(36, Math.floor((Dimensions.get("window").width - CALENDAR_PADDING) / 7));
 
-type DaySummary = { totalMinutes: number; countEntries: number };
+type DaySummary = { meMinutes: number; teamMinutes: number; countEntries: number };
 
-function formatMinutesToHours(minutes: number): string {
+function formatMinutesWithUnits(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
-  return m > 0 ? `${h}h ${String(m).padStart(2, "0")}m` : `${h}h`;
+  return `${h}h ${String(m).padStart(2, "0")}m`;
 }
 
 function formatTimeRange(startedAt: string, endedAt: string): string {
@@ -89,6 +90,89 @@ function hasValidGps(gps: { lat?: number; lng?: number } | null | undefined): bo
   return !!gps && typeof gps.lat === "number" && typeof gps.lng === "number" && !isNaN(gps.lat) && !isNaN(gps.lng);
 }
 
+function EntryCard({
+  entry,
+  isMe,
+  onLocationPress,
+  t,
+}: {
+  entry: TimeEntryDoc;
+  isMe: boolean;
+  userId?: string;
+  onLocationPress: (lat: number, lng: number) => void;
+  t: (key: string) => string;
+}) {
+  return (
+    <View style={styles.entryCard}>
+      <View style={styles.entryHeaderRow}>
+        <Text style={styles.entryPerson} numberOfLines={1}>
+          {entry.userNameSnapshot?.trim() || entry.userId || "—"}
+        </Text>
+        {isMe && (
+          <View style={styles.meBadge}>
+            <Text style={styles.meBadgeText}>{t("time.dailyProtocol.meBadge")}</Text>
+          </View>
+        )}
+      </View>
+      <Text style={styles.entryProject} numberOfLines={1}>
+        {entry.projectNameSnapshot || "Project"}
+      </Text>
+      <Text style={styles.entryTime}>
+        {formatTimeRange(entry.startedAt, entry.endedAt)} • {formatMinutesWithUnits(entry.durationMinutes ?? 0)}
+      </Text>
+      <View style={styles.locationRow}>
+        <TouchableOpacity
+          style={[styles.locationBtn, !hasValidGps(entry.gpsStart) && styles.locationBtnDisabled]}
+          onPress={() =>
+            hasValidGps(entry.gpsStart) &&
+            entry.gpsStart &&
+            onLocationPress(entry.gpsStart!.lat!, entry.gpsStart!.lng!)
+          }
+          disabled={!hasValidGps(entry.gpsStart)}
+        >
+          <Ionicons
+            name="location"
+            size={16}
+            color={hasValidGps(entry.gpsStart) ? colors.primary : colors.textOnDark}
+          />
+          <Text
+            style={[
+              styles.locationBtnText,
+              !hasValidGps(entry.gpsStart) && styles.locationBtnTextDisabled,
+            ]}
+          >
+            {hasValidGps(entry.gpsStart)
+              ? t("time.dailyProtocol.startLocation")
+              : t("time.dailyProtocol.locationMissing")}
+          </Text>
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={[styles.locationBtn, !hasValidGps(entry.gpsEnd) && styles.locationBtnDisabled]}
+          onPress={() =>
+            hasValidGps(entry.gpsEnd) &&
+            entry.gpsEnd &&
+            onLocationPress(entry.gpsEnd!.lat!, entry.gpsEnd!.lng!)
+          }
+          disabled={!hasValidGps(entry.gpsEnd)}
+        >
+          <Ionicons
+            name="location"
+            size={16}
+            color={hasValidGps(entry.gpsEnd) ? colors.primary : colors.textOnDark}
+          />
+          <Text
+            style={[styles.locationBtnText, !hasValidGps(entry.gpsEnd) && styles.locationBtnTextDisabled]}
+          >
+            {hasValidGps(entry.gpsEnd)
+              ? t("time.dailyProtocol.endLocation")
+              : t("time.dailyProtocol.locationMissing")}
+          </Text>
+        </TouchableOpacity>
+      </View>
+    </View>
+  );
+}
+
 export function TimeDailyProtocolScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
@@ -104,8 +188,15 @@ export function TimeDailyProtocolScreen() {
   const [entries, setEntries] = useState<TimeEntryDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [mode, setMode] = useState<"all" | "me" | "team">("all");
+  const [teamProjectIds, setTeamProjectIds] = useState<string[]>([]);
+  const [teamEntriesForMonth, setTeamEntriesForMonth] = useState<TimeEntryDoc[]>([]);
+  const [teamEntriesForDay, setTeamEntriesForDay] = useState<TimeEntryDoc[]>([]);
+  const [teamDayLoading, setTeamDayLoading] = useState(false);
+  const [expandedPersonIds, setExpandedPersonIds] = useState<Set<string>>(new Set());
 
   const userId = user?.id ?? "";
+  const canSeeTeam = teamProjectIds.length > 0;
 
   const loadData = useCallback(
     async (isRefresh = false) => {
@@ -137,11 +228,76 @@ export function TimeDailyProtocolScreen() {
     loadData();
   }, [loadData]);
 
+  useEffect(() => {
+    if (!userId) return;
+    timeTracking.getProjectIdsWithTeamTimeAccess(userId).then(setTeamProjectIds);
+  }, [userId]);
+
+  const loadTeamEntriesForMonth = useCallback(async () => {
+    if (!teamProjectIds.length) {
+      setTeamEntriesForMonth([]);
+      return;
+    }
+    const fromYmd = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, "0")}-01`;
+    const lastDay = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
+    const toYmd = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+    try {
+      const list = await timeTracking.listTimeEntriesForProjects(teamProjectIds, fromYmd, toYmd);
+      setTeamEntriesForMonth(list);
+    } catch (err) {
+      console.warn("[TimeDailyProtocol] Team month load error:", err);
+      setTeamEntriesForMonth([]);
+    }
+  }, [teamProjectIds, currentMonth]);
+
+  useEffect(() => {
+    if (teamProjectIds.length > 0) {
+      loadTeamEntriesForMonth();
+    } else {
+      setTeamEntriesForMonth([]);
+    }
+  }, [teamProjectIds, currentMonth, loadTeamEntriesForMonth]);
+
+  const selectedYmd = selectedDate ? toYmd(selectedDate) : null;
+
+  const loadTeamEntriesForDay = useCallback(
+    async (ymd: string) => {
+      if (!teamProjectIds.length) {
+        setTeamEntriesForDay([]);
+        return;
+      }
+      setTeamDayLoading(true);
+      try {
+        const list = await timeTracking.listTimeEntriesForProjects(teamProjectIds, ymd, ymd);
+        setTeamEntriesForDay(list);
+      } catch (err) {
+        console.warn("[TimeDailyProtocol] Team load error:", err);
+        setTeamEntriesForDay([]);
+      } finally {
+        setTeamDayLoading(false);
+      }
+    },
+    [teamProjectIds]
+  );
+
+  useEffect(() => {
+    if (selectedYmd && (mode === "all" || mode === "team")) {
+      loadTeamEntriesForDay(selectedYmd);
+    } else {
+      setTeamEntriesForDay([]);
+    }
+  }, [selectedYmd, mode, loadTeamEntriesForDay]);
+
   const days = useMemo(() => {
     const start = startOfWeek(startOfMonth(currentMonth), { weekStartsOn: 1 });
     const end = endOfWeek(endOfMonth(currentMonth), { weekStartsOn: 1 });
     return eachDayOfInterval({ start, end });
   }, [currentMonth]);
+
+  const teamOnlyEntriesForMonth = useMemo(
+    () => teamEntriesForMonth.filter((e) => e.userId !== userId),
+    [teamEntriesForMonth, userId]
+  );
 
   const daySummaries = useMemo(() => {
     const map = new Map<string, DaySummary>();
@@ -150,16 +306,27 @@ export function TimeDailyProtocolScreen() {
       const existing = map.get(dayKey);
       const mins = e.durationMinutes ?? 0;
       if (existing) {
-        existing.totalMinutes += mins;
+        existing.meMinutes += mins;
         existing.countEntries += 1;
       } else {
-        map.set(dayKey, { totalMinutes: mins, countEntries: 1 });
+        map.set(dayKey, { meMinutes: mins, teamMinutes: 0, countEntries: 1 });
+      }
+    }
+    if (canSeeTeam) {
+      for (const e of teamOnlyEntriesForMonth) {
+        const dayKey = toYmd(new Date(e.startedAt));
+        const existing = map.get(dayKey);
+        const mins = e.durationMinutes ?? 0;
+        if (existing) {
+          existing.teamMinutes += mins;
+        } else {
+          map.set(dayKey, { meMinutes: 0, teamMinutes: mins, countEntries: 0 });
+        }
       }
     }
     return map;
-  }, [entries]);
+  }, [entries, teamOnlyEntriesForMonth, canSeeTeam, userId]);
 
-  const selectedYmd = selectedDate ? toYmd(selectedDate) : null;
   const entriesForDay = useMemo(() => {
     if (!selectedYmd) return [];
     return entries
@@ -169,6 +336,66 @@ export function TimeDailyProtocolScreen() {
 
   const totalForDay = entriesForDay.reduce((sum, e) => sum + (e.durationMinutes ?? 0), 0);
   const totalMinutes = entries.reduce((sum, e) => sum + (e.durationMinutes ?? 0), 0);
+
+  const teamOnlyEntriesForDay = useMemo(
+    () => teamEntriesForDay.filter((e) => e.userId !== userId),
+    [teamEntriesForDay, userId]
+  );
+
+  type PersonGroup = { userId: string; userName: string; totalMinutes: number; entries: TimeEntryDoc[] };
+  const teamGroupedByPerson = useMemo(() => {
+    const map = new Map<string, PersonGroup>();
+    for (const e of teamOnlyEntriesForDay) {
+      const uid = e.userId || "unknown";
+      const existing = map.get(uid);
+      const mins = e.durationMinutes ?? 0;
+      const name = e.userNameSnapshot?.trim() || e.userId || "—";
+      if (existing) {
+        existing.totalMinutes += mins;
+        existing.entries.push(e);
+      } else {
+        map.set(uid, { userId: uid, userName: name, totalMinutes: mins, entries: [e] });
+      }
+    }
+    const groups = Array.from(map.values());
+    for (const g of groups) {
+      g.entries.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
+    }
+    return groups.sort((a, b) => b.totalMinutes - a.totalMinutes);
+  }, [teamOnlyEntriesForDay]);
+
+  const allGroupedByPerson = useMemo(() => {
+    const combined = [...entriesForDay, ...teamOnlyEntriesForDay];
+    const map = new Map<string, PersonGroup>();
+    for (const e of combined) {
+      const uid = e.userId || "unknown";
+      const existing = map.get(uid);
+      const mins = e.durationMinutes ?? 0;
+      const name = e.userNameSnapshot?.trim() || e.userId || "—";
+      if (existing) {
+        existing.totalMinutes += mins;
+        existing.entries.push(e);
+      } else {
+        map.set(uid, { userId: uid, userName: name, totalMinutes: mins, entries: [e] });
+      }
+    }
+    const groups = Array.from(map.values());
+    for (const g of groups) {
+      g.entries.sort((a, b) => new Date(a.startedAt).getTime() - new Date(b.startedAt).getTime());
+    }
+    return groups.sort((a, b) => b.totalMinutes - a.totalMinutes);
+  }, [entriesForDay, teamOnlyEntriesForDay]);
+
+  const teamTotalForDay = teamOnlyEntriesForDay.reduce((sum, e) => sum + (e.durationMinutes ?? 0), 0);
+
+  const togglePersonExpand = useCallback((uid: string) => {
+    setExpandedPersonIds((prev) => {
+      const next = new Set(prev);
+      if (next.has(uid)) next.delete(uid);
+      else next.add(uid);
+      return next;
+    });
+  }, []);
 
   const goPrevMonth = useCallback(() => {
     setCurrentMonth((m) => subMonths(m, 1));
@@ -236,10 +463,60 @@ export function TimeDailyProtocolScreen() {
 
         <View style={styles.kpiRow}>
           <View style={styles.kpiCard}>
-            <Text style={styles.kpiLabel}>{t("time.dailyProtocol.totalHours")}</Text>
-            <Text style={styles.kpiValue}>{formatMinutesToHours(totalMinutes)}</Text>
+            <Text style={styles.kpiLabel}>
+              {selectedYmd
+                ? t("time.dailyProtocol.totalForDay")
+                : t("time.dailyProtocol.totalHours")}
+            </Text>
+            {selectedYmd ? (
+              <>
+                <Text style={styles.kpiValue}>
+                  {formatMinutesWithUnits(totalForDay + teamTotalForDay)}
+                </Text>
+                {canSeeTeam && (
+                  <Text style={styles.kpiSub}>
+                    {t("time.dailyProtocol.me")} {formatMinutesWithUnits(totalForDay)} • {t("time.dailyProtocol.team")}{" "}
+                    {formatMinutesWithUnits(teamTotalForDay)}
+                  </Text>
+                )}
+              </>
+            ) : (
+              <Text style={styles.kpiValue}>{formatMinutesWithUnits(totalMinutes)}</Text>
+            )}
           </View>
         </View>
+
+        {canSeeTeam && selectedYmd && (
+          <View style={styles.segmentedRow}>
+            <TouchableOpacity
+              style={[styles.segmentedBtn, mode === "all" && styles.segmentedBtnActive]}
+              onPress={() => setMode("all")}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.segmentedBtnText, mode === "all" && styles.segmentedBtnTextActive]}>
+                {t("time.dailyProtocol.all")}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.segmentedBtn, mode === "me" && styles.segmentedBtnActive]}
+              onPress={() => setMode("me")}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.segmentedBtnText, mode === "me" && styles.segmentedBtnTextActive]}>
+                {t("time.dailyProtocol.me")}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.segmentedBtn, mode === "team" && styles.segmentedBtnActive]}
+              onPress={() => setMode("team")}
+              activeOpacity={0.7}
+            >
+              <Text style={[styles.segmentedBtnText, mode === "team" && styles.segmentedBtnTextActive]}>
+                {t("time.dailyProtocol.team")}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        )}
 
         <View style={styles.weekdayRow}>
           {weekdays.map((d) => (
@@ -256,8 +533,10 @@ export function TimeDailyProtocolScreen() {
             const today = isToday(day);
             const dayKey = toYmd(day);
             const summary = daySummaries.get(dayKey);
-            const hasEntries = !!summary && summary.totalMinutes > 0;
-            const hasLongDay = !!summary && summary.totalMinutes > 480;
+            const hasMeEntries = !!summary && summary.meMinutes > 0;
+            const hasTeamEntries = !!summary && summary.teamMinutes > 0;
+            const totalMinutes = summary ? summary.meMinutes + summary.teamMinutes : 0;
+            const hasLongDay = totalMinutes > 480;
 
             return (
               <TouchableOpacity
@@ -282,16 +561,33 @@ export function TimeDailyProtocolScreen() {
                 >
                   {format(day, "d")}
                 </Text>
-                {hasEntries && (
+                {(hasMeEntries || hasTeamEntries) && (
                   <View style={styles.dotRow}>
-                    <View style={[styles.dot, hasLongDay && styles.dotThick]} />
-                    {hasLongDay && <View style={[styles.dot, styles.dotThick]} />}
+                    {hasMeEntries && (
+                      <View style={[styles.dot, styles.dotMe, hasLongDay && styles.dotThick]} />
+                    )}
+                    {hasTeamEntries && (
+                      <View style={[styles.dot, styles.dotTeam, hasLongDay && styles.dotThick]} />
+                    )}
                   </View>
                 )}
               </TouchableOpacity>
             );
           })}
         </View>
+
+        {canSeeTeam && (
+          <View style={styles.calendarLegend}>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, styles.dotMe]} />
+              <Text style={styles.legendText}>{t("time.dailyProtocol.me")}</Text>
+            </View>
+            <View style={styles.legendItem}>
+              <View style={[styles.legendDot, styles.dotTeam]} />
+              <Text style={styles.legendText}>{t("time.dailyProtocol.team")}</Text>
+            </View>
+          </View>
+        )}
 
         <View style={styles.detailSection}>
           <Text style={styles.detailTitle}>
@@ -306,79 +602,103 @@ export function TimeDailyProtocolScreen() {
 
           {selectedYmd && (
             <>
-              <Text style={styles.totalForDay}>
-                {t("time.dailyProtocol.totalForDay")}: {formatMinutesToHours(totalForDay)}
-              </Text>
-
-              {entriesForDay.length === 0 ? (
+              {mode === "me" ? (
+                entriesForDay.length === 0 ? (
+                  <Text style={styles.emptyText}>{t("time.dailyProtocol.emptyDay")}</Text>
+                ) : (
+                  entriesForDay.map((entry) => (
+                    <EntryCard
+                      key={entry.id}
+                      entry={entry}
+                      isMe={entry.userId === userId}
+                      userId={userId}
+                      onLocationPress={handleLocationPress}
+                      t={t}
+                    />
+                  ))
+                )
+              ) : mode === "all" ? (
+                teamDayLoading ? (
+                  <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: spacing.md }} />
+                ) : allGroupedByPerson.length === 0 ? (
+                  <Text style={styles.emptyText}>{t("time.dailyProtocol.emptyDay")}</Text>
+                ) : (
+                  allGroupedByPerson.map((group) => (
+                  <View key={group.userId} style={styles.personGroup}>
+                    <TouchableOpacity
+                      style={styles.personRow}
+                      onPress={() => togglePersonExpand(group.userId)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.personName} numberOfLines={1}>
+                        {group.userName}
+                      </Text>
+                      <View style={styles.personMeta}>
+                        <Text style={styles.personTime}>{formatMinutesWithUnits(group.totalMinutes)}</Text>
+                        <Text style={styles.personCount}>
+                          ({group.entries.length} {group.entries.length === 1 ? t("time.dailyProtocol.entry") : t("time.dailyProtocol.entries")})
+                        </Text>
+                      </View>
+                      <Ionicons
+                        name={expandedPersonIds.has(group.userId) ? "chevron-up" : "chevron-down"}
+                        size={18}
+                        color={colors.textOnDark}
+                      />
+                    </TouchableOpacity>
+                    {expandedPersonIds.has(group.userId) &&
+                      group.entries.map((entry) => (
+                        <View key={entry.id} style={styles.entryCardNested}>
+                          <EntryCard
+                            entry={entry}
+                            isMe={entry.userId === userId}
+                            userId={userId}
+                            onLocationPress={handleLocationPress}
+                            t={t}
+                          />
+                        </View>
+                      ))}
+                  </View>
+                ))
+              )
+              ) : teamDayLoading ? (
+                <ActivityIndicator size="small" color={colors.primary} style={{ marginTop: spacing.md }} />
+              ) : teamGroupedByPerson.length === 0 ? (
                 <Text style={styles.emptyText}>{t("time.dailyProtocol.emptyDay")}</Text>
               ) : (
-                entriesForDay.map((entry) => (
-                  <View key={entry.id} style={styles.entryCard}>
-                    <Text style={styles.entryProject} numberOfLines={1}>
-                      {entry.projectNameSnapshot || "Project"}
-                    </Text>
-                    <Text style={styles.entryTime}>
-                      {formatTimeRange(entry.startedAt, entry.endedAt)} • {formatMinutesToHours(entry.durationMinutes ?? 0)}
-                    </Text>
-                    <View style={styles.locationRow}>
-                      <TouchableOpacity
-                        style={[
-                          styles.locationBtn,
-                          !hasValidGps(entry.gpsStart) && styles.locationBtnDisabled,
-                        ]}
-                        onPress={() =>
-                          hasValidGps(entry.gpsStart) &&
-                          entry.gpsStart &&
-                          handleLocationPress(entry.gpsStart!.lat!, entry.gpsStart!.lng!)
-                        }
-                        disabled={!hasValidGps(entry.gpsStart)}
-                      >
-                        <Ionicons
-                          name="location"
-                          size={16}
-                          color={hasValidGps(entry.gpsStart) ? colors.primary : colors.textMuted}
-                        />
-                        <Text
-                          style={[
-                            styles.locationBtnText,
-                            !hasValidGps(entry.gpsStart) && styles.locationBtnTextDisabled,
-                          ]}
-                        >
-                          {hasValidGps(entry.gpsStart)
-                            ? t("time.dailyProtocol.startLocation")
-                            : t("time.dailyProtocol.locationMissing")}
+                teamGroupedByPerson.map((group) => (
+                  <View key={group.userId} style={styles.personGroup}>
+                    <TouchableOpacity
+                      style={styles.personRow}
+                      onPress={() => togglePersonExpand(group.userId)}
+                      activeOpacity={0.7}
+                    >
+                      <Text style={styles.personName} numberOfLines={1}>
+                        {group.userName}
+                      </Text>
+                      <View style={styles.personMeta}>
+                        <Text style={styles.personTime}>{formatMinutesWithUnits(group.totalMinutes)}</Text>
+                        <Text style={styles.personCount}>
+                          ({group.entries.length} {group.entries.length === 1 ? t("time.dailyProtocol.entry") : t("time.dailyProtocol.entries")})
                         </Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={[
-                          styles.locationBtn,
-                          !hasValidGps(entry.gpsEnd) && styles.locationBtnDisabled,
-                        ]}
-                        onPress={() =>
-                          hasValidGps(entry.gpsEnd) &&
-                          entry.gpsEnd &&
-                          handleLocationPress(entry.gpsEnd!.lat!, entry.gpsEnd!.lng!)
-                        }
-                        disabled={!hasValidGps(entry.gpsEnd)}
-                      >
-                        <Ionicons
-                          name="location"
-                          size={16}
-                          color={hasValidGps(entry.gpsEnd) ? colors.primary : colors.textMuted}
-                        />
-                        <Text
-                          style={[
-                            styles.locationBtnText,
-                            !hasValidGps(entry.gpsEnd) && styles.locationBtnTextDisabled,
-                          ]}
-                        >
-                          {hasValidGps(entry.gpsEnd)
-                            ? t("time.dailyProtocol.endLocation")
-                            : t("time.dailyProtocol.locationMissing")}
-                        </Text>
-                      </TouchableOpacity>
-                    </View>
+                      </View>
+                      <Ionicons
+                        name={expandedPersonIds.has(group.userId) ? "chevron-up" : "chevron-down"}
+                        size={18}
+                        color={colors.textOnDark}
+                      />
+                    </TouchableOpacity>
+                    {expandedPersonIds.has(group.userId) &&
+                      group.entries.map((entry) => (
+                        <View key={entry.id} style={styles.entryCardNested}>
+                          <EntryCard
+                            entry={entry}
+                            isMe={entry.userId === userId}
+                            userId={userId}
+                            onLocationPress={handleLocationPress}
+                            t={t}
+                          />
+                        </View>
+                      ))}
                   </View>
                 ))
               )}
@@ -461,6 +781,11 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.primary,
   },
+  kpiSub: {
+    fontSize: 14,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
+  },
   weekdayRow: {
     flexDirection: "row",
     marginBottom: spacing.sm,
@@ -469,13 +794,32 @@ const styles = StyleSheet.create({
     width: DAY_CELL_SIZE,
     fontSize: 12,
     fontWeight: "600",
-    color: colors.textMuted,
+    color: colors.textOnDark,
     textAlign: "center",
   },
   daysGrid: {
     flexDirection: "row",
     flexWrap: "wrap",
-    marginBottom: spacing.xl,
+    marginBottom: spacing.sm,
+  },
+  calendarLegend: {
+    flexDirection: "row",
+    gap: spacing.lg,
+    marginBottom: spacing.lg,
+  },
+  legendItem: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  legendDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  legendText: {
+    fontSize: 12,
+    color: colors.textOnDark,
   },
   dayCell: {
     justifyContent: "center",
@@ -498,7 +842,7 @@ const styles = StyleSheet.create({
     color: colors.textOnDark,
   },
   dayTextDisabled: {
-    color: colors.textMuted,
+    color: colors.textOnDark,
   },
   dayTextSelected: {
     color: colors.textOnDark,
@@ -515,7 +859,12 @@ const styles = StyleSheet.create({
     width: 4,
     height: 4,
     borderRadius: 2,
+  },
+  dotMe: {
     backgroundColor: colors.primary,
+  },
+  dotTeam: {
+    backgroundColor: colors.teamAccent,
   },
   dotThick: {
     width: 5,
@@ -538,8 +887,72 @@ const styles = StyleSheet.create({
   },
   emptyText: {
     fontSize: 14,
-    color: colors.textMuted,
+    color: colors.textOnDark,
     marginTop: spacing.sm,
+  },
+  segmentedRow: {
+    flexDirection: "row",
+    marginTop: spacing.sm,
+    marginBottom: spacing.lg,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 8,
+    padding: 2,
+  },
+  segmentedBtn: {
+    flex: 1,
+    paddingVertical: spacing.sm,
+    alignItems: "center",
+    borderRadius: 6,
+  },
+  segmentedBtnActive: {
+    backgroundColor: colors.primary,
+  },
+  segmentedBtnText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.textOnDark,
+  },
+  segmentedBtnTextActive: {
+    color: colors.textOnDark,
+  },
+  personGroup: {
+    marginBottom: spacing.md,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: colors.border,
+    overflow: "hidden",
+  },
+  personRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: spacing.md,
+  },
+  personName: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.textOnDark,
+    marginRight: spacing.sm,
+  },
+  personMeta: {
+    flexDirection: "row",
+    alignItems: "baseline",
+    gap: spacing.xs,
+    marginRight: spacing.sm,
+  },
+  personTime: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: colors.primary,
+  },
+  personCount: {
+    fontSize: 12,
+    color: colors.textOnDark,
+  },
+  entryCardNested: {
+    marginHorizontal: spacing.sm,
+    marginBottom: spacing.sm,
   },
   entryCard: {
     backgroundColor: "rgba(255,255,255,0.06)",
@@ -549,6 +962,29 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
+  entryHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  entryPerson: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.textOnDark,
+    flex: 1,
+  },
+  meBadge: {
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: 4,
+  },
+  meBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.textOnDark,
+  },
   entryProject: {
     fontSize: 16,
     fontWeight: "600",
@@ -557,7 +993,7 @@ const styles = StyleSheet.create({
   },
   entryTime: {
     fontSize: 14,
-    color: colors.textMuted,
+    color: colors.textOnDark,
     marginBottom: spacing.sm,
   },
   locationRow: {
@@ -575,8 +1011,7 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(224,103,55,0.2)",
   },
   locationBtnDisabled: {
-    backgroundColor: "rgba(255,255,255,0.06)",
-    opacity: 0.7,
+    backgroundColor: "rgba(224,103,55,0.35)",
   },
   locationBtnText: {
     fontSize: 13,
@@ -584,6 +1019,6 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
   locationBtnTextDisabled: {
-    color: colors.textMuted,
+    color: colors.textOnDark,
   },
 });

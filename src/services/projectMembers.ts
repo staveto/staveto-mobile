@@ -24,6 +24,7 @@ export type ProjectMemberDoc = {
     expenses?: boolean;
     diary?: boolean;
     documents?: boolean;
+    timeTracking?: boolean;
   };
   sharedPhaseIds?: string[]; // Specific phases to share (if phases=true)
   sharedEquipmentIds?: string[]; // Specific equipment to share (MAINTENANCE projects only)
@@ -71,13 +72,17 @@ export async function listProjectMembers(
         joinedAt: data.joinedAt || undefined,
         permissionLevel: data.permissionLevel || 'editor',
         addedAt: data.addedAt || new Date().toISOString(),
-        sharedItems: data.sharedItems || {
-          tasks: true,
-          phases: true,
-          expenses: true,
-          diary: true,
-          documents: true,
-        },
+        sharedItems: (() => {
+          const si = data.sharedItems ?? {};
+          return {
+            tasks: si.tasks ?? true,
+            phases: si.phases ?? true,
+            expenses: si.expenses ?? true,
+            diary: si.diary ?? true,
+            documents: si.documents ?? true,
+            timeTracking: si.timeTracking ?? true,
+          };
+        })(),
         sharedPhaseIds: data.sharedPhaseIds || [],
         sharedEquipmentIds: data.sharedEquipmentIds || [],
       };
@@ -104,6 +109,7 @@ export async function inviteMemberByEmail(
     expenses?: boolean;
     diary?: boolean;
     documents?: boolean;
+    timeTracking?: boolean;
   },
   sharedPhaseIds?: string[],
   sharedEquipmentIds?: string[]
@@ -147,6 +153,7 @@ export async function inviteMemberByEmail(
         expenses: true,
         diary: true,
         documents: true,
+        timeTracking: permissionLevel === "editor",
       },
       sharedPhaseIds: sharedPhaseIds || [],
       sharedEquipmentIds: sharedEquipmentIds || [],
@@ -231,8 +238,10 @@ export async function updateMemberPermissions(
     expenses?: boolean;
     diary?: boolean;
     documents?: boolean;
+    timeTracking?: boolean;
   },
-  sharedPhaseIds?: string[]
+  sharedPhaseIds?: string[],
+  sharedEquipmentIds?: string[]
 ): Promise<void> {
   const u = auth.currentUser;
   console.log("[perm] currentUser", !!u, u?.uid, u?.email);
@@ -253,6 +262,7 @@ export async function updateMemberPermissions(
       expenses: false,
       diary: false,
       documents: false,
+      timeTracking: permissionLevel === "editor",
     },
     sharedPhaseIds: sharedPhaseIds || [],
     sharedEquipmentIds: sharedEquipmentIds || [],

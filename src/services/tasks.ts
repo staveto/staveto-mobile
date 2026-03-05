@@ -344,10 +344,10 @@ export async function listTasksByProject(projectId: string): Promise<TaskDoc[]> 
     return list;
   } catch (error: any) {
     console.error(`[tasks] listTasksByProject error:`, error);
-    const errorCode = error.code || '';
+    const errorCode = String(error.code || '');
     const errorMessage = error.message || 'Unknown error';
     
-    if (errorCode === 'permission-denied') {
+    if (errorCode === 'permission-denied' || errorCode.includes('permission-denied')) {
       console.error(`[tasks] listTasksByProject: PERMISSION DENIED for project ${projectId}`);
       console.error(`[tasks] listTasksByProject: auth.currentUser.uid = "${currentUserUid}"`);
       console.error(`[tasks] listTasksByProject: Firestore rule: projectOwner(${projectId})`);
@@ -446,9 +446,12 @@ export async function ensureOverdueNotificationsIfNeeded(userId: string): Promis
   const todayYmd = new Date().toISOString().split("T")[0];
   const { listMyProjects } = await import("./projects");
   const { getProject } = await import("./projects");
+  const { fetchProjectAccess } = await import("../hooks/useProjectAccess");
   const projects = await listMyProjects(userId);
   for (const project of projects) {
     try {
+      const access = await fetchProjectAccess(project.id, userId, project.ownerId);
+      if (!access.canReadTasks) continue;
       const tasks = await listTasksByProject(project.id);
       for (const task of tasks) {
         if (task.isActive === false) continue;

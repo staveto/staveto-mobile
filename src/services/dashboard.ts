@@ -17,7 +17,8 @@ export type DashboardViewModel = {
     hasExpensesAccess: boolean; // True if user can see expenses in at least one project
   };
   projectStats: Map<string, { openCount: number; totalCount: number; progress: number }>;
-};
+  timeTrackingProjectIds: string[]; // Project IDs where user can log time (owner or editor with sharedItems.timeTracking)
+}
 
 /**
  * Load dashboard data for a user
@@ -80,18 +81,26 @@ export async function loadDashboardData(ownerId: string, options?: { forceServer
   let expensesMonthSum = 0;
   let expensesTotalSum = 0;
   let projectIdsWithExpensesAccess = new Set<string>();
+  let timeTrackingProjectIds: string[] = [];
   try {
-    // Determine which projects the user can see expenses for (owner = full access, member = sharedItems.expenses)
-    const expensesAccessPromises = projects.map(async (project) => {
+    // Determine which projects the user can see expenses for and which can log time
+    const accessPromises = projects.map(async (project) => {
       const isOwner = project.ownerId === ownerId;
-      if (isOwner) return { projectId: project.id, canReadExpenses: true };
+      if (isOwner) {
+        return { projectId: project.id, canReadExpenses: true, canWriteTime: true };
+      }
       const access = await fetchProjectAccess(project.id, ownerId, project.ownerId);
-      return { projectId: project.id, canReadExpenses: access.canReadExpenses };
+      return {
+        projectId: project.id,
+        canReadExpenses: access.canReadExpenses,
+        canWriteTime: access.canWriteTime,
+      };
     });
-    const expensesAccessList = await Promise.all(expensesAccessPromises);
+    const accessList = await Promise.all(accessPromises);
     projectIdsWithExpensesAccess = new Set(
-      expensesAccessList.filter((a) => a.canReadExpenses).map((a) => a.projectId)
+      accessList.filter((a) => a.canReadExpenses).map((a) => a.projectId)
     );
+    timeTrackingProjectIds = accessList.filter((a) => a.canWriteTime).map((a) => a.projectId);
 
     // Load expenses only from projects where user has expenses permission
     const expensesPromises = projects
@@ -186,5 +195,6 @@ export async function loadDashboardData(ownerId: string, options?: { forceServer
       hasExpensesAccess: projectIdsWithExpensesAccess.size > 0,
     },
     projectStats,
+    timeTrackingProjectIds,
   };
 }

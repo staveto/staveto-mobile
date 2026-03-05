@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, ActivityIndicator, Share } from "react-native";
+import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, ActivityIndicator, Share, KeyboardAvoidingView, Platform, Dimensions } from "react-native";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -34,6 +34,7 @@ export function ProjectMembersScreen() {
   const [editShareExpenses, setEditShareExpenses] = useState(false);
   const [editShareDiary, setEditShareDiary] = useState(false);
   const [editShareDocuments, setEditShareDocuments] = useState(false);
+  const [editShareTimeTracking, setEditShareTimeTracking] = useState(false);
   const [editShareEquipment, setEditShareEquipment] = useState(false);
   const [editSelectedPhaseIds, setEditSelectedPhaseIds] = useState<string[]>([]);
   const [members, setMembers] = useState<ProjectMemberDoc[]>([]);
@@ -55,6 +56,7 @@ export function ProjectMembersScreen() {
   const [shareExpenses, setShareExpenses] = useState(false);
   const [shareDiary, setShareDiary] = useState(false);
   const [shareDocuments, setShareDocuments] = useState(false);
+  const [shareTimeTracking, setShareTimeTracking] = useState(true);
   const [shareEquipment, setShareEquipment] = useState(false);
   const [selectedPhaseIds, setSelectedPhaseIds] = useState<string[]>([]);
 
@@ -111,13 +113,14 @@ export function ProjectMembersScreen() {
   }, [projectId]);
 
   const onAddMember = () => {
-    // Reset sharing options to defaults
+    // Reset sharing options to defaults (editor: timeTracking true, viewer: false)
     setPermissionLevel('editor');
     setShareTasks(true);
     setSharePhases(true);
     setShareExpenses(false);
     setShareDiary(false);
     setShareDocuments(false);
+    setShareTimeTracking(true);
     setShareEquipment(false);
     setSelectedPhaseIds([]);
     setSelectedEquipmentIds([]);
@@ -134,6 +137,7 @@ export function ProjectMembersScreen() {
     setShareExpenses(false);
     setShareDiary(false);
     setShareDocuments(false);
+    setShareTimeTracking(true);
     setShareEquipment(false);
     setSelectedPhaseIds([]);
     setSelectedEquipmentIds([]);
@@ -169,6 +173,7 @@ export function ProjectMembersScreen() {
           expenses: shareExpenses,
           diary: shareDiary,
           documents: shareDocuments,
+          timeTracking: permissionLevel === 'editor' ? shareTimeTracking : false,
         },
         sharePhases ? selectedPhaseIds : [],
         projectType === 'MAINTENANCE' ? (shareEquipment ? selectedEquipmentIds : []) : undefined
@@ -226,12 +231,14 @@ export function ProjectMembersScreen() {
 
   const openEditMember = (member: ProjectMemberDoc) => {
     setEditingMember(member);
-    setEditPermissionLevel((member.permissionLevel as 'viewer' | 'editor') || 'viewer');
+    const perm = (member.permissionLevel as 'viewer' | 'editor') || 'viewer';
+    setEditPermissionLevel(perm);
     setEditShareTasks(member.sharedItems?.tasks ?? true);
     setEditSharePhases(member.sharedItems?.phases ?? true);
     setEditShareExpenses(member.sharedItems?.expenses ?? false);
     setEditShareDiary(member.sharedItems?.diary ?? false);
     setEditShareDocuments(member.sharedItems?.documents ?? false);
+    setEditShareTimeTracking(member.sharedItems?.timeTracking ?? (perm === 'editor'));
     setEditShareEquipment((member.sharedEquipmentIds?.length ?? 0) > 0);
     setEditSelectedPhaseIds(member.sharedPhaseIds ?? []);
     setEditSelectedEquipmentIds(member.sharedEquipmentIds ?? []);
@@ -256,6 +263,7 @@ export function ProjectMembersScreen() {
           expenses: editShareExpenses,
           diary: editShareDiary,
           documents: editShareDocuments,
+          timeTracking: editPermissionLevel === 'editor' ? editShareTimeTracking : false,
         },
         editSharePhases ? editSelectedPhaseIds : [],
         projectType === 'MAINTENANCE' ? (editShareEquipment ? editSelectedEquipmentIds : []) : undefined
@@ -578,7 +586,7 @@ export function ProjectMembersScreen() {
       </TouchableOpacity>
 
       <Modal visible={showAddMember} transparent animationType="slide">
-        <View style={[styles.addMemberOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom + spacing.md }]}>
+        <KeyboardAvoidingView style={[styles.addMemberOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom + spacing.md }]} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={styles.addMemberContainer}>
             <View style={styles.addMemberHeader}>
               <TouchableOpacity onPress={closeAddMember} style={styles.addMemberClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
@@ -590,7 +598,7 @@ export function ProjectMembersScreen() {
             <ScrollView
               style={styles.addMemberScroll}
               contentContainerStyle={styles.addMemberScrollContent}
-              showsVerticalScrollIndicator={false}
+              showsVerticalScrollIndicator={true}
               keyboardShouldPersistTaps="handled"
               nestedScrollEnabled
             >
@@ -624,7 +632,10 @@ export function ProjectMembersScreen() {
             <View style={styles.permissionLevelContainer}>
               <TouchableOpacity
                 style={[styles.permissionOption, permissionLevel === 'viewer' && styles.permissionOptionActive]}
-                onPress={() => setPermissionLevel('viewer')}
+                onPress={() => {
+                  setPermissionLevel('viewer');
+                  setShareTimeTracking(false);
+                }}
                 activeOpacity={0.7}
               >
                 <Ionicons 
@@ -644,7 +655,10 @@ export function ProjectMembersScreen() {
 
               <TouchableOpacity
                 style={[styles.permissionOption, permissionLevel === 'editor' && styles.permissionOptionActive]}
-                onPress={() => setPermissionLevel('editor')}
+                onPress={() => {
+                  setPermissionLevel('editor');
+                  setShareTimeTracking(true);
+                }}
                 activeOpacity={0.7}
               >
                 <Ionicons 
@@ -738,6 +752,32 @@ export function ProjectMembersScreen() {
                 <Text style={styles.shareOptionLabel}>
                   {t('projectMembers.shareExpenses')}
                 </Text>
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={[styles.shareOption, permissionLevel === 'viewer' && styles.shareOptionDisabled]}
+                onPress={() => permissionLevel === 'editor' && setShareTimeTracking(!shareTimeTracking)}
+                activeOpacity={0.7}
+                disabled={permissionLevel === 'viewer'}
+              >
+                <View style={[styles.checkbox, shareTimeTracking && styles.checkboxChecked]}>
+                  {shareTimeTracking && <Ionicons name="checkmark" size={16} color="#fff" />}
+                </View>
+                <View style={styles.shareOptionLabelContainer}>
+                  <Text style={styles.shareOptionLabelInContainer}>
+                    {t('projectMembers.shareTimeTracking') || 'Evidencia času'}
+                  </Text>
+                  {permissionLevel === 'viewer' && (
+                    <Text style={styles.shareOptionHint}>
+                      {t('projectMembers.timeTrackingRequiresEdit') || 'Vyžaduje oprávnenie Úprava'}
+                    </Text>
+                  )}
+                  {permissionLevel === 'editor' && (
+                    <Text style={styles.shareOptionHint}>
+                      {t('projectMembers.shareTimeTrackingHint') || 'Môže zapisovať hodiny a uložiť polohu pri štarte/ukončení.'}
+                    </Text>
+                  )}
+                </View>
               </TouchableOpacity>
 
               <TouchableOpacity
@@ -849,12 +889,12 @@ export function ProjectMembersScreen() {
             </View>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Edit member permissions modal */}
       <Modal visible={!!editingMember} transparent animationType="slide">
-        <View style={[styles.addMemberOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom + spacing.md }]}>
+        <KeyboardAvoidingView style={[styles.addMemberOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom + spacing.md }]} behavior={Platform.OS === "ios" ? "padding" : undefined}>
           <View style={styles.addMemberContainer}>
             <View style={styles.addMemberHeader}>
               <TouchableOpacity onPress={closeEditMember} style={styles.addMemberClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
@@ -868,7 +908,7 @@ export function ProjectMembersScreen() {
             <ScrollView
               style={styles.addMemberScroll}
               contentContainerStyle={styles.addMemberScrollContent}
-              showsVerticalScrollIndicator={false}
+              showsVerticalScrollIndicator={true}
               keyboardShouldPersistTaps="handled"
               nestedScrollEnabled
             >
@@ -879,7 +919,10 @@ export function ProjectMembersScreen() {
               <View style={styles.permissionLevelContainer}>
                 <TouchableOpacity
                   style={[styles.permissionOption, editPermissionLevel === 'viewer' && styles.permissionOptionActive]}
-                  onPress={() => setEditPermissionLevel('viewer')}
+                  onPress={() => {
+                    setEditPermissionLevel('viewer');
+                    setEditShareTimeTracking(false);
+                  }}
                   activeOpacity={0.7}
                 >
                   <Ionicons
@@ -899,7 +942,10 @@ export function ProjectMembersScreen() {
 
                 <TouchableOpacity
                   style={[styles.permissionOption, editPermissionLevel === 'editor' && styles.permissionOptionActive]}
-                  onPress={() => setEditPermissionLevel('editor')}
+                  onPress={() => {
+                    setEditPermissionLevel('editor');
+                    setEditShareTimeTracking(true);
+                  }}
                   activeOpacity={0.7}
                 >
                   <Ionicons
@@ -986,6 +1032,32 @@ export function ProjectMembersScreen() {
                     {editShareExpenses && <Ionicons name="checkmark" size={16} color="#fff" />}
                   </View>
                   <Text style={styles.shareOptionLabel}>{t('projectMembers.shareExpenses')}</Text>
+                </TouchableOpacity>
+
+                <TouchableOpacity
+                  style={[styles.shareOption, editPermissionLevel === 'viewer' && styles.shareOptionDisabled]}
+                  onPress={() => editPermissionLevel === 'editor' && setEditShareTimeTracking(!editShareTimeTracking)}
+                  activeOpacity={0.7}
+                  disabled={editPermissionLevel === 'viewer'}
+                >
+                  <View style={[styles.checkbox, editShareTimeTracking && styles.checkboxChecked]}>
+                    {editShareTimeTracking && <Ionicons name="checkmark" size={16} color="#fff" />}
+                  </View>
+                  <View style={styles.shareOptionLabelContainer}>
+                    <Text style={styles.shareOptionLabelInContainer}>
+                      {t('projectMembers.shareTimeTracking') || 'Evidencia času'}
+                    </Text>
+                    {editPermissionLevel === 'viewer' && (
+                      <Text style={styles.shareOptionHint}>
+                        {t('projectMembers.timeTrackingRequiresEdit') || 'Vyžaduje oprávnenie Úprava'}
+                      </Text>
+                    )}
+                    {editPermissionLevel === 'editor' && (
+                      <Text style={styles.shareOptionHint}>
+                        {t('projectMembers.shareTimeTrackingHint') || 'Môže zapisovať hodiny a uložiť polohu pri štarte/ukončení.'}
+                      </Text>
+                    )}
+                  </View>
                 </TouchableOpacity>
 
                 <TouchableOpacity
@@ -1089,7 +1161,7 @@ export function ProjectMembersScreen() {
               </View>
             </ScrollView>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
     </View>
   );
@@ -1172,14 +1244,16 @@ const styles = StyleSheet.create({
     marginTop: spacing.lg,
     padding: spacing.lg,
     flex: 1,
+    maxHeight: Dimensions.get("window").height * 0.88,
     borderWidth: 1,
     borderColor: colors.border,
   },
   addMemberScroll: {
     flex: 1,
+    minHeight: 0,
   },
   addMemberScrollContent: {
-    paddingBottom: spacing.md,
+    paddingBottom: spacing.xl,
   },
   addMemberHeader: {
     flexDirection: "row",
@@ -1251,6 +1325,22 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.text,
     flex: 1,
+  },
+  shareOptionLabelContainer: {
+    flex: 1,
+    marginLeft: 0,
+  },
+  shareOptionLabelInContainer: {
+    fontSize: 15,
+    color: colors.text,
+  },
+  shareOptionHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  shareOptionDisabled: {
+    opacity: 0.6,
   },
   phaseSelectionContainer: {
     marginLeft: spacing.xl,

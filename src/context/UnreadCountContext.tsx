@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useEffect, useState } from "react";
-import { AppState, AppStateStatus } from "react-native";
+import { AppState, AppStateStatus, Platform } from "react-native";
+import * as Notifications from "expo-notifications";
 import { useAuth } from "./AuthContext";
 import * as notificationsService from "../services/notifications";
 import * as invitesService from "../services/invites";
@@ -54,6 +55,12 @@ export function UnreadCountProvider({ children }: { children: React.ReactNode })
     });
     return () => sub.remove();
   }, [refresh]);
+
+  // Sync app icon badge (red circle on home screen) with unread count
+  useEffect(() => {
+    if (Platform.OS === "web") return;
+    Notifications.setBadgeCountAsync(count).catch(() => {});
+  }, [count]);
 
   const value: UnreadCountValue = {
     count,

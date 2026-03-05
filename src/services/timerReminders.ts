@@ -7,7 +7,7 @@ import { Platform } from "react-native";
 import * as Notifications from "expo-notifications";
 
 const REMINDER_INTERVAL_HOURS = 2;
-const MAX_REMINDERS = 6; // 2h, 4h, 6h, 8h, 10h, 12h
+const MAX_REMINDERS = 1; // single reminder at 2h (avoids multiple notifications firing at once)
 
 // Ensure notifications are shown when app is in foreground
 Notifications.setNotificationHandler({

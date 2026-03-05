@@ -14,6 +14,7 @@ export type ProjectAccess = {
     expenses: boolean;
     diary: boolean;
     documents: boolean;
+    timeTracking: boolean;
   };
   sharedPhaseIds: string[];
   canReadTasks: boolean;
@@ -22,6 +23,7 @@ export type ProjectAccess = {
   canReadDiary: boolean;
   canReadDocuments: boolean;
   canWrite: boolean;
+  canWriteTime: boolean;
 };
 
 const ALL_TRUE = {
@@ -30,6 +32,7 @@ const ALL_TRUE = {
   expenses: true,
   diary: true,
   documents: true,
+  timeTracking: true,
 };
 
 const NO_ACCESS: ProjectAccess = {
@@ -37,7 +40,7 @@ const NO_ACCESS: ProjectAccess = {
   isOwner: false,
   isMember: false,
   permissionLevel: "viewer",
-  sharedItems: { tasks: false, phases: false, expenses: false, diary: false, documents: false },
+  sharedItems: { tasks: false, phases: false, expenses: false, diary: false, documents: false, timeTracking: false },
   sharedPhaseIds: [],
   canReadTasks: false,
   canReadPhases: false,
@@ -45,6 +48,7 @@ const NO_ACCESS: ProjectAccess = {
   canReadDiary: false,
   canReadDocuments: false,
   canWrite: false,
+  canWriteTime: false,
 };
 
 /**
@@ -94,6 +98,7 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
           canReadDiary: true,
           canReadDocuments: true,
           canWrite: true,
+          canWriteTime: true,
         });
         setLoading(false);
         return;
@@ -118,6 +123,7 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
                   expenses: !!mShared.expenses,
                   diary: !!mShared.diary,
                   documents: !!mShared.documents,
+                  timeTracking: mShared.timeTracking ?? true,
                 }
               : ALL_TRUE;
             const mPerm = (mData?.permissionLevel === "editor" ? "editor" : "viewer") as "viewer" | "editor";
@@ -134,6 +140,7 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
               canReadDiary: mSi.diary,
               canReadDocuments: mSi.documents,
               canWrite: mPerm === "editor",
+              canWriteTime: mPerm === "editor" && mSi.timeTracking === true,
             });
             setLoading(false);
             return;
@@ -159,6 +166,7 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
         expenses: !!sharedItems.expenses,
         diary: !!sharedItems.diary,
         documents: !!sharedItems.documents,
+        timeTracking: sharedItems.timeTracking ?? true,
       };
       const permLevel = (data?.permissionLevel === "editor" ? "editor" : "viewer") as "viewer" | "editor";
       const sharedPhaseIds = (data?.sharedPhaseIds as string[]) ?? [];
@@ -176,6 +184,7 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
         canReadDiary: si.diary,
         canReadDocuments: si.documents,
         canWrite: permLevel === "editor",
+        canWriteTime: permLevel === "editor" && si.timeTracking === true,
       });
     } catch (error) {
       console.warn("[useProjectAccess] Error:", error);
@@ -228,6 +237,7 @@ export async function fetchProjectAccess(
         canReadDiary: true,
         canReadDocuments: true,
         canWrite: true,
+        canWriteTime: true,
       };
     }
 
@@ -249,6 +259,7 @@ export async function fetchProjectAccess(
                 expenses: !!mShared.expenses,
                 diary: !!mShared.diary,
                 documents: !!mShared.documents,
+                timeTracking: mShared.timeTracking ?? true,
               }
             : ALL_TRUE;
           const mPerm = (mData?.permissionLevel === "editor" ? "editor" : "viewer") as "viewer" | "editor";
@@ -265,6 +276,7 @@ export async function fetchProjectAccess(
             canReadDiary: mSi.diary,
             canReadDocuments: mSi.documents,
             canWrite: mPerm === "editor",
+            canWriteTime: mPerm === "editor" && mSi.timeTracking === true,
           };
         }
       }
@@ -284,6 +296,7 @@ export async function fetchProjectAccess(
       expenses: !!sharedItems.expenses,
       diary: !!sharedItems.diary,
       documents: !!sharedItems.documents,
+      timeTracking: sharedItems.timeTracking ?? true,
     };
     const permLevel = (data?.permissionLevel === "editor" ? "editor" : "viewer") as "viewer" | "editor";
 
@@ -300,6 +313,7 @@ export async function fetchProjectAccess(
       canReadDiary: si.diary,
       canReadDocuments: si.documents,
       canWrite: permLevel === "editor",
+      canWriteTime: permLevel === "editor" && si.timeTracking === true,
     };
   } catch (error) {
     console.warn("[fetchProjectAccess] Error:", error);

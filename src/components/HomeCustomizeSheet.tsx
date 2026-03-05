@@ -6,6 +6,8 @@ import {
   StyleSheet,
   Switch,
   Alert,
+  Modal,
+  Pressable,
 } from "react-native";
 import { BottomSheetModal, BottomSheetBackdrop } from "@gorhom/bottom-sheet";
 import DraggableFlatList, {
@@ -26,17 +28,24 @@ import {
 } from "../services/homeLayout";
 
 const SECTION_LABELS: Record<HomeSectionId, string> = {
-  kpis: "home.sectionKpis",
+  open_tasks_chip: "home.sectionOpenTasksChip",
+  projects_chip: "home.sectionProjectsChip",
+  time_tracking_chip: "home.sectionTimeTrackingChip",
+  expenses_chip: "home.sectionExpensesChip",
   current_work: "home.sectionCurrentWork",
   project_filters: "home.sectionProjectFilters",
   other_projects: "home.sectionOtherProjects",
   calendar: "home.sectionCalendarButton",
   quick_add: "home.sectionQuickAdd",
+  kpis: "home.sectionKpis",
 };
 
 type Props = {
   sheetRef: React.RefObject<BottomSheetModal | null>;
   onLayoutChanged?: (layout: { sections: HomeSectionConfig[] }) => void;
+  /** When set, use Modal instead of BottomSheetModal (more reliable on some devices) */
+  visible?: boolean;
+  onDismiss?: () => void;
 };
 
 function SectionRow({
@@ -87,7 +96,7 @@ function SectionRow({
   );
 }
 
-export function HomeCustomizeSheet({ sheetRef, onLayoutChanged }: Props) {
+export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismiss }: Props) {
   const { t } = useI18n();
   const [sections, setSections] = useState<HomeSectionConfig[]>(DEFAULT_HOME_LAYOUT.sections);
 
@@ -105,12 +114,20 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged }: Props) {
     const layout = { sections };
     await saveHomeLayout(layout);
     onLayoutChanged?.(layout);
-    sheetRef.current?.dismiss();
-  }, [sections, onLayoutChanged, sheetRef]);
+    if (visible !== undefined) {
+      onDismiss?.();
+    } else {
+      sheetRef.current?.dismiss();
+    }
+  }, [sections, onLayoutChanged, sheetRef, visible, onDismiss]);
 
   const handleCancel = useCallback(() => {
-    sheetRef.current?.dismiss();
-  }, [sheetRef]);
+    if (visible !== undefined) {
+      onDismiss?.();
+    } else {
+      sheetRef.current?.dismiss();
+    }
+  }, [sheetRef, visible, onDismiss]);
 
   const handleReset = useCallback(() => {
     Alert.alert(
@@ -143,15 +160,8 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged }: Props) {
     []
   );
 
-  return (
-    <BottomSheetModal
-      ref={sheetRef}
-      enablePanDownToClose
-      snapPoints={["70%"]}
-      backdropComponent={renderBackdrop}
-      handleIndicatorStyle={{ backgroundColor: "rgba(255,255,255,0.5)" }}
-      backgroundStyle={styles.sheet}
-    >
+  const renderContent = () => (
+    <>
       <View style={[styles.header, { paddingTop: spacing.lg }]}>
         <TouchableOpacity style={styles.headerBtn} onPress={handleCancel} accessibilityRole="button" accessibilityLabel={t("common.cancel")}>
           <Text style={styles.headerCancel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
@@ -183,7 +193,7 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged }: Props) {
         ) : (
           <GestureHandlerRootView style={{ flex: 1 }}>
             <DraggableFlatList
-              data={sections}
+              data={sections.filter((s) => s.id !== "kpis")}
               onDragEnd={({ data }) => setSections(data)}
               keyExtractor={(item) => item.id}
               renderItem={({ item, drag, isActive }: RenderItemParams<HomeSectionConfig>) => (
@@ -199,6 +209,38 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged }: Props) {
           </GestureHandlerRootView>
         )}
       </View>
+    </>
+  );
+
+  if (visible !== undefined) {
+    return (
+      <Modal
+        visible={visible}
+        animationType="slide"
+        transparent
+        onRequestClose={handleCancel}
+      >
+        <Pressable style={modalStyles.overlay} onPress={handleCancel}>
+          <Pressable style={modalStyles.content} onPress={(e) => e.stopPropagation()}>
+            <View style={[styles.sheet, modalStyles.sheet]}>
+              {renderContent()}
+            </View>
+          </Pressable>
+        </Pressable>
+      </Modal>
+    );
+  }
+
+  return (
+    <BottomSheetModal
+      ref={sheetRef}
+      enablePanDownToClose
+      snapPoints={["70%"]}
+      backdropComponent={renderBackdrop}
+      handleIndicatorStyle={{ backgroundColor: "rgba(255,255,255,0.5)" }}
+      backgroundStyle={styles.sheet}
+    >
+      {renderContent()}
     </BottomSheetModal>
   );
 }
@@ -207,6 +249,23 @@ const SHEET_BG = "#1e2530";
 const SHEET_TEXT = "#ffffff";
 const SHEET_ACTION = "#7dd3fc";
 const SHEET_BORDER = "rgba(255,255,255,0.15)";
+
+const modalStyles = StyleSheet.create({
+  overlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "flex-end",
+  },
+  content: {
+    maxHeight: "80%",
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    overflow: "hidden",
+  },
+  sheet: {
+    minHeight: 400,
+  },
+});
 
 const styles = StyleSheet.create({
   sheet: {

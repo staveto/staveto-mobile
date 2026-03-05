@@ -90,6 +90,7 @@ type DashboardViewModel = {
     hasExpensesAccess: boolean;
   };
   projectStats: Map<string, { openCount: number; totalCount: number; progress: number }>;
+  timeTrackingProjectIds?: string[];
 };
 
 type LiveProjectRow = {
@@ -384,6 +385,7 @@ export function HomeScreen() {
   const [showActionSheet, setShowActionSheet] = useState(false);
   const [homeLayout, setHomeLayout] = useState<{ sections: HomeSectionConfig[] } | null>(null);
   const [photoURL, setPhotoURL] = useState<string | null>(null);
+  const [showCustomizeModal, setShowCustomizeModal] = useState(false);
   const customizeSheetRef = useRef<BottomSheetModal | null>(null);
   const calendarSheetRef = useRef<BottomSheetModal | null>(null);
   const quickTimeSheetRef = useRef<BottomSheetModal | null>(null);
@@ -411,7 +413,7 @@ export function HomeScreen() {
   }, [navigation]);
 
   const openCustomizeSheet = useCallback(() => {
-    customizeSheetRef.current?.present();
+    setShowCustomizeModal(true);
   }, []);
 
   const openCalendarSheet = useCallback(() => {
@@ -1296,16 +1298,16 @@ export function HomeScreen() {
           <Text style={styles.welcomeTitle} numberOfLines={1}>{t("home.greeting", { name: greetingName })}</Text>
           <Text style={styles.welcomeSubtitle}>{t("home.projectsOverviewTitle")}</Text>
         </View>
-        <TouchableOpacity
+        <Pressable
           style={styles.headerCustomizeBtn}
           onPress={openCustomizeSheet}
           accessibilityLabel={t("home.customizeHome")}
-          hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-          activeOpacity={0.7}
+          accessibilityRole="button"
+          hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
         >
           <Ionicons name="grid-outline" size={20} color={colors.textOnDark} />
           <Ionicons name="add" size={16} color={colors.textOnDark} style={{ marginLeft: 2 }} />
-        </TouchableOpacity>
+        </Pressable>
       </View>
 
       <FlatList
@@ -1344,24 +1346,33 @@ export function HomeScreen() {
               const enabledSections = effectiveLayout.sections.filter((s) => s.enabled);
               return (
                 <>
-                  {enabledSectionIds.has("kpis") && (
+                  {(enabledSectionIds.has("open_tasks_chip") ||
+                    enabledSectionIds.has("projects_chip") ||
+                    enabledSectionIds.has("time_tracking_chip") ||
+                    (enabledSectionIds.has("expenses_chip") && data.kpis.hasExpensesAccess)) && (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-              <TouchableOpacity style={styles.statChip} onPress={() => stackNav.navigate("Tasks")} activeOpacity={0.8}>
-                <Text style={styles.statChipText}>{t("home.openTasksChip")} {data.kpis.openCount}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity style={styles.statChip} onPress={() => goToProjects()} activeOpacity={0.8}>
-                <Text style={styles.statChipText}>{t("home.projectsCount", { count: String(data.projects.length) })}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.statChip}
-                onPress={() => stackNav.navigate("AttendanceReportScreen")}
-                activeOpacity={0.8}
-              >
-                <Text style={styles.statChipText}>
-                  {t("home.attendanceChip", { hours: formatMinutesToHours(monthlyMinutes) })}
-                </Text>
-              </TouchableOpacity>
-              {data.kpis.hasExpensesAccess && (
+              {enabledSectionIds.has("open_tasks_chip") && (
+                <TouchableOpacity style={styles.statChip} onPress={() => stackNav.navigate("Tasks")} activeOpacity={0.8}>
+                  <Text style={styles.statChipText}>{t("home.openTasksChip")} {data.kpis.openCount}</Text>
+                </TouchableOpacity>
+              )}
+              {enabledSectionIds.has("projects_chip") && (
+                <TouchableOpacity style={styles.statChip} onPress={() => goToProjects()} activeOpacity={0.8}>
+                  <Text style={styles.statChipText}>{t("home.projectsCount", { count: String(data.projects.length) })}</Text>
+                </TouchableOpacity>
+              )}
+              {enabledSectionIds.has("time_tracking_chip") && (
+                <TouchableOpacity
+                  style={styles.statChip}
+                  onPress={() => stackNav.navigate("AttendanceReportScreen")}
+                  activeOpacity={0.8}
+                >
+                  <Text style={styles.statChipText}>
+                    {t("home.attendanceChip", { hours: formatMinutesToHours(monthlyMinutes) })}
+                  </Text>
+                </TouchableOpacity>
+              )}
+              {enabledSectionIds.has("expenses_chip") && data.kpis.hasExpensesAccess && (
                 <TouchableOpacity
                   style={styles.statChip}
                   onPress={() => stackNav.navigate("ExpensesKpiScreen")}
@@ -1989,6 +2000,8 @@ export function HomeScreen() {
       <HomeCustomizeSheet
         sheetRef={customizeSheetRef}
         onLayoutChanged={(layout) => setHomeLayout(layout)}
+        visible={showCustomizeModal}
+        onDismiss={() => setShowCustomizeModal(false)}
       />
       <HomeCalendarSheet
         sheetRef={calendarSheetRef}
@@ -2022,7 +2035,13 @@ export function HomeScreen() {
       />
       <QuickTimeModal
         sheetRef={quickTimeSheetRef}
-        projects={dashboardData?.projects ?? []}
+        projects={
+          dashboardData?.timeTrackingProjectIds != null
+            ? (dashboardData.projects ?? []).filter((p) =>
+                dashboardData.timeTrackingProjectIds!.includes(p.id)
+              )
+            : (dashboardData?.projects ?? [])
+        }
         activeTimer={activeTimer}
         onRefreshActiveTimer={refreshActiveTimer}
         onSaved={() => {

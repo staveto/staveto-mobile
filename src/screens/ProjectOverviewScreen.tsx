@@ -4133,12 +4133,19 @@ export function ProjectOverviewScreen() {
                         style={styles.expenseActionButton}
                         onPress={async () => {
                           try {
-                            const attachment = await attachmentsService.getAttachmentURL({ storagePath: '', id: doc.attachmentId } as any);
-                            const supported = await Linking.canOpenURL(attachment);
-                            if (supported) {
-                              await Linking.openURL(attachment);
+                            if (!doc.attachmentId) {
+                              Alert.alert(t("common.error"), t("projectOverview.failedToOpenDocument"));
+                              return;
                             }
+                            const attachmentMeta = await attachmentsService.getAttachment(projectId, doc.attachmentId);
+                            if (!attachmentMeta?.storagePath) {
+                              Alert.alert(t("common.error"), t("projectOverview.failedToOpenDocument"));
+                              return;
+                            }
+                            const url = await attachmentsService.getAttachmentURL(attachmentMeta);
+                            await Linking.openURL(url);
                           } catch (error: any) {
+                            console.warn("[ProjectOverview] Error opening document:", error);
                             Alert.alert(t("common.error"), t("projectOverview.failedToOpenDocument"));
                           }
                         }}

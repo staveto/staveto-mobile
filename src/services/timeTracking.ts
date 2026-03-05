@@ -68,7 +68,7 @@ function toIso(ts: unknown): string | undefined {
 
 async function ensureCanWriteTime(projectId: string, uid: string): Promise<void> {
   const access = await fetchProjectAccess(projectId, uid);
-  if (!access.canWrite && !access.isOwner) {
+  if (!access.canWriteTime) {
     throw new Error("Nemáte oprávnenie zapisovať hodiny do tohto projektu.");
   }
 }
@@ -107,6 +107,8 @@ export async function getActiveTimer(): Promise<ActiveTimer | null> {
 export async function startTimer(projectId: string, projectName: string): Promise<void> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Musíte byť prihlásený.");
+  const existing = await getActiveTimer();
+  if (existing) throw new Error("Časovač už beží. Najprv ho zastavte.");
   await ensureCanWriteTime(projectId, uid);
 
   const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
@@ -270,6 +272,8 @@ export async function checkAutoStopOnAppOpen(): Promise<TimeEntryDoc | null> {
   const uid = auth.currentUser?.uid;
   if (!uid) return null;
 
+  await ensureCanWriteTime(active.projectId, uid);
+
   const endedAt = new Date().toISOString();
   const durationMinutes = Math.round((new Date(endedAt).getTime() - new Date(active.startedAt).getTime()) / 60000);
   const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
@@ -385,4 +389,119 @@ export async function getMonthlyMinutes(userId: string, year: number, month: num
   const toYmd = `${year}-${String(month).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
   const entries = await listTimeEntries(userId, fromYmd, toYmd);
   return entries.reduce((sum, e) => sum + (e.durationMinutes ?? 0), 0);
+}
+
+/** Parse Firestore doc to TimeEntryDoc. */
+function parseTimeEntryDoc(d: { id: string; data: () => Record<string, unknown> }): TimeEntryDoc {
+  const data = d.data();
+  const startedAt = toIso(data.startedAt) ?? (data.startedAt as string) ?? "";
+  const endedAt = toIso(data.endedAt) ?? (data.endedAt as string) ?? "";
+  return {
+    id: d.id,
+    projectId: (data.projectId as string) ?? "",
+    projectNameSnapshot: (data.projectNameSnapshot as string) ?? "",
+    userId: (data.userId as string) ?? "",
+    userNameSnapshot: (data.userNameSnapshot as string) ?? "",
+    startedAt,
+    endedAt,
+    durationMinutes: (data.durationMinutes as number) ?? 0,
+    mode: (data.mode as "timer" | "manual") ?? "timer",
+    date: data.date as string | undefined,
+    note: (data.note as string) ?? undefined,
+    gpsStart: data.gpsStart ?? null,
+    gpsEnd: data.gpsEnd ?? null,
+    flags: data.flags ?? undefined,
+    createdAt: toIso(data.createdAt) ?? undefined,
+    updatedAt: toIso(data.updatedAt) ?? undefined,
+  } as TimeEntryDoc;
+}
+
+/**
+ * List time entries for a single project within a date range.
+ * Used when user can read team entries (owner/editor per Firestore rules).
+ * Firestore index: composite on (projectId, startedAt) - Firestore will prompt to create if missing.
+ */
+export async function listTimeEntriesByProject(
+  projectId: string,
+  fromYmd: string,
+  toYmd: string
+): Promise<TimeEntryDoc[]> {
+  if (!projectId) return [];
+  const fromIso = `${fromYmd}T00:00:00.000Z`;
+  const endIso = `${toYmd}T23:59:59.999Z`;
+
+  const c = collection(db, paths.timeEntries());
+  const q = query(
+    c,
+    where("projectId", "==", projectId),
+    where("startedAt", ">=", fromIso),
+    where("startedAt", "<=", endIso),
+    orderBy("startedAt", "desc"),
+    limit(500)
+  );
+  const snap = await getDocs(q);
+  return snap.docs.map((d) => parseTimeEntryDoc({ id: d.id, data: d.data.bind(d) }));
+}
+
+const IN_QUERY_CHUNK_SIZE = 10;
+
+/**
+ * List time entries for multiple projects within a date range.
+ * Uses Firestore "in" query in chunks (max 10 per chunk) for better performance.
+ * Firestore index: composite on (projectId, startedAt) for "in" + range - Firestore will prompt if missing.
+ */
+export async function listTimeEntriesForProjects(
+  projectIds: string[],
+  fromYmd: string,
+  toYmd: string
+): Promise<TimeEntryDoc[]> {
+  if (!projectIds.length) return [];
+  const fromIso = `${fromYmd}T00:00:00.000Z`;
+  const endIso = `${toYmd}T23:59:59.999Z`;
+
+  const c = collection(db, paths.timeEntries());
+  const chunks: string[][] = [];
+  for (let i = 0; i < projectIds.length; i += IN_QUERY_CHUNK_SIZE) {
+    chunks.push(projectIds.slice(i, i + IN_QUERY_CHUNK_SIZE));
+  }
+
+  const allDocs: { id: string; data: () => Record<string, unknown> }[] = [];
+  for (const chunk of chunks) {
+    const q = query(
+      c,
+      where("projectId", "in", chunk),
+      where("startedAt", ">=", fromIso),
+      where("startedAt", "<=", endIso),
+      orderBy("startedAt", "desc"),
+      limit(500)
+    );
+    const snap = await getDocs(q);
+    allDocs.push(...snap.docs.map((d) => ({ id: d.id, data: d.data.bind(d) })));
+  }
+
+  const seen = new Set<string>();
+  const unique = allDocs.filter((d) => {
+    if (seen.has(d.id)) return false;
+    seen.add(d.id);
+    return true;
+  });
+  return unique.map((d) => parseTimeEntryDoc(d));
+}
+
+/**
+ * Get project IDs where the user can view team time (owner or editor).
+ * Used for Daily protocol Team mode and AttendanceReport All/Team.
+ */
+export async function getProjectIdsWithTeamTimeAccess(userId: string): Promise<string[]> {
+  if (!userId) return [];
+  const { listMyProjects } = await import("./projects");
+  const projects = await listMyProjects(userId);
+  const ids: string[] = [];
+  for (const p of projects) {
+    const access = await fetchProjectAccess(p.id, userId, p.ownerId);
+    if (access.isOwner || access.canWrite) {
+      ids.push(p.id);
+    }
+  }
+  return ids;
 }

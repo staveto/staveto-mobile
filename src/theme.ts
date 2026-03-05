@@ -10,6 +10,8 @@ export const colors = {
   textOnDark: "#ffffff",
   /** Error/destructive actions (e.g. leave project, remove) */
   error: "#dc3545",
+  /** Team / secondary accent (e.g. calendar dots for team entries) */
+  teamAccent: "#4a9fd9",
 };
 
 export const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 };

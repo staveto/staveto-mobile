@@ -280,11 +280,16 @@ service cloud.firestore {
 
     // Notifications (inbox)
     match /notifications/{notificationId} {
-      allow read: if signedIn() && request.auth.uid == resource.data.userId;
+      // Allow read when doc doesn't exist (getDoc for upsert check) or when user owns it
+      allow read: if signedIn() && (
+        !exists(/databases/$(database)/documents/notifications/$(notificationId))
+        || request.auth.uid == resource.data.userId
+      );
       allow create: if signedIn() && request.auth.uid == request.resource.data.userId;
+      // User can update their own notification (e.g. refresh task-due data); cannot change userId
       allow update: if signedIn()
         && request.auth.uid == resource.data.userId
-        && request.resource.data.diff(resource.data).changedKeys().hasOnly(["readAt"]);
+        && request.resource.data.userId == resource.data.userId;
       allow delete: if false;
     }
   }

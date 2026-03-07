@@ -28,6 +28,7 @@ import type { ProjectMemberDoc } from "../services/projectMembers";
 import type { EquipmentDoc } from "../services/equipment";
 import { colors, radius, spacing } from "../theme";
 import { showToast } from "../helpers/toast";
+import { getCurrentPositionSafe, requestLocationPermission } from "../lib/location";
 import { DescriptionInputModal } from "../components/DescriptionInputModal";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
 
@@ -65,6 +66,7 @@ export function CreateProblemScreen() {
   const [category, setCategory] = useState<ProblemCategory>("other");
   const [priority, setPriority] = useState<ProblemPriority>("medium");
   const [blocksWork, setBlocksWork] = useState(false);
+  const [recordGps, setRecordGps] = useState(false);
   const [title, setTitle] = useState("");
   const [problemNoteText, setProblemNoteText] = useState<string | null>(null);
   const [problemNoteRecordingUri, setProblemNoteRecordingUri] = useState<string | null>(null);
@@ -79,6 +81,7 @@ export function CreateProblemScreen() {
   const [equipmentId, setEquipmentId] = useState("");
   const [equipmentName, setEquipmentName] = useState("");
   const [equipmentDropdownOpen, setEquipmentDropdownOpen] = useState(false);
+  const [assigneeDropdownOpen, setAssigneeDropdownOpen] = useState(false);
   const [submitting, setSubmitting] = useState(false);
 
   const projType = projectType ?? "BUILD";
@@ -150,19 +153,25 @@ export function CreateProblemScreen() {
       Alert.alert(t("common.error"), t("problems.photoNotAvailable"));
       return;
     }
-    const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert(t("common.error"), t("problems.galleryPermission"));
-      return;
-    }
-    const result = await ImagePicker.launchImageLibraryAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      quality: 0.8,
-      allowsMultipleSelection: true,
-    });
-    if (!result.canceled && result.assets?.length) {
-      setPhotos((p) => [...p, ...result.assets!.map((a) => ({ uri: a.uri }))]);
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(t("common.error"), t("problems.galleryPermission"));
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.8,
+        allowsMultipleSelection: true,
+      });
+      const assets = result?.assets ?? [];
+      if (!result?.canceled && assets.length > 0) {
+        setPhotos((p) => [...p, ...assets.filter((a) => a?.uri).map((a) => ({ uri: a.uri }))]);
+      }
+    } catch (e: any) {
+      console.error("[CreateProblem] pickPhoto error:", e);
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectImage"));
     }
   };
 
@@ -171,18 +180,24 @@ export function CreateProblemScreen() {
       Alert.alert(t("common.error"), t("problems.photoNotAvailable"));
       return;
     }
-    const { status } = await ImagePicker.requestCameraPermissionsAsync();
-    if (status !== "granted") {
-      Alert.alert(t("common.error"), t("problems.cameraPermission"));
-      return;
-    }
-    const result = await ImagePicker.launchCameraAsync({
-      mediaTypes: ImagePicker.MediaTypeOptions.Images,
-      allowsEditing: false,
-      quality: 0.8,
-    });
-    if (!result.canceled && result.assets?.[0]) {
-      setPhotos((p) => [...p, { uri: result.assets![0].uri }]);
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(t("common.error"), t("problems.cameraPermission"));
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.8,
+      });
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
+        setPhotos((p) => [...p, { uri: asset.uri }]);
+      }
+    } catch (e: any) {
+      console.error("[CreateProblem] takePhoto error:", e);
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectImage"));
     }
   };
 
@@ -220,10 +235,6 @@ export function CreateProblemScreen() {
       Alert.alert(t("common.error"), t("equipment.selectEquipment"));
       return;
     }
-    if (!assigneeUid) {
-      Alert.alert(t("common.error"), t("problems.assigneeRequired"));
-      return;
-    }
     if (!access.canWrite) {
       Alert.alert(t("common.error"), t("errors.auth.editorRequired"));
       return;
@@ -258,6 +269,17 @@ export function CreateProblemScreen() {
         detailValue = t("problems.voiceMessage");
       }
 
+      let gpsLocation: { lat: number; lng: number } | null = null;
+      if (recordGps) {
+        await requestLocationPermission();
+        const gps = await getCurrentPositionSafe();
+        if (gps) {
+          gpsLocation = { lat: gps.lat, lng: gps.lng };
+        } else {
+          showToast(t("problems.gpsNotAvailable"));
+        }
+      }
+
       const created = await problemsService.createProblem({
         projectId,
         projectType: projType,
@@ -266,6 +288,7 @@ export function CreateProblemScreen() {
         shortDescription: title.trim(),
         detail: detailValue,
         location: location.trim() || null,
+        gpsLocation,
         blocksWork: blocksWork || null,
         assigneeUid,
         assigneeName: assigneeName || undefined,
@@ -460,6 +483,24 @@ export function CreateProblemScreen() {
       )}
 
       <View style={styles.field}>
+        <View style={styles.toggleRow}>
+          <View style={{ flexDirection: "row", alignItems: "center", flex: 1 }}>
+            <Ionicons name="location" size={20} color={colors.primary} style={{ marginRight: 8 }} />
+            <Text style={styles.label} maxFontSizeMultiplier={1.2}>
+              {t("problems.recordGpsLocation")}
+            </Text>
+          </View>
+          <Switch
+            value={recordGps}
+            onValueChange={setRecordGps}
+            trackColor={{ false: "rgba(255,255,255,0.3)", true: colors.primary }}
+            thumbColor="#fff"
+            accessibilityLabel={t("problems.recordGpsLocation")}
+          />
+        </View>
+      </View>
+
+      <View style={styles.field}>
         <Text style={styles.label} maxFontSizeMultiplier={1.2}>
           {t("problems.category")}
         </Text>
@@ -525,48 +566,79 @@ export function CreateProblemScreen() {
 
       <View style={styles.field}>
         <Text style={styles.label} maxFontSizeMultiplier={1.2}>
-          {t("problems.assignee")} *
+          {t("problems.assignee")}
         </Text>
-        {singleMember ? (
+        {members.length === 0 ? (
           <View style={styles.assigneeStatic}>
-            <Text style={styles.pickerText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-              {assigneeName || (assigneeUid === user?.id ? t("problems.you") : assigneeUid)}
-            </Text>
+            <Text style={styles.pickerPlaceholder}>{t("problems.noMembers")}</Text>
           </View>
         ) : (
-          <TouchableOpacity
-            style={styles.picker}
-            onPress={() => {
-              const buttons = [
-                ...members.map((m) => {
-                  const label =
-                    m.name ||
-                    m.email ||
-                    (m.userId === user?.id ? (user?.name ?? user?.email ?? t("problems.you")) : m.userId);
-                  return {
-                    text: label,
-                    onPress: () => {
-                      setAssigneeUid(m.userId);
-                      setAssigneeName(
-                        m.name ?? m.email ?? (m.userId === user?.id ? (user?.name ?? user?.email ?? "") : "")
-                      );
-                    },
-                  };
-                }),
-                { text: t("common.cancel"), style: "cancel" as const },
-              ];
-              Alert.alert(t("problems.assignee"), "", buttons);
-            }}
-            accessibilityRole="button"
-            accessibilityLabel={t("problems.selectAssignee")}
-          >
-            <Text style={assigneeUid ? styles.pickerText : styles.pickerPlaceholder} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-              {assigneeName ||
-                (assigneeUid === user?.id ? t("problems.you") : assigneeUid) ||
-                t("problems.selectAssignee")}
-            </Text>
-            <Ionicons name="chevron-down" size={20} color={colors.textMuted} />
-          </TouchableOpacity>
+          <>
+            <TouchableOpacity
+              style={styles.picker}
+              onPress={() => setAssigneeDropdownOpen((v) => !v)}
+              accessibilityRole="button"
+              accessibilityLabel={t("problems.selectAssignee")}
+              accessibilityState={{ expanded: assigneeDropdownOpen }}
+            >
+              <Text
+                style={assigneeUid ? styles.pickerText : styles.pickerPlaceholder}
+                maxFontSizeMultiplier={1.2}
+                numberOfLines={1}
+              >
+                {assigneeUid
+                  ? assigneeName || (assigneeUid === user?.id ? t("problems.you") : assigneeUid)
+                  : t("problems.noOneFromGroup")}
+              </Text>
+              <Ionicons
+                name={assigneeDropdownOpen ? "chevron-up" : "chevron-down"}
+                size={20}
+                color={colors.textMuted}
+              />
+            </TouchableOpacity>
+            {assigneeDropdownOpen && (
+              <View style={styles.dropdownList}>
+                <ScrollView nestedScrollEnabled style={styles.dropdownScroll}>
+                  <TouchableOpacity
+                    style={[styles.dropdownItem, !assigneeUid && styles.dropdownItemSelected]}
+                    onPress={() => {
+                      setAssigneeUid("");
+                      setAssigneeName("");
+                      setAssigneeDropdownOpen(false);
+                    }}
+                  >
+                    <Text style={[styles.dropdownItemText, !assigneeUid && styles.dropdownItemTextSelected]}>
+                      {t("problems.noOneFromGroup")}
+                    </Text>
+                    {!assigneeUid ? <Ionicons name="checkmark" size={18} color={colors.primary} /> : null}
+                  </TouchableOpacity>
+                  {members.map((m) => {
+                    const selected = assigneeUid === m.userId;
+                    const label =
+                      m.name ||
+                      m.email ||
+                      (m.userId === user?.id ? (user?.name ?? user?.email ?? t("problems.you")) : m.userId);
+                    return (
+                      <TouchableOpacity
+                        key={m.userId}
+                        style={[styles.dropdownItem, selected && styles.dropdownItemSelected]}
+                        onPress={() => {
+                          setAssigneeUid(m.userId);
+                          setAssigneeName(m.name ?? m.email ?? (m.userId === user?.id ? (user?.name ?? user?.email ?? "") : ""));
+                          setAssigneeDropdownOpen(false);
+                        }}
+                      >
+                        <Text style={[styles.dropdownItemText, selected && styles.dropdownItemTextSelected]}>
+                          {label}
+                        </Text>
+                        {selected ? <Ionicons name="checkmark" size={18} color={colors.primary} /> : null}
+                      </TouchableOpacity>
+                    );
+                  })}
+                </ScrollView>
+              </View>
+            )}
+          </>
         )}
       </View>
 

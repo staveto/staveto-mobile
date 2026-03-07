@@ -992,13 +992,13 @@ export function HomeScreen() {
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: true,
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
         setExpenseInvoiceImage({
           uri: asset.uri,
           fileName: asset.fileName || `faktura_${Date.now()}.jpg`,
@@ -1022,13 +1022,13 @@ export function HomeScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: true,
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
         setExpenseInvoiceImage({
           uri: asset.uri,
           fileName: asset.fileName || `faktura_${Date.now()}.jpg`,

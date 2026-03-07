@@ -204,12 +204,13 @@ export function EquipmentFormScreen() {
           return;
         }
         const result = await ImagePicker.launchCameraAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
+          mediaTypes: ["images"],
           allowsEditing: true,
           quality: 0.8,
         });
-        if (!result.canceled && result.assets[0]) {
-          setPhotoUri(result.assets[0].uri);
+        const asset = result?.assets?.[0];
+        if (!result?.canceled && asset?.uri) {
+          setPhotoUri(asset.uri);
         }
       } else {
         const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
@@ -218,12 +219,13 @@ export function EquipmentFormScreen() {
           return;
         }
         const result = await ImagePicker.launchImageLibraryAsync({
-          mediaTypes: ImagePicker.MediaTypeOptions.Images,
-          allowsEditing: true,
+          mediaTypes: ["images"],
+          allowsEditing: Platform.OS !== "ios",
           quality: 0.8,
         });
-        if (!result.canceled && result.assets[0]) {
-          setPhotoUri(result.assets[0].uri);
+        const asset = result?.assets?.[0];
+        if (!result?.canceled && asset?.uri) {
+          setPhotoUri(asset.uri);
         }
       }
     } catch (e: any) {

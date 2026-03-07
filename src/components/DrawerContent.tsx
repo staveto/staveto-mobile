@@ -147,23 +147,23 @@ export function DrawerContent(props: DrawerContentComponentProps) {
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
-        allowsEditing: true,
+        mediaTypes: ["images"],
+        allowsEditing: Platform.OS !== "ios",
         aspect: [1, 1],
         quality: 0.8,
       });
       // #region agent log
       sendAgentDebugLog("H2", "DrawerContent.pickProfilePhoto.pickerResult", "Image picker result", {
-        canceled: result.canceled,
-        assetCount: result.assets?.length ?? 0,
+        canceled: result?.canceled,
+        assetCount: result?.assets?.length ?? 0,
         hasFirstAsset: Boolean(result.assets?.[0]),
         firstAssetUriScheme: result.assets?.[0]?.uri ? result.assets[0].uri.split(":")[0] : null,
         firstAssetFileName: result.assets?.[0]?.fileName ?? null,
       });
       // #endregion agent log
-      if (result.canceled || !result.assets[0]) return;
+      const asset = result?.assets?.[0];
+      if (result?.canceled || !asset?.uri) return;
       setUploadingPhoto(true);
-      const asset = result.assets[0];
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
       const storageInstance = getStorage();
       if (!storageInstance) throw new Error("Firebase Storage nie je dostupný.");
@@ -224,14 +224,14 @@ export function DrawerContent(props: DrawerContentComponentProps) {
         return;
       }
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: true,
         aspect: [1, 1],
         quality: 0.8,
       });
-      if (result.canceled || !result.assets[0]) return;
+      const asset = result?.assets?.[0];
+      if (result?.canceled || !asset?.uri) return;
       setUploadingPhoto(true);
-      const asset = result.assets[0];
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
       const storageInstance = getStorage();
       if (!storageInstance) throw new Error("Firebase Storage nie je dostupný.");

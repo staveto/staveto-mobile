@@ -48,6 +48,8 @@ export type ProblemDoc = {
   detail?: string | null;
   /** Required location (phase/area). */
   location?: string | null;
+  /** GPS coordinates when reported with location enabled. */
+  gpsLocation?: { lat: number; lng: number } | null;
   /** When true, priority is forced to high. */
   blocksWork?: boolean | null;
   assigneeUid: string;
@@ -105,6 +107,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     shortDescription: (d.shortDescription as string) ?? "",
     detail: (d.detail as string) ?? null,
     location: (d.location as string) ?? (d.locationHint as string) ?? null,
+    gpsLocation: (d.gpsLocation as { lat: number; lng: number }) ?? null,
     blocksWork: (d.blocksWork as boolean) ?? null,
     assigneeUid: (d.assigneeUid as string) ?? "",
     assigneeName: (d.assigneeName as string) ?? undefined,
@@ -206,6 +209,7 @@ export type CreateProblemInput = {
   shortDescription: string;
   detail?: string | null;
   location?: string | null;
+  gpsLocation?: { lat: number; lng: number } | null;
   blocksWork?: boolean | null;
   assigneeUid: string;
   assigneeName?: string;
@@ -239,6 +243,7 @@ export async function createProblem(input: CreateProblemInput): Promise<ProblemD
     shortDescription: input.shortDescription,
     detail: input.detail ?? null,
     location: input.location ?? null,
+    gpsLocation: input.gpsLocation ?? null,
     blocksWork: input.blocksWork ?? null,
     assigneeUid: input.assigneeUid,
     assigneeName: input.assigneeName ?? null,
@@ -288,6 +293,7 @@ export type UpdateProblemInput = Partial<{
   shortDescription: string;
   detail: string | null;
   location: string | null;
+  gpsLocation: { lat: number; lng: number } | null;
   blocksWork: boolean | null;
   assigneeUid: string;
   assigneeName: string;
@@ -320,6 +326,7 @@ export async function updateProblem(
   if (input.priority !== undefined) updates.priority = input.priority;
   if (input.detail !== undefined) updates.detail = input.detail;
   if (input.location !== undefined) updates.location = input.location;
+  if (input.gpsLocation !== undefined) updates.gpsLocation = input.gpsLocation;
   if (input.blocksWork !== undefined) updates.blocksWork = input.blocksWork;
   if (input.status !== undefined) {
     updates.status = input.status;

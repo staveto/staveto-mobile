@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -16,8 +16,12 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { colors, spacing } from "../theme";
 import { toYmd } from "../utils/date";
 import * as timeTracking from "../services/timeTracking";
+import * as projectsService from "../services/projects";
+import * as tasksService from "../services/tasks";
 import type { ActiveTimer } from "../services/timeTracking";
 import type { ProjectDoc } from "../services/projects";
+import type { ProjectPhaseDoc } from "../services/projects";
+import type { TaskDoc } from "../services/tasks";
 
 const SHEET_BG = "#1e2530";
 const SHEET_TEXT = "#ffffff";
@@ -49,6 +53,11 @@ export function QuickTimeModal({
   t,
 }: Props) {
   const [selectedProject, setSelectedProject] = useState<ProjectDoc | null>(null);
+  const [selectedPhase, setSelectedPhase] = useState<ProjectPhaseDoc | null>(null);
+  const [selectedTask, setSelectedTask] = useState<TaskDoc | null>(null);
+  const [phases, setPhases] = useState<ProjectPhaseDoc[]>([]);
+  const [tasks, setTasks] = useState<TaskDoc[]>([]);
+  const [loadingPhasesTasks, setLoadingPhasesTasks] = useState(false);
   const [mode, setMode] = useState<"timer" | "manual">("timer");
   const [manualDate, setManualDate] = useState(new Date());
   const [manualHours, setManualHours] = useState("1");
@@ -59,6 +68,41 @@ export function QuickTimeModal({
   const [projectSearch, setProjectSearch] = useState("");
   const [elapsedDisplay, setElapsedDisplay] = useState("");
   const rotateAnim = useRef(new Animated.Value(0)).current;
+
+  const isBuildOrManagement = selectedProject?.projectType === "BUILD" || selectedProject?.projectType === "MANAGEMENT";
+
+  useEffect(() => {
+    if (!selectedProject?.id) {
+      setPhases([]);
+      setTasks([]);
+      setSelectedPhase(null);
+      setSelectedTask(null);
+      return;
+    }
+    setLoadingPhasesTasks(true);
+    (async () => {
+      try {
+        const [ph, tk] = await Promise.all([
+          isBuildOrManagement ? projectsService.listProjectPhases(selectedProject.id).catch(() => []) : Promise.resolve([]),
+          tasksService.listTasksByProject(selectedProject.id).catch(() => []),
+        ]);
+        setPhases(ph);
+        setTasks(tk.filter((t) => t.isActive !== false));
+        setSelectedPhase(null);
+        setSelectedTask(null);
+      } catch {
+        setPhases([]);
+        setTasks([]);
+      } finally {
+        setLoadingPhasesTasks(false);
+      }
+    })();
+  }, [selectedProject?.id, isBuildOrManagement]);
+
+  const tasksForPhase = useMemo(() => {
+    if (!selectedPhase) return tasks;
+    return tasks.filter((t) => t.phaseId === selectedPhase.id);
+  }, [tasks, selectedPhase]);
 
   useEffect(() => {
     if (!activeTimer) return;
@@ -98,7 +142,12 @@ export function QuickTimeModal({
     }
     setLoading(true);
     try {
-      await timeTracking.startTimer(selectedProject.id, selectedProject.name ?? "Project");
+      await timeTracking.startTimer(selectedProject.id, selectedProject.name ?? "Project", {
+        phaseId: selectedPhase?.id ?? null,
+        phaseNameSnapshot: selectedPhase?.name ?? null,
+        taskId: selectedTask?.id ?? null,
+        taskTitleSnapshot: selectedTask?.title ?? null,
+      });
       onRefreshActiveTimer();
     } catch (err) {
       Alert.alert(
@@ -108,7 +157,7 @@ export function QuickTimeModal({
     } finally {
       setLoading(false);
     }
-  }, [selectedProject, onRefreshActiveTimer, t]);
+  }, [selectedProject, selectedPhase, selectedTask, onRefreshActiveTimer, t]);
 
   const handleStop = useCallback(async () => {
     setLoading(true);
@@ -144,7 +193,13 @@ export function QuickTimeModal({
         selectedProject.name ?? "Project",
         dateYmd,
         totalMinutes,
-        manualNote.trim() || undefined
+        manualNote.trim() || undefined,
+        {
+          phaseId: selectedPhase?.id ?? null,
+          phaseNameSnapshot: selectedPhase?.name ?? null,
+          taskId: selectedTask?.id ?? null,
+          taskTitleSnapshot: selectedTask?.title ?? null,
+        }
       );
       onSaved?.();
       sheetRef.current?.dismiss();
@@ -159,7 +214,7 @@ export function QuickTimeModal({
     } finally {
       setLoading(false);
     }
-  }, [selectedProject, manualHours, manualMinutes, manualNote, manualDate, onSaved, sheetRef, t]);
+  }, [selectedProject, selectedPhase, selectedTask, manualHours, manualMinutes, manualNote, manualDate, onSaved, sheetRef, t]);
 
   const snapPoints = ["55%", "85%"];
 
@@ -181,9 +236,16 @@ export function QuickTimeModal({
         {activeTimer ? (
           <View style={styles.selectedProjectChip}>
             <Ionicons name="folder-open" size={18} color={SHEET_ACTION} />
-            <Text style={styles.selectedProjectName} numberOfLines={1}>
-              {activeTimer.projectNameSnapshot}
-            </Text>
+            <View style={{ flex: 1 }}>
+              <Text style={styles.selectedProjectName} numberOfLines={1}>
+                {activeTimer.projectNameSnapshot}
+              </Text>
+              {(activeTimer.phaseNameSnapshot || activeTimer.taskTitleSnapshot) && (
+                <Text style={styles.selectedProjectSub} numberOfLines={1}>
+                  {[activeTimer.phaseNameSnapshot, activeTimer.taskTitleSnapshot].filter(Boolean).join(" › ")}
+                </Text>
+              )}
+            </View>
           </View>
         ) : (
           <>
@@ -224,6 +286,83 @@ export function QuickTimeModal({
                 })
               )}
             </View>
+
+            {/* Phase (optional) – len pre BUILD/MANAGEMENT */}
+            {selectedProject && isBuildOrManagement && (
+              <>
+                <Text style={styles.label}>{t("time.selectPhaseOptional")}</Text>
+                {loadingPhasesTasks ? (
+                  <ActivityIndicator size="small" color={SHEET_ACTION} style={{ marginBottom: spacing.md }} />
+                ) : (
+                  <View style={styles.optionList}>
+                    <TouchableOpacity
+                      style={[styles.optionRow, !selectedPhase && styles.optionRowSelected]}
+                      onPress={() => setSelectedPhase(null)}
+                    >
+                      <Text style={[styles.optionRowText, !selectedPhase && styles.optionRowTextSelected]}>
+                        {t("time.projectOnly")}
+                      </Text>
+                      {!selectedPhase && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
+                    </TouchableOpacity>
+                    {phases.map((ph) => {
+                      const isSelected = selectedPhase?.id === ph.id;
+                      return (
+                        <TouchableOpacity
+                          key={ph.id}
+                          style={[styles.optionRow, isSelected && styles.optionRowSelected]}
+                          onPress={() => {
+                            setSelectedPhase(ph);
+                            setSelectedTask(null);
+                          }}
+                        >
+                          <Text style={[styles.optionRowText, isSelected && styles.optionRowTextSelected]} numberOfLines={1}>
+                            {ph.name}
+                          </Text>
+                          {isSelected && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
+            )}
+
+            {/* Task (optional) */}
+            {selectedProject && tasks.length > 0 && (
+              <>
+                <Text style={styles.label}>{t("time.selectTaskOptional")}</Text>
+                {loadingPhasesTasks ? (
+                  <ActivityIndicator size="small" color={SHEET_ACTION} style={{ marginBottom: spacing.md }} />
+                ) : (
+                  <View style={styles.optionList}>
+                    <TouchableOpacity
+                      style={[styles.optionRow, !selectedTask && styles.optionRowSelected]}
+                      onPress={() => setSelectedTask(null)}
+                    >
+                      <Text style={[styles.optionRowText, !selectedTask && styles.optionRowTextSelected]}>
+                        {t("time.projectOnly")}
+                      </Text>
+                      {!selectedTask && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
+                    </TouchableOpacity>
+                    {tasksForPhase.map((tk) => {
+                      const isSelected = selectedTask?.id === tk.id;
+                      return (
+                        <TouchableOpacity
+                          key={tk.id}
+                          style={[styles.optionRow, isSelected && styles.optionRowSelected]}
+                          onPress={() => setSelectedTask(tk)}
+                        >
+                          <Text style={[styles.optionRowText, isSelected && styles.optionRowTextSelected]} numberOfLines={1}>
+                            {tk.title || t("time.taskUntitled")}
+                          </Text>
+                          {isSelected && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
+                        </TouchableOpacity>
+                      );
+                    })}
+                  </View>
+                )}
+              </>
+            )}
           </>
         )}
 
@@ -423,7 +562,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: SHEET_TEXT,
-    flex: 1,
+  },
+  selectedProjectSub: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.7)",
+    marginTop: 2,
   },
   projectList: {
     marginBottom: spacing.lg,
@@ -465,6 +608,32 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.6)",
     padding: spacing.lg,
     textAlign: "center",
+  },
+  optionList: {
+    marginBottom: spacing.md,
+  },
+  optionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginBottom: 2,
+    borderRadius: 6,
+    backgroundColor: "rgba(255,255,255,0.06)",
+  },
+  optionRowSelected: {
+    backgroundColor: "rgba(125,211,252,0.15)",
+    borderLeftWidth: 3,
+    borderLeftColor: SHEET_ACTION,
+  },
+  optionRowText: {
+    fontSize: 14,
+    color: "rgba(255,255,255,0.9)",
+    flex: 1,
+  },
+  optionRowTextSelected: {
+    fontWeight: "600",
   },
   segmentRow: {
     flexDirection: "row",

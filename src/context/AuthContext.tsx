@@ -83,8 +83,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         console.log("[auth] Billing status: isPro=true, status=", data.status, "currentPeriodEndAt=", data.currentPeriodEndAt);
       }
       return data ?? null;
-    } catch (e) {
-      if (__DEV__) console.warn("[auth] getBillingStatus failed:", e);
+    } catch (e: unknown) {
+      const code = String((e as { code?: string })?.code ?? "").toLowerCase();
+      const msg = String((e as { message?: string })?.message ?? "");
+      const isNotFound = code.includes("not-found") || msg.includes("NOT_FOUND");
+      if (__DEV__ && !isNotFound) console.warn("[auth] getBillingStatus failed:", e);
       return null;
     }
   };

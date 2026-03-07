@@ -35,6 +35,10 @@ export type ActiveTimer = {
   source: string;
   gpsStart?: GpsPoint | null;
   reminderIds?: string[];
+  phaseId?: string | null;
+  phaseNameSnapshot?: string | null;
+  taskId?: string | null;
+  taskTitleSnapshot?: string | null;
 };
 
 export type TimeEntryDoc = {
@@ -52,6 +56,10 @@ export type TimeEntryDoc = {
   gpsStart?: GpsPoint | null;
   gpsEnd?: GpsPoint | null;
   flags?: { reminded?: boolean; autoStopped?: boolean; lowAccuracy?: boolean };
+  phaseId?: string | null;
+  phaseNameSnapshot?: string | null;
+  taskId?: string | null;
+  taskTitleSnapshot?: string | null;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -94,6 +102,10 @@ export async function getActiveTimer(): Promise<ActiveTimer | null> {
       source: at.source ?? "home_quick_timer",
       gpsStart: at.gpsStart ?? null,
       reminderIds: Array.isArray(at.reminderIds) ? at.reminderIds : [],
+      phaseId: at.phaseId ?? null,
+      phaseNameSnapshot: at.phaseNameSnapshot ?? null,
+      taskId: at.taskId ?? null,
+      taskTitleSnapshot: at.taskTitleSnapshot ?? null,
     };
   } catch (err) {
     console.warn("[timeTracking] getActiveTimer error:", err);
@@ -104,7 +116,11 @@ export async function getActiveTimer(): Promise<ActiveTimer | null> {
 /**
  * Start timer for project. Gets GPS if permission granted.
  */
-export async function startTimer(projectId: string, projectName: string): Promise<void> {
+export async function startTimer(
+  projectId: string,
+  projectName: string,
+  opts?: { phaseId?: string | null; phaseNameSnapshot?: string | null; taskId?: string | null; taskTitleSnapshot?: string | null }
+): Promise<void> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Musíte byť prihlásený.");
   const existing = await getActiveTimer();
@@ -127,6 +143,10 @@ export async function startTimer(projectId: string, projectName: string): Promis
       source: "home_quick_timer",
       gpsStart: gpsStart ?? null,
       reminderIds,
+      phaseId: opts?.phaseId ?? null,
+      phaseNameSnapshot: opts?.phaseNameSnapshot ?? null,
+      taskId: opts?.taskId ?? null,
+      taskTitleSnapshot: opts?.taskTitleSnapshot ?? null,
     },
   });
 }
@@ -176,6 +196,10 @@ export async function stopTimer(note?: string): Promise<TimeEntryDoc> {
     gpsStart: active.gpsStart ?? null,
     gpsEnd: gpsEnd ?? null,
     flags: Object.keys(flags).length > 0 ? flags : null,
+    phaseId: active.phaseId ?? null,
+    phaseNameSnapshot: active.phaseNameSnapshot ?? null,
+    taskId: active.taskId ?? null,
+    taskTitleSnapshot: active.taskTitleSnapshot ?? null,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
@@ -209,6 +233,13 @@ export async function stopTimer(note?: string): Promise<TimeEntryDoc> {
   } as TimeEntryDoc;
 }
 
+export type AddManualEntryParams = {
+  phaseId?: string | null;
+  phaseNameSnapshot?: string | null;
+  taskId?: string | null;
+  taskTitleSnapshot?: string | null;
+};
+
 /**
  * Add manual time entry (no GPS, no timer).
  */
@@ -217,7 +248,8 @@ export async function addManualEntry(
   projectName: string,
   dateYmd: string,
   durationMinutes: number,
-  note?: string
+  note?: string,
+  opts?: AddManualEntryParams
 ): Promise<TimeEntryDoc> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Musíte byť prihlásený.");
@@ -241,6 +273,10 @@ export async function addManualEntry(
     gpsStart: null,
     gpsEnd: null,
     flags: null,
+    phaseId: opts?.phaseId ?? null,
+    phaseNameSnapshot: opts?.phaseNameSnapshot ?? null,
+    taskId: opts?.taskId ?? null,
+    taskTitleSnapshot: opts?.taskTitleSnapshot ?? null,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
@@ -291,6 +327,10 @@ export async function checkAutoStopOnAppOpen(): Promise<TimeEntryDoc | null> {
     gpsStart: active.gpsStart ?? null,
     gpsEnd: null,
     flags: { autoStopped: true },
+    phaseId: active.phaseId ?? null,
+    phaseNameSnapshot: active.phaseNameSnapshot ?? null,
+    taskId: active.taskId ?? null,
+    taskTitleSnapshot: active.taskTitleSnapshot ?? null,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
@@ -337,29 +377,7 @@ export async function listTimeEntries(
     limit(500)
   );
   const snap = await getDocs(q);
-  return snap.docs.map((d) => {
-    const data = d.data();
-    const startedAt = toIso(data.startedAt) ?? (data.startedAt as string) ?? "";
-    const endedAt = toIso(data.endedAt) ?? (data.endedAt as string) ?? "";
-    return {
-      id: d.id,
-      projectId: (data.projectId as string) ?? "",
-      projectNameSnapshot: (data.projectNameSnapshot as string) ?? "",
-      userId: (data.userId as string) ?? "",
-      userNameSnapshot: (data.userNameSnapshot as string) ?? "",
-      startedAt,
-      endedAt,
-      durationMinutes: (data.durationMinutes as number) ?? 0,
-      mode: (data.mode as "timer" | "manual") ?? "timer",
-      date: data.date as string | undefined,
-      note: (data.note as string) ?? undefined,
-      gpsStart: data.gpsStart ?? null,
-      gpsEnd: data.gpsEnd ?? null,
-      flags: data.flags ?? undefined,
-      createdAt: toIso(data.createdAt) ?? undefined,
-      updatedAt: toIso(data.updatedAt) ?? undefined,
-    } as TimeEntryDoc;
-  });
+  return snap.docs.map((d) => parseTimeEntryDoc({ id: d.id, data: d.data.bind(d) }));
 }
 
 /**
@@ -411,6 +429,10 @@ function parseTimeEntryDoc(d: { id: string; data: () => Record<string, unknown> 
     gpsStart: data.gpsStart ?? null,
     gpsEnd: data.gpsEnd ?? null,
     flags: data.flags ?? undefined,
+    phaseId: (data.phaseId as string) ?? undefined,
+    phaseNameSnapshot: (data.phaseNameSnapshot as string) ?? undefined,
+    taskId: (data.taskId as string) ?? undefined,
+    taskTitleSnapshot: (data.taskTitleSnapshot as string) ?? undefined,
     createdAt: toIso(data.createdAt) ?? undefined,
     updatedAt: toIso(data.updatedAt) ?? undefined,
   } as TimeEntryDoc;

@@ -332,14 +332,14 @@ export function AccountScreen() {
         return;
       }
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: true,
         quality: 0.8,
       });
-      if (result.canceled || !result.assets[0]) return;
+      const asset = result?.assets?.[0];
+      if (result?.canceled || !asset?.uri) return;
 
       setUploadingPhoto(true);
-      const asset = result.assets[0];
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
       const storageInstance = getStorage();
       if (!storageInstance) throw new Error("Firebase Storage nie je dostupný.");
@@ -364,14 +364,14 @@ export function AccountScreen() {
         return;
       }
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: true,
         quality: 0.8,
       });
-      if (result.canceled || !result.assets[0]) return;
+      const asset = result?.assets?.[0];
+      if (result?.canceled || !asset?.uri) return;
 
       setUploadingPhoto(true);
-      const asset = result.assets[0];
       const fileName = asset.fileName || `profile_${Date.now()}.jpg`;
       const storageInstance = getStorage();
       if (!storageInstance) throw new Error("Firebase Storage nie je dostupný.");
@@ -907,7 +907,7 @@ const styles = StyleSheet.create({
   sectionTitle: {
     fontSize: 14,
     fontWeight: "600",
-    color: colors.textMuted,
+    color: colors.textOnDark,
     marginBottom: spacing.sm,
     marginTop: spacing.md,
   },

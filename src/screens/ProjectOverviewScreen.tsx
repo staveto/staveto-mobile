@@ -265,6 +265,9 @@ export function ProjectOverviewScreen() {
   const [diaryPhaseId, setDiaryPhaseId] = useState<string | null>(null);
   const [diaryAttachments, setDiaryAttachments] = useState<{ uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' }[]>([]);
   const [uploadingDiaryAttachment, setUploadingDiaryAttachment] = useState(false);
+  const [viewingDiaryEntry, setViewingDiaryEntry] = useState<DiaryEntryDoc | null>(null);
+  const [diaryDetailAttachmentUrls, setDiaryDetailAttachmentUrls] = useState<Map<string, string>>(new Map());
+  const [diaryDetailAttachmentDocs, setDiaryDetailAttachmentDocs] = useState<Map<string, AttachmentDoc>>(new Map());
   
   // Project documents state
   const [projectDocuments, setProjectDocuments] = useState<ProjectDocumentDoc[]>([]);
@@ -1729,13 +1732,13 @@ export function ProjectOverviewScreen() {
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: true,
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
         await handlePickedExpenseAttachment({
           uri: asset.uri,
           fileName: asset.fileName || `faktura_${Date.now()}.jpg`,
@@ -1760,13 +1763,13 @@ export function ProjectOverviewScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: true,
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
         await handlePickedExpenseAttachment({
           uri: asset.uri,
           fileName: asset.fileName || `faktura_${Date.now()}.jpg`,
@@ -1829,13 +1832,13 @@ export function ProjectOverviewScreen() {
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: true,
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
         setDiaryAttachments((prev) => [
           ...prev,
           {
@@ -1863,13 +1866,14 @@ export function ProjectOverviewScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsMultipleSelection: true,
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets.length > 0) {
-        const newAttachments = result.assets.map((asset) => ({
+      const assets = result?.assets ?? [];
+      if (!result?.canceled && assets.length > 0) {
+        const newAttachments = assets.map((asset) => ({
           uri: asset.uri,
           fileName: asset.fileName || `dennik_${Date.now()}_${Math.random().toString(36).slice(2, 8)}.jpg`,
           mimeType: asset.mimeType || 'image/jpeg',
@@ -1893,13 +1897,13 @@ export function ProjectOverviewScreen() {
         type: ['application/pdf', 'image/*'],
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
         const kind = asset.mimeType?.includes('pdf') ? 'pdf' : 
                      asset.mimeType?.startsWith('image/') ? 'image' : 'document';
         await handlePickedExpenseAttachment({
           uri: asset.uri,
-          fileName: asset.name || `faktura_${Date.now()}.pdf`,
+          fileName: asset.fileName ?? (asset as { name?: string }).name ?? `faktura_${Date.now()}.pdf`,
           mimeType: asset.mimeType || 'application/pdf',
           kind,
         });
@@ -2334,6 +2338,42 @@ export function ProjectOverviewScreen() {
     }
   };
 
+  const openDiaryDetailModal = async (entry: DiaryEntryDoc) => {
+    setViewingDiaryEntry(entry);
+    setDiaryDetailAttachmentUrls(new Map());
+    setDiaryDetailAttachmentDocs(new Map());
+    const attachmentIds = entry.attachments || [];
+    if (attachmentIds.length > 0) {
+      const urlMap = new Map<string, string>();
+      const docMap = new Map<string, AttachmentDoc>();
+      for (const attId of attachmentIds) {
+        try {
+          const att = await attachmentsService.getAttachment(projectId, attId);
+          if (att) {
+            docMap.set(attId, att);
+            if (att.fileType === "image") {
+              const url = (att as any).downloadURL ?? (await attachmentsService.getAttachmentURL(att));
+              urlMap.set(attId, url);
+            }
+          }
+        } catch (e) {
+          console.warn(`[ProjectOverview] Failed to load diary attachment ${attId}:`, e);
+        }
+      }
+      setDiaryDetailAttachmentUrls(urlMap);
+      setDiaryDetailAttachmentDocs(docMap);
+    }
+  };
+
+  const openDiaryImage = (attachmentId: string) => {
+    const att = diaryDetailAttachmentDocs.get(attachmentId);
+    const url = diaryDetailAttachmentUrls.get(attachmentId);
+    if (att && url) {
+      setViewingAttachment(att);
+      setViewingAttachmentURL(url);
+    }
+  };
+
   const sharePhase = async (phase: ProjectPhaseDoc) => {
     try {
       const phaseTasks = tasksByPhase.get(phase.id) || [];
@@ -2511,13 +2551,13 @@ export function ProjectOverviewScreen() {
         type: ['application/pdf', 'image/*'],
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
         const kind = asset.mimeType?.includes('pdf') ? 'pdf' : 
                      asset.mimeType?.startsWith('image/') ? 'image' : 'document';
         setDocumentAttachment({
           uri: asset.uri,
-          fileName: asset.name || `dokument_${Date.now()}.pdf`,
+          fileName: asset.fileName ?? (asset as { name?: string }).name ?? `dokument_${Date.now()}.pdf`,
           mimeType: asset.mimeType || 'application/pdf',
           kind,
         });
@@ -2722,13 +2762,14 @@ export function ProjectOverviewScreen() {
       }
 
       const result = await ImagePicker.launchCameraAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: false,
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        await uploadAttachmentFile(result.assets[0].uri, result.assets[0].fileName || 'image.jpg', 'image');
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
+        await uploadAttachmentFile(asset.uri, asset.fileName || 'image.jpg', 'image');
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error launching camera:`, error);
@@ -2747,13 +2788,14 @@ export function ProjectOverviewScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Images,
+        mediaTypes: ["images"],
         allowsEditing: false,
         quality: 0.8,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        await uploadAttachmentFile(result.assets[0].uri, result.assets[0].fileName || 'image.jpg', 'image');
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
+        await uploadAttachmentFile(asset.uri, asset.fileName || 'image.jpg', 'image');
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error picking from gallery:`, error);
@@ -2772,13 +2814,13 @@ export function ProjectOverviewScreen() {
       }
 
       const result = await ImagePicker.launchImageLibraryAsync({
-        mediaTypes: ImagePicker.MediaTypeOptions.Videos,
+        mediaTypes: ["videos"],
         allowsEditing: false,
         quality: 1.0,
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
         await uploadAttachmentFile(
           asset.uri, 
           asset.fileName || `video_${Date.now()}.mp4`, 
@@ -2802,11 +2844,12 @@ export function ProjectOverviewScreen() {
         type: '*/*',
       });
 
-      if (!result.canceled && result.assets[0]) {
-        const asset = result.assets[0];
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
         const kind = asset.mimeType?.includes('pdf') ? 'pdf' : 
                      asset.mimeType?.startsWith('image/') ? 'image' : 'document';
-        await uploadAttachmentFile(asset.uri, asset.name, kind, asset.mimeType);
+        const fileName = asset.fileName ?? (asset as { name?: string }).name ?? 'document';
+        await uploadAttachmentFile(asset.uri, fileName, kind, asset.mimeType);
       }
     } catch (error: any) {
       console.error(`[ProjectOverview] Error picking document:`, error);
@@ -3110,6 +3153,15 @@ export function ProjectOverviewScreen() {
             <Text style={styles.avatarText}>{initials}</Text>
           </View>
           {projectType !== 'MAINTENANCE' && <Ionicons name="add" size={20} color={colors.textOnDark} style={{ marginLeft: 4 }} />}
+        </TouchableOpacity>
+        <TouchableOpacity
+          style={styles.headerMenu}
+          onPress={() => (navigation as any).navigate("ProjectOverviewDashboard", { projectId, projectName, projectType })}
+          hitSlop={ICON_HIT_SLOP}
+          accessibilityRole="button"
+          accessibilityLabel={t("projectOverviewDashboard.title")}
+        >
+          <Ionicons name="stats-chart" size={22} color={colors.textOnDark} />
         </TouchableOpacity>
         <TouchableOpacity 
           style={styles.headerMenu} 
@@ -3910,7 +3962,11 @@ export function ProjectOverviewScreen() {
               ) : (
                 diaryEntries.map((entry) => (
                   <View key={entry.id} style={styles.expenseRow}>
-                    <View style={styles.expenseInfo}>
+                    <TouchableOpacity
+                      style={styles.expenseInfo}
+                      onPress={() => openDiaryDetailModal(entry)}
+                      activeOpacity={0.7}
+                    >
                       <View style={{ flexDirection: 'row', alignItems: 'center', gap: spacing.xs }}>
                         <Text style={styles.expenseTitle}>{formatDate(entry.date)}</Text>
                         {entry.attachments && entry.attachments.length > 0 && (
@@ -3924,7 +3980,7 @@ export function ProjectOverviewScreen() {
                       {entry.workers && (
                         <Text style={styles.expenseDate}>{t("projectOverview.workers")}: {entry.workers}</Text>
                       )}
-                    </View>
+                    </TouchableOpacity>
                     <View style={styles.expenseActions}>
                       <TouchableOpacity
                         style={styles.expenseActionButton}
@@ -4378,48 +4434,58 @@ export function ProjectOverviewScreen() {
       </Modal>
 
       {/* Edit project modal */}
-      <Modal visible={showEditModal} transparent animationType="slide">
-        <View style={styles.modalOverlay}>
+      <Modal visible={showEditModal} transparent animationType="fade">
+        <KeyboardAvoidingView
+          style={styles.modalOverlay}
+          behavior={Platform.OS === "ios" ? "padding" : "height"}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 24}
+        >
           <View style={styles.modal}>
-            <Text style={styles.modalTitle}>Upraviť projekt</Text>
-            <TextInput
-              style={styles.input}
-              value={editProjectName}
-              onChangeText={setEditProjectName}
-              placeholder={t("projectOverview.projectNamePlaceholder")}
-              placeholderTextColor={colors.textMuted}
-              autoFocus
-            />
-            <Text style={styles.modalLabel}>{t("projects.country")}</Text>
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.sm }}>
-              {COUNTRY_CODES.slice(0, 12).map((code) => (
-                <TouchableOpacity
-                  key={code}
-                  style={[styles.editCountryChip, editProjectCountry === code && styles.editCountryChipActive]}
-                  onPress={() => setEditProjectCountry(code)}
-                >
-                  <Text style={[styles.editCountryChipText, editProjectCountry === code && styles.editCountryChipTextActive]}>
-                    {getLocalizedCountryName(code, locale)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+            <ScrollView
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator={false}
+              contentContainerStyle={{ paddingBottom: spacing.lg }}
+            >
+              <Text style={styles.modalTitle}>Upraviť projekt</Text>
+              <TextInput
+                style={styles.input}
+                value={editProjectName}
+                onChangeText={setEditProjectName}
+                placeholder={t("projectOverview.projectNamePlaceholder")}
+                placeholderTextColor={colors.textMuted}
+                autoFocus
+              />
+              <Text style={styles.modalLabel}>{t("projects.country")}</Text>
+              <ScrollView horizontal showsHorizontalScrollIndicator={false} nestedScrollEnabled style={{ marginBottom: spacing.sm }}>
+                {COUNTRY_CODES.slice(0, 12).map((code) => (
+                  <TouchableOpacity
+                    key={code}
+                    style={[styles.editCountryChip, editProjectCountry === code && styles.editCountryChipActive]}
+                    onPress={() => setEditProjectCountry(code)}
+                  >
+                    <Text style={[styles.editCountryChipText, editProjectCountry === code && styles.editCountryChipTextActive]}>
+                      {getLocalizedCountryName(code, locale)}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </ScrollView>
+              <Text style={styles.modalLabel}>{t("projects.city")}</Text>
+              <TextInput
+                style={styles.input}
+                value={editProjectCity}
+                onChangeText={setEditProjectCity}
+                placeholder={t("projects.cityPlaceholder")}
+                placeholderTextColor={colors.textMuted}
+              />
+              <Text style={styles.modalLabel}>{t("projects.address")}</Text>
+              <TextInput
+                style={styles.input}
+                value={editProjectAddress}
+                onChangeText={setEditProjectAddress}
+                placeholder={t("projectOverview.projectAddressPlaceholder")}
+                placeholderTextColor={colors.textMuted}
+              />
             </ScrollView>
-            <Text style={styles.modalLabel}>{t("projects.city")}</Text>
-            <TextInput
-              style={styles.input}
-              value={editProjectCity}
-              onChangeText={setEditProjectCity}
-              placeholder={t("projects.cityPlaceholder")}
-              placeholderTextColor={colors.textMuted}
-            />
-            <Text style={styles.modalLabel}>{t("projects.address")}</Text>
-            <TextInput
-              style={styles.input}
-              value={editProjectAddress}
-              onChangeText={setEditProjectAddress}
-              placeholder={t("projectOverview.projectAddressPlaceholder")}
-              placeholderTextColor={colors.textMuted}
-            />
             <View style={styles.modalButtons}>
               <TouchableOpacity 
                 style={styles.modalCancel} 
@@ -4442,7 +4508,7 @@ export function ProjectOverviewScreen() {
               </TouchableOpacity>
             </View>
           </View>
-        </View>
+        </KeyboardAvoidingView>
       </Modal>
 
       {/* Expense modal */}
@@ -5122,6 +5188,120 @@ export function ProjectOverviewScreen() {
               />
             </ScrollView>
           )}
+        </View>
+      </Modal>
+
+      {/* Diary entry detail modal - full overview */}
+      <Modal visible={viewingDiaryEntry !== null} transparent animationType="slide">
+        <View style={styles.modalOverlay}>
+          <View style={[styles.modal, styles.diaryDetailModal]}>
+            <View style={styles.diaryDetailHeader}>
+              <Text style={styles.diaryDetailTitle}>
+                {viewingDiaryEntry ? formatDate(viewingDiaryEntry.date) : ""}
+              </Text>
+              <TouchableOpacity
+                onPress={() => {
+                  setViewingDiaryEntry(null);
+                  setDiaryDetailAttachmentUrls(new Map());
+                  setDiaryDetailAttachmentDocs(new Map());
+                }}
+                style={styles.diaryDetailCloseButton}
+              >
+                <Ionicons name="close" size={24} color={colors.textOnDark} />
+              </TouchableOpacity>
+            </View>
+            {viewingDiaryEntry && (
+              <ScrollView
+                style={styles.diaryDetailScroll}
+                contentContainerStyle={styles.diaryDetailContent}
+                showsVerticalScrollIndicator={false}
+              >
+                <Text style={styles.diaryDetailDescription}>{viewingDiaryEntry.workDescription}</Text>
+                <View style={styles.diaryDetailMeta}>
+                  {viewingDiaryEntry.weather && (
+                    <View style={styles.diaryDetailMetaRow}>
+                      <Ionicons name="partly-sunny-outline" size={18} color={colors.primary} />
+                      <Text style={styles.diaryDetailMetaText}>{t("projectOverview.weather")}: {viewingDiaryEntry.weather}</Text>
+                    </View>
+                  )}
+                  {viewingDiaryEntry.workers && (
+                    <View style={styles.diaryDetailMetaRow}>
+                      <Ionicons name="people-outline" size={18} color={colors.primary} />
+                      <Text style={styles.diaryDetailMetaText}>{t("projectOverview.workers")}: {viewingDiaryEntry.workers}</Text>
+                    </View>
+                  )}
+                  {viewingDiaryEntry.materials && (
+                    <View style={styles.diaryDetailMetaRow}>
+                      <Ionicons name="construct-outline" size={18} color={colors.primary} />
+                      <Text style={styles.diaryDetailMetaText}>{t("projectOverview.materialsPlaceholder")}: {viewingDiaryEntry.materials}</Text>
+                    </View>
+                  )}
+                  {viewingDiaryEntry.phaseId && (() => {
+                    const phase = phases.find(p => p.id === viewingDiaryEntry!.phaseId);
+                    return phase ? (
+                      <View style={styles.diaryDetailMetaRow}>
+                        <Ionicons name="layers-outline" size={18} color={colors.primary} />
+                        <Text style={styles.diaryDetailMetaText}>Fáza: {phase.name}</Text>
+                      </View>
+                    ) : null;
+                  })()}
+                </View>
+                {viewingDiaryEntry.attachments && viewingDiaryEntry.attachments.length > 0 && (
+                  <View style={styles.diaryDetailGallery}>
+                    <Text style={styles.diaryDetailGalleryTitle}>
+                      {t("taskDetail.attachments") || "Prílohy"} ({viewingDiaryEntry.attachments.length})
+                    </Text>
+                    <View style={styles.diaryDetailGalleryGrid}>
+                      {viewingDiaryEntry.attachments.map((attId) => {
+                        const url = diaryDetailAttachmentUrls.get(attId);
+                        const att = diaryDetailAttachmentDocs.get(attId);
+                        if (url && att?.fileType === "image") {
+                          return (
+                            <TouchableOpacity
+                              key={attId}
+                              style={styles.diaryDetailGalleryItem}
+                              onPress={() => openDiaryImage(attId)}
+                              activeOpacity={0.8}
+                            >
+                              <Image
+                                source={{ uri: url }}
+                                style={styles.diaryDetailGalleryImage}
+                                resizeMode="cover"
+                              />
+                            </TouchableOpacity>
+                          );
+                        }
+                        if (att) {
+                          return (
+                            <TouchableOpacity
+                              key={attId}
+                              style={[styles.diaryDetailGalleryItem, styles.diaryDetailGalleryDoc]}
+                              onPress={async () => {
+                                try {
+                                  const u = await attachmentsService.getAttachmentURL(att);
+                                  await Linking.openURL(u);
+                                } catch (e) {
+                                  Alert.alert(t("common.error"), t("projectOverview.failedToLoadAttachments"));
+                                }
+                              }}
+                            >
+                              <Ionicons
+                                name={att.fileType === "pdf" ? "document-text-outline" : "document-outline"}
+                                size={32}
+                                color={colors.primary}
+                              />
+                              <Text style={styles.diaryDetailGalleryDocName} numberOfLines={2}>{att.fileName}</Text>
+                            </TouchableOpacity>
+                          );
+                        }
+                        return null;
+                      })}
+                    </View>
+                  </View>
+                )}
+              </ScrollView>
+            )}
+          </View>
         </View>
       </Modal>
 
@@ -7083,6 +7263,93 @@ const styles = StyleSheet.create({
     aspectRatio: 1,
     maxWidth: '100%',
     maxHeight: '100%',
+  },
+  diaryDetailModal: {
+    maxHeight: '85%',
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    overflow: 'hidden',
+  },
+  diaryDetailHeader: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    justifyContent: 'space-between',
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  diaryDetailTitle: {
+    fontSize: 18,
+    fontWeight: '700',
+    color: colors.textOnDark,
+  },
+  diaryDetailCloseButton: {
+    padding: spacing.xs,
+  },
+  diaryDetailScroll: {
+    maxHeight: 400,
+  },
+  diaryDetailContent: {
+    padding: spacing.lg,
+    paddingBottom: spacing.xl,
+  },
+  diaryDetailDescription: {
+    fontSize: 16,
+    color: colors.text,
+    lineHeight: 24,
+    marginBottom: spacing.lg,
+  },
+  diaryDetailMeta: {
+    gap: spacing.sm,
+    marginBottom: spacing.lg,
+  },
+  diaryDetailMetaRow: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: spacing.sm,
+  },
+  diaryDetailMetaText: {
+    fontSize: 14,
+    color: colors.text,
+    flex: 1,
+  },
+  diaryDetailGallery: {
+    marginTop: spacing.sm,
+  },
+  diaryDetailGalleryTitle: {
+    fontSize: 14,
+    fontWeight: '600',
+    color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  diaryDetailGalleryGrid: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+  },
+  diaryDetailGalleryItem: {
+    width: '31%',
+    aspectRatio: 1,
+    borderRadius: 8,
+    overflow: 'hidden',
+    backgroundColor: colors.background,
+  },
+  diaryDetailGalleryImage: {
+    width: '100%',
+    height: '100%',
+  },
+  diaryDetailGalleryDoc: {
+    justifyContent: 'center',
+    alignItems: 'center',
+    padding: spacing.sm,
+  },
+  diaryDetailGalleryDocName: {
+    fontSize: 10,
+    color: colors.textOnDark,
+    marginTop: spacing.xs,
+    textAlign: 'center',
   },
   documentTypeSelector: {
     marginBottom: spacing.md,

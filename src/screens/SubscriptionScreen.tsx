@@ -153,7 +153,8 @@ export function SubscriptionScreen() {
   };
 
   const getPromoErrorMessage = (code: string): string => {
-    switch (code) {
+    const c = (code || "").toUpperCase();
+    switch (c) {
       case "INVALID_CODE":
         return t("subscription.promoInvalidCode");
       case "EXPIRED":
@@ -164,6 +165,8 @@ export function SubscriptionScreen() {
         return t("subscription.promoAlreadyRedeemed");
       case "UNAUTHENTICATED":
         return t("subscription.promoUnauthenticated");
+      case "INTERNAL":
+        return t("subscription.promoInternalError");
       default:
         return t("common.error") + ": " + (code || "Unknown error");
     }
@@ -180,7 +183,11 @@ export function SubscriptionScreen() {
       setPromoCodeInput("");
       await refreshUser();
     } catch (error: any) {
-      const errCode = error?.message || error?.details || "";
+      const isInternal =
+        (typeof error?.code === "string" && error.code.includes("internal")) ||
+        (typeof error?.message === "string" && error.message.toUpperCase().includes("INTERNAL"));
+      const errCode = isInternal ? "INTERNAL" : (error?.message || error?.details || "");
+      if (__DEV__) console.warn("[Subscription] redeemPromoCode error:", error?.code, error?.message, error);
       Alert.alert(t("common.error"), getPromoErrorMessage(errCode));
     } finally {
       setPromoRedeeming(false);

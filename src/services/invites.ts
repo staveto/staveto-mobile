@@ -82,7 +82,10 @@ export async function claimProjectInvites(): Promise<ClaimInvitesResult> {
       projectIds: Array.isArray(data.projectIds) ? data.projectIds.filter((x): x is string => typeof x === "string") : [],
     };
   } catch (error) {
-    if (__DEV__) console.warn("[invites] claimProjectInvites failed (non-blocking):", error);
+    const msg = String((error as { message?: string })?.message ?? "").toUpperCase();
+    const code = String((error as { code?: string })?.code ?? "").toLowerCase();
+    const isTransient = msg.includes("TIMEOUT") || msg.includes("INTERNAL") || code.includes("internal");
+    if (__DEV__ && !isTransient) console.warn("[invites] claimProjectInvites failed (non-blocking):", error);
     return empty;
   }
 }

@@ -1358,11 +1358,11 @@ export function ProjectsScreen() {
         </KeyboardAvoidingView>
       </Modal>
 
-      <Modal visible={showEdit} transparent animationType="slide">
+      <Modal visible={showEdit} transparent animationType="fade">
         <KeyboardAvoidingView
           style={styles.modalOverlay}
           behavior={Platform.OS === "ios" ? "padding" : "height"}
-          keyboardVerticalOffset={0}
+          keyboardVerticalOffset={Platform.OS === "ios" ? 0 : 24}
         >
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>{t("projects.editTitle")}</Text>
@@ -1431,7 +1431,7 @@ const styles = StyleSheet.create({
   },
   filterChipText: {
     fontSize: 14,
-    color: colors.textSecondary,
+    color: colors.text,
   },
   filterChipTextActive: {
     color: "#fff",

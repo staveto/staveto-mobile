@@ -32,42 +32,54 @@ export async function pickCoverImageWithOptions(
     const { requestCameraPermissionsAsync, requestMediaLibraryPermissionsAsync } = ImagePickerModule;
     const { Alert, ActionSheetIOS, Platform } = await import("react-native");
 
-    const mediaTypes = ImagePicker?.MediaTypeOptions?.Images ?? "images";
+    const mediaTypes = ["images"] as const;
 
     const handleTakePhoto = async (): Promise<PickResult> => {
-      const { status } = await requestCameraPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert(t("cover.permissionTitle") || "Permission", t("cover.cameraPermission") || "Camera access is required.");
+      try {
+        const { status } = await requestCameraPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert(t("cover.permissionTitle") || "Permission", t("cover.cameraPermission") || "Camera access is required.");
+          return null;
+        }
+        const result = await launchCameraAsync({
+          mediaTypes,
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.85,
+        });
+        const asset = result?.assets?.[0];
+        if (!result?.canceled && asset?.uri) {
+          return { uri: asset.uri };
+        }
+        return null;
+      } catch (e) {
+        console.warn("[projectCover] launchCamera error:", e);
         return null;
       }
-      const result = await launchCameraAsync({
-        mediaTypes,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.85,
-      });
-      if (!result.canceled && result.assets[0]) {
-        return { uri: result.assets[0].uri };
-      }
-      return null;
     };
 
     const handleChooseGallery = async (): Promise<PickResult> => {
-      const { status } = await requestMediaLibraryPermissionsAsync();
-      if (status !== "granted") {
-        Alert.alert(t("cover.permissionTitle") || "Permission", t("cover.galleryPermission") || "Gallery access is required.");
+      try {
+        const { status } = await requestMediaLibraryPermissionsAsync();
+        if (status !== "granted") {
+          Alert.alert(t("cover.permissionTitle") || "Permission", t("cover.galleryPermission") || "Gallery access is required.");
+          return null;
+        }
+        const result = await launchImageLibraryAsync({
+          mediaTypes,
+          allowsEditing: true,
+          aspect: [1, 1],
+          quality: 0.85,
+        });
+        const asset = result?.assets?.[0];
+        if (!result?.canceled && asset?.uri) {
+          return { uri: asset.uri };
+        }
+        return null;
+      } catch (e) {
+        console.warn("[projectCover] launchImageLibrary error:", e);
         return null;
       }
-      const result = await launchImageLibraryAsync({
-        mediaTypes,
-        allowsEditing: true,
-        aspect: [1, 1],
-        quality: 0.85,
-      });
-      if (!result.canceled && result.assets[0]) {
-        return { uri: result.assets[0].uri };
-      }
-      return null;
     };
 
     if (action === "camera") return handleTakePhoto();

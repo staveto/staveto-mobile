@@ -117,6 +117,11 @@ function EntryCard({
       <Text style={styles.entryProject} numberOfLines={1}>
         {entry.projectNameSnapshot || "Project"}
       </Text>
+      {(entry.phaseNameSnapshot || entry.taskTitleSnapshot) && (
+        <Text style={styles.entryPhaseTask} numberOfLines={1}>
+          {[entry.phaseNameSnapshot, entry.taskTitleSnapshot].filter(Boolean).join(" › ")}
+        </Text>
+      )}
       <Text style={styles.entryTime}>
         {formatTimeRange(entry.startedAt, entry.endedAt)} • {formatMinutesWithUnits(entry.durationMinutes ?? 0)}
       </Text>
@@ -989,6 +994,11 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: colors.textOnDark,
+    marginBottom: spacing.xs,
+  },
+  entryPhaseTask: {
+    fontSize: 13,
+    color: "rgba(255,255,255,0.8)",
     marginBottom: spacing.xs,
   },
   entryTime: {

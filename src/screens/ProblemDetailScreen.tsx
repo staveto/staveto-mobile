@@ -11,7 +11,9 @@ import {
   Linking,
   RefreshControl,
   TextInput,
+  Platform,
 } from "react-native";
+import MapView, { Marker } from "react-native-maps";
 
 // Lazy-load expo-av only when playing audio (avoids iOS mic indicator at startup)
 let AudioModule: typeof import("expo-av") | null = null;
@@ -34,7 +36,9 @@ import * as attachmentsService from "../services/attachments";
 import type { ProblemDoc, ProblemStatus } from "../services/problems";
 import { colors, radius, spacing } from "../theme";
 import { showToast } from "../helpers/toast";
+import { openLatLngInMaps } from "../lib/maps";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
+import Constants from "expo-constants";
 
 const PRIORITY_COLORS: Record<string, string> = {
   low: "#2e7d32",
@@ -264,6 +268,31 @@ export function ProblemDetailScreen() {
           {problem.shortDescription}
         </Text>
 
+        {problem.photos && problem.photos.length > 0 && (
+          <View style={styles.photosSection}>
+            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+              {t("problems.photos")}
+            </Text>
+            <View style={styles.photoGrid}>
+              {problem.photos.map((ph) => {
+                const url = photoUrls.get(ph.path) ?? ph.downloadURL;
+                if (!url) return null;
+                return (
+                  <TouchableOpacity
+                    key={ph.path}
+                    onPress={() => openPhoto(url)}
+                    accessibilityRole="button"
+                    accessibilityLabel={t("problems.photos")}
+                    hitSlop={ICON_HIT_SLOP}
+                  >
+                    <Image source={{ uri: url }} style={styles.photoThumb} />
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+          </View>
+        )}
+
         {problem.location && (
           <View style={styles.meta}>
             <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
@@ -272,6 +301,58 @@ export function ProblemDetailScreen() {
             <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
               {problem.location}
             </Text>
+          </View>
+        )}
+        {problem.gpsLocation && (
+          <View style={styles.gpsSection}>
+            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+              {t("problems.gpsLocation")}
+            </Text>
+            {Platform.OS !== "web" &&
+              (Platform.OS !== "android" ||
+                !!Constants.expoConfig?.extra?.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY?.trim()) && (
+              <TouchableOpacity
+                style={styles.miniMapWrap}
+                onPress={() => openLatLngInMaps(problem.gpsLocation!.lat, problem.gpsLocation!.lng)}
+                activeOpacity={0.9}
+              >
+                <MapView
+                  style={styles.miniMap}
+                  region={{
+                    latitude: problem.gpsLocation.lat,
+                    longitude: problem.gpsLocation.lng,
+                    latitudeDelta: 0.002,
+                    longitudeDelta: 0.002,
+                  }}
+                  scrollEnabled={false}
+                  zoomEnabled={false}
+                  pitchEnabled={false}
+                  rotateEnabled={false}
+                >
+                  <Marker
+                    coordinate={{
+                      latitude: problem.gpsLocation.lat,
+                      longitude: problem.gpsLocation.lng,
+                    }}
+                    pinColor={colors.primary}
+                  />
+                </MapView>
+                <View style={styles.miniMapOverlay}>
+                  <Ionicons name="navigate" size={20} color="#fff" />
+                  <Text style={styles.miniMapOverlayText}>{t("maps.openInMaps")}</Text>
+                </View>
+              </TouchableOpacity>
+            )}
+            <TouchableOpacity
+              style={styles.gpsRow}
+              onPress={() => openLatLngInMaps(problem.gpsLocation!.lat, problem.gpsLocation!.lng)}
+              activeOpacity={0.7}
+            >
+              <Ionicons name="location" size={18} color={colors.primary} />
+              <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
+                {problem.gpsLocation.lat.toFixed(5)}°, {problem.gpsLocation.lng.toFixed(5)}°
+              </Text>
+            </TouchableOpacity>
           </View>
         )}
         {!!problem.equipmentName && (
@@ -307,7 +388,7 @@ export function ProblemDetailScreen() {
             {t("problems.assignee")}
           </Text>
           <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
-            {problem.assigneeName || problem.assigneeUid || "—"}
+            {problem.assigneeUid ? (problem.assigneeName || problem.assigneeUid) : t("problems.noOneFromGroup")}
           </Text>
         </View>
         <View style={styles.meta}>
@@ -361,24 +442,33 @@ export function ProblemDetailScreen() {
           </Text>
           {canEdit && (
             <View style={styles.statusButtons}>
-              {statusFlow.map((s) => (
-                <TouchableOpacity
-                  key={s}
-                  style={[
-                    styles.statusBtn,
-                    s === "rejected" && styles.statusBtnReject,
-                    problem.status === s && styles.statusBtnSelected,
-                  ]}
-                  onPress={() => updateStatus(s)}
-                  accessibilityRole="button"
-                  accessibilityLabel={t(`problems.statuses.${s}`)}
-                  accessibilityState={{ selected: problem.status === s }}
-                >
-                  <Text style={styles.statusBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-                    {t(`problems.statuses.${s}`)}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+              {statusFlow.map((s) => {
+                const isSelected = problem.status === s;
+                return (
+                  <TouchableOpacity
+                    key={s}
+                    style={[
+                      styles.statusBtn,
+                      !isSelected && s === "rejected" && styles.statusBtnRejectUnselected,
+                      !isSelected && s !== "rejected" && styles.statusBtnUnselected,
+                      isSelected && s === "rejected" && styles.statusBtnReject,
+                      isSelected && s !== "rejected" && styles.statusBtnSelected,
+                      isSelected && styles.statusBtnSelectedBorder,
+                    ]}
+                    onPress={() => updateStatus(s)}
+                    accessibilityRole="button"
+                    accessibilityLabel={t(`problems.statuses.${s}`)}
+                    accessibilityState={{ selected: isSelected }}
+                  >
+                    <View style={styles.statusBtnInner}>
+                      {isSelected && <Ionicons name="checkmark-circle" size={18} color="#fff" style={{ marginRight: 6 }} />}
+                      <Text style={styles.statusBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                        {t(`problems.statuses.${s}`)}
+                      </Text>
+                    </View>
+                  </TouchableOpacity>
+                );
+              })}
             </View>
           )}
         </View>
@@ -434,31 +524,6 @@ export function ProblemDetailScreen() {
           </TouchableOpacity>
         )}
 
-        {problem.photos && problem.photos.length > 0 && (
-          <View style={styles.photosSection}>
-            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
-              {t("problems.photos")}
-            </Text>
-            <View style={styles.photoGrid}>
-              {problem.photos.map((ph) => {
-                const url = photoUrls.get(ph.path) ?? ph.downloadURL;
-                if (!url) return null;
-                return (
-                  <TouchableOpacity
-                    key={ph.path}
-                    onPress={() => openPhoto(url)}
-                    accessibilityRole="button"
-                    accessibilityLabel={t("problems.photos")}
-                    hitSlop={ICON_HIT_SLOP}
-                  >
-                    <Image source={{ uri: url }} style={styles.photoThumb} />
-                  </TouchableOpacity>
-                );
-              })}
-            </View>
-          </View>
-        )}
-
         {audioUrl && AudioModule?.Audio && (
           <View style={styles.audioSection}>
             <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
@@ -500,21 +565,40 @@ const styles = StyleSheet.create({
   meta: { marginBottom: spacing.sm },
   metaLabel: { fontSize: 12, color: colors.textMuted, marginBottom: 2 },
   metaValue: { fontSize: 15, color: colors.text },
+  gpsSection: { marginBottom: spacing.sm },
+  gpsRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.xs },
+  miniMapWrap: { marginTop: spacing.sm, borderRadius: 8, overflow: "hidden", position: "relative" },
+  miniMap: { width: "100%", height: 140 },
+  miniMapOverlay: {
+    position: "absolute",
+    bottom: 0,
+    left: 0,
+    right: 0,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: 6,
+    paddingVertical: 6,
+    backgroundColor: "rgba(0,0,0,0.5)",
+  },
+  miniMapOverlayText: { color: "#fff", fontSize: 13, fontWeight: "600" },
   voiceMessageLabel: { marginTop: 4 },
   statusSection: { marginTop: spacing.lg, paddingTop: spacing.lg, borderTopWidth: 1, borderTopColor: "#eee" },
   statusValue: { fontSize: 16, fontWeight: "600", color: colors.text, marginTop: 4 },
   statusButtons: { flexDirection: "row", flexWrap: "wrap", marginTop: spacing.md, gap: spacing.sm },
   statusBtn: {
-    backgroundColor: colors.primary,
+    flexDirection: "row",
+    alignItems: "center",
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     borderRadius: 8,
   },
+  statusBtnInner: { flexDirection: "row", alignItems: "center" },
+  statusBtnUnselected: { backgroundColor: "rgba(224, 103, 55, 0.45)" },
+  statusBtnRejectUnselected: { backgroundColor: "rgba(220, 53, 69, 0.45)" },
+  statusBtnSelected: { backgroundColor: colors.primary },
   statusBtnReject: { backgroundColor: colors.error },
-  statusBtnSelected: {
-    borderWidth: 2,
-    borderColor: "#fff",
-  },
+  statusBtnSelectedBorder: { borderWidth: 3, borderColor: "#fff" },
   statusBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
   archiveSection: { marginTop: spacing.md, gap: spacing.sm },
   archiveBtn: { backgroundColor: "#6b7280" },
@@ -530,7 +614,7 @@ const styles = StyleSheet.create({
     textAlignVertical: "top",
   },
   archiveConfirmBtn: { backgroundColor: "#374151", alignSelf: "flex-start" },
-  photosSection: { marginTop: spacing.lg },
+  photosSection: { marginTop: spacing.md },
   photoGrid: { flexDirection: "row", flexWrap: "wrap", marginTop: spacing.sm, gap: spacing.sm },
   photoThumb: { width: 100, height: 100, borderRadius: 8 },
   audioSection: { marginTop: spacing.lg },

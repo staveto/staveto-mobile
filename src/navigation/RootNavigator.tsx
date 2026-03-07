@@ -15,6 +15,8 @@ import { NotificationsScreen } from "../screens/NotificationsScreen";
 import { CustomizeHomeScreen } from "../screens/CustomizeHomeScreen";
 import { TaskDetailScreen } from "../screens/TaskDetailScreen";
 import { ProjectOverviewScreen } from "../screens/ProjectOverviewScreen";
+import { ProjectOverviewDashboardScreen } from "../screens/ProjectOverviewDashboardScreen";
+import { ProjectPhotosScreen } from "../screens/ProjectPhotosScreen";
 import { ProjectMembersScreen } from "../screens/ProjectMembersScreen";
 import { SubscriptionScreen } from "../screens/SubscriptionScreen";
 import { PaywallScreen } from "../screens/PaywallScreen";
@@ -249,7 +251,7 @@ export function RootNavigator() {
       screenOptions={{
         headerShown: false,
         headerStyle: { backgroundColor: colors.background },
-        headerTintColor: colors.text,
+        headerTintColor: colors.textOnDark,
       }}
     >
       <Stack.Screen name="AppTabs" component={AppDrawer} />
@@ -269,6 +271,16 @@ export function RootNavigator() {
         name="ProjectOverview"
         component={ProjectOverviewScreen}
         options={{ headerShown: true, title: t("nav.projectOverview") || "Projekt" }}
+      />
+      <Stack.Screen
+        name="ProjectOverviewDashboard"
+        component={ProjectOverviewDashboardScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ProjectPhotos"
+        component={ProjectPhotosScreen}
+        options={{ headerShown: false }}
       />
       <Stack.Screen
         name="ProjectMembers"

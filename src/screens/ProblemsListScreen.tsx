@@ -9,14 +9,30 @@ import {
   TouchableOpacity,
   Alert,
   ScrollView,
+  Image,
 } from "react-native";
 import { useRoute, useNavigation, useFocusEffect } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { useProjectAccess } from "../hooks/useProjectAccess";
 import * as problemsService from "../services/problems";
-import type { ProblemDoc, ProblemStatus, ProblemPriority } from "../services/problems";
+import type { ProblemDoc, ProblemStatus, ProblemPriority, ProblemPhoto } from "../services/problems";
+import * as problemPhotosService from "../services/problemPhotos";
 import { colors, radius, spacing } from "../theme";
+
+function ProblemPhotoThumb({ photo }: { photo: ProblemPhoto }) {
+  const [url, setUrl] = React.useState<string | null>(photo.downloadURL ?? null);
+  React.useEffect(() => {
+    if (!url && photo.path) {
+      problemPhotosService.getProblemPhotoURL(photo.path).then(setUrl).catch(() => {});
+    }
+  }, [photo.path, photo.downloadURL]);
+  return url ? (
+    <Image source={{ uri: url }} style={styles.itemPhoto} />
+  ) : (
+    <View style={styles.itemPhotoPlaceholder} />
+  );
+}
 
 const PRIORITY_COLORS: Record<ProblemPriority, string> = {
   low: "#2e7d32",
@@ -108,6 +124,7 @@ export function ProblemsListScreen() {
 
   const renderItem = ({ item }: { item: ProblemDoc }) => (
     <TouchableOpacity style={styles.item} onPress={() => openDetail(item)} activeOpacity={0.7}>
+      {item.photos?.length > 0 && <ProblemPhotoThumb photo={item.photos[0]} />}
       <View style={[styles.priorityDot, { backgroundColor: PRIORITY_COLORS[item.priority] }]} />
       <View style={styles.itemContent}>
         <Text style={styles.itemCategory}>{t(`problems.categories.${item.category}`)}</Text>
@@ -293,6 +310,8 @@ const styles = StyleSheet.create({
     padding: spacing.md,
     marginBottom: spacing.sm,
   },
+  itemPhoto: { width: 56, height: 56, borderRadius: 8, marginRight: spacing.sm },
+  itemPhotoPlaceholder: { width: 56, height: 56, borderRadius: 8, marginRight: spacing.sm, backgroundColor: "#eee" },
   priorityDot: { width: 8, height: 8, borderRadius: 4, marginRight: spacing.sm },
   itemContent: { flex: 1 },
   itemCategory: { fontSize: 11, color: colors.textMuted, textTransform: "uppercase", marginBottom: 2 },

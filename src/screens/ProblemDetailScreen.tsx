@@ -49,7 +49,7 @@ const PRIORITY_COLORS: Record<string, string> = {
 function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, {
     day: "numeric",
-    month: "long",
+    month: "short",
     year: "numeric",
   });
 }
@@ -71,6 +71,7 @@ export function ProblemDetailScreen() {
   const [audioPlaying, setAudioPlaying] = useState(false);
   const [showArchiveInput, setShowArchiveInput] = useState(false);
   const [resolutionNote, setResolutionNote] = useState("");
+  const [noteExpanded, setNoteExpanded] = useState(false);
   const soundRef = React.useRef<{ unloadAsync: () => Promise<void>; playAsync: () => Promise<void>; pauseAsync: () => Promise<void> } | null>(null);
 
   const canEdit =
@@ -308,51 +309,57 @@ export function ProblemDetailScreen() {
             <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
               {t("problems.gpsLocation")}
             </Text>
-            {Platform.OS !== "web" &&
+            <TouchableOpacity
+              style={styles.miniMapWrap}
+              onPress={() => openLatLngInMaps(problem.gpsLocation!.lat, problem.gpsLocation!.lng)}
+              activeOpacity={0.9}
+            >
+              {Platform.OS !== "web" &&
               (Platform.OS !== "android" ||
-                !!Constants.expoConfig?.extra?.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY?.trim()) && (
-              <TouchableOpacity
-                style={styles.miniMapWrap}
-                onPress={() => openLatLngInMaps(problem.gpsLocation!.lat, problem.gpsLocation!.lng)}
-                activeOpacity={0.9}
-              >
-                <MapView
-                  style={styles.miniMap}
-                  region={{
-                    latitude: problem.gpsLocation.lat,
-                    longitude: problem.gpsLocation.lng,
-                    latitudeDelta: 0.002,
-                    longitudeDelta: 0.002,
-                  }}
-                  scrollEnabled={false}
-                  zoomEnabled={false}
-                  pitchEnabled={false}
-                  rotateEnabled={false}
-                >
-                  <Marker
-                    coordinate={{
+                !!Constants.expoConfig?.extra?.EXPO_PUBLIC_GOOGLE_MAPS_API_KEY?.trim()) ? (
+                <>
+                  <MapView
+                    style={styles.miniMap}
+                    region={{
                       latitude: problem.gpsLocation.lat,
                       longitude: problem.gpsLocation.lng,
+                      latitudeDelta: 0.002,
+                      longitudeDelta: 0.002,
                     }}
-                    pinColor={colors.primary}
-                  />
-                </MapView>
-                <View style={styles.miniMapOverlay}>
-                  <Ionicons name="navigate" size={20} color="#fff" />
-                  <Text style={styles.miniMapOverlayText}>{t("maps.openInMaps")}</Text>
+                    scrollEnabled={false}
+                    zoomEnabled={false}
+                    pitchEnabled={false}
+                    rotateEnabled={false}
+                  >
+                    <Marker
+                      coordinate={{
+                        latitude: problem.gpsLocation.lat,
+                        longitude: problem.gpsLocation.lng,
+                      }}
+                      pinColor={colors.primary}
+                    />
+                  </MapView>
+                  <View style={styles.miniMapOverlay}>
+                    <Ionicons name="navigate" size={20} color="#fff" />
+                    <Text style={styles.miniMapOverlayText}>{t("maps.openInMaps")}</Text>
+                  </View>
+                </>
+              ) : (
+                <View style={styles.mapPlaceholder}>
+                  <Ionicons name="map" size={48} color={colors.primary} />
+                  <Text style={styles.mapPlaceholderText}>{t("maps.openInMaps")}</Text>
+                  <Text style={styles.mapPlaceholderCoords}>
+                    {problem.gpsLocation.lat.toFixed(5)}°, {problem.gpsLocation.lng.toFixed(5)}°
+                  </Text>
                 </View>
-              </TouchableOpacity>
-            )}
-            <TouchableOpacity
-              style={styles.gpsRow}
-              onPress={() => openLatLngInMaps(problem.gpsLocation!.lat, problem.gpsLocation!.lng)}
-              activeOpacity={0.7}
-            >
+              )}
+            </TouchableOpacity>
+            <View style={styles.gpsRow}>
               <Ionicons name="location" size={18} color={colors.primary} />
               <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
                 {problem.gpsLocation.lat.toFixed(5)}°, {problem.gpsLocation.lng.toFixed(5)}°
               </Text>
-            </TouchableOpacity>
+            </View>
           </View>
         )}
         {!!problem.equipmentName && (
@@ -367,56 +374,84 @@ export function ProblemDetailScreen() {
         )}
         {(problem.detail || audioUrl) && (
           <View style={styles.meta}>
-            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
-              {t("problems.noteOptional")}
-            </Text>
-            {problem.detail && problem.detail !== t("problems.voiceMessage") ? (
-              <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
-                {problem.detail}
+            <TouchableOpacity
+              onPress={() => setNoteExpanded((e) => !e)}
+              style={styles.noteHeader}
+              accessibilityRole="button"
+              accessibilityLabel={noteExpanded ? t("problems.hideDetails") : t("problems.showDetails")}
+            >
+              <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+                {t("problems.noteOptional")}
               </Text>
-            ) : null}
-            {audioUrl && (
-              <Text style={[styles.metaValue, !problem.detail && styles.voiceMessageLabel]} maxFontSizeMultiplier={1.3}>
-                🎙 {t("problems.voiceMessage")}
-              </Text>
+              <Ionicons name={noteExpanded ? "chevron-up" : "chevron-down"} size={18} color={colors.textMuted} />
+            </TouchableOpacity>
+            {noteExpanded && (
+              <>
+                {problem.detail && problem.detail !== t("problems.voiceMessage") ? (
+                  <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
+                    {problem.detail}
+                  </Text>
+                ) : null}
+                {audioUrl && (
+                  <Text style={[styles.metaValue, !problem.detail && styles.voiceMessageLabel]} maxFontSizeMultiplier={1.3}>
+                    🎙 {t("problems.voiceMessage")}
+                  </Text>
+                )}
+              </>
+            )}
+            {!noteExpanded && (
+              <>
+                {problem.detail && problem.detail !== t("problems.voiceMessage") ? (
+                  <Text style={styles.notePreview} maxFontSizeMultiplier={1.3} numberOfLines={2}>
+                    {problem.detail}
+                  </Text>
+                ) : audioUrl ? (
+                  <Text style={styles.notePreview} maxFontSizeMultiplier={1.3}>
+                    🎙 {t("problems.voiceMessage")}
+                  </Text>
+                ) : null}
+              </>
             )}
           </View>
         )}
 
-        <View style={styles.meta}>
-          <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
-            {t("problems.assignee")}
-          </Text>
-          <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
-            {problem.assigneeUid ? (problem.assigneeName || problem.assigneeUid) : t("problems.noOneFromGroup")}
-          </Text>
-        </View>
-        <View style={styles.meta}>
-          <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
-            {t("problems.createdBy")}
-          </Text>
-          <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
-            {problem.createdByName || problem.createdByUid || "—"}
-          </Text>
-        </View>
-        <View style={styles.meta}>
-          <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
-            {t("problems.createdAt")}
-          </Text>
-          <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
-            {formatDate(problem.createdAt)}
-          </Text>
-        </View>
-        {problem.dueDate && (
+        <View style={styles.metaDivider} />
+        <View style={styles.metaGrid}>
           <View style={styles.meta}>
             <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
-              {t("problems.dueDate")}
+              {t("problems.assignee")}
             </Text>
-            <Text style={styles.metaValue} maxFontSizeMultiplier={1.3}>
-              {formatDate(problem.dueDate)}
+            <Text style={styles.metaValue} maxFontSizeMultiplier={1.3} numberOfLines={1}>
+              {problem.assigneeUid ? (problem.assigneeName || problem.assigneeUid) : t("problems.noOneFromGroup")}
             </Text>
           </View>
-        )}
+          <View style={styles.meta}>
+            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+              {t("problems.createdBy")}
+            </Text>
+            <Text style={styles.metaValue} maxFontSizeMultiplier={1.3} numberOfLines={1}>
+              {problem.createdByName || problem.createdByUid || "—"}
+            </Text>
+          </View>
+          <View style={styles.meta}>
+            <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+              {t("problems.createdAt")}
+            </Text>
+            <Text style={styles.metaValue} maxFontSizeMultiplier={1.3} numberOfLines={1}>
+              {formatDate(problem.createdAt)}
+            </Text>
+          </View>
+          {problem.dueDate ? (
+            <View style={styles.meta}>
+              <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
+                {t("problems.dueDate")}
+              </Text>
+              <Text style={styles.metaValue} maxFontSizeMultiplier={1.3} numberOfLines={1}>
+                {formatDate(problem.dueDate)}
+              </Text>
+            </View>
+          ) : null}
+        </View>
         {!!problem.archivedAt && (
           <View style={styles.meta}>
             <Text style={styles.metaLabel} maxFontSizeMultiplier={1.2}>
@@ -512,7 +547,7 @@ export function ProblemDetailScreen() {
 
         {access.isOwner && (
           <TouchableOpacity
-            style={[styles.deleteBtn, { marginTop: spacing.lg }]}
+            style={[styles.deleteBtn, { marginTop: spacing.md }]}
             onPress={deleteProblem}
             accessibilityRole="button"
             accessibilityLabel={t("common.delete")}
@@ -549,26 +584,39 @@ export function ProblemDetailScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
-  content: { padding: spacing.lg, paddingBottom: 80 },
+  content: { padding: spacing.md, paddingBottom: 80 },
   center: { flex: 1, justifyContent: "center", alignItems: "center" },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius,
-    padding: spacing.lg,
-    marginBottom: spacing.lg,
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
-  header: { flexDirection: "row", alignItems: "center", marginBottom: spacing.md, flexWrap: "wrap", gap: spacing.sm },
+  header: { flexDirection: "row", alignItems: "center", marginBottom: spacing.sm, flexWrap: "wrap", gap: spacing.sm },
   priorityDot: { width: 10, height: 10, borderRadius: 5 },
   category: { fontSize: 12, color: colors.textMuted, textTransform: "uppercase" },
   priority: { fontSize: 12, color: colors.primary, fontWeight: "600" },
-  description: { fontSize: 18, color: colors.text, marginBottom: spacing.lg, lineHeight: 24 },
-  meta: { marginBottom: spacing.sm },
-  metaLabel: { fontSize: 12, color: colors.textMuted, marginBottom: 2 },
-  metaValue: { fontSize: 15, color: colors.text },
+  description: { fontSize: 16, color: colors.text, marginBottom: spacing.sm, lineHeight: 22 },
+  meta: { marginBottom: spacing.xs, flex: 1, minWidth: "45%" },
+  metaGrid: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm },
+  metaDivider: { height: 1, backgroundColor: "#eee", marginVertical: spacing.sm },
+  metaLabel: { fontSize: 11, color: colors.textMuted, marginBottom: 1 },
+  noteHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: 4 },
+  notePreview: { fontSize: 14, color: colors.textMuted, fontStyle: "italic" },
+  metaValue: { fontSize: 14, color: colors.text },
   gpsSection: { marginBottom: spacing.sm },
   gpsRow: { flexDirection: "row", alignItems: "center", gap: spacing.xs, marginTop: spacing.xs },
-  miniMapWrap: { marginTop: spacing.sm, borderRadius: 8, overflow: "hidden", position: "relative" },
-  miniMap: { width: "100%", height: 140 },
+  miniMapWrap: { marginTop: spacing.xs, borderRadius: 8, overflow: "hidden", position: "relative", backgroundColor: "#f5f5f5", minHeight: 72 },
+  miniMap: { width: "100%", height: 72 },
+  mapPlaceholder: {
+    minHeight: 72,
+    alignItems: "center",
+    justifyContent: "center",
+    padding: spacing.sm,
+    backgroundColor: "#f0f4f8",
+  },
+  mapPlaceholderText: { fontSize: 14, fontWeight: "600", color: colors.primary, marginTop: spacing.xs },
+  mapPlaceholderCoords: { fontSize: 11, color: colors.textMuted, marginTop: 2 },
   miniMapOverlay: {
     position: "absolute",
     bottom: 0,
@@ -583,14 +631,14 @@ const styles = StyleSheet.create({
   },
   miniMapOverlayText: { color: "#fff", fontSize: 13, fontWeight: "600" },
   voiceMessageLabel: { marginTop: 4 },
-  statusSection: { marginTop: spacing.lg, paddingTop: spacing.lg, borderTopWidth: 1, borderTopColor: "#eee" },
-  statusValue: { fontSize: 16, fontWeight: "600", color: colors.text, marginTop: 4 },
-  statusButtons: { flexDirection: "row", flexWrap: "wrap", marginTop: spacing.md, gap: spacing.sm },
+  statusSection: { marginTop: spacing.md, paddingTop: spacing.md, borderTopWidth: 1, borderTopColor: "#eee" },
+  statusValue: { fontSize: 15, fontWeight: "600", color: colors.text, marginTop: 2 },
+  statusButtons: { flexDirection: "row", flexWrap: "wrap", marginTop: spacing.sm, gap: spacing.xs },
   statusBtn: {
     flexDirection: "row",
     alignItems: "center",
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 6,
     borderRadius: 8,
   },
   statusBtnInner: { flexDirection: "row", alignItems: "center" },
@@ -600,7 +648,7 @@ const styles = StyleSheet.create({
   statusBtnReject: { backgroundColor: colors.error },
   statusBtnSelectedBorder: { borderWidth: 3, borderColor: "#fff" },
   statusBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
-  archiveSection: { marginTop: spacing.md, gap: spacing.sm },
+  archiveSection: { marginTop: spacing.sm, gap: spacing.sm },
   archiveBtn: { backgroundColor: "#6b7280" },
   archiveInputWrap: { gap: spacing.sm },
   archiveInput: {
@@ -614,10 +662,10 @@ const styles = StyleSheet.create({
     textAlignVertical: "top",
   },
   archiveConfirmBtn: { backgroundColor: "#374151", alignSelf: "flex-start" },
-  photosSection: { marginTop: spacing.md },
-  photoGrid: { flexDirection: "row", flexWrap: "wrap", marginTop: spacing.sm, gap: spacing.sm },
-  photoThumb: { width: 100, height: 100, borderRadius: 8 },
-  audioSection: { marginTop: spacing.lg },
+  photosSection: { marginTop: spacing.sm },
+  photoGrid: { flexDirection: "row", flexWrap: "wrap", marginTop: spacing.xs, gap: spacing.xs },
+  photoThumb: { width: 64, height: 64, borderRadius: 6 },
+  audioSection: { marginTop: spacing.md },
   audioBtn: {
     flexDirection: "row",
     alignItems: "center",

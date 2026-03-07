@@ -11,12 +11,8 @@ set TMP=C:\g
 set TEMP=C:\g
 set REACT_NATIVE_ARCHITECTURES=x86_64
 
-REM Use subst for short project path (Z: = project root)
-subst Z: /d 2>nul
-subst Z: "%PROJECT_ROOT%"
-cd /d Z:\
+cd /d "%PROJECT_ROOT%"
 call npx expo run:android %*
 set "EXIT_CODE=%ERRORLEVEL%"
-subst Z: /d 2>nul
 endlocal
 exit /b %EXIT_CODE%

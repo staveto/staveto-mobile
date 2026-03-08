@@ -27,6 +27,7 @@ import * as projectsService from "../services/projects";
 import * as tasksService from "../services/tasks";
 import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
+import { extractInvoiceData } from "../services/invoiceOCR";
 import * as dashboardService from "../services/dashboard";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectCoverService from "../services/projectCover";
@@ -53,6 +54,7 @@ import analytics from "@react-native-firebase/analytics";
 import { hasShownFirstProjectPrompt, markFirstProjectPromptShown } from "../utils/firstProjectPrompt";
 import { KpiCardComponent } from "../components/KpiCard";
 import type { KpiCard } from "../helpers/kpi/getKpiCards";
+import { CurrencyDropdown } from "../components/CurrencyDropdown";
 
 // Conditional imports for image/document picker
 let ImagePicker: typeof import('expo-image-picker') | null = null;
@@ -379,7 +381,10 @@ export function HomeScreen() {
   const [expenseNote, setExpenseNote] = useState("");
   const [expenseCategory, setExpenseCategory] = useState<'WORK' | 'MATERIAL' | undefined>(undefined);
   const [expenseSupplierName, setExpenseSupplierName] = useState("");
+  const [expenseCurrency, setExpenseCurrency] = useState<string>("EUR");
   const [expenseInvoiceImage, setExpenseInvoiceImage] = useState<{ uri: string; fileName: string } | null>(null);
+  const [expenseOcrLoading, setExpenseOcrLoading] = useState(false);
+  const [showCurrencyDropdown, setShowCurrencyDropdown] = useState(false);
   const [uploadingExpenseAttachment, setUploadingExpenseAttachment] = useState(false);
   const [submittingExpense, setSubmittingExpense] = useState(false);
   const [showActionSheet, setShowActionSheet] = useState(false);
@@ -980,62 +985,102 @@ export function HomeScreen() {
     }
   };
 
+  const runOcrOnExpenseImage = useCallback(
+    async (uri: string, fileName: string) => {
+      if (!expenseProjectId) return;
+      try {
+        setUploadingExpenseAttachment(true);
+        setExpenseOcrLoading(true);
+        const attachment = await attachmentsService.uploadAttachment(expenseProjectId, {
+          expenseId: null,
+          taskId: null,
+          phaseId: null,
+          localUri: uri,
+          fileName,
+          mimeType: "image/jpeg",
+          kind: "image",
+        });
+        const storagePath = attachment.storagePath?.trim();
+        if (!storagePath) throw new Error("Upload returned empty path.");
+        const result = await extractInvoiceData({
+          filePath: storagePath,
+          mimeType: "image/jpeg",
+          attachmentId: attachment.id,
+          projectId: expenseProjectId,
+        });
+        if (result.status === "success" && result.parsed) {
+          const p = result.parsed;
+          if (p.totalAmount != null && p.totalAmount > 0) setExpenseAmount(String(p.totalAmount));
+          if (p.currency && p.currency !== "UNKNOWN") setExpenseCurrency(p.currency);
+          if (p.supplierName?.trim()) setExpenseSupplierName(p.supplierName.trim());
+          if (p.issueDate) setExpenseDate(p.issueDate);
+          if (p.supplierName?.trim() && !expenseTitle.trim()) setExpenseTitle(p.supplierName.trim());
+        } else if (result.status !== "success") {
+          const msg =
+            result.errorCode === "ENTITLEMENT_REQUIRED"
+              ? t("subscription.entitlementRequired")
+              : result.errorCode === "LIMIT_REACHED"
+                ? t("expense.ocrLimit")
+                : t("ocr.manualFallback");
+          Alert.alert(t("common.warning"), msg);
+        }
+      } catch (error: any) {
+        console.error("[HomeScreen] OCR failed:", error);
+        Alert.alert(t("common.warning"), t("ocr.manualFallback"));
+      } finally {
+        setUploadingExpenseAttachment(false);
+        setExpenseOcrLoading(false);
+      }
+    },
+    [expenseProjectId, expenseTitle, t]
+  );
+
   const launchCameraForExpense = async () => {
     if (!ImagePicker) return;
-    
     try {
-      // Request camera permissions
       const { status } = await ImagePicker.requestCameraPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Oprávnenie', 'Potrebujeme prístup ku kamere na fotografovanie faktúr.');
+      if (status !== "granted") {
+        Alert.alert("Oprávnenie", "Potrebujeme prístup ku kamere na fotografovanie faktúr.");
         return;
       }
-
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ["images"],
         allowsEditing: true,
         quality: 0.8,
       });
-
       const asset = result?.assets?.[0];
       if (!result?.canceled && asset?.uri) {
-        setExpenseInvoiceImage({
-          uri: asset.uri,
-          fileName: asset.fileName || `faktura_${Date.now()}.jpg`,
-        });
+        const img = { uri: asset.uri, fileName: asset.fileName || `faktura_${Date.now()}.jpg` };
+        setExpenseInvoiceImage(img);
+        if (expenseProjectId) await runOcrOnExpenseImage(img.uri, img.fileName);
       }
     } catch (error: any) {
-      console.error(`[HomeScreen] Error launching camera:`, error);
+      console.error("[HomeScreen] Error launching camera:", error);
       Alert.alert(t("common.error"), t("projectOverview.failedToOpenCamera"));
     }
   };
 
   const launchGalleryForExpense = async () => {
     if (!ImagePicker) return;
-    
     try {
-      // Request media library permissions
       const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
-      if (status !== 'granted') {
-        Alert.alert('Oprávnenie', 'Potrebujeme prístup k galérii na výber faktúr.');
+      if (status !== "granted") {
+        Alert.alert("Oprávnenie", "Potrebujeme prístup k galérii na výber faktúr.");
         return;
       }
-
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
         allowsEditing: true,
         quality: 0.8,
       });
-
       const asset = result?.assets?.[0];
       if (!result?.canceled && asset?.uri) {
-        setExpenseInvoiceImage({
-          uri: asset.uri,
-          fileName: asset.fileName || `faktura_${Date.now()}.jpg`,
-        });
+        const img = { uri: asset.uri, fileName: asset.fileName || `faktura_${Date.now()}.jpg` };
+        setExpenseInvoiceImage(img);
+        if (expenseProjectId) await runOcrOnExpenseImage(img.uri, img.fileName);
       }
     } catch (error: any) {
-      console.error(`[HomeScreen] Error picking from gallery:`, error);
+      console.error("[HomeScreen] Error picking from gallery:", error);
       Alert.alert(t("common.error"), t("projectOverview.failedToSelectImage"));
     }
   };
@@ -1066,6 +1111,7 @@ export function HomeScreen() {
       const newExpense = await expensesService.createExpense(orgId, expenseProjectId, {
         title: expenseTitleValue,
         amount,
+        currency: expenseCurrency || "EUR",
         date: new Date(expenseDate),
         note: expenseNote.trim() || undefined,
         source: expenseInvoiceImage ? 'DOCUMENT' : 'MANUAL',
@@ -1114,6 +1160,7 @@ export function HomeScreen() {
       setExpenseDate(new Date().toISOString().split('T')[0]);
       setExpenseCategory(undefined);
       setExpenseSupplierName("");
+      setExpenseCurrency("EUR");
       setExpenseInvoiceImage(null);
       
       await loadDashboard(true);
@@ -1124,7 +1171,7 @@ export function HomeScreen() {
       setSubmittingExpense(false);
       setUploadingExpenseAttachment(false);
     }
-  }, [expenseProjectId, orgId, expenseTitle, expenseAmount, expenseDate, expenseNote, expenseCategory, expenseSupplierName, expenseInvoiceImage, loadDashboard]);
+  }, [expenseProjectId, orgId, expenseTitle, expenseAmount, expenseDate, expenseNote, expenseCategory, expenseSupplierName, expenseCurrency, expenseInvoiceImage, loadDashboard]);
 
 
 
@@ -1867,29 +1914,46 @@ export function HomeScreen() {
                     <TouchableOpacity
                       style={styles.expenseInvoiceButton}
                       onPress={pickExpenseInvoiceImage}
-                      disabled={uploadingExpenseAttachment}
+                      disabled={uploadingExpenseAttachment || expenseOcrLoading}
                     >
                       <Ionicons name="camera-outline" size={24} color={colors.primary} />
                       <Text style={styles.expenseInvoiceButtonText}>{t("expense.takeInvoicePhoto")}</Text>
                     </TouchableOpacity>
                   )}
-                  {uploadingExpenseAttachment && (
+                  {(uploadingExpenseAttachment || expenseOcrLoading) && (
                     <View style={styles.uploadingIndicator}>
                       <ActivityIndicator size="small" color={colors.primary} />
-                      <Text style={styles.uploadingText}>Nahráva sa...</Text>
+                      <Text style={styles.uploadingText}>
+                        {expenseOcrLoading ? t("expense.ocrProcessing") : t("common.uploading")}
+                      </Text>
                     </View>
                   )}
                 </View>
 
-                {/* Amount */}
-                <TextInput
-                  style={styles.input}
-                  placeholder={t("expense.amount")}
-                  placeholderTextColor="#FFFFFF"
-                  value={expenseAmount}
-                  onChangeText={handleAmountChange}
-                  keyboardType="decimal-pad"
-                />
+                {/* Amount + Currency */}
+                <View style={styles.expenseAmountRow}>
+                  <TextInput
+                    style={[styles.input, styles.expenseAmountInput]}
+                    placeholder={t("expense.amount")}
+                    placeholderTextColor="#FFFFFF"
+                    value={expenseAmount}
+                    onChangeText={handleAmountChange}
+                    keyboardType="decimal-pad"
+                  />
+                  <TouchableOpacity
+                    style={styles.expenseCurrencyTouchable}
+                    onPress={() => setShowCurrencyDropdown(true)}
+                  >
+                    <Text style={styles.expenseCurrencyLabel}>{expenseCurrency}</Text>
+                    <Ionicons name="chevron-down" size={14} color="rgba(255,255,255,0.7)" />
+                  </TouchableOpacity>
+                  <CurrencyDropdown
+                    visible={showCurrencyDropdown}
+                    onClose={() => setShowCurrencyDropdown(false)}
+                    value={expenseCurrency}
+                    onSelect={setExpenseCurrency}
+                  />
+                </View>
 
                 {/* Category Selector */}
                 <View style={styles.expenseCategorySection}>
@@ -3179,6 +3243,28 @@ const styles = StyleSheet.create({
     backgroundColor: colors.card,
     borderRadius: 12,
     padding: spacing.xs,
+  },
+  expenseAmountRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginBottom: spacing.md,
+  },
+  expenseAmountInput: {
+    flex: 1,
+    marginRight: spacing.sm,
+    marginBottom: 0,
+  },
+  expenseCurrencyTouchable: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+  },
+  expenseCurrencyLabel: {
+    fontSize: 16,
+    color: "#FFFFFF",
+    fontWeight: "500",
   },
   expenseCategorySection: {
     marginBottom: spacing.md,

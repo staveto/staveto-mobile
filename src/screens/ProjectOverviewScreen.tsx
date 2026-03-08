@@ -81,6 +81,7 @@ import { formatEventSummary } from "../helpers/formatEvent";
 import type { ProjectEvent } from "../lib/types";
 import type { ProjectWeatherSnapshot } from "../services/weather";
 import { DescriptionInputModal } from "../components/DescriptionInputModal";
+import { CurrencyDropdown } from "../components/CurrencyDropdown";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
 
 const DONE_COLOR = "#2e7d32";
@@ -187,6 +188,8 @@ export function ProjectOverviewScreen() {
   const [kmError, setKmError] = useState<string | undefined>(undefined);
   const [expenseSupplierName, setExpenseSupplierName] = useState("");
   const [expenseSupplierIco, setExpenseSupplierIco] = useState("");
+  const [expenseCurrency, setExpenseCurrency] = useState<string>("EUR");
+  const [showCurrencyDropdown, setShowCurrencyDropdown] = useState(false);
   const [expensePhaseId, setExpensePhaseId] = useState<string | null>(null);
   const [expenseAttachment, setExpenseAttachment] = useState<{ uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' } | null>(null);
   const [expensePreuploadedAttachment, setExpensePreuploadedAttachment] = useState<{
@@ -1524,6 +1527,7 @@ export function ProjectOverviewScreen() {
       setExpenseCategory((expense.category as 'WORK' | 'MATERIAL' | 'OTHER' | 'TRAVEL' | undefined) || undefined);
       setExpenseSupplierName(expense.supplierName || "");
       setExpenseSupplierIco(expense.supplierIco || "");
+      setExpenseCurrency(expense.currency || "EUR");
       setExpensePhaseId(expense.phaseId || null);
       setExpenseAttachment(null);
       setExpensePreuploadedAttachment(null);
@@ -1549,6 +1553,7 @@ export function ProjectOverviewScreen() {
       setExpenseCategory(initialCategory ?? undefined);
       setExpenseSupplierName("");
       setExpenseSupplierIco("");
+      setExpenseCurrency("EUR");
       setExpensePhaseId(null);
       setExpenseAttachment(null);
       setExpensePreuploadedAttachment(null);
@@ -1572,6 +1577,9 @@ export function ProjectOverviewScreen() {
     }
     if (parsed.issueDate) {
       setExpenseDate(parsed.issueDate);
+    }
+    if (parsed.currency && parsed.currency !== "UNKNOWN") {
+      setExpenseCurrency(parsed.currency);
     }
     const supplier = parsed.supplierName?.trim();
     const isNoise = supplier && /^[\u0600-\u06FF\s]+$/.test(supplier) && supplier.length < 10;
@@ -1918,11 +1926,12 @@ export function ProjectOverviewScreen() {
     projectId: string;
     expenseId: string;
     status: "success" | "failed" | "limit" | "cancelled";
-    parsed: { supplierName: string | null; invoiceNumber: string | null; issueDate: string | null; totalAmount: number | null; vatAmount: number | null; currency: "EUR"; } | null;
+    parsed: OcrParsed | null;
     defaultTitle: string;
     defaultAmount: string;
     defaultDate: string;
     defaultSupplierName?: string;
+    defaultCurrency?: string;
     attachmentId?: string;
     storagePath?: string;
   }) => {
@@ -1953,6 +1962,7 @@ export function ProjectOverviewScreen() {
     defaultAmount: string;
     defaultDate: string;
     defaultSupplierName?: string;
+    defaultCurrency?: string;
   }) => {
     const requestId = Date.now();
     const normalizedPath = input.storagePath?.trim();
@@ -2127,6 +2137,7 @@ export function ProjectOverviewScreen() {
         const newExpense = await expensesService.createExpense(orgId, projectId, {
           title: titleValue,
           amount,
+          currency: expenseCurrency || "EUR",
           date: expenseDateObj,
           note: expenseNote.trim() || undefined,
           category: expenseCategory,
@@ -2141,6 +2152,7 @@ export function ProjectOverviewScreen() {
             : undefined,
           filePath: expensePreuploadedAttachment?.storagePath ?? null,
           mimeType: expensePreuploadedAttachment?.mimeType ?? expenseAttachment?.mimeType ?? null,
+          ocrCurrency: expenseCurrency || "EUR",
           ...(travelData && { travel: travelData }),
         });
 
@@ -2163,6 +2175,7 @@ export function ProjectOverviewScreen() {
             ocrSupplierName: expenseSupplierName.trim() || null,
             ocrIssueDate: expenseDate || null,
             ocrTotalAmount: amount ?? null,
+            ocrCurrency: expenseCurrency || "EUR",
           });
         }
 
@@ -2213,6 +2226,7 @@ export function ProjectOverviewScreen() {
                 defaultAmount: expenseAmount,
                 defaultDate: expenseDate,
                 defaultSupplierName: expenseSupplierName || undefined,
+                defaultCurrency: expenseCurrency || "EUR",
               });
             }
           } catch (error: any) {
@@ -2237,6 +2251,7 @@ export function ProjectOverviewScreen() {
                 defaultAmount: expenseAmount,
                 defaultDate: expenseDate,
                 defaultSupplierName: expenseSupplierName || undefined,
+                defaultCurrency: expenseCurrency || "EUR",
               });
             } else {
               Alert.alert(t("common.warning"), t("projectOverview.expenseSavedAttachmentFailed"));
@@ -4658,7 +4673,19 @@ export function ProjectOverviewScreen() {
                 placeholderTextColor={colors.textMuted}
                 keyboardType="decimal-pad"
               />
-              <Text style={styles.expenseCurrencyLabel}>EUR</Text>
+              <TouchableOpacity
+                style={styles.expenseCurrencyTouchable}
+                onPress={() => setShowCurrencyDropdown(true)}
+              >
+                <Text style={styles.expenseCurrencyLabel}>{expenseCurrency}</Text>
+                <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
+              </TouchableOpacity>
+              <CurrencyDropdown
+                visible={showCurrencyDropdown}
+                onClose={() => setShowCurrencyDropdown(false)}
+                value={expenseCurrency}
+                onSelect={setExpenseCurrency}
+              />
             </View>
 
             <View style={styles.expenseCategorySection}>
@@ -4869,23 +4896,24 @@ export function ProjectOverviewScreen() {
               <>
             {/* Supplier */}
             <TextInput
-              style={styles.input}
+              style={[styles.input, styles.expenseInputCompact]}
               value={expenseSupplierName}
               onChangeText={setExpenseSupplierName}
               placeholder={t("expense.supplierName") || "Meno dodávateľa (voliteľné)"}
               placeholderTextColor={colors.textMuted}
             />
+            {/* Tax ID */}
             <TextInput
-              style={styles.input}
+              style={[styles.input, styles.expenseInputCompact]}
               value={expenseSupplierIco}
               onChangeText={setExpenseSupplierIco}
-              placeholder={t("expense.supplierTaxId")}
+              placeholder={t("expense.supplierTaxId") || "Daňové identifikačné číslo (voliteľné)"}
               placeholderTextColor={colors.textMuted}
               keyboardType="number-pad"
             />
 
             <TextInput
-              style={styles.input}
+              style={[styles.input, styles.expenseInputCompact]}
               value={expenseTitle}
               onChangeText={setExpenseTitle}
               placeholder={t("projectOverview.expenseTitlePlaceholder") || "Názov výdavku *"}
@@ -4894,7 +4922,7 @@ export function ProjectOverviewScreen() {
             />
             {expenseCategory !== 'TRAVEL' && (
             <TouchableOpacity
-              style={styles.dateInputButton}
+              style={[styles.dateInputButton, styles.expenseDateCompact]}
               onPress={() => {
                 const currentDate = expenseDate ? new Date(expenseDate) : new Date();
                 setDatePickerDate(currentDate);
@@ -4909,7 +4937,7 @@ export function ProjectOverviewScreen() {
             </TouchableOpacity>
             )}
             <TextInput
-              style={[styles.input, styles.textArea]}
+              style={[styles.input, styles.expenseNoteInput]}
               value={expenseNote}
               onChangeText={setExpenseNote}
               onFocus={() => {
@@ -4918,7 +4946,7 @@ export function ProjectOverviewScreen() {
               placeholder={t("projectOverview.expenseNotePlaceholder")}
               placeholderTextColor={colors.textMuted}
               multiline
-              numberOfLines={3}
+              numberOfLines={2}
             />
               </>
             )}
@@ -6752,14 +6780,15 @@ const styles = StyleSheet.create({
     fontWeight: "500",
   },
 
-  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-start", padding: spacing.lg, paddingTop: spacing.xl },
+  modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.5)", justifyContent: "flex-start", padding: spacing.md, paddingTop: spacing.lg },
   modal: { backgroundColor: colors.card, borderRadius: radius, padding: spacing.lg, borderWidth: 1, borderColor: colors.border },
   expenseModal: {
-    height: Dimensions.get("window").height * 0.88,
+    height: Dimensions.get("window").height * 0.92,
     alignSelf: "stretch",
+    padding: spacing.lg,
   },
   expenseModalScroll: { flex: 1, minHeight: 0 },
-  expenseModalScrollContent: { paddingTop: spacing.sm, paddingBottom: 320 },
+  expenseModalScrollContent: { paddingTop: spacing.sm, paddingBottom: 220 },
   diaryModal: {
     height: Dimensions.get("window").height * 0.9,
     alignSelf: "stretch",
@@ -6778,7 +6807,7 @@ const styles = StyleSheet.create({
   ocrText: { color: colors.text, fontSize: 14, textAlign: "center" },
   ocrCancelButton: { marginTop: spacing.sm },
   ocrCancelText: { color: colors.primary, fontSize: 14, fontWeight: "600" },
-  modalTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.md },
+  modalTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.sm },
   assigneePickerSubtitle: { fontSize: 13, color: colors.textMuted, marginBottom: spacing.sm },
   assigneePickerList: { maxHeight: 280, marginBottom: spacing.md },
   assigneePickerListContent: { gap: spacing.xs },
@@ -6984,11 +7013,18 @@ const styles = StyleSheet.create({
   expenseAmountRow: {
     flexDirection: 'row',
     alignItems: 'center',
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   expenseAmountInput: {
     flex: 1,
     marginRight: spacing.sm,
+  },
+  expenseCurrencyTouchable: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 4,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
   },
   expenseCurrencyLabel: {
     fontSize: 16,
@@ -6996,7 +7032,7 @@ const styles = StyleSheet.create({
     fontWeight: '500',
   },
   expenseCategorySection: {
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   expenseCategoryLabel: {
     fontSize: 14,
@@ -7007,7 +7043,7 @@ const styles = StyleSheet.create({
   expenseCategoryHint: {
     fontSize: 12,
     color: colors.textMuted,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
   },
   expenseCategoryButtons: {
     flexDirection: "row",
@@ -7039,19 +7075,24 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   expenseAttachmentSection: {
-    marginTop: spacing.sm,
-    marginBottom: spacing.md,
+    marginTop: spacing.xs,
+    marginBottom: spacing.sm,
   },
   expenseAttachmentLabel: {
     fontSize: 14,
     fontWeight: '600',
     color: colors.text,
-    marginBottom: spacing.sm,
+    marginBottom: 2,
+  },
+  expenseAttachmentHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginBottom: spacing.xs,
   },
   expenseAttachmentButtons: {
     flexDirection: 'row',
-    gap: spacing.md,
-    marginBottom: spacing.sm,
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
   },
   expenseAttachmentButton: {
     flex: 1,
@@ -7099,6 +7140,19 @@ const styles = StyleSheet.create({
   expenseAttachmentUploadingText: {
     fontSize: 14,
     color: colors.textMuted,
+  },
+  expenseNoteInput: {
+    minHeight: 64,
+    textAlignVertical: "top",
+    marginBottom: spacing.sm,
+  },
+  expenseInputCompact: {
+    marginBottom: spacing.sm,
+  },
+  expenseDateCompact: {
+    marginBottom: spacing.sm,
+    minHeight: 48,
+    padding: spacing.md,
   },
   textArea: {
     minHeight: 80,
@@ -7394,8 +7448,8 @@ const styles = StyleSheet.create({
   },
   expenseTypeChoiceRow: {
     flexDirection: "row",
-    gap: spacing.md,
-    marginBottom: spacing.sm,
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
   },
   expenseTypeChoiceButton: {
     flex: 1,

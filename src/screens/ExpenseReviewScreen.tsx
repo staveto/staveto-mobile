@@ -17,6 +17,7 @@ type RouteParams = {
   defaultAmount: string;
   defaultDate: string;
   defaultSupplierName?: string;
+  defaultCurrency?: string;
   attachmentId?: string;
   storagePath?: string;
 };
@@ -94,9 +95,12 @@ export function ExpenseReviewScreen() {
 
     setSaving(true);
     try {
+      const resolvedCurrency = params.parsed?.currency ?? params.defaultCurrency ?? "EUR";
+      const effectiveCurrency = resolvedCurrency === "UNKNOWN" ? "EUR" : resolvedCurrency;
       await expensesService.updateExpense(params.projectId, params.expenseId, {
         title: title.trim(),
         amount: amountNum,
+        currency: effectiveCurrency,
         date: expenseDate,
         supplierName: supplierName.trim() || undefined,
         ocrStatus: params.status,
@@ -106,7 +110,7 @@ export function ExpenseReviewScreen() {
         ocrIssueDate: date,
         ocrTotalAmount: amountNum,
         ocrVatAmount: toNumber(vatAmount),
-        ocrCurrency: "EUR",
+        ocrCurrency: effectiveCurrency,
       });
       Alert.alert(t("common.success"), t("projectOverview.expenseUpdated"));
       (navigation as { goBack: () => void }).goBack();
@@ -118,10 +122,19 @@ export function ExpenseReviewScreen() {
     }
   };
 
+  const debugMatched = parsed?.matchedLine;
+  const debugConfidence = parsed?.confidence?.total ?? parsed?.confidence?.overall;
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>Kontrola údajov z faktúry</Text>
       {statusMessage ? <Text style={styles.statusMessage}>{statusMessage}</Text> : null}
+      {debugMatched != null && (
+        <Text style={styles.debugMatched} numberOfLines={2}>
+          {debugConfidence != null ? `Confidence: ${(debugConfidence * 100).toFixed(0)}% · ` : ""}
+          Matched: {debugMatched}
+        </Text>
+      )}
 
       <Text style={styles.label}>Názov výdavku</Text>
       <TextInput style={styles.input} value={title} onChangeText={setTitle} placeholderTextColor={colors.textMuted} />
@@ -190,6 +203,7 @@ const styles = StyleSheet.create({
   content: { padding: spacing.lg, paddingBottom: spacing.xl },
   title: { fontSize: 20, fontWeight: "700", color: colors.text, marginBottom: spacing.sm },
   statusMessage: { color: colors.textMuted, marginBottom: spacing.md },
+  debugMatched: { fontSize: 11, color: colors.textMuted, marginBottom: spacing.sm, fontStyle: "italic" },
   label: { fontSize: 12, color: colors.textMuted, marginBottom: spacing.xs },
   input: {
     backgroundColor: colors.card,

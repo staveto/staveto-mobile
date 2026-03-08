@@ -1,6 +1,11 @@
 import { auth } from "../firebase";
 import { getCallable } from "../firebase";
-import { extractTotalFromRawText, parseMoneyToNumber } from "../helpers/parseMoney";
+import { parseMoneyToNumber } from "../helpers/parseMoney";
+import {
+  detectCurrencyCandidates,
+  pickBestTotalFromText,
+  type CurrencyCode,
+} from "../utils/invoiceUniversal";
 import { addProjectEvent } from "./projectEvents";
 
 export type OcrStatus = "success" | "failed" | "limit";
@@ -12,18 +17,41 @@ export type OcrParsed = {
   issueDate: string | null;
   totalAmount: number | null;
   vatAmount: number | null;
-  currency: "EUR";
+  currency: CurrencyCode;
+  confidence?: { total?: number; currency?: number; overall?: number };
+  matchedLine?: string;
 };
 
-/** Normalize backend parsed object: map various amount field names and parse string values (e.g. "65,19"). */
+/** Normalize backend parsed object: map various amount field names and parse string values. */
 function normalizeToOcrParsed(
   raw: Record<string, unknown> | null | undefined,
   rawText?: string | null
 ): OcrParsed {
-  if (!raw || typeof raw !== "object") {
-    return { supplierName: null, invoiceNumber: null, issueDate: null, totalAmount: null, vatAmount: null, currency: "EUR" };
-  }
+  const fallbackCurrency: CurrencyCode = "UNKNOWN";
+  const emptyParsed: OcrParsed = {
+    supplierName: null,
+    invoiceNumber: null,
+    issueDate: null,
+    totalAmount: null,
+    vatAmount: null,
+    currency: fallbackCurrency,
+  };
+
+  if (!raw || typeof raw !== "object") return emptyParsed;
   const ocr = raw as Record<string, unknown>;
+
+  // Currency: backend first, else detect from rawText
+  let currency: CurrencyCode = fallbackCurrency;
+  const backendCurrency = ocr.currency as string | undefined;
+  if (backendCurrency && typeof backendCurrency === "string" && backendCurrency.length >= 3) {
+    currency = backendCurrency.toUpperCase() as CurrencyCode;
+  } else if (rawText) {
+    const candidates = detectCurrencyCandidates(rawText);
+    currency = candidates[0]?.currency ?? fallbackCurrency;
+  }
+  if (currency === "UNKNOWN") currency = "EUR"; // safe fallback for legacy
+
+  // Total: backend first
   const candidate =
     ocr.totalAmount ?? ocr.total ?? ocr.grandTotal ?? ocr.amount ?? ocr.sum ?? ocr.amountCents;
   const isFromCents = candidate === ocr.amountCents;
@@ -38,11 +66,34 @@ function normalizeToOcrParsed(
   }
   const MAX = 999_999.99;
   if (totalAmount != null && (totalAmount <= 0 || totalAmount > MAX)) totalAmount = null;
-  if (totalAmount == null && rawText) totalAmount = extractTotalFromRawText(rawText);
-  // When backend returns round number (45, 46, 50) but rawText has XX,XX EUR – prefer mobile fallback
-  if (totalAmount != null && rawText && totalAmount >= 40 && totalAmount <= 60 && Number.isInteger(totalAmount)) {
-    const fromRaw = extractTotalFromRawText(rawText);
-    if (fromRaw != null && fromRaw % 1 !== 0) totalAmount = fromRaw;
+
+  // Universal fallback: pickBestTotalFromText when backend missing or suspicious
+  let confidence = 0.5;
+  let matchedLine: string | undefined;
+  if (rawText) {
+    const pickResult = pickBestTotalFromText(rawText);
+    const pickMoney = pickResult.money;
+    const pickConf = pickResult.confidence ?? 0;
+    matchedLine = pickResult.matchedLine;
+
+    if (totalAmount == null && pickMoney) {
+      totalAmount = pickMoney.amount;
+      currency = pickMoney.currency;
+      confidence = pickConf;
+    } else if (
+      totalAmount != null &&
+      pickMoney &&
+      pickConf > 0.6 &&
+      ((Number.isInteger(totalAmount) && totalAmount >= 100000) ||
+        (Number.isInteger(totalAmount) && pickMoney.amount % 1 !== 0))
+    ) {
+      // Backend looks like ref (big int) or has no decimals while pick has; prefer universal pick
+      totalAmount = pickMoney.amount;
+      currency = pickMoney.currency;
+      confidence = pickConf;
+    } else if (totalAmount != null && pickConf > confidence) {
+      confidence = pickConf;
+    }
   }
 
   let vatAmount: number | null = null;
@@ -113,7 +164,9 @@ function normalizeToOcrParsed(
     issueDate: typeof ocr.issueDate === "string" ? ocr.issueDate : null,
     totalAmount,
     vatAmount,
-    currency: "EUR",
+    currency,
+    confidence: { total: confidence, currency: currency !== fallbackCurrency ? 0.9 : 0.5, overall: confidence },
+    matchedLine,
   };
 }
 
@@ -206,7 +259,12 @@ export async function extractInvoiceData(input: {
     }
     if ("ok" in result && result.ok === true && !("status" in result)) {
       const rawParsed = (result as OcrResult).parsed as Record<string, unknown> | null;
-      const rawText = (result as { rawText?: string }).rawText ?? (result as { extractedText?: string }).extractedText;
+      const rawText =
+        (result as { rawText?: string }).rawText ??
+        (result as { extractedText?: string }).extractedText ??
+        (result as { text?: string }).text ??
+        (result as { fullText?: string }).fullText ??
+        (result as { ocrText?: string }).ocrText;
       const parsed = normalizeToOcrParsed(rawParsed, rawText);
       return { status: "success" as const, parsed };
     }
@@ -215,7 +273,12 @@ export async function extractInvoiceData(input: {
     }
     const ocrResult = result as OcrResult & { cooldownSeconds?: number };
     const rawParsed = ocrResult.parsed as Record<string, unknown> | null;
-    const rawText = ocrResult.rawText ?? (result as { extractedText?: string }).extractedText;
+    const rawText =
+      ocrResult.rawText ??
+      (result as { extractedText?: string }).extractedText ??
+      (result as { text?: string }).text ??
+      (result as { fullText?: string }).fullText ??
+      (result as { ocrText?: string }).ocrText;
     if (ocrResult.status === "limit") {
       return {
         status: "limit",

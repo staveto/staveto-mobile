@@ -18,7 +18,9 @@ import { colors, radius, spacing } from "../theme";
 import { getCallable, db } from "../firebase";
 import { showToast } from "../helpers/toast";
 import { COUNTRY_CODES, getLocalizedCountryName } from "../utils/countries";
+import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
 import { doc, getDoc } from "../lib/rnFirestore";
+import { withTimeout } from "../utils/withTimeout";
 
 const ALLOWED_PROJECT_TYPES = ["BUILD", "RESIDENTIAL", "TRADE", "MANAGEMENT"] as const;
 
@@ -91,8 +93,15 @@ export function CloneProjectModal({
     setSubmitting(true);
     try {
       if (__DEV__) console.log("[CloneProjectModal] clone start, sourceProjectId:", sourceProjectId);
-      // Verify project exists on server before calling CF (avoids not-found from stale cache)
-      const projectSnap = await getDoc(doc(db, "projects", sourceProjectId), { source: "server" });
+      // Server-only: verify project exists on server before calling CF (avoids not-found from stale cache).
+      // Timeout so UI does not hang on weak network.
+      const projectSnap = await withTimeout<
+        FirebaseFirestoreTypes.DocumentSnapshot<FirebaseFirestoreTypes.DocumentData>
+      >(
+        getDoc(doc(db, "projects", sourceProjectId), { source: "server" }),
+        8000,
+        "CloneProjectModal:verifyProject"
+      );
       if (!projectSnap.exists()) {
         if (__DEV__) console.warn("[CloneProjectModal] project not found on server:", sourceProjectId);
         setError(t("projects.cloneNotFound"));

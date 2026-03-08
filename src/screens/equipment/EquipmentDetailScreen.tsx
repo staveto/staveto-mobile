@@ -207,6 +207,11 @@ export function EquipmentDetailScreen() {
                   {r.startFrom && (
                     <Text style={styles.ruleMeta}>{t("equipment.from")}: {new Date(r.startFrom).toLocaleDateString("sk-SK", { day: "numeric", month: "numeric", year: "numeric" })}</Text>
                   )}
+                  {r.nextDueAt && (
+                    <Text style={[styles.ruleMeta, styles.ruleNextDue]}>
+                      {t("equipment.nextInspection")}: {new Date(r.nextDueAt).toLocaleDateString("sk-SK", { day: "numeric", month: "numeric", year: "numeric" })}
+                    </Text>
+                  )}
                 </View>
                 <Ionicons name="pencil" size={20} color={colors.textMuted} />
               </TouchableOpacity>
@@ -295,6 +300,7 @@ const styles = StyleSheet.create({
   ruleRowContent: { flex: 1 },
   ruleTitle: { fontSize: 15, fontWeight: "500", color: colors.text },
   ruleMeta: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
+  ruleNextDue: { fontWeight: "600", color: colors.primary },
   taskRow: {
     backgroundColor: colors.card,
     borderRadius: radius,

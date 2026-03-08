@@ -1,5 +1,6 @@
 import { collection, addDoc, query, getDocs, deleteDoc, doc, serverTimestamp, where, getDoc, writeBatch } from "../lib/rnFirestore";
 import firestore from "@react-native-firebase/firestore";
+import { getDocsSmart } from "./firestoreSmartRead";
 import { db, auth, getCallable } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { addProjectEvent } from "./projectEvents";
@@ -48,9 +49,9 @@ export async function listProjectMembers(
       .collection("projects")
       .doc(projectId)
       .collection("members");
-    const snapshot = forceFromServer
-      ? await membersRef.get({ source: "server" })
-      : await membersRef.get();
+    // Server-only when forceFromServer: need fresh data after add/remove member.
+    // getDocsSmart with forceServer uses 8s timeout to avoid UI hang.
+    const snapshot = await getDocsSmart(membersRef, { forceServer: !!forceFromServer });
     
     return snapshot.docs.map(doc => {
       const data = doc.data();

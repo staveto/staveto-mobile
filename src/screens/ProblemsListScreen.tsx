@@ -17,16 +17,26 @@ import { useI18n } from "../i18n/I18nContext";
 import { useProjectAccess } from "../hooks/useProjectAccess";
 import * as problemsService from "../services/problems";
 import type { ProblemDoc, ProblemStatus, ProblemPriority, ProblemPhoto } from "../services/problems";
-import * as problemPhotosService from "../services/problemPhotos";
+import * as storageSmart from "../services/storageSmart";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { colors, radius, spacing } from "../theme";
 
-function ProblemPhotoThumb({ photo }: { photo: ProblemPhoto }) {
+function ProblemPhotoThumb({
+  photo,
+  onlineStatus,
+}: {
+  photo: ProblemPhoto;
+  onlineStatus: { isOffline: boolean; isPoorNetwork: boolean };
+}) {
   const [url, setUrl] = React.useState<string | null>(photo.downloadURL ?? null);
   React.useEffect(() => {
     if (!url && photo.path) {
-      problemPhotosService.getProblemPhotoURL(photo.path).then(setUrl).catch(() => {});
+      storageSmart
+        .getDownloadUrlSmart(photo.path, onlineStatus)
+        .then((u) => u && setUrl(u))
+        .catch(() => {});
     }
-  }, [photo.path, photo.downloadURL]);
+  }, [photo.path, photo.downloadURL, onlineStatus.isOffline, onlineStatus.isPoorNetwork]);
   return url ? (
     <Image source={{ uri: url }} style={styles.itemPhoto} />
   ) : (
@@ -62,6 +72,7 @@ export function ProblemsListScreen() {
   const { t } = useI18n();
   const { projectId, projectName, projectType } = (route.params ?? {}) as RouteParams;
   const access = useProjectAccess(projectId);
+  const { isOffline, isPoorNetwork } = useOnlineStatus();
   const [problems, setProblems] = useState<ProblemDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -124,7 +135,12 @@ export function ProblemsListScreen() {
 
   const renderItem = ({ item }: { item: ProblemDoc }) => (
     <TouchableOpacity style={styles.item} onPress={() => openDetail(item)} activeOpacity={0.7}>
-      {item.photos?.length > 0 && <ProblemPhotoThumb photo={item.photos[0]} />}
+      {item.photos?.length > 0 && (
+                <ProblemPhotoThumb
+                  photo={item.photos[0]}
+                  onlineStatus={{ isOffline, isPoorNetwork }}
+                />
+              )}
       <View style={[styles.priorityDot, { backgroundColor: PRIORITY_COLORS[item.priority] }]} />
       <View style={styles.itemContent}>
         <Text style={styles.itemCategory}>{t(`problems.categories.${item.category}`)}</Text>

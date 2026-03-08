@@ -27,6 +27,8 @@ import * as problemsService from "../services/problems";
 import * as constructionDiaryService from "../services/constructionDiary";
 import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
+import * as storageSmart from "../services/storageSmart";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import { ProjectShareCard } from "../components/ProjectShareCard";
@@ -57,6 +59,7 @@ export function ProjectOverviewDashboardScreen() {
   const projectId = params.projectId ?? "";
   const projectName = params.projectName ?? "";
   const projectType = params.projectType ?? "";
+  const { isOffline, isPoorNetwork } = useOnlineStatus();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -98,10 +101,16 @@ export function ProjectOverviewDashboardScreen() {
 
         const imageAtts = atts.filter((a) => a.fileType === "image").slice(0, 6);
         const urlMap = new Map<string, string>();
+        const onlineStatus = { isOffline, isPoorNetwork };
         for (const a of imageAtts) {
+          const cached = (a as AttachmentDoc & { downloadURL?: string }).downloadURL;
+          if (cached) {
+            urlMap.set(a.id, cached);
+            continue;
+          }
           try {
-            const url = (a as any).downloadURL ?? (await attachmentsService.getAttachmentURL(a));
-            urlMap.set(a.id, url);
+            const url = await storageSmart.getDownloadUrlSmart(a.storagePath, onlineStatus);
+            if (url) urlMap.set(a.id, url);
           } catch {
             // skip
           }
@@ -114,7 +123,7 @@ export function ProjectOverviewDashboardScreen() {
         setRefreshing(false);
       }
     },
-    [projectId, isBuildOrManagement]
+    [projectId, isBuildOrManagement, isOffline, isPoorNetwork]
   );
 
   useEffect(() => {
@@ -282,14 +291,20 @@ export function ProjectOverviewDashboardScreen() {
       expandExpensesSection: true,
     });
   const goToDiary = () =>
-    (navigation as any).navigate("ProjectOverview", {
+    (navigation as any).navigate("ProjectDiaryOverview", {
       projectId,
       projectName,
       projectType,
-      openDiaryModal: false,
     });
   const goToPhotos = () =>
     (navigation as any).navigate("ProjectPhotos", { projectId, projectName });
+
+  const goToMilestonesOverview = () =>
+    (navigation as any).navigate("ProjectMilestonesOverview", {
+      projectId,
+      projectName,
+      projectType,
+    });
 
   const problemsTitle =
     projectType === "MAINTENANCE"
@@ -456,10 +471,17 @@ export function ProjectOverviewDashboardScreen() {
           </View>
         </View>
 
-        {/* Milestones Card - dokončené fázy */}
+        {/* Milestones Card - dokončené fázy (klikateľné → vizuálny prehľad) */}
         {isBuildOrManagement && kpis.completedPhases.length > 0 && (
-          <View style={styles.card}>
-            <Text style={styles.cardTitle}>{t("projectOverviewDashboard.milestones")}</Text>
+          <TouchableOpacity
+            style={styles.card}
+            onPress={goToMilestonesOverview}
+            activeOpacity={0.95}
+          >
+            <View style={styles.milestonesCardHeader}>
+              <Text style={styles.cardTitle}>{t("projectOverviewDashboard.milestones")}</Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+            </View>
             {kpis.completedPhases.map(({ phase }) => (
               <View key={phase.id} style={styles.milestoneRow}>
                 <View style={styles.milestoneCheck}>
@@ -469,7 +491,7 @@ export function ProjectOverviewDashboardScreen() {
                 <Text style={styles.milestoneLabel}>{t("projectOverviewDashboard.phaseCompleted")}</Text>
               </View>
             ))}
-          </View>
+          </TouchableOpacity>
         )}
 
         {/* Problems Card */}
@@ -508,9 +530,16 @@ export function ProjectOverviewDashboardScreen() {
           </TouchableOpacity>
         </View>
 
-        {/* Diary Card */}
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>{t("projectOverviewDashboard.diaryTitle")}</Text>
+        {/* Diary Card – klikateľné → vizuálny prehľad */}
+        <TouchableOpacity
+          style={styles.card}
+          onPress={goToDiary}
+          activeOpacity={0.95}
+        >
+          <View style={styles.diaryCardHeader}>
+            <Text style={styles.cardTitle}>{t("projectOverviewDashboard.diaryTitle")}</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+          </View>
           {kpis.lastDiary.length === 0 ? (
             <Text style={styles.emptyText}>{t("projectOverview.noDiaryEntries")}</Text>
           ) : (
@@ -536,11 +565,11 @@ export function ProjectOverviewDashboardScreen() {
               </View>
             ))
           )}
-          <TouchableOpacity style={styles.cardButton} onPress={goToDiary}>
+          <View style={styles.cardButton}>
             <Text style={styles.cardButtonText}>{t("projectOverviewDashboard.openDiary")}</Text>
             <Ionicons name="chevron-forward" size={18} color={colors.primary} />
-          </TouchableOpacity>
-        </View>
+          </View>
+        </TouchableOpacity>
 
         {/* Photos Card - Hero layout */}
         <View style={styles.card}>
@@ -706,6 +735,18 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "700",
     color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  milestonesCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  diaryCardHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
     marginBottom: spacing.sm,
   },
   problemsCardAlert: {

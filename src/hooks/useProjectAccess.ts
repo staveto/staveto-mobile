@@ -1,5 +1,6 @@
 import { useState, useEffect, useCallback } from "react";
 import { doc, getDoc } from "../lib/rnFirestore";
+import { getDocSmart } from "../services/firestoreSmartRead";
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 
@@ -74,7 +75,7 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
     setLoading(true);
     try {
       const projectRef = doc(db, "projects", projectId);
-      const projectSnap = await getDoc(projectRef);
+      const projectSnap = await getDocSmart(projectRef);
       const ownerId = (projectSnap.data()?.ownerId as string) ?? projectOwnerId ?? null;
 
       if (!ownerId) {
@@ -105,11 +106,11 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
       }
 
       const memberByUidRef = doc(db, "projects", projectId, "membersByUid", uid);
-      let memberSnap = await getDoc(memberByUidRef);
+      let memberSnap = await getDocSmart(memberByUidRef);
 
       if (!memberSnap.exists()) {
         const membersRef = doc(db, "projects", projectId, "members", uid);
-        const membersSnap = await getDoc(membersRef);
+        const membersSnap = await getDocSmart(membersRef);
         if (membersSnap.exists()) {
           const mData = membersSnap.data();
           const mStatus = mData?.status ?? "";
@@ -215,7 +216,7 @@ export async function fetchProjectAccess(
   }
   try {
     const projectRef = doc(db, "projects", projectId);
-    const projectSnap = await getDoc(projectRef);
+    const projectSnap = await getDocSmart(projectRef);
     const ownerId = (projectSnap.data()?.ownerId as string) ?? projectOwnerId ?? null;
 
     if (!ownerId) {
@@ -242,10 +243,10 @@ export async function fetchProjectAccess(
     }
 
     const memberByUidRef = doc(db, "projects", projectId, "membersByUid", uid);
-    let memberSnap = await getDoc(memberByUidRef);
+    let memberSnap = await getDocSmart(memberByUidRef);
     if (!memberSnap.exists()) {
       const membersRef = doc(db, "projects", projectId, "members", uid);
-      const membersSnap = await getDoc(membersRef);
+      const membersSnap = await getDocSmart(membersRef);
       if (membersSnap.exists()) {
         const mData = membersSnap.data();
         const mStatus = mData?.status ?? "";

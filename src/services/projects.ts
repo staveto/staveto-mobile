@@ -1,6 +1,6 @@
 import { collection, collectionGroup, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, setDoc, serverTimestamp, limit } from "../lib/rnFirestore";
+import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
-import firestore from "@react-native-firebase/firestore";
 import { getApp } from "@react-native-firebase/app";
 import { paths } from "../lib/firestorePaths";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
@@ -150,7 +150,7 @@ export async function listProjectPhases(projectId: string): Promise<ProjectPhase
     const c = collection(db, paths.projectPhases(projectId));
     const q = query(c, orderBy("order", "asc"));
     console.log(`[projects] listProjectPhases: querying phases collection...`);
-    const snap = await getDocs(q);
+    const snap = await getDocsSmart(q);
     console.log(`[projects] Found ${snap.docs.length} phases in Firestore`);
     
     const phases = snap.docs.map((d) => {
@@ -199,7 +199,7 @@ export async function getProject(projectId: string): Promise<ProjectDoc | null> 
   
   try {
     const docRef = doc(db, COLLECTION, projectId);
-    const docSnap = await getDoc(docRef);
+    const docSnap = await getDocSmart(docRef);
     
     if (!docSnap.exists()) {
       console.warn(`[projects] getProject: project ${projectId} does not exist`);
@@ -244,7 +244,7 @@ export async function getProject(projectId: string): Promise<ProjectDoc | null> 
  * Internal helper to load all projects (including archived)
  */
 async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: boolean): Promise<ProjectDoc[]> {
-  const getOptions = forceServerRead ? ({ source: "server" } as const) : undefined;
+  const smartOpts = { forceServer: forceServerRead ?? false };
   // CRITICAL FIX: Always use auth.currentUser.uid, never trust ownerId from params
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
@@ -269,10 +269,11 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
   try {
     // CRITICAL: Query MUST use where('ownerId', '==', auth.currentUser.uid)
     // This ensures Firestore rules can check resource.data.ownerId == uid()
-    const ownerSnap = await firestore()
-      .collection(COLLECTION)
-      .where("ownerId", "==", actualOwnerId)
-      .get(getOptions);
+    const ownerQuery = query(
+      collection(db, COLLECTION),
+      where("ownerId", "==", actualOwnerId)
+    );
+    const ownerSnap = await getDocsSmart(ownerQuery, smartOpts);
     console.log(`[projects] listAllMyProjectsInternal: found ${ownerSnap.docs.length} owner projects`);
     
     // Debug: Check ownerId in each project
@@ -290,7 +291,10 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
 
     // Source 1: users/{uid}/projectRefs (created by claimProjectInvites Cloud Function)
     try {
-      const refsSnap = await getDocs(collection(db, paths.userProjectRefs(actualOwnerId)), getOptions);
+      const refsSnap = await getDocsSmart(
+        collection(db, paths.userProjectRefs(actualOwnerId)),
+        smartOpts
+      );
       refsSnap.docs.forEach((d) => {
         const projectId = typeof d.data().projectId === "string" ? (d.data().projectId as string) : d.id;
         if (projectId && !ownerIds.has(projectId)) memberProjectIds.add(projectId);
@@ -304,7 +308,7 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
       try {
         const membersGroup = collectionGroup(db, "members");
         const memberQuery = query(membersGroup, where("userId", "==", actualOwnerId));
-        const memberSnap = await getDocs(memberQuery, getOptions);
+        const memberSnap = await getDocsSmart(memberQuery, smartOpts);
         memberSnap.docs.forEach((d) => {
           const pathParts = d.ref.path.split("/");
           const projectId = pathParts[1];
@@ -332,7 +336,7 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
     const memberProjects: ProjectDoc[] = [];
     for (const projectId of memberProjectIds) {
       try {
-        const snap = await getDoc(doc(db, COLLECTION, projectId), getOptions);
+        const snap = await getDocSmart(doc(db, COLLECTION, projectId), smartOpts);
         if (!snap.exists()) continue;
         const p = toDoc({ id: snap.id, data: snap.data.bind(snap) }) as ProjectDoc;
         p.isSharedToMe = true;
@@ -514,7 +518,7 @@ export async function createPhase(projectId: string, name: string): Promise<Proj
   
   // Verify project exists and user is owner
   const projectRef = doc(db, paths.project(projectId));
-  const projectSnap = await getDoc(projectRef);
+  const projectSnap = await getDocSmart(projectRef);
   
   if (!projectSnap.exists()) {
     throw new Error(`Projekt ${projectId} neexistuje.`);
@@ -528,7 +532,7 @@ export async function createPhase(projectId: string, name: string): Promise<Proj
   // Calculate order (get max order + 1)
   const phasesRef = collection(db, paths.projectPhases(projectId));
   const phasesQuery = query(phasesRef, orderBy("order", "desc"), limit(1));
-  const phasesSnapshot = await getDocs(phasesQuery);
+  const phasesSnapshot = await getDocsSmart(phasesQuery);
   
   let order = 0;
   if (!phasesSnapshot.empty) {

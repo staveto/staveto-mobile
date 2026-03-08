@@ -32,7 +32,7 @@ import { useI18n } from "../i18n/I18nContext";
 import type { Locale } from "../i18n/translations";
 import { useAuth } from "../context/AuthContext";
 import { colors, spacing } from "../theme";
-import { toYmd, ymdToDate } from "../utils/date";
+import { toYmd, ymdToDate, normalizeDueDateToYmd } from "../utils/date";
 import { normalizeStatusValue } from "../helpers/taskStatusMapping";
 import * as tasksService from "../services/tasks";
 import * as problemsService from "../services/problems";
@@ -136,8 +136,8 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
       }
       const problemMap = new Map<string, ProblemWithProject[]>();
       for (const p of problems) {
-        const ymd = p.dueDate?.trim();
-        if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
+        const ymd = normalizeDueDateToYmd(p.dueDate);
+        if (!ymd) continue;
         const arr = problemMap.get(ymd) ?? [];
         arr.push(p);
         problemMap.set(ymd, arr);

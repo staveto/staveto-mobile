@@ -15,6 +15,7 @@ import {
   Timestamp,
   writeBatch,
 } from "../lib/rnFirestore";
+import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { normalizeDueDateToYmd } from "../utils/date";
@@ -320,7 +321,7 @@ export async function listTasksByProject(projectId: string): Promise<TaskDoc[]> 
     // Note: Firestore doesn't support != null, so we query all and filter in code
     const q = query(c, orderBy("order", "asc"));
     console.log(`[tasks] listTasksByProject: querying tasks collection...`);
-    const snap = await getDocs(q);
+    const snap = await getDocsSmart(q);
     console.log(`[tasks] Found ${snap.docs.length} tasks in Firestore (before filtering)`);
     
     const list = snap.docs
@@ -487,7 +488,7 @@ export async function updateTaskStatus(
   let taskTitle = "";
   let serviceRuleId: string | undefined;
   try {
-    const beforeSnap = await getDoc(doc(db, paths.projectTask(projectId, taskId)));
+    const beforeSnap = await getDocSmart(doc(db, paths.projectTask(projectId, taskId)));
     if (beforeSnap.exists()) {
       const beforeData = beforeSnap.data() as { title?: string; serviceRuleId?: string };
       taskTitle = beforeData.title ?? "";
@@ -545,7 +546,7 @@ export async function updateTaskStatus(
 export async function getTaskById(projectId: string, taskId: string): Promise<TaskDoc | null> {
   try {
     const ref = doc(db, paths.projectTask(projectId, taskId));
-    const snap = await getDoc(ref);
+    const snap = await getDocSmart(ref);
     if (!snap.exists()) return null;
     return toDoc({ id: snap.id, data: snap.data.bind(snap) }, projectId);
   } catch (error) {
@@ -618,7 +619,7 @@ export async function reorderTask(
 ): Promise<void> {
   // Get current task
   const taskRef = doc(db, paths.projectTask(projectId, taskId));
-  const taskSnap = await getDoc(taskRef);
+  const taskSnap = await getDocSmart(taskRef);
   
   if (!taskSnap.exists()) {
     throw new Error(`Task ${taskId} not found`);
@@ -636,7 +637,7 @@ export async function reorderTask(
     orderBy('order', 'asc')
   );
   
-  const allTasksSnap = await getDocs(allTasksQuery);
+  const allTasksSnap = await getDocsSmart(allTasksQuery);
   const phaseTasks = allTasksSnap.docs
     .map(d => ({
       id: d.id,
@@ -695,7 +696,7 @@ export async function moveTaskToPhase(
   newPhaseId: string | null
 ): Promise<void> {
   const taskRef = doc(db, paths.projectTask(projectId, taskId));
-  const taskSnap = await getDoc(taskRef);
+  const taskSnap = await getDocSmart(taskRef);
   
   if (!taskSnap.exists()) {
     throw new Error(`Task ${taskId} not found`);
@@ -710,7 +711,7 @@ export async function moveTaskToPhase(
       orderBy('order', 'desc'),
       limit(1)
     );
-    const targetPhaseSnap = await getDocs(targetPhaseQuery);
+    const targetPhaseSnap = await getDocsSmart(targetPhaseQuery);
     const activeTasks = targetPhaseSnap.docs
       .map(d => d.data())
       .filter(t => t.isActive !== false);

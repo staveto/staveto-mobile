@@ -19,6 +19,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import * as attachmentsService from "../services/attachments";
 import type { AttachmentDoc } from "../services/attachments";
+import * as storageSmart from "../services/storageSmart";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 
@@ -34,6 +36,7 @@ export function ProjectPhotosScreen() {
   const params = (route.params as { projectId?: string; projectName?: string }) ?? {};
   const projectId = params.projectId ?? "";
   const projectName = params.projectName ?? "";
+  const { isOffline, isPoorNetwork } = useOnlineStatus();
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -53,12 +56,16 @@ export function ProjectPhotosScreen() {
         setPhotos(imageAtts);
 
         const urlMap = new Map<string, string>();
+        const onlineStatus = { isOffline, isPoorNetwork };
         for (const a of imageAtts) {
+          const cached = (a as AttachmentDoc & { downloadURL?: string }).downloadURL;
+          if (cached) {
+            urlMap.set(a.id, cached);
+            continue;
+          }
           try {
-            const url =
-              (a as AttachmentDoc & { downloadURL?: string }).downloadURL ??
-              (await attachmentsService.getAttachmentURL(a));
-            urlMap.set(a.id, url);
+            const url = await storageSmart.getDownloadUrlSmart(a.storagePath, onlineStatus);
+            if (url) urlMap.set(a.id, url);
           } catch {
             // skip
           }
@@ -71,7 +78,7 @@ export function ProjectPhotosScreen() {
         setRefreshing(false);
       }
     },
-    [projectId]
+    [projectId, isOffline, isPoorNetwork]
   );
 
   useEffect(() => {
@@ -80,11 +87,18 @@ export function ProjectPhotosScreen() {
 
   const openPhoto = async (att: AttachmentDoc) => {
     try {
-      const url =
-        (att as AttachmentDoc & { downloadURL?: string }).downloadURL ??
-        photoUrls.get(att.id) ??
-        (await attachmentsService.getAttachmentURL(att));
-      setViewingUrl(url);
+      const cached =
+        (att as AttachmentDoc & { downloadURL?: string }).downloadURL ?? photoUrls.get(att.id);
+      if (cached) {
+        setViewingUrl(cached);
+        setViewingPhoto(att);
+        return;
+      }
+      const url = await storageSmart.getDownloadUrlSmart(att.storagePath, {
+        isOffline,
+        isPoorNetwork,
+      });
+      setViewingUrl(url ?? undefined);
       setViewingPhoto(att);
     } catch {
       // ignore
@@ -173,12 +187,19 @@ export function ProjectPhotosScreen() {
             style={styles.modalScroll}
             contentContainerStyle={styles.modalContent}
           >
-            {viewingUrl && (
+            {viewingUrl ? (
               <Image
                 source={{ uri: viewingUrl }}
                 style={styles.modalImage}
                 resizeMode="contain"
               />
+            ) : (
+              <View style={[styles.modalImage, styles.centered]}>
+                <Ionicons name="cloud-offline-outline" size={48} color={colors.textMuted} />
+                <Text style={styles.emptyText}>
+                  {t("common.noConnection") || "Slabé pripojenie – obrázok sa nenačítal"}
+                </Text>
+              </View>
             )}
           </ScrollView>
         </View>

@@ -13,6 +13,7 @@ import {
   Timestamp,
   limit,
 } from "../lib/rnFirestore";
+import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 
@@ -166,7 +167,7 @@ export async function listProblems(
 ): Promise<ProblemDoc[]> {
   const c = collection(db, paths.projectProblems(projectId));
   const q = query(c, orderBy("createdAt", "desc"));
-  const snap = await getDocs(q);
+  const snap = await getDocsSmart(q);
   let list = snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) }));
 
   if (filters?.status) {
@@ -190,13 +191,13 @@ export async function listProblems(
 export async function countOpenProblems(projectId: string): Promise<number> {
   const c = collection(db, paths.projectProblems(projectId));
   const q = query(c, where("status", "in", ["open", "in_progress"]));
-  const snap = await getDocs(q);
+  const snap = await getDocsSmart(q);
   return snap.size;
 }
 
 export async function getProblem(projectId: string, problemId: string): Promise<ProblemDoc | null> {
   const ref = doc(db, paths.projectProblem(projectId, problemId));
-  const snap = await getDoc(ref);
+  const snap = await getDocSmart(ref);
   if (!snap.exists()) return null;
   return toDoc({ id: snap.id, data: snap.data.bind(snap) });
 }
@@ -423,6 +424,7 @@ export async function listProblemsWithDueDateInRange(
     try {
       const list = await listProblems(project.id);
       for (const p of list) {
+        if (p.archivedAt) continue;
         const ymd = normalizeDueDateToYmd(p.dueDate);
         if (!ymd) continue;
         if (ymd >= startYmd && ymd <= endYmd) {

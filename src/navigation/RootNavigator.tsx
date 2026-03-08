@@ -16,6 +16,8 @@ import { CustomizeHomeScreen } from "../screens/CustomizeHomeScreen";
 import { TaskDetailScreen } from "../screens/TaskDetailScreen";
 import { ProjectOverviewScreen } from "../screens/ProjectOverviewScreen";
 import { ProjectOverviewDashboardScreen } from "../screens/ProjectOverviewDashboardScreen";
+import { ProjectMilestonesOverviewScreen } from "../screens/ProjectMilestonesOverviewScreen";
+import { ProjectDiaryOverviewScreen } from "../screens/ProjectDiaryOverviewScreen";
 import { ProjectPhotosScreen } from "../screens/ProjectPhotosScreen";
 import { ProjectMembersScreen } from "../screens/ProjectMembersScreen";
 import { SubscriptionScreen } from "../screens/SubscriptionScreen";
@@ -39,6 +41,7 @@ import { ProblemsListScreen } from "../screens/ProblemsListScreen";
 import { ProblemDetailScreen } from "../screens/ProblemDetailScreen";
 import { CreateProblemScreen } from "../screens/CreateProblemScreen";
 import { AppDrawer } from "./AppDrawer";
+import { OfflineBanner } from "../components/OfflineBanner";
 import { colors, spacing } from "../theme";
 import { getFirestore, db } from "../firebase";
 import { doc, getDoc } from "../lib/rnFirestore";
@@ -247,14 +250,16 @@ export function RootNavigator() {
   }
 
   return (
-    <Stack.Navigator
-      screenOptions={{
-        headerShown: false,
-        headerStyle: { backgroundColor: colors.background },
-        headerTintColor: colors.textOnDark,
-      }}
-    >
-      <Stack.Screen name="AppTabs" component={AppDrawer} />
+    <View style={{ flex: 1 }}>
+      <OfflineBanner />
+      <Stack.Navigator
+        screenOptions={{
+          headerShown: false,
+          headerStyle: { backgroundColor: colors.background },
+          headerTintColor: colors.textOnDark,
+        }}
+      >
+        <Stack.Screen name="AppTabs" component={AppDrawer} />
       <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: true, title: t("nav.home") }} />
       <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: true, title: t("nav.notifications") }} />
       <Stack.Screen
@@ -275,6 +280,16 @@ export function RootNavigator() {
       <Stack.Screen
         name="ProjectOverviewDashboard"
         component={ProjectOverviewDashboardScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ProjectMilestonesOverview"
+        component={ProjectMilestonesOverviewScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ProjectDiaryOverview"
+        component={ProjectDiaryOverviewScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen
@@ -388,6 +403,7 @@ export function RootNavigator() {
         options={{ headerShown: false }}
       />
     </Stack.Navigator>
+    </View>
   );
 }
 

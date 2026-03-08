@@ -103,6 +103,8 @@ export function ProjectOverviewScreen() {
     selectedPhaseId?: string | null;
     openExpenseId?: string | null;
     expandExpensesSection?: boolean;
+    /** Expand this phase on load (e.g. when navigating from milestone click) */
+    expandPhaseId?: string | null;
   }) ?? {};
   const {
     projectId: paramProjectId,
@@ -115,6 +117,7 @@ export function ProjectOverviewScreen() {
     selectedPhaseId: paramSelectedPhaseId,
     openExpenseId: paramOpenExpenseId,
     expandExpensesSection: paramExpandExpensesSection,
+    expandPhaseId: paramExpandPhaseId,
   } = routeParams;
   const projectId = paramProjectId ?? "";
   const projectName = paramProjectName ?? "";
@@ -723,6 +726,20 @@ export function ProjectOverviewScreen() {
       setExpandedExpenses(true);
     }
   }, [paramExpandExpensesSection, projectId, access.canReadExpenses]);
+
+  // Expand phase when navigating from milestone click (ProjectOverviewDashboard)
+  useEffect(() => {
+    if (!paramExpandPhaseId || phases.length === 0) return;
+    const phaseExists = phases.some((p) => p.id === paramExpandPhaseId);
+    if (phaseExists) {
+      setExpandedPhases((prev) => {
+        const next = new Map(prev);
+        next.set(paramExpandPhaseId, true);
+        expandedPhasesRef.current = next;
+        return next;
+      });
+    }
+  }, [paramExpandPhaseId, phases]);
 
   useEffect(() => {
     if (!paramOpenExpenseId || !projectId) return;

@@ -4,6 +4,7 @@ import storageModule from "@react-native-firebase/storage";
 import { getApp } from "@react-native-firebase/app";
 import { getFunctions, httpsCallable } from "@react-native-firebase/functions";
 import { IOS_SKIP_AUTH } from "./lib/iosDiagnostic";
+import { withTimeout, isTimeoutOrOfflineError } from "./utils/withTimeout";
 
 const REGION = "europe-west1";
 
@@ -64,13 +65,31 @@ export function getFunctionsInstance() {
   }
 }
 
-/** Keep call style: getCallable("name")(data) */
+const FUNCTIONS_TIMEOUT_MS = 6000;
+
+/** Keep call style: getCallable("name")(data). Wrapped with 6s timeout for fast fail on weak network. */
 export const getCallable = <T = unknown, R = unknown>(name: string) => {
   return async (data: T) => {
     if (IOS_SKIP_AUTH) throw new Error("FIREBASE_DISABLED");
     const fns = getFunctionsInstance();
     if (!fns) throw new Error("FIREBASE_FUNCTIONS_NOT_READY");
-    return httpsCallable<T, R>(fns, name)(data);
+    try {
+      return await withTimeout(
+        httpsCallable<T, R>(fns, name)(data),
+        FUNCTIONS_TIMEOUT_MS,
+        name
+      );
+    } catch (err) {
+      if (isTimeoutOrOfflineError(err)) {
+        const friendly = new Error(
+          "Slabé pripojenie alebo žiadny internet. Skúste znova neskôr."
+        ) as Error & { code?: string };
+        friendly.code = "NETWORK_ERROR";
+        (friendly as Error & { cause?: unknown }).cause = err;
+        throw friendly;
+      }
+      throw err;
+    }
   };
 };
 

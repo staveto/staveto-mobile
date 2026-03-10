@@ -14,7 +14,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
-import { getAuthErrorMessage, loginWithGoogle } from "../services/auth";
+import { getAuthErrorMessage, loginWithApple, loginWithGoogle } from "../services/auth";
 import { colors, radius, spacing } from "../theme";
 
 export function RegisterScreen() {
@@ -54,6 +54,19 @@ export function RegisterScreen() {
     setError("");
     try {
       await loginWithGoogle();
+    } catch (e: unknown) {
+      const code = (e as { code?: string })?.code;
+      setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("register.failed")));
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
+  const onAppleRegister = async () => {
+    setSubmitting(true);
+    setError("");
+    try {
+      await loginWithApple();
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code;
       setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("register.failed")));
@@ -108,6 +121,12 @@ export function RegisterScreen() {
         <Ionicons name="logo-google" size={20} color="#fff" />
         <Text style={styles.googleBtnText}>{t("register.google")}</Text>
       </TouchableOpacity>
+      {Platform.OS === "ios" && (
+        <TouchableOpacity style={styles.appleBtn} onPress={onAppleRegister} disabled={submitting}>
+          <Ionicons name="logo-apple" size={22} color="#fff" />
+          <Text style={styles.appleBtnText}>{t("login.apple")}</Text>
+        </TouchableOpacity>
+      )}
       <TouchableOpacity style={styles.link} onPress={() => (navigation as any).navigate("Login")}>
         <Text style={styles.linkText}>{t("register.haveAccount")}</Text>
       </TouchableOpacity>
@@ -165,6 +184,17 @@ const styles = StyleSheet.create({
     backgroundColor: "#4285F4",
   },
   googleBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  appleBtn: {
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    backgroundColor: "#000",
+  },
+  appleBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   link: { marginTop: spacing.lg, alignItems: "center" },
   linkText: { color: colors.primary, fontSize: 14 },
 });

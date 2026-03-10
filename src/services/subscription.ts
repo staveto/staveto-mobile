@@ -8,7 +8,8 @@
  */
 
 import { doc, getDoc, onSnapshot, Unsubscribe } from "../lib/rnFirestore";
-import { db, getCallable } from "../firebase";
+import { db } from "../firebase";
+import { getCallableWithTimeout } from "./functionsClient";
 
 export type SubscriptionTier = "FREE" | "BASIC" | "PRO" | "ENTERPRISE";
 export type SubscriptionStatus = "trialing" | "active" | "past_due" | "canceled";
@@ -130,8 +131,12 @@ export function subscribeToSubscription(
  * Returns { ok, tier, currentPeriodEnd } on success.
  * Throws with code: INVALID_CODE | EXPIRED | LIMIT_REACHED | ALREADY_REDEEMED | UNAUTHENTICATED
  */
+/** 15s timeout – Firestore transaction + cold start can be slow, especially on iOS */
+const REDEEM_PROMO_TIMEOUT_MS = 15000;
+
 export async function redeemPromoCode(code: string): Promise<{ ok: boolean; tier: string; currentPeriodEnd: string }> {
-  const result = await getCallable("redeemPromoCode")({ code });
+  const fn = getCallableWithTimeout("redeemPromoCode", REDEEM_PROMO_TIMEOUT_MS);
+  const result = await fn({ code });
   return result.data as { ok: boolean; tier: string; currentPeriodEnd: string };
 }
 

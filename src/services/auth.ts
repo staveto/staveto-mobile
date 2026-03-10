@@ -18,27 +18,36 @@ function hasField(data: Record<string, unknown>, key: string): boolean {
   return Object.prototype.hasOwnProperty.call(data, key);
 }
 
+/**
+ * Ensure user profile in Firestore. Does not overwrite existing email/name when
+ * incoming values are empty (e.g. Apple "Hide My Email" – subsequent sign-in
+ * may not return email/name).
+ */
 async function ensureUserProfile(user: AuthUser): Promise<void> {
   const ref = doc(db, "users", user.id);
   const snap = await getDoc(ref);
   const existing = (snap.exists() ? snap.data() : {}) as Record<string, unknown>;
-  const emailLower = user.email.trim().toLowerCase();
   const update: Record<string, unknown> = {
-    emailLower,
     updatedAt: serverTimestamp(),
   };
 
-  if (!hasField(existing, "email")) {
-    update.email = user.email;
+  // Only set email/emailLower when we have a value – don't overwrite with empty (Apple Hide My Email)
+  const hasEmail = !!user.email?.trim();
+  if (hasEmail) {
+    const trimmed = user.email.trim();
+    update.email = trimmed;
+    update.emailLower = trimmed.toLowerCase();
   }
-  if (!hasField(existing, "displayName")) {
-    update.displayName = user.name ?? null;
+  // When hasEmail is false: don't add to update – existing email/emailLower stay unchanged
+
+  if (!hasField(existing, "displayName") && (user.name?.trim() ?? (user.firstName || user.lastName))) {
+    update.displayName = (user.name?.trim()) ?? ([user.firstName, user.lastName].filter(Boolean).join(" ").trim() || null);
   }
-  if (!hasField(existing, "firstName")) {
-    update.firstName = user.firstName ?? null;
+  if (!hasField(existing, "firstName") && user.firstName) {
+    update.firstName = user.firstName;
   }
-  if (!hasField(existing, "lastName")) {
-    update.lastName = user.lastName ?? null;
+  if (!hasField(existing, "lastName") && user.lastName) {
+    update.lastName = user.lastName;
   }
   if (!hasField(existing, "phoneE164")) {
     update.phoneE164 = user.phoneE164 ?? null;
@@ -166,6 +175,70 @@ export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string
   return { user, token };
 }
 
+/** Sign in with Apple (iOS only). Requires expo-apple-authentication + Firebase Auth Apple provider. */
+export async function loginWithApple(): Promise<{ user: AuthUser; token: string }> {
+  if (Platform.OS !== "ios") {
+    throw new Error("Sign in with Apple is only available on iOS.");
+  }
+
+  const AppleAuthentication = require("expo-apple-authentication").default;
+  const Crypto = require("expo-crypto");
+  const authMod = require("@react-native-firebase/auth").default;
+
+  const isAvailable = await AppleAuthentication.isAvailableAsync();
+  if (!isAvailable) {
+    throw new Error("Sign in with Apple is not available on this device.");
+  }
+
+  const rawNonce = Crypto.randomUUID();
+  const hashedNonce = await Crypto.digestStringAsync(
+    Crypto.CryptoDigestAlgorithm.SHA256,
+    rawNonce,
+    { encoding: Crypto.CryptoEncoding.HEX }
+  );
+
+  const credential = await AppleAuthentication.signInAsync({
+    requestedScopes: [
+      AppleAuthentication.AppleAuthenticationScope.FULL_NAME,
+      AppleAuthentication.AppleAuthenticationScope.EMAIL,
+    ],
+    nonce: hashedNonce,
+  });
+
+  if (!credential.identityToken) {
+    throw new Error("Používateľ zrušil prihlásenie.");
+  }
+
+  const provider = new authMod.OAuthProvider("apple.com");
+  const appleCredential = provider.credential({
+    idToken: credential.identityToken,
+    rawNonce,
+  });
+
+  const cred = await authMod().signInWithCredential(appleCredential);
+
+  // Apple sends fullName/email only on first sign-in; use them if present
+  const fullName = credential.fullName;
+  const appleEmail = credential.email?.trim() || "";
+  const appleName =
+    fullName?.givenName || fullName?.familyName
+      ? [fullName.givenName, fullName.familyName].filter(Boolean).join(" ").trim()
+      : "";
+
+  const fbUser = cred.user;
+  const user: AuthUser = {
+    id: fbUser.uid,
+    email: fbUser.email ?? appleEmail ?? "",
+    name: fbUser.displayName ?? (appleName || undefined),
+    firstName: fullName?.givenName ?? undefined,
+    lastName: fullName?.familyName ?? undefined,
+  };
+
+  await ensureUserProfile(user);
+  const token = await fbUser.getIdToken();
+  return { user, token };
+}
+
 export async function logout(): Promise<void> {
   await getAuth()?.signOut();
 }
@@ -193,10 +266,11 @@ export function getAuthErrorMessage(code: string): string {
     "auth/invalid-credential": "Neplatné prihlasovacie údaje. Skontrolujte Web Client ID vo Firebase.",
     "auth/account-exists-with-different-credential": "Účet s týmto emailom už existuje. Prihláste sa heslom.",
     "auth/credential-already-in-use": "Tieto prihlasovacie údaje sú už použité.",
-    "auth/operation-not-allowed": "Google prihlásenie nie je povolené. Skontrolujte Firebase Console.",
+    "auth/operation-not-allowed": "Google alebo Apple prihlásenie nie je povolené. Skontrolujte Firebase Console.",
     "auth/configuration-not-found": "Chýba Web Client ID. Pridajte EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID do .env",
     "DEVELOPER_ERROR": "Chyba konfigurácie. Skontrolujte SHA-1 v Firebase a Web Client ID.",
     "SIGN_IN_REQUIRED": "Používateľ zrušil prihlásenie.",
+    "ERR_REQUEST_CANCELED": "Používateľ zrušil prihlásenie.",
   };
   return m[code] ?? "Chyba prihlásenia. Skúste znova.";
 }

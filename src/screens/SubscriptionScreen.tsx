@@ -20,6 +20,7 @@ import {
   Pressable,
   KeyboardAvoidingView,
   Platform,
+  Linking,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { useNavigation } from "@react-navigation/native";
@@ -34,6 +35,7 @@ import {
 } from "../services/billing";
 import Purchases from "react-native-purchases";
 import { colors, radius, spacing } from "../theme";
+import { PRIVACY_URL, TERMS_URL } from "../constants/consent";
 import { useI18n } from "../i18n/I18nContext";
 import { showToast } from "../helpers/toast";
 
@@ -165,6 +167,8 @@ export function SubscriptionScreen() {
         return t("subscription.promoAlreadyRedeemed");
       case "UNAUTHENTICATED":
         return t("subscription.promoUnauthenticated");
+      case "USER_NOT_FOUND":
+        return t("subscription.promoInternalError");
       case "INTERNAL":
         return t("subscription.promoInternalError");
       default:
@@ -186,9 +190,13 @@ export function SubscriptionScreen() {
       const isInternal =
         (typeof error?.code === "string" && error.code.includes("internal")) ||
         (typeof error?.message === "string" && error.message.toUpperCase().includes("INTERNAL"));
-      const errCode = isInternal ? "INTERNAL" : (error?.message || error?.details || "");
+      const rawMessage = error?.message || error?.details || "";
+      const errCode = isInternal ? "INTERNAL" : rawMessage;
       if (__DEV__) console.warn("[Subscription] redeemPromoCode error:", error?.code, error?.message, error);
-      Alert.alert(t("common.error"), getPromoErrorMessage(errCode));
+      const displayMsg = isInternal
+        ? `${t("subscription.promoInternalError")}${__DEV__ && rawMessage ? `\n\n${rawMessage}` : ""}`
+        : getPromoErrorMessage(errCode);
+      Alert.alert(t("common.error"), displayMsg);
     } finally {
       setPromoRedeeming(false);
     }
@@ -337,6 +345,15 @@ export function SubscriptionScreen() {
         <Text style={styles.footerText} maxFontSizeMultiplier={1.2}>
           {t("subscription.footerText")}
         </Text>
+        <View style={styles.legalLinks}>
+          <Text style={styles.legalLink} onPress={() => Linking.openURL(PRIVACY_URL)}>
+            {t("account.privacyPolicy")}
+          </Text>
+          <Text style={styles.legalSeparator}> • </Text>
+          <Text style={styles.legalLink} onPress={() => Linking.openURL(TERMS_URL)}>
+            {t("account.termsOfService")}
+          </Text>
+        </View>
       </View>
 
       <Modal visible={showPromoModal} transparent animationType="fade">
@@ -607,5 +624,22 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     textAlign: "center",
     lineHeight: 18,
+    marginBottom: spacing.sm,
+  },
+  legalLinks: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    alignItems: "center",
+    gap: 4,
+  },
+  legalLink: {
+    fontSize: 12,
+    color: colors.primary,
+    textDecorationLine: "underline",
+  },
+  legalSeparator: {
+    fontSize: 12,
+    color: colors.textMuted,
   },
 });

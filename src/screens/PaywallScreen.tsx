@@ -12,11 +12,13 @@ import {
   ActivityIndicator,
   ScrollView,
   Platform,
+  Linking,
 } from "react-native";
 import { useNavigation, useRoute, type RouteProp } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { getEntitlement, getOfferings, purchaseMonthly, restorePurchases, PLAN_ID } from "../services/billing";
+import { PRIVACY_URL, TERMS_URL } from "../constants/consent";
 import { colors, radius, spacing } from "../theme";
 import { showToast } from "../helpers/toast";
 import { logEventSafe, type PurchaseFailureReason } from "../services/analytics";
@@ -217,6 +219,16 @@ export function PaywallScreen() {
         )}
       </TouchableOpacity>
 
+      <View style={styles.legalLinks}>
+        <Text style={styles.legalLink} onPress={() => Linking.openURL(PRIVACY_URL)}>
+          {t("account.privacyPolicy")}
+        </Text>
+        <Text style={styles.legalSeparator}> • </Text>
+        <Text style={styles.legalLink} onPress={() => Linking.openURL(TERMS_URL)}>
+          {t("account.termsOfService")}
+        </Text>
+      </View>
+
       {__DEV__ && debugInfo ? (
         <View style={styles.debug}>
           <Text style={styles.debugText}>{debugInfo}</Text>
@@ -324,6 +336,23 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.primary,
     textDecorationLine: "underline",
+  },
+  legalLinks: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "center",
+    alignItems: "center",
+    marginTop: spacing.lg,
+    gap: 4,
+  },
+  legalLink: {
+    fontSize: 12,
+    color: colors.primary,
+    textDecorationLine: "underline",
+  },
+  legalSeparator: {
+    fontSize: 12,
+    color: colors.textMuted,
   },
   entitledCard: {
     flex: 1,

@@ -1,6 +1,7 @@
 import * as admin from "firebase-admin";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
-import { onDocumentCreated, onDocumentUpdated } from "firebase-functions/v2/firestore";
+import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { beforeUserCreated } from "firebase-functions/v2/identity";
 import { log } from "firebase-functions/logger";
 import { getUserTokens, findUidByEmailLower, sendPushToUser } from "./push";
 import * as crypto from "crypto";
@@ -8,6 +9,52 @@ import vision from "@google-cloud/vision";
 
 const STORAGE_BUCKET = "staveto-mvp-5f251.firebasestorage.app";
 admin.initializeApp({ storageBucket: STORAGE_BUCKET });
+
+/**
+ * Creates Firestore users/{uid} before Auth user creation.
+ * Hard guarantee: block signup if profile doc cannot be created – never allow Auth user without Firestore doc.
+ */
+export const createUserDoc = beforeUserCreated(
+  { region: "europe-west1" },
+  async (event) => {
+    const user = event.data;
+    if (!user) return;
+    const uid = user.uid;
+    const email = user.email ?? null;
+    const emailLower = email ? email.toLowerCase() : null;
+    const displayName = user.displayName ?? null;
+    const photoURL = user.photoURL ?? null;
+    const providers = (user.providerData ?? []).map((p: { providerId: string }) => p.providerId);
+
+    const userDoc = {
+      uid,
+      email,
+      emailLower,
+      displayName,
+      photoURL,
+      providers,
+      countryCode: null,
+      locale: null,
+      timezone: null,
+      openToWork: true,
+      subscriptionStatus: "free",
+      createdBy: "beforeUserCreated",
+      profileState: "seeded",
+      createdAt: admin.firestore.FieldValue.serverTimestamp(),
+      updatedAt: admin.firestore.FieldValue.serverTimestamp(),
+    };
+
+    try {
+      await admin.firestore().collection("users").doc(uid).set(userDoc, { merge: true });
+      log("[createUserDoc] Created users doc for", uid);
+    } catch (err) {
+      const code = (err as { code?: string })?.code;
+      const message = (err as { message?: string })?.message;
+      log("[createUserDoc] Firestore write failed", { code, message });
+      throw new Error("USER_PROFILE_CREATION_FAILED");
+    }
+  }
+);
 
 type ParsedInvoice = {
   supplierName: string | null;
@@ -89,14 +136,7 @@ function pickLargestAmount(text: string): number | null {
     .map((m) => parseAmount(m))
     .filter((n): n is number => typeof n === "number" && isReasonableAmount(n));
   if (!amounts.length) return null;
-  const max = Math.max(...amounts);
-  // Prefer amounts with 2 decimals (EUR totals) over round numbers (45 from "45%", 46 from barcode)
-  const withDecimals = amounts.filter((n) => n % 1 !== 0 && n > 1 && n < 1000);
-  if (withDecimals.length > 0 && max >= 40 && max <= 60 && Number.isInteger(max)) {
-    const bestDecimal = Math.max(...withDecimals);
-    return bestDecimal;
-  }
-  return max;
+  return Math.max(...amounts);
 }
 
 function extractLineAmount(lines: string[], keywordRegex: RegExp): number | null {
@@ -116,39 +156,15 @@ function extractLineAmount(lines: string[], keywordRegex: RegExp): number | null
 /** Lines that mean BASE (without VAT) – never use as total. */
 const BASE_ONLY_REGEX = /^(?:základ|base|netto|net|báze)\s*[:]?\s*/i;
 
-/** Lines about discount – amounts like 45 from "45% zľava" must not be used as total (multi-language) */
-const DISCOUNT_LINE_REGEX = /(?:z[lľ]ava|discount|rabatt|sconto|r[ée]duction|korting|zni[żz]ka)\s*[:\s]*\d*\s*%/i;
-
-/** Extract amount in XX,XX EUR or XX.XX EUR format – avoids picking 45 from "45%" or 46 from barcodes */
-function extractEurAmountFromLine(line: string): number | null {
-  const m = line.match(/(\d{1,6}[.,]\d{2})\s*(?:eur|€|euro)/i);
-  if (!m?.[1]) return null;
-  const n = parseAmount(m[1]);
-  return n != null && isReasonableAmount(n) ? n : null;
-}
-
-/** Extract total WITH VAT. Prioritize XX,XX EUR format, then unambiguous "total" phrases. */
+/** Extract total WITH VAT. Prioritize unambiguous "total" phrases, exclude base-only lines. */
 function extractTotalWithVat(lines: string[]): number | null {
   const totalWithVatRegex =
-    /(?:spolu(?:\s+v\s+eur)?|uhraden[ée]|platen[ée]\s+v\s+hotovosti|na\s*[úu]hradu\s*(?:eur)?|celkom|total|summe|gesamt|totale|importe|razem|k\s*[úu]hrade|hotovosť|karta|platba|zaplatiť|betrag|úhradu\s*eur|paid|bezahlt|pagato|amount|montant|importo)/i;
+    /(?:spolu\s+v\s+eur|na\s*[úu]hradu\s*(?:eur)?|celkom|total|summe|gesamt|totale|importe|razem|k\s*[úu]hrade|hotovosť|karta|platba|zaplatiť|betrag|úhradu\s*eur)/i;
   for (let i = 0; i < lines.length; i++) {
     const line = lines[i];
     if (BASE_ONLY_REGEX.test(line)) continue;
-    if (DISCOUNT_LINE_REGEX.test(line)) continue;
     if (!totalWithVatRegex.test(line)) continue;
-    // Prefer amount in "40,20 EUR" format – avoids 45 from "45%" or 46 from barcodes
-    let amount = extractEurAmountFromLine(line);
-    if (amount !== null) return amount;
-    if (i + 1 < lines.length) {
-      amount = extractEurAmountFromLine(lines[i + 1]);
-      if (amount !== null) return amount;
-    }
-    // Fallback: line may have "40,20" without EUR – prefer amounts with 2 decimals (totals)
-    const decimalAmounts = (line + (i + 1 < lines.length ? " " + lines[i + 1] : ""))
-      .match(/\d{1,6}[.,]\d{2}/g) || [];
-    const parsed = decimalAmounts.map((s) => parseAmount(s)).filter((n): n is number => n != null && isReasonableAmount(n));
-    if (parsed.length > 0) return Math.max(...parsed);
-    amount = pickLargestAmount(line);
+    let amount = pickLargestAmount(line);
     if (amount !== null) return amount;
     if (i + 1 < lines.length) {
       amount = pickLargestAmount(lines[i + 1]);
@@ -202,45 +218,16 @@ function parseDate(text: string): string | null {
   return null;
 }
 
-/** Section headers (supplier/customer) in multiple languages – strip from supplier name */
-const SUPPLIER_PREFIX_REGEX =
-  /^(?:dod[áa]vate[lľ]|odberate[lľ]|dodávatel|odberatel|lieferant|kunde|supplier|customer|fornitore|cliente|fournisseur|client|dostawca|odbiorca|leverancier|klant)\s*[:]?\s*/i;
-/** Single stray char from OCR (e.g. "ľ" misread as "y" from "Dodávateľ") – only strip if followed by space + company-like text */
-const SUPPLIER_LEADING_JUNK = /^[yíýľ]\s+(?=[A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŔŠŤÚÝŽ])/i;
-
-function cleanSupplierName(raw: string): string {
-  let s = raw.trim();
-  s = s.replace(SUPPLIER_PREFIX_REGEX, "");
-  s = s.replace(SUPPLIER_LEADING_JUNK, ""); // "y DEK s.r.o." -> "DEK s.r.o."
-  return s.trim().slice(0, 80) || raw.trim().slice(0, 80);
-}
-
 function parseSupplierName(lines: string[]): string | null {
-  let candidate: string | null = null;
-  let inSupplierSection = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
+  for (const line of lines) {
     const trimmed = line.trim();
     if (!trimmed) continue;
-    if (/\b(?:odberate[lľ]|kunde|customer|cliente|client|odbiorca|klant)\b/i.test(trimmed)) inSupplierSection = false;
-    if (/\b(?:dod[áa]vate[lľ]|lieferant|supplier|fornitore|fournisseur|dostawca|leverancier)\b/i.test(trimmed)) {
-      inSupplierSection = true;
-      continue; // Section header – take next line
-    }
     if (/fakt[úu]ra|invoice|rechnung|fattura|factura|rachunek/i.test(trimmed)) continue;
     if (/\d{6,}/.test(trimmed)) continue;
     if (trimmed.length < 3) continue;
-    // Prefer lines that look like company names (multi-language legal forms, incl. "s. r. o." with spaces)
-    if (/\b(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl|s\.a\.|s\.l\.|nv|bv|s\.a\.r\.l\.|eurl)\b/i.test(trimmed)) {
-      return cleanSupplierName(trimmed);
-    }
-    if (inSupplierSection && !candidate) candidate = trimmed;
-    if (!candidate) candidate = trimmed;
+    return trimmed.slice(0, 80);
   }
-  const result = candidate ? cleanSupplierName(candidate) : null;
-  // Reject OCR noise: short Arabic-only strings (e.g. "کلام") from misread Latin on non-Arabic invoices
-  if (result && /^[\u0600-\u06FF\s]+$/.test(result) && result.length < 10) return null;
-  return result;
+  return null;
 }
 
 /** Extracts EU VAT/Tax ID from invoice text (IČO, USt-IdNr, NIP, P.IVA, CIF, etc.) */
@@ -263,44 +250,15 @@ function parseSupplierTaxId(text: string): string | null {
   return null;
 }
 
-/** Highest priority: "uhradené" / "platené v hotovosti" = final paid amount (SK invoices) */
-function extractPaidAmount(rawText: string): number | null {
-  const block = rawText.replace(/\s+/g, " ");
-  const paidRegex =
-    /(?:uhraden[ée]|platen[ée](?:\s+v\s+hotovosti)?)\s*(\d{1,6}[.,]\d{2})\s*(?:eur|€|euro)?/gi;
-  const all = [...block.matchAll(paidRegex)];
-  if (all.length > 0) {
-    const last = all[all.length - 1];
-    const n = parseAmount(last[1]);
-    return n != null && isReasonableAmount(n) ? n : null;
-  }
-  return null;
-}
-
-/** Fallback: find "XX,XX EUR" or "XX.XX EUR" after total keywords (multi-language) */
-function extractTotalFromEurInText(rawText: string): number | null {
-  const block = rawText.replace(/\s+/g, " ");
-  const m = block.match(
-    /(?:spolu|uhraden[ée]|platen[ée](?:\s+v\s+hotovosti)?|total|summe|gesamt|totale|importe|razem|paid|bezahlt|pagato|pay[ée]|betrag|amount|montant|importo)[\s\S]{0,80}?(\d{1,6}[.,]\d{2})\s*(?:eur|€|euro)/i
-  );
-  if (m?.[1]) {
-    const n = parseAmount(m[1]);
-    return n != null && isReasonableAmount(n) ? n : null;
-  }
-  return null;
-}
-
 function parseInvoiceText(rawText: string): ParsedInvoice {
   const lines = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
   const invoiceNumber = parseInvoiceNumber(rawText);
   const issueDate = parseDate(rawText);
-  // Always use total WITH VAT: prioritize XX,XX EUR format near "Spolu"/"Uhradené"
+  // Always use total WITH VAT: prioritize "Spolu v EUR", "NA ÚHRADU", etc.; exclude "Základ" (base)
   const totalRegex =
-    /(?:spolu(?:\s+v\s+eur)?|uhraden[ée]|na\s*[úu]hradu|celkom|total|summe|gesamt|totale|importe|razem|k\s*[úu]hrade|hotovosť|karta|platba|zaplatiť|betrag|úhradu\s*eur|eur\s*\d|paid|bezahlt|pagato|amount|montant|importo)/i;
+    /(?:spolu\s+v\s+eur|na\s*[úu]hradu|celkom|total|summe|gesamt|k\s*[úu]hrade|hotovosť|karta|platba|zaplatiť|betrag|úhradu\s*eur|eur\s*\d)/i;
   let totalAmount =
-    extractPaidAmount(rawText) ??
     extractTotalWithVat(lines) ??
-    extractTotalFromEurInText(rawText) ??
     extractLineAmount(lines, totalRegex) ??
     extractTotalFromBaseAndVat(lines) ??
     pickLargestAmount(rawText);
@@ -309,64 +267,8 @@ function parseInvoiceText(rawText: string): ParsedInvoice {
   }
   const vatRegex = /(dph|vat|mwst|iva|tva|podatek)/i;
   const vatAmount = extractLineAmount(lines, vatRegex);
+  const supplierName = parseSupplierName(lines);
   const supplierTaxId = parseSupplierTaxId(rawText);
-  let supplierName = parseSupplierName(lines);
-  // Fallback 1: find company name (with legal form) before the tax ID in text
-  if (!supplierName && supplierTaxId) {
-    const taxIdx = rawText.indexOf(supplierTaxId);
-    if (taxIdx > 0) {
-      const beforeTax = rawText.slice(0, taxIdx);
-      const m = beforeTax.match(
-        /([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž0-9\u0600-\u06FF][^\n]{2,50}\s+(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl|s\.a\.|s\.l\.|nv|bv)\b)/i
-      );
-      if (m?.[1]) {
-        const extracted = m[1].replace(/\s+/g, " ").trim();
-        const isNoise = /^[\u0600-\u06FF\s]+$/.test(extracted) && extracted.length < 10;
-        if (!/\d{6,}/.test(extracted) && !isNoise) supplierName = cleanSupplierName(extracted);
-      }
-    }
-    // Fallback 2: tax ID might appear before company name in OCR – search after tax ID too
-    if (!supplierName && taxIdx >= 0 && taxIdx < rawText.length) {
-      const afterTax = rawText.slice(taxIdx + supplierTaxId.length, taxIdx + 200);
-      const m2 = afterTax.match(
-        /([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž][^\n]{1,40}\s+(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b)/i
-      );
-      if (m2?.[1]) {
-        const extracted = m2[1].replace(/\s+/g, " ").trim();
-        const isNoise = /^[\u0600-\u06FF\s]+$/.test(extracted) && extracted.length < 10;
-        if (!/\d{6,}/.test(extracted) && !isNoise) supplierName = cleanSupplierName(extracted);
-      }
-    }
-  }
-  // Fallback 3: line containing tax ID – company name is often 1–2 lines before
-  if (!supplierName && supplierTaxId) {
-    for (let i = 0; i < lines.length; i++) {
-      if (!lines[i].includes(supplierTaxId)) continue;
-      const legalForm = /\b(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b/i;
-      for (const offset of [2, 1]) {
-        if (i - offset < 0) continue;
-        const line = lines[i - offset].trim();
-        if (line.length < 4 || line.length > 80 || /\d{6,}/.test(line)) continue;
-        const isNoise = /^[\u0600-\u06FF\s]+$/.test(line) && line.length < 10;
-        if (isNoise) continue;
-        supplierName = cleanSupplierName(line);
-        if (legalForm.test(line)) break; // Prefer line with legal form
-      }
-      break;
-    }
-  }
-  // Fallback 4: search first 800 chars for any "CompanyName s.r.o."
-  if (!supplierName) {
-    const top = rawText.slice(0, 800);
-    const m3 = top.match(
-      /\b([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž][A-Za-záäčďéíĺľňóôřšťúýž0-9\s\-\.]{1,45}(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b)/i
-    );
-    if (m3?.[1]) {
-      const extracted = m3[1].replace(/\s+/g, " ").trim();
-      const isNoise = /^[\u0600-\u06FF\s]+$/.test(extracted) && extracted.length < 10;
-      if (!/\d{6,}/.test(extracted) && !isNoise && extracted.length >= 4) supplierName = cleanSupplierName(extracted);
-    }
-  }
   return {
     supplierName,
     supplierTaxId,
@@ -390,17 +292,18 @@ export const claimProjectInvites = onCall(
     invoker: "public",
   },
   async (request) => {
-    if (!request.auth?.uid) {
-      throw new HttpsError("unauthenticated", "Authentication required.");
-    }
+    try {
+      if (!request.auth?.uid) {
+        throw new HttpsError("unauthenticated", "Authentication required.");
+      }
 
-    const uid = request.auth.uid;
-    const emailLower = normalizeEmail(request.auth.token.email);
-    if (!emailLower) {
-      return { claimedCount: 0, projectIds: [] as string[] };
-    }
+      const uid = request.auth.uid;
+      const emailLower = normalizeEmail(request.auth.token.email);
+      if (!emailLower) {
+        return { claimedCount: 0, projectIds: [] as string[] };
+      }
 
-    const db = admin.firestore();
+      const db = admin.firestore();
     const [emailLowerSnap, emailSnap] = await Promise.all([
       db.collectionGroup("members").where("emailLower", "==", emailLower).get(),
       db.collectionGroup("members").where("email", "==", emailLower).get(),
@@ -572,6 +475,11 @@ export const claimProjectInvites = onCall(
     }
 
     return { claimedCount, projectIds };
+    } catch (err) {
+      log("[claimProjectInvites] Error:", err);
+      if (err instanceof HttpsError) throw err;
+      return { claimedCount: 0, projectIds: [] as string[] };
+    }
   }
 );
 
@@ -1013,16 +921,13 @@ export const extractInvoiceData = onCall(
         rawText?: string;
       };
       if (cached.status === "success") {
-        const rawText = cached.rawText ?? cached.extractedText ?? "";
-        // Re-parse cached rawText so improved parsing logic applies (fixes stale cache after deploy)
-        const reparsed = rawText ? parseInvoiceText(rawText) : (cached.parsed ?? cached.fields);
         return {
           ok: true,
-          extractedText: rawText,
-          fields: reparsed,
+          extractedText: cached.extractedText ?? cached.rawText ?? "",
+          fields: cached.fields ?? cached.parsed ?? {},
           status: "success" as const,
-          parsed: reparsed,
-          rawText,
+          parsed: cached.parsed,
+          rawText: cached.rawText ?? cached.extractedText ?? "",
         };
       }
       return cached;
@@ -1033,12 +938,12 @@ export const extractInvoiceData = onCall(
     const limits = await getLimitsConfig(db);
     const userRef = db.collection("users").doc(uid);
 
-    const gateError = await db.runTransaction<
-      { errorCode: string; cooldownSeconds?: number } | null
-    >(async (tx) => {
+    let gateError: { errorCode: string; cooldownSeconds?: number } | null = null;
+    await db.runTransaction(async (tx) => {
       const userSnap = await tx.get(userRef);
       if (!userSnap.exists) {
-        return { errorCode: "ENTITLEMENT_REQUIRED" };
+        gateError = { errorCode: "ENTITLEMENT_REQUIRED" };
+        return;
       }
       const userData = userSnap.data() as Record<string, unknown>;
       let effectiveUserData = userData;
@@ -1068,7 +973,8 @@ export const extractInvoiceData = onCall(
 
       const gateResult = checkAndConsumeOcrCreditSync(effectiveUserData, usageData, limits, requestId);
       if (!gateResult.allowed) {
-        return { errorCode: gateResult.errorCode!, cooldownSeconds: gateResult.cooldownSeconds };
+        gateError = { errorCode: gateResult.errorCode!, cooldownSeconds: gateResult.cooldownSeconds };
+        return;
       }
 
       const ocrUsed = typeof usageData?.ocrUsed === "number" ? usageData.ocrUsed : 0;
@@ -1082,21 +988,14 @@ export const extractInvoiceData = onCall(
         requestIds: [...requestIds, requestId],
         updatedAt: now,
       }, { merge: true });
-      return null;
     });
 
     if (gateError) {
-      const upgradeRequired =
-        gateError.errorCode === "ENTITLEMENT_REQUIRED" || gateError.errorCode === "LIMIT_REACHED";
       return {
         status: "limit",
         parsed: null,
-        errorCode: gateError.errorCode,
-        cooldownSeconds: gateError.cooldownSeconds,
-        code: "LIMIT_EXCEEDED",
-        upgradeRequired,
-        remaining: 0,
-        limit: upgradeRequired ? 0 : undefined,
+        errorCode: (gateError as { errorCode: string; cooldownSeconds?: number }).errorCode,
+        cooldownSeconds: (gateError as { errorCode: string; cooldownSeconds?: number }).cooldownSeconds,
       };
     }
 
@@ -1164,7 +1063,7 @@ export const extractInvoiceData = onCall(
       throwStepError("vision_call", "empty_ocr_text");
     }
 
-    const parsed = parseInvoiceText(rawText) as ParseInvoiceResult;
+    const parsed = parseInvoiceText(rawText);
     const response = {
       ok: true,
       extractedText: rawText,
@@ -1173,7 +1072,6 @@ export const extractInvoiceData = onCall(
       status: "success" as const,
       parsed,
       rawText,
-      _debug: { fromCache: false, rawTextLength: rawText.length, rawTextPreview: rawText.slice(0, 600), parsedAmount: parsed.totalAmount, parsedSupplier: parsed.supplierName, totalAmountSource: parsed._debugSource?.totalAmountSource, linesCount: parsed._debugSource?.linesCount },
     };
     await cacheCollection.doc(hash).set({
       ...response,
@@ -1186,13 +1084,13 @@ export const extractInvoiceData = onCall(
 );
 
 export { inboundWebhook } from "./whatsapp";
-export { addProjectMemberByEmail, removeProjectMember, updateMemberPermissions, syncMembersByUidForProject, backfillProjectSharedCounts, syncMyProjectsSharedCount } from "./team";
+export { addProjectMemberByEmail, removeProjectMember, updateMemberPermissions, backfillProjectSharedCounts } from "./team";
+export { cloneProjectStructure } from "./cloneProject";
 export { calculateDistanceKm } from "./distance";
 export { redeemPromoCode } from "./promo";
-export { checkEntitlement, getBillingStatus } from "./billing";
-export { revenuecatWebhook } from "./revenuecatWebhook";
+export { checkEntitlement } from "./billing";
 
-/** Send in-app notification when a project member invite is created. Push is sent by onNotificationCreated. */
+/** Send in-app notification + FCM push when a project member invite is created (status invited, emailLower set). */
 export const onMemberInviteCreated = onDocumentCreated(
   {
     document: "projects/{projectId}/members/{memberId}",
@@ -1212,7 +1110,7 @@ export const onMemberInviteCreated = onDocumentCreated(
     const invitedByUid = (data?.invitedBy as string) ?? null;
     const uid = (data?.userId as string) ?? (await findUidByEmailLower(emailLower));
     if (!uid) {
-      log("[onMemberInviteCreated] No user found for email, skipping notification", emailLower);
+      log("[onMemberInviteCreated] No user found for email, skipping notification and push", emailLower);
       return;
     }
 
@@ -1232,149 +1130,11 @@ export const onMemberInviteCreated = onDocumentCreated(
       message: `${projectName} – čaká na prijatie`,
     });
     log("[onMemberInviteCreated] In-app notification created for", uid, "project", projectId);
-  }
-);
 
-/** Send in-app notification when a problem is created or assignee changes. */
-export const onProblemCreated = onDocumentCreated(
-  {
-    document: "projects/{projectId}/problems/{problemId}",
-    region: "europe-west1",
-  },
-  async (event) => {
-    const snap = event.data;
-    if (!snap?.exists) return;
-    const data = snap.data();
-    const assigneeUid = (data?.assigneeUid as string) ?? "";
-    const createdByUid = (data?.createdByUid as string) ?? "";
-    if (!assigneeUid) return;
-
-    const projectId = event.params?.projectId;
-    const problemId = event.params?.problemId;
-    if (!projectId || !problemId) return;
-
-    const db = admin.firestore();
-    const projectSnap = await db.doc(`projects/${projectId}`).get();
-    const projectName = (projectSnap.data()?.name as string) ?? "Projekt";
-    const shortDescription = (data?.shortDescription as string) ?? "";
-    const createdByName = (data?.createdByName as string) ?? "";
-    const isSelfAssign = assigneeUid === createdByUid;
-
-    const message = isSelfAssign
-      ? `Nahlásil si nový problém: ${shortDescription || "Bez popisu"}`
-      : createdByName
-        ? `${createdByName} ti priradil problém: ${shortDescription || "Bez popisu"}`
-        : `Bola ti priradená nová úloha v projekte ${projectName}`;
-
-    await db.collection("notifications").add({
-      userId: assigneeUid,
-      type: "PROBLEM_ASSIGNED",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      readAt: null,
-      projectId,
-      projectName,
-      message,
-      fromUserId: createdByUid,
-      fromUserName: createdByName || null,
-      severity: "info",
-      meta: { problemId, projectId },
-      deepLink: { screen: "ProblemDetail", params: { projectId, problemId } },
-    });
-    log("[onProblemCreated] Notification created for assignee", assigneeUid, "problem", problemId);
-  }
-);
-
-/** Send in-app notification when problem assignee changes. */
-export const onProblemUpdated = onDocumentUpdated(
-  {
-    document: "projects/{projectId}/problems/{problemId}",
-    region: "europe-west1",
-  },
-  async (event) => {
-    const before = event.data?.before.data();
-    const after = event.data?.after.data();
-    if (!before || !after) return;
-    const oldAssignee = (before.assigneeUid as string) ?? "";
-    const newAssignee = (after.assigneeUid as string) ?? "";
-    if (!newAssignee || oldAssignee === newAssignee) return;
-
-    const projectId = event.params?.projectId;
-    const problemId = event.params?.problemId;
-    if (!projectId || !problemId) return;
-
-    const audit = after.audit as { lastStatusByUid?: string } | undefined;
-    const updatedByUid = (audit?.lastStatusByUid ?? after.createdByUid ?? "") as string;
-    if (updatedByUid === newAssignee) return; // Don't notify self
-
-    const db = admin.firestore();
-    const projectSnap = await db.doc(`projects/${projectId}`).get();
-    const projectName = (projectSnap.data()?.name as string) ?? "Projekt";
-    const shortDescription = (after.shortDescription as string) ?? "";
-    const createdByName = (after.createdByName as string) ?? "";
-
-    const message = createdByName
-      ? `${createdByName} ti priradil problém: ${shortDescription || "Bez popisu"}`
-      : `Bola ti priradená úloha v projekte ${projectName}`;
-
-    await db.collection("notifications").add({
-      userId: newAssignee,
-      type: "PROBLEM_ASSIGNED",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      readAt: null,
-      projectId,
-      projectName,
-      message,
-      fromUserId: updatedByUid,
-      fromUserName: createdByName || null,
-      severity: "info",
-      meta: { problemId, projectId },
-      deepLink: { screen: "ProblemDetail", params: { projectId, problemId } },
-    });
-    log("[onProblemUpdated] Notification created for new assignee", newAssignee, "problem", problemId);
-  }
-);
-
-/** Send FCM push to user's phone whenever any notification is created in Firestore. */
-export const onNotificationCreated = onDocumentCreated(
-  {
-    document: "notifications/{notificationId}",
-    region: "europe-west1",
-  },
-  async (event) => {
-    const snap = event.data;
-    if (!snap?.exists) return;
-    const data = snap.data();
-    const userId = data?.userId as string | undefined;
-    const type = (data?.type as string) ?? "PROJECT_ACTIVITY";
-    const message = (data?.message as string) ?? "";
-    const projectId = (data?.projectId as string) ?? "";
-    const projectName = (data?.projectName as string) ?? "";
-
-    if (!userId) {
-      log("[onNotificationCreated] No userId, skipping push");
-      return;
-    }
-
-    const titleMap: Record<string, string> = {
-      TASK_ASSIGNED: "Priradená úloha",
-      TASK_DUE_TODAY: "Úloha dnes",
-      TASK_OVERDUE: "Úloha po termíne",
-      PROJECT_INVITED: "Pozvánka do projektu",
-      PROBLEM_ASSIGNED: "Priradený problém",
-      EXPENSE_ADDED: "Nový výdavok",
-      PROJECT_CREATED: "Nový projekt",
-      MEMBER_JOINED: "Člen vstúpil",
-      MEMBER_LEFT: "Člen opustil projekt",
-      MEMBER_REMOVED: "Člen bol odstránený",
-      SYNC_ISSUE: "Problém so synchronizáciou",
-    };
-    const title = titleMap[type] ?? "Upozornenie";
-    const body = message || (projectName ? `Projekt: ${projectName}` : "Máte nové upozornenie.");
-
-    await sendPushToUser(userId, title, body, {
-      type: type === "PROJECT_INVITED" ? "PROJECT_INVITE" : type,
+    await sendPushToUser(uid, "Pozvánka do projektu", `${projectName} – čaká na prijatie`, {
+      type: "PROJECT_INVITE",
       projectId,
     });
-    log("[onNotificationCreated] Push sent to", userId, "type", type);
+    log("[onMemberInviteCreated] Push sent to", uid, "for project", projectId);
   }
 );

@@ -15,6 +15,8 @@ import {
   Image,
   Share,
   Alert,
+  Platform,
+  ActionSheetIOS,
 } from "react-native";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -28,10 +30,14 @@ import * as constructionDiaryService from "../services/constructionDiary";
 import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
 import * as storageSmart from "../services/storageSmart";
+import * as timeTracking from "../services/timeTracking";
+import { fetchProjectAccess } from "../hooks/useProjectAccess";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
+import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import { ProjectShareCard } from "../components/ProjectShareCard";
+import { exportProjectAsProtocol } from "../services/projectProtocolExport";
 import type { TaskDoc } from "../services/tasks";
 import type { ProjectPhaseDoc } from "../services/projects";
 import type { DiaryEntryDoc } from "../services/constructionDiary";
@@ -55,6 +61,7 @@ export function ProjectOverviewDashboardScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
+  const { user } = useAuth();
   const params = (route.params as { projectId?: string; projectName?: string; projectType?: string }) ?? {};
   const projectId = params.projectId ?? "";
   const projectName = params.projectName ?? "";
@@ -73,6 +80,8 @@ export function ProjectOverviewDashboardScreen() {
   const [photoUrls, setPhotoUrls] = useState<Map<string, string>>(new Map());
   const [shareCardRef, setShareCardRef] = useState<View | null>(null);
   const [sharing, setSharing] = useState(false);
+  const [projectHoursMinutes, setProjectHoursMinutes] = useState<number>(0);
+  const [canSeeHours, setCanSeeHours] = useState(false);
 
   const isBuildOrManagement = projectType === "BUILD" || projectType === "MANAGEMENT";
 
@@ -116,6 +125,27 @@ export function ProjectOverviewDashboardScreen() {
           }
         }
         setPhotoUrls(urlMap);
+
+        // Hours spent on project (owner or editor with time tracking)
+        if (user?.id && proj?.ownerId) {
+          try {
+            const access = await fetchProjectAccess(projectId, user.id, proj?.ownerId);
+            if (access.isOwner || access.canWriteTime) {
+              setCanSeeHours(true);
+              const mins = await timeTracking.getProjectTotalMinutes(projectId);
+              setProjectHoursMinutes(mins);
+            } else {
+              setCanSeeHours(false);
+              setProjectHoursMinutes(0);
+            }
+          } catch {
+            setCanSeeHours(false);
+            setProjectHoursMinutes(0);
+          }
+        } else {
+          setCanSeeHours(false);
+          setProjectHoursMinutes(0);
+        }
       } catch (e) {
         console.error("[ProjectOverviewDashboard] Load error:", e);
       } finally {
@@ -123,7 +153,7 @@ export function ProjectOverviewDashboardScreen() {
         setRefreshing(false);
       }
     },
-    [projectId, isBuildOrManagement, isOffline, isPoorNetwork]
+    [projectId, isBuildOrManagement, isOffline, isPoorNetwork, user?.id]
   );
 
   useEffect(() => {
@@ -280,6 +310,62 @@ export function ProjectOverviewDashboardScreen() {
     }
   }, [shareCardRef, projectName, t]);
 
+  const handleExportProtocol = useCallback(async () => {
+    setSharing(true);
+    try {
+      const result = await exportProjectAsProtocol(projectId, {
+        title: t("projectOverview.exportProtocol.title"),
+        exportDate: t("projectOverview.exportProtocol.exportDate"),
+        status: t("projectOverview.exportProtocol.status"),
+        tasks: t("projectOverview.exportProtocol.tasks"),
+        expenses: t("projectOverview.exportProtocol.expenses"),
+        diary: t("projectOverview.exportProtocol.diary"),
+        problems: t("projectOverview.exportProtocol.problems"),
+        phase: t("projectOverview.exportProtocol.phase"),
+        task: t("projectOverview.exportProtocol.task"),
+        responsible: t("projectOverview.exportProtocol.responsible"),
+        photos: t("projectOverview.exportProtocol.photos"),
+        signature: t("projectOverview.exportProtocol.signature"),
+        statusLabel: t("projectOverview.exportProtocol.statusLabel"),
+        date: t("projectOverview.exportProtocol.date"),
+        amount: t("projectOverview.exportProtocol.amount"),
+        description: t("projectOverview.exportProtocol.description"),
+        total: t("projectOverview.exportProtocol.total"),
+        footer: t("projectOverview.exportProtocol.footer"),
+      });
+      if (!result.ok) {
+        Alert.alert(t("common.error"), result.error ?? "Nepodarilo sa exportovať.");
+      }
+    } finally {
+      setSharing(false);
+    }
+  }, [projectId, t]);
+
+  const handleShareMenu = useCallback(() => {
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: [t("common.cancel"), t("projectOverviewDashboard.shareAsImage"), t("projectOverview.exportProtocol.title")],
+          cancelButtonIndex: 0,
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 1) handleShare();
+          else if (buttonIndex === 2) handleExportProtocol();
+        }
+      );
+    } else {
+      Alert.alert(
+        t("projectOverviewDashboard.exportOrShare"),
+        "",
+        [
+          { text: t("common.cancel"), style: "cancel" },
+          { text: t("projectOverviewDashboard.shareAsImage"), onPress: handleShare },
+          { text: t("projectOverview.exportProtocol.title"), onPress: handleExportProtocol },
+        ]
+      );
+    }
+  }, [handleShare, handleExportProtocol, t]);
+
   const goBack = () => (navigation as any).goBack();
   const goToProblems = () =>
     (navigation as any).navigate("ProblemsList", { projectId, projectName, projectType });
@@ -341,7 +427,7 @@ export function ProjectOverviewDashboardScreen() {
         </Text>
         <View style={styles.headerActions}>
           <TouchableOpacity
-            onPress={handleShare}
+            onPress={handleShareMenu}
             disabled={sharing}
             style={styles.headerIcon}
           >
@@ -382,7 +468,7 @@ export function ProjectOverviewDashboardScreen() {
         </View>
 
         {/* Hero Card */}
-        <View style={styles.card}>
+        <View style={[styles.card, styles.heroCard]}>
           <Text style={styles.heroProjectName} numberOfLines={1}>
             {projectName || t("projects.noName")}
           </Text>
@@ -396,26 +482,26 @@ export function ProjectOverviewDashboardScreen() {
           </View>
           <View style={styles.heroProgressContainer}>
             <View style={styles.circularProgressWrap}>
-              <Svg width={120} height={120} style={styles.circularProgressSvg}>
+              <Svg width={88} height={88} style={styles.circularProgressSvg}>
                 <Circle
-                  cx={60}
-                  cy={60}
-                  r={52}
+                  cx={44}
+                  cy={44}
+                  r={38}
                   stroke="rgba(0,0,0,0.08)"
-                  strokeWidth={10}
+                  strokeWidth={8}
                   fill="none"
                 />
                 <Circle
-                  cx={60}
-                  cy={60}
-                  r={52}
+                  cx={44}
+                  cy={44}
+                  r={38}
                   stroke={kpis.statusColor}
-                  strokeWidth={10}
+                  strokeWidth={8}
                   fill="none"
-                  strokeDasharray={`${2 * Math.PI * 52}`}
-                  strokeDashoffset={2 * Math.PI * 52 * (1 - kpis.progressPct / 100)}
+                  strokeDasharray={`${2 * Math.PI * 38}`}
+                  strokeDashoffset={2 * Math.PI * 38 * (1 - kpis.progressPct / 100)}
                   strokeLinecap="round"
-                  transform="rotate(-90 60 60)"
+                  transform="rotate(-90 44 44)"
                 />
               </Svg>
               <View style={styles.heroProgressCenter}>
@@ -440,136 +526,6 @@ export function ProjectOverviewDashboardScreen() {
             </Text>
           </View>
         </View>
-
-        {/* KPI Row */}
-        <View style={styles.card}>
-          <View style={styles.kpiRow}>
-            <View style={styles.kpiTile}>
-              <Ionicons name="checkmark-circle" size={24} color="#2e7d32" />
-              <Text style={styles.kpiValue}>{kpis.tasksDone}</Text>
-              <Text style={styles.kpiLabel}>{t("projectOverviewDashboard.done")}</Text>
-            </View>
-            <View style={styles.kpiTile}>
-              <Ionicons name="time-outline" size={24} color={colors.primary} />
-              <Text style={styles.kpiValue}>{kpis.tasksOpen}</Text>
-              <Text style={styles.kpiLabel}>{t("projectOverviewDashboard.open")}</Text>
-            </View>
-            <View style={styles.kpiTile}>
-              <Ionicons name="warning-outline" size={24} color={colors.error} />
-              <Text style={styles.kpiValue}>{kpis.tasksOverdue}</Text>
-              <Text style={styles.kpiLabel}>{t("projectOverviewDashboard.overdue")}</Text>
-            </View>
-            {isBuildOrManagement && (
-              <View style={styles.kpiTile}>
-                <Ionicons name="layers-outline" size={24} color={colors.primary} />
-                <Text style={styles.kpiValue}>
-                  {kpis.phasesDone}/{kpis.phasesTotal}
-                </Text>
-                <Text style={styles.kpiLabel}>{t("projectOverviewDashboard.phases")}</Text>
-              </View>
-            )}
-          </View>
-        </View>
-
-        {/* Milestones Card - dokončené fázy (klikateľné → vizuálny prehľad) */}
-        {isBuildOrManagement && kpis.completedPhases.length > 0 && (
-          <TouchableOpacity
-            style={styles.card}
-            onPress={goToMilestonesOverview}
-            activeOpacity={0.95}
-          >
-            <View style={styles.milestonesCardHeader}>
-              <Text style={styles.cardTitle}>{t("projectOverviewDashboard.milestones")}</Text>
-              <Ionicons name="chevron-forward" size={20} color={colors.primary} />
-            </View>
-            {kpis.completedPhases.map(({ phase }) => (
-              <View key={phase.id} style={styles.milestoneRow}>
-                <View style={styles.milestoneCheck}>
-                  <Ionicons name="checkmark-circle" size={24} color="#2e7d32" />
-                </View>
-                <Text style={styles.milestoneName}>{phase.name}</Text>
-                <Text style={styles.milestoneLabel}>{t("projectOverviewDashboard.phaseCompleted")}</Text>
-              </View>
-            ))}
-          </TouchableOpacity>
-        )}
-
-        {/* Problems Card */}
-        <View style={[styles.card, kpis.openCount > 0 && styles.problemsCardAlert]}>
-          <Text style={styles.cardTitle}>{problemsTitle}</Text>
-          <View style={styles.problemsRow}>
-            <View style={styles.problemBadge}>
-              <View style={[styles.problemDot, { backgroundColor: colors.error }]} />
-              <Text style={styles.problemCount}>{kpis.openCount}</Text>
-              <Text style={styles.problemLabel}>{t("projectOverviewDashboard.problemOpen")}</Text>
-            </View>
-            <View style={styles.problemBadge}>
-              <View style={[styles.problemDot, { backgroundColor: colors.primary }]} />
-              <Text style={styles.problemCount}>{kpis.inProgressCount}</Text>
-              <Text style={styles.problemLabel}>{t("projectOverviewDashboard.problemInProgress")}</Text>
-            </View>
-            <View style={styles.problemBadge}>
-              <View style={[styles.problemDot, { backgroundColor: "#2e7d32" }]} />
-              <Text style={styles.problemCount}>{kpis.fixedCount}</Text>
-              <Text style={styles.problemLabel}>{t("projectOverviewDashboard.problemFixed")}</Text>
-            </View>
-            <View style={styles.problemBadge}>
-              <View style={[styles.problemDot, { backgroundColor: "#2e7d32" }]} />
-              <Text style={styles.problemCount}>{kpis.verifiedCount}</Text>
-              <Text style={styles.problemLabel}>{t("projectOverviewDashboard.problemVerified")}</Text>
-            </View>
-          </View>
-          {kpis.mostRecentOpenProblem && (
-            <Text style={styles.mostRecentProblem} numberOfLines={2}>
-              {kpis.mostRecentOpenProblem.shortDescription}
-            </Text>
-          )}
-          <TouchableOpacity style={styles.cardButton} onPress={goToProblems}>
-            <Text style={styles.cardButtonText}>{t("projectOverviewDashboard.viewProblems")}</Text>
-            <Ionicons name="chevron-forward" size={18} color={colors.primary} />
-          </TouchableOpacity>
-        </View>
-
-        {/* Diary Card – klikateľné → vizuálny prehľad */}
-        <TouchableOpacity
-          style={styles.card}
-          onPress={goToDiary}
-          activeOpacity={0.95}
-        >
-          <View style={styles.diaryCardHeader}>
-            <Text style={styles.cardTitle}>{t("projectOverviewDashboard.diaryTitle")}</Text>
-            <Ionicons name="chevron-forward" size={20} color={colors.primary} />
-          </View>
-          {kpis.lastDiary.length === 0 ? (
-            <Text style={styles.emptyText}>{t("projectOverview.noDiaryEntries")}</Text>
-          ) : (
-            kpis.lastDiary.map((entry) => (
-              <View key={entry.id} style={styles.diaryEntry}>
-                <Text style={styles.diaryDate}>{formatDate(entry.date)}</Text>
-                <Text style={styles.diaryDesc} numberOfLines={2}>
-                  {entry.workDescription}
-                </Text>
-                {entry.weather && (
-                  <Text style={styles.diaryMeta}>
-                    {t("projectOverview.weather")}: {entry.weather}
-                  </Text>
-                )}
-                {entry.workers && (
-                  <Text style={styles.diaryMeta}>
-                    {t("projectOverview.workers")}: {entry.workers}
-                  </Text>
-                )}
-                {entry.attachments && entry.attachments.length > 0 && (
-                  <Ionicons name="image" size={14} color={colors.primary} style={{ marginTop: 2 }} />
-                )}
-              </View>
-            ))
-          )}
-          <View style={styles.cardButton}>
-            <Text style={styles.cardButtonText}>{t("projectOverviewDashboard.openDiary")}</Text>
-            <Ionicons name="chevron-forward" size={18} color={colors.primary} />
-          </View>
-        </TouchableOpacity>
 
         {/* Photos Card - Hero layout */}
         <View style={styles.card}>
@@ -635,6 +591,163 @@ export function ProjectOverviewDashboardScreen() {
             <Ionicons name="chevron-forward" size={18} color={colors.primary} />
           </TouchableOpacity>
         </View>
+
+        {/* Problems Card */}
+        <View style={[styles.card, kpis.openCount > 0 && styles.problemsCardAlert]}>
+          <Text style={styles.cardTitle}>{problemsTitle}</Text>
+          <View style={styles.problemsRow}>
+            <View style={styles.problemBadge}>
+              <View style={[styles.problemDot, { backgroundColor: colors.error }]} />
+              <Text style={styles.problemCount}>{kpis.openCount}</Text>
+              <Text style={styles.problemLabel}>{t("projectOverviewDashboard.problemOpen")}</Text>
+            </View>
+            <View style={styles.problemBadge}>
+              <View style={[styles.problemDot, { backgroundColor: colors.primary }]} />
+              <Text style={styles.problemCount}>{kpis.inProgressCount}</Text>
+              <Text style={styles.problemLabel}>{t("projectOverviewDashboard.problemInProgress")}</Text>
+            </View>
+            <View style={styles.problemBadge}>
+              <View style={[styles.problemDot, { backgroundColor: "#2e7d32" }]} />
+              <Text style={styles.problemCount}>{kpis.fixedCount}</Text>
+              <Text style={styles.problemLabel}>{t("projectOverviewDashboard.problemFixed")}</Text>
+            </View>
+            <View style={styles.problemBadge}>
+              <View style={[styles.problemDot, { backgroundColor: "#2e7d32" }]} />
+              <Text style={styles.problemCount}>{kpis.verifiedCount}</Text>
+              <Text style={styles.problemLabel}>{t("projectOverviewDashboard.problemVerified")}</Text>
+            </View>
+          </View>
+          {kpis.mostRecentOpenProblem && (
+            <Text style={styles.mostRecentProblem} numberOfLines={2}>
+              {kpis.mostRecentOpenProblem.shortDescription}
+            </Text>
+          )}
+          <TouchableOpacity style={styles.cardButton} onPress={goToProblems}>
+            <Text style={styles.cardButtonText}>{t("projectOverviewDashboard.viewProblems")}</Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.primary} />
+          </TouchableOpacity>
+        </View>
+
+        {/* KPI Row - task done */}
+        <View style={styles.card}>
+          <View style={styles.kpiRow}>
+            <View style={styles.kpiTile}>
+              <Ionicons name="checkmark-circle" size={24} color="#2e7d32" />
+              <Text style={styles.kpiValue}>{kpis.tasksDone}</Text>
+              <Text style={styles.kpiLabel}>{t("projectOverviewDashboard.done")}</Text>
+            </View>
+            <View style={styles.kpiTile}>
+              <Ionicons name="time-outline" size={24} color={colors.primary} />
+              <Text style={styles.kpiValue}>{kpis.tasksOpen}</Text>
+              <Text style={styles.kpiLabel}>{t("projectOverviewDashboard.open")}</Text>
+            </View>
+            <View style={styles.kpiTile}>
+              <Ionicons name="warning-outline" size={24} color={colors.error} />
+              <Text style={styles.kpiValue}>{kpis.tasksOverdue}</Text>
+              <Text style={styles.kpiLabel}>{t("projectOverviewDashboard.overdue")}</Text>
+            </View>
+            {isBuildOrManagement && (
+              <View style={styles.kpiTile}>
+                <Ionicons name="layers-outline" size={24} color={colors.primary} />
+                <Text style={styles.kpiValue}>
+                  {kpis.phasesDone}/{kpis.phasesTotal}
+                </Text>
+                <Text style={styles.kpiLabel}>{t("projectOverviewDashboard.phases")}</Text>
+              </View>
+            )}
+          </View>
+        </View>
+
+        {/* Diary Card – klikateľné → vizuálny prehľad */}
+        <TouchableOpacity
+          style={styles.card}
+          onPress={goToDiary}
+          activeOpacity={0.95}
+        >
+          <View style={styles.diaryCardHeader}>
+            <Text style={styles.cardTitle}>{t("projectOverviewDashboard.diaryTitle")}</Text>
+            <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+          </View>
+          {kpis.lastDiary.length === 0 ? (
+            <Text style={styles.emptyText}>{t("projectOverview.noDiaryEntries")}</Text>
+          ) : (
+            kpis.lastDiary.map((entry) => (
+              <View key={entry.id} style={styles.diaryEntry}>
+                <Text style={styles.diaryDate}>{formatDate(entry.date)}</Text>
+                <Text style={styles.diaryDesc} numberOfLines={2}>
+                  {entry.workDescription}
+                </Text>
+                {entry.weather && (
+                  <Text style={styles.diaryMeta}>
+                    {t("projectOverview.weather")}: {entry.weather}
+                  </Text>
+                )}
+                {entry.workers && (
+                  <Text style={styles.diaryMeta}>
+                    {t("projectOverview.workers")}: {entry.workers}
+                  </Text>
+                )}
+                {entry.attachments && entry.attachments.length > 0 && (
+                  <Ionicons name="image" size={14} color={colors.primary} style={{ marginTop: 2 }} />
+                )}
+              </View>
+            ))
+          )}
+          <View style={styles.cardButton}>
+            <Text style={styles.cardButtonText}>{t("projectOverviewDashboard.openDiary")}</Text>
+            <Ionicons name="chevron-forward" size={18} color={colors.primary} />
+          </View>
+        </TouchableOpacity>
+
+        {/* Milestones Card - dokončené fázy (klikateľné → vizuálny prehľad) */}
+        {isBuildOrManagement && kpis.completedPhases.length > 0 && (
+          <TouchableOpacity
+            style={styles.card}
+            onPress={goToMilestonesOverview}
+            activeOpacity={0.95}
+          >
+            <View style={styles.milestonesCardHeader}>
+              <Text style={styles.cardTitle}>{t("projectOverviewDashboard.milestones")}</Text>
+              <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+            </View>
+            {kpis.completedPhases.map(({ phase }) => (
+              <View key={phase.id} style={styles.milestoneRow}>
+                <View style={styles.milestoneCheck}>
+                  <Ionicons name="checkmark-circle" size={24} color="#2e7d32" />
+                </View>
+                <Text style={styles.milestoneName}>{phase.name}</Text>
+                <Text style={styles.milestoneLabel}>{t("projectOverviewDashboard.phaseCompleted")}</Text>
+              </View>
+            ))}
+          </TouchableOpacity>
+        )}
+
+        {/* Hours spent on project */}
+        {canSeeHours && projectHoursMinutes > 0 && (
+          <TouchableOpacity
+            style={styles.card}
+            onPress={() => (navigation as any).navigate("AttendanceReportScreen")}
+            activeOpacity={0.95}
+          >
+            <View style={styles.diaryCardHeader}>
+              <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                <Ionicons name="time-outline" size={20} color={colors.primary} />
+                <Text style={styles.cardTitle}>{t("projectOverview.hoursSpentOnProject")}</Text>
+              </View>
+              <Ionicons name="chevron-forward" size={20} color={colors.primary} />
+            </View>
+            <View style={styles.expenseRow}>
+              <Text style={styles.expenseLabel}>{t("projectOverviewDashboard.total")}:</Text>
+              <Text style={styles.expenseValue}>
+                {Math.floor(projectHoursMinutes / 60)} {t("time.hoursShort")}
+              </Text>
+            </View>
+            <View style={styles.cardButton}>
+              <Text style={styles.cardButtonText}>{t("attendance.reportTitle")}</Text>
+              <Ionicons name="chevron-forward" size={18} color={colors.primary} />
+            </View>
+          </TouchableOpacity>
+        )}
 
         {/* Expenses Card */}
         <View style={styles.card}>
@@ -753,33 +866,37 @@ const styles = StyleSheet.create({
     borderTopWidth: 3,
     borderTopColor: colors.error,
   },
+  heroCard: {
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+  },
   heroProjectName: {
-    fontSize: 18,
+    fontSize: 16,
     fontWeight: "700",
     color: colors.text,
   },
   heroAddress: {
-    fontSize: 14,
+    fontSize: 13,
     color: colors.textMuted,
     marginTop: spacing.xs,
   },
   statusPill: {
     alignSelf: "flex-start",
-    paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    borderRadius: 20,
-    marginTop: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 16,
+    marginTop: spacing.xs,
   },
   statusPillText: {
     color: "#fff",
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "700",
   },
   circularProgressWrap: {
-    width: 120,
-    height: 120,
+    width: 88,
+    height: 88,
     alignSelf: "center",
-    marginTop: spacing.sm,
+    marginTop: spacing.xs,
   },
   heroProgressCenter: {
     ...StyleSheet.absoluteFillObject,
@@ -787,19 +904,19 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   heroProgressPct: {
-    fontSize: 28,
+    fontSize: 20,
     fontWeight: "700",
     color: colors.text,
   },
   heroProgressLabel: {
-    fontSize: 12,
+    fontSize: 11,
     color: colors.textMuted,
-    marginTop: 2,
+    marginTop: 1,
   },
   progressBar: {
-    marginTop: spacing.md,
-    height: 24,
-    borderRadius: 12,
+    marginTop: spacing.sm,
+    height: 16,
+    borderRadius: 8,
     backgroundColor: "rgba(0,0,0,0.1)",
     overflow: "hidden",
     flexDirection: "row",
@@ -807,8 +924,8 @@ const styles = StyleSheet.create({
   progressBarFill: {
     height: "100%",
     backgroundColor: colors.primary,
-    borderTopLeftRadius: 12,
-    borderBottomLeftRadius: 12,
+    borderTopLeftRadius: 8,
+    borderBottomLeftRadius: 8,
   },
   progressPct: {
     position: "absolute",
@@ -821,9 +938,9 @@ const styles = StyleSheet.create({
     color: colors.text,
   },
   progressLabel: {
-    fontSize: 14,
+    fontSize: 13,
     color: colors.textMuted,
-    marginTop: spacing.sm,
+    marginTop: spacing.xs,
   },
   kpiRow: {
     flexDirection: "row",

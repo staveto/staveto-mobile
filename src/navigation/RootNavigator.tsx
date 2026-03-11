@@ -16,6 +16,7 @@ import { CustomizeHomeScreen } from "../screens/CustomizeHomeScreen";
 import { TaskDetailScreen } from "../screens/TaskDetailScreen";
 import { ProjectOverviewScreen } from "../screens/ProjectOverviewScreen";
 import { ProjectOverviewDashboardScreen } from "../screens/ProjectOverviewDashboardScreen";
+import { AttendanceReportScreen } from "../screens/AttendanceReportScreen";
 import { ProjectMilestonesOverviewScreen } from "../screens/ProjectMilestonesOverviewScreen";
 import { ProjectDiaryOverviewScreen } from "../screens/ProjectDiaryOverviewScreen";
 import { ProjectPhotosScreen } from "../screens/ProjectPhotosScreen";
@@ -280,6 +281,11 @@ export function RootNavigator() {
       <Stack.Screen
         name="ProjectOverviewDashboard"
         component={ProjectOverviewDashboardScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="AttendanceReportScreen"
+        component={AttendanceReportScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen

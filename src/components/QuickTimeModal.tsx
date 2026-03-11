@@ -23,6 +23,10 @@ import type { ProjectDoc } from "../services/projects";
 import type { ProjectPhaseDoc } from "../services/projects";
 import type { TaskDoc } from "../services/tasks";
 
+/** Virtual task option for "Administrativa na projekte" – not a real task, stored as taskTitleSnapshot only */
+const TASK_OPTION_ADMINISTRATION = "__administration__" as const;
+type TaskOption = TaskDoc | null | typeof TASK_OPTION_ADMINISTRATION;
+
 const SHEET_BG = "#1e2530";
 const SHEET_TEXT = "#ffffff";
 const SHEET_ACTION = "#7dd3fc";
@@ -54,7 +58,7 @@ export function QuickTimeModal({
 }: Props) {
   const [selectedProject, setSelectedProject] = useState<ProjectDoc | null>(null);
   const [selectedPhase, setSelectedPhase] = useState<ProjectPhaseDoc | null>(null);
-  const [selectedTask, setSelectedTask] = useState<TaskDoc | null>(null);
+  const [selectedTask, setSelectedTask] = useState<TaskOption>(null);
   const [phases, setPhases] = useState<ProjectPhaseDoc[]>([]);
   const [tasks, setTasks] = useState<TaskDoc[]>([]);
   const [loadingPhasesTasks, setLoadingPhasesTasks] = useState(false);
@@ -145,8 +149,8 @@ export function QuickTimeModal({
       await timeTracking.startTimer(selectedProject.id, selectedProject.name ?? "Project", {
         phaseId: selectedPhase?.id ?? null,
         phaseNameSnapshot: selectedPhase?.name ?? null,
-        taskId: selectedTask?.id ?? null,
-        taskTitleSnapshot: selectedTask?.title ?? null,
+        taskId: selectedTask && selectedTask !== TASK_OPTION_ADMINISTRATION ? selectedTask.id : null,
+        taskTitleSnapshot: selectedTask === TASK_OPTION_ADMINISTRATION ? t("time.projectAdministration") : (selectedTask && selectedTask !== TASK_OPTION_ADMINISTRATION ? selectedTask.title ?? null : null),
       });
       onRefreshActiveTimer();
     } catch (err) {
@@ -197,8 +201,8 @@ export function QuickTimeModal({
         {
           phaseId: selectedPhase?.id ?? null,
           phaseNameSnapshot: selectedPhase?.name ?? null,
-          taskId: selectedTask?.id ?? null,
-          taskTitleSnapshot: selectedTask?.title ?? null,
+          taskId: selectedTask && selectedTask !== TASK_OPTION_ADMINISTRATION ? selectedTask.id : null,
+          taskTitleSnapshot: selectedTask === TASK_OPTION_ADMINISTRATION ? t("time.projectAdministration") : (selectedTask && selectedTask !== TASK_OPTION_ADMINISTRATION ? selectedTask.title ?? null : null),
         }
       );
       onSaved?.();
@@ -327,8 +331,8 @@ export function QuickTimeModal({
               </>
             )}
 
-            {/* Task (optional) */}
-            {selectedProject && tasks.length > 0 && (
+            {/* Task (optional) – vždy zobrazené pri vybranom projekte */}
+            {selectedProject && (
               <>
                 <Text style={styles.label}>{t("time.selectTaskOptional")}</Text>
                 {loadingPhasesTasks ? (
@@ -336,16 +340,25 @@ export function QuickTimeModal({
                 ) : (
                   <View style={styles.optionList}>
                     <TouchableOpacity
-                      style={[styles.optionRow, !selectedTask && styles.optionRowSelected]}
+                      style={[styles.optionRow, selectedTask === null && styles.optionRowSelected]}
                       onPress={() => setSelectedTask(null)}
                     >
-                      <Text style={[styles.optionRowText, !selectedTask && styles.optionRowTextSelected]}>
+                      <Text style={[styles.optionRowText, selectedTask === null && styles.optionRowTextSelected]}>
                         {t("time.projectOnly")}
                       </Text>
-                      {!selectedTask && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
+                      {selectedTask === null && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.optionRow, selectedTask === TASK_OPTION_ADMINISTRATION && styles.optionRowSelected]}
+                      onPress={() => setSelectedTask(TASK_OPTION_ADMINISTRATION)}
+                    >
+                      <Text style={[styles.optionRowText, selectedTask === TASK_OPTION_ADMINISTRATION && styles.optionRowTextSelected]}>
+                        {t("time.projectAdministration")}
+                      </Text>
+                      {selectedTask === TASK_OPTION_ADMINISTRATION && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
                     </TouchableOpacity>
                     {tasksForPhase.map((tk) => {
-                      const isSelected = selectedTask?.id === tk.id;
+                      const isSelected = selectedTask && selectedTask !== TASK_OPTION_ADMINISTRATION && selectedTask.id === tk.id;
                       return (
                         <TouchableOpacity
                           key={tk.id}

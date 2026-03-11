@@ -184,7 +184,7 @@ export function CloneProjectModal({
         <View style={styles.modal}>
           <View style={styles.header}>
             <Text style={styles.title} numberOfLines={1} maxFontSizeMultiplier={1.2}>
-              {t("projects.cloneModalTitle")}
+              {t("projects.duplicate")}
             </Text>
             <TouchableOpacity
               onPress={handleClose}
@@ -294,12 +294,12 @@ export function CloneProjectModal({
             onPress={handleSubmit}
             disabled={submitting || !newName.trim()}
             accessibilityRole="button"
-            accessibilityLabel={t("projects.cloneStructure")}
+            accessibilityLabel={t("projects.duplicate")}
           >
             {submitting ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Text style={styles.submitBtnText}>{t("projects.cloneStructure")}</Text>
+              <Text style={styles.submitBtnText}>{t("projects.duplicate")}</Text>
             )}
           </TouchableOpacity>
         </View>

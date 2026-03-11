@@ -120,59 +120,82 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         setState((s) => ({ ...s, token: null, user: null, orgId: null, loading: false }));
         return;
       }
-      const token = await fbUser.getIdToken();
-      let user: User = {
-        id: fbUser.uid,
-        email: fbUser.email ?? "",
-        name: fbUser.displayName ?? undefined,
-      };
       try {
-        setLastBootStep("user_doc_loading");
-        const snap = await getDoc(doc(db, "users", fbUser.uid));
-        setLastBootStep("user_doc_loaded");
-        if (snap.exists()) {
-          const d = snap.data() as Record<string, unknown>;
-          const fn = d.firstName as string | undefined;
-          const ln = d.lastName as string | undefined;
-          const dn = d.displayName as string | undefined;
-          if (fn) user = { ...user, firstName: fn };
-          if (ln) user = { ...user, lastName: ln };
-          if (dn && !user.name) user = { ...user, name: dn };
-          if (!user.name && fn && ln) user = { ...user, name: `${fn} ${ln}`.trim() };
+        const token = await fbUser.getIdToken();
+        let user: User = {
+          id: fbUser.uid,
+          email: fbUser.email ?? "",
+          name: fbUser.displayName ?? undefined,
+        };
+        try {
+          setLastBootStep("user_doc_loading");
+          const snap = await getDoc(doc(db, "users", fbUser.uid));
+          setLastBootStep("user_doc_loaded");
+          if (snap.exists()) {
+            const d = snap.data() as Record<string, unknown>;
+            const fn = d.firstName as string | undefined;
+            const ln = d.lastName as string | undefined;
+            const dn = d.displayName as string | undefined;
+            if (fn) user = { ...user, firstName: fn };
+            if (ln) user = { ...user, lastName: ln };
+            if (dn && !user.name) user = { ...user, name: dn };
+            if (!user.name && fn && ln) user = { ...user, name: `${fn} ${ln}`.trim() };
+          }
+        } catch {
+          setLastBootStep("user_doc_error");
         }
-      } catch {
-        setLastBootStep("user_doc_error");
+        bootStep("revenuecat_configure_before", "H6", {}).catch(() => {});
+        configurePurchases(fbUser.uid)
+          .then(() => bootStep("revenuecat_configure_after", "H6", {}).catch(() => {}))
+          .catch(() => {});
+        setLastBootStep("billing_loading");
+        const billing = await fetchBillingStatus(fbUser.uid);
+        setLastBootStep("billing_loaded");
+        user = { ...user, billing: billing ?? undefined };
+        if (!claimedInviteSessionsRef.current.has(fbUser.uid)) {
+          claimedInviteSessionsRef.current.add(fbUser.uid);
+          setLastBootStep("invites_started");
+          claimProjectInvites()
+            .then((result) => {
+              setLastBootStep("invites_done");
+              if (result.claimedCount > 0 && __DEV__) {
+                console.log("[auth] claimed project invites:", result.claimedCount, result.projectIds);
+              }
+            })
+            .catch(() => {
+              setLastBootStep("invites_failed");
+            });
+        }
+        setLastBootStep("boot_done");
+        setState((s) => ({
+          ...s,
+          token,
+          user,
+          orgId: fbUser.uid,
+          loading: false,
+        }));
+      } catch (e) {
+        if (__DEV__) console.warn("[auth] onAuthStateChanged error after sign-in:", e);
+        setLastBootStep("auth_error");
+        let token = "";
+        try {
+          token = await fbUser.getIdToken();
+        } catch {
+          /* ignore */
+        }
+        const fallbackUser: User = {
+          id: fbUser.uid,
+          email: fbUser.email ?? "",
+          name: fbUser.displayName ?? undefined,
+        };
+        setState((s) => ({
+          ...s,
+          token: token || null,
+          user: token ? fallbackUser : null,
+          orgId: token ? fbUser.uid : null,
+          loading: false,
+        }));
       }
-      bootStep("revenuecat_configure_before", "H6", {}).catch(() => {});
-      configurePurchases(fbUser.uid)
-        .then(() => bootStep("revenuecat_configure_after", "H6", {}).catch(() => {}))
-        .catch(() => {});
-      setLastBootStep("billing_loading");
-      const billing = await fetchBillingStatus(fbUser.uid);
-      setLastBootStep("billing_loaded");
-      user = { ...user, billing: billing ?? undefined };
-      if (!claimedInviteSessionsRef.current.has(fbUser.uid)) {
-        claimedInviteSessionsRef.current.add(fbUser.uid);
-        setLastBootStep("invites_started");
-        claimProjectInvites()
-          .then((result) => {
-            setLastBootStep("invites_done");
-            if (result.claimedCount > 0 && __DEV__) {
-              console.log("[auth] claimed project invites:", result.claimedCount, result.projectIds);
-            }
-          })
-          .catch(() => {
-            setLastBootStep("invites_failed");
-          });
-      }
-      setLastBootStep("boot_done");
-      setState((s) => ({
-        ...s,
-        token,
-        user,
-        orgId: fbUser.uid,
-        loading: false,
-      }));
     });
     return () => unsubscribe();
   }, []);

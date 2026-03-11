@@ -4,6 +4,7 @@ import { db, auth } from "../firebase";
 import { getApp } from "@react-native-firebase/app";
 import { paths } from "../lib/firestorePaths";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
+import type { WorkType, BusinessMode, CreationMode } from "../lib/projectEnums";
 
 const COLLECTION = "projects";
 const CACHE_TTL_MS = 30_000;
@@ -43,6 +44,11 @@ export type ProjectDoc = {
   createdAt?: string; // ISO string when project was created
   sharedWithCount?: number; // Number of non-owner members (for badge)
   isSharedToMe?: boolean; // True when current user is invited member (not owner)
+  /** New attribute fields (nullable for backward compat) */
+  workType?: WorkType | null;
+  businessMode?: BusinessMode | null;
+  creationMode?: CreationMode | null;
+  isTemplate?: boolean; // Hidden from normal list when true
 };
 
 export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
@@ -57,6 +63,9 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
       createdAt = (raw as { toDate: () => Date }).toDate().toISOString();
     }
   }
+  const workType = d.workType as WorkType | null | undefined;
+  const businessMode = d.businessMode as BusinessMode | null | undefined;
+  const creationMode = d.creationMode as CreationMode | null | undefined;
   return {
     id: docSnap.id,
     name: (d.name as string) ?? "",
@@ -73,6 +82,10 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     archivedAt: d.archivedAt ?? undefined,
     createdAt,
     sharedWithCount: typeof d.sharedWithCount === "number" ? d.sharedWithCount : undefined,
+    workType: workType ?? undefined,
+    businessMode: businessMode ?? undefined,
+    creationMode: creationMode ?? undefined,
+    isTemplate: !!d.isTemplate,
   };
 }
 
@@ -450,7 +463,8 @@ export async function updateProject(
   name: string,
   addressText?: string | null,
   countryCode?: string | null,
-  city?: string | null
+  city?: string | null,
+  isTemplate?: boolean
 ): Promise<void> {
   // CRITICAL FIX: Always use auth.currentUser.uid for verification
   const currentUser = auth.currentUser;
@@ -466,8 +480,19 @@ export async function updateProject(
   if (addressText !== undefined) update.addressText = (addressText ?? "").trim() || null;
   if (countryCode !== undefined) update.countryCode = (countryCode ?? "").trim() || null;
   if (city !== undefined) update.city = (city ?? "").trim() || null;
+  if (isTemplate !== undefined) update.isTemplate = isTemplate;
   await updateDoc(ref, update);
   console.log(`[projects] Updated project ${projectId}: name="${name.trim()}"`);
+}
+
+export async function setProjectAsTemplate(_ownerId: string, projectId: string, isTemplate: boolean): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser || !currentUser.uid) {
+    throw new Error('Musíte byť prihlásený na úpravu projektu.');
+  }
+  const ref = doc(db, COLLECTION, projectId);
+  await updateDoc(ref, { isTemplate, updatedAt: serverTimestamp() });
+  console.log(`[projects] Set project ${projectId} isTemplate=${isTemplate}`);
 }
 
 export async function deleteProject(_ownerId: string, projectId: string): Promise<void> {

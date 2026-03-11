@@ -117,6 +117,7 @@ export function AccountScreen() {
   const [profilePhone, setProfilePhone] = useState("");
   const [profileProfessionCode, setProfileProfessionCode] = useState<ProfessionCode | null>(null);
   const [profileProfessionOtherText, setProfileProfessionOtherText] = useState("");
+  const [profileHourlyRate, setProfileHourlyRate] = useState("");
   const [profilePhotoURL, setProfilePhotoURL] = useState<string | null>(null);
   const [showProfessionModal, setShowProfessionModal] = useState(false);
   const [professionSearch, setProfessionSearch] = useState("");
@@ -189,6 +190,7 @@ export function AccountScreen() {
           lastName?: string;
           phoneE164?: string | null;
           primaryUsageMode?: "build" | "trade" | "maintenance" | null;
+          hourlyRateEur?: number | null;
         };
         setProfileFirstName(data.firstName ?? user.firstName ?? "");
         setProfileLastName(data.lastName ?? user.lastName ?? "");
@@ -223,9 +225,11 @@ export function AccountScreen() {
           }
         }
         setProfilePhotoURL(data.photoURL ?? null);
+        setProfileHourlyRate(data.hourlyRateEur != null && data.hourlyRateEur > 0 ? String(data.hourlyRateEur) : "");
       } else {
         setProfileFirstName(user.firstName ?? "");
         setProfileLastName(user.lastName ?? "");
+        setProfileHourlyRate("");
         const pending = await AsyncStorage.getItem("pending_onboarding");
         if (pending) {
           try {
@@ -282,6 +286,8 @@ export function AccountScreen() {
     setSavingProfile(true);
     try {
       const displayName = `${profileFirstName.trim()} ${profileLastName.trim()}`.trim();
+      const hourlyRateNum = profileHourlyRate.trim() ? parseFloat(profileHourlyRate.trim()) : null;
+      const hourlyRateEur = hourlyRateNum != null && !isNaN(hourlyRateNum) && hourlyRateNum > 0 ? hourlyRateNum : null;
       await updateDoc(doc(db, "users", user.id), {
         firstName: profileFirstName.trim(),
         lastName: profileLastName.trim(),
@@ -290,6 +296,7 @@ export function AccountScreen() {
         primaryProfessionCode: professionPayload.primaryProfessionCode,
         primaryProfessionOtherText: professionPayload.primaryProfessionOtherText,
         photoURL: profilePhotoURL ?? null,
+        hourlyRateEur,
         updatedAt: serverTimestamp(),
       });
       const fbUser = auth()?.currentUser;
@@ -304,7 +311,7 @@ export function AccountScreen() {
     } finally {
       setSavingProfile(false);
     }
-  }, [user?.id, profileFirstName, profileLastName, profilePhone, profileProfessionCode, profileProfessionOtherText, profilePhotoURL, t]);
+  }, [user?.id, profileFirstName, profileLastName, profilePhone, profileProfessionCode, profileProfessionOtherText, profilePhotoURL, profileHourlyRate, t]);
 
   const saveUsageMode = useCallback(
     async (mode: "build" | "trade" | "maintenance") => {
@@ -778,6 +785,18 @@ export function AccountScreen() {
                 />
               </>
             ) : null}
+            <Text style={styles.profileFieldLabel}>{t("profile.hourlyRateLabel") || "Hodinová mzda (€)"}</Text>
+            <TextInput
+              style={styles.profileInput}
+              placeholder={t("profile.hourlyRatePlaceholder") || "napr. 15"}
+              placeholderTextColor={colors.textMuted}
+              value={profileHourlyRate}
+              onChangeText={setProfileHourlyRate}
+              keyboardType="decimal-pad"
+            />
+            <Text style={[styles.profileFieldLabel, { color: colors.textMuted, fontSize: 12, marginTop: -spacing.sm }]}>
+              {t("profile.hourlyRateHint") || "Voliteľné. Pre výpočet nákladov práce v reporte hodín."}
+            </Text>
             <View style={styles.profileModalActions}>
               <TouchableOpacity style={styles.profileCancel} onPress={() => setShowProfileModal(false)}>
                 <Text style={styles.profileCancelText}>{t("common.cancel")}</Text>

@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -16,7 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
-import { getAuthErrorMessage, loginWithApple, loginWithGoogle, sendPasswordResetEmail } from "../services/auth";
+import { getAuthErrorMessage, isAppleSignInAvailable, loginWithApple, loginWithGoogle, sendPasswordResetEmail } from "../services/auth";
 import { colors, radius, spacing } from "../theme";
 
 export function LoginScreen() {
@@ -31,6 +31,13 @@ export function LoginScreen() {
   const [showForgotPassword, setShowForgotPassword] = useState(false);
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotSubmitting, setForgotSubmitting] = useState(false);
+  const [appleSignInAvailable, setAppleSignInAvailable] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS === "ios") {
+      isAppleSignInAvailable().then(setAppleSignInAvailable);
+    }
+  }, []);
 
   const onLogin = async () => {
     if (!email.trim() || !password) {
@@ -137,7 +144,7 @@ export function LoginScreen() {
         <Ionicons name="logo-google" size={20} color="#fff" />
         <Text style={styles.googleBtnText}>{t("register.google")}</Text>
       </TouchableOpacity>
-      {Platform.OS === "ios" && (
+      {Platform.OS === "ios" && appleSignInAvailable && (
         <TouchableOpacity style={styles.appleBtn} onPress={onAppleLogin} disabled={submitting}>
           <Ionicons name="logo-apple" size={22} color="#fff" />
           <Text style={styles.appleBtnText}>{t("login.apple")}</Text>

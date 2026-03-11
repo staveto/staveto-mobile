@@ -175,13 +175,39 @@ export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string
   return { user, token };
 }
 
+/** Check if Sign in with Apple is available (iOS only). Use to hide button when unavailable. */
+export async function isAppleSignInAvailable(): Promise<boolean> {
+  if (Platform.OS !== "ios") return false;
+  try {
+    const mod = require("expo-apple-authentication");
+    const AppleAuthentication = mod?.default ?? mod;
+    return !!(AppleAuthentication && typeof AppleAuthentication.isAvailableAsync === "function" && (await AppleAuthentication.isAvailableAsync()));
+  } catch {
+    return false;
+  }
+}
+
 /** Sign in with Apple (iOS only). Requires expo-apple-authentication + Firebase Auth Apple provider. */
 export async function loginWithApple(): Promise<{ user: AuthUser; token: string }> {
   if (Platform.OS !== "ios") {
     throw new Error("Sign in with Apple is only available on iOS.");
   }
 
-  const AppleAuthentication = require("expo-apple-authentication").default;
+  let AppleAuthentication: { isAvailableAsync: () => Promise<boolean>; signInAsync: (opts: unknown) => Promise<unknown>; AppleAuthenticationScope: { FULL_NAME: number; EMAIL: number } };
+  try {
+    const mod = require("expo-apple-authentication");
+    AppleAuthentication = mod?.default ?? mod;
+  } catch {
+    const err = new Error("Sign in with Apple is not available. Please sign in with email or update the app.") as Error & { code?: string };
+    err.code = "auth/apple-unavailable";
+    throw err;
+  }
+  if (!AppleAuthentication || typeof AppleAuthentication.isAvailableAsync !== "function") {
+    const err = new Error("Sign in with Apple is not available on this device. Please sign in with email.") as Error & { code?: string };
+    err.code = "auth/apple-unavailable";
+    throw err;
+  }
+
   const Crypto = require("expo-crypto");
   const authMod = require("@react-native-firebase/auth").default;
 
@@ -234,7 +260,12 @@ export async function loginWithApple(): Promise<{ user: AuthUser; token: string 
     lastName: fullName?.familyName ?? undefined,
   };
 
-  await ensureUserProfile(user);
+  try {
+    await ensureUserProfile(user);
+  } catch (e) {
+    if (__DEV__) console.warn("[auth] ensureUserProfile after Apple sign-in failed:", e);
+    // Don't throw – user is signed in; AuthContext will load profile from Firestore
+  }
   const token = await fbUser.getIdToken();
   return { user, token };
 }
@@ -268,6 +299,7 @@ export function getAuthErrorMessage(code: string): string {
     "auth/credential-already-in-use": "Tieto prihlasovacie údaje sú už použité.",
     "auth/operation-not-allowed": "Google alebo Apple prihlásenie nie je povolené. Skontrolujte Firebase Console.",
     "auth/configuration-not-found": "Chýba Web Client ID. Pridajte EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID do .env",
+    "auth/apple-unavailable": "Prihlásenie cez Apple nie je na tomto zariadení dostupné. Použite prihlásenie emailom.",
     "DEVELOPER_ERROR": "Chyba konfigurácie. Skontrolujte SHA-1 v Firebase a Web Client ID.",
     "SIGN_IN_REQUIRED": "Používateľ zrušil prihlásenie.",
     "ERR_REQUEST_CANCELED": "Používateľ zrušil prihlásenie.",

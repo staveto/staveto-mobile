@@ -465,6 +465,21 @@ export async function listTimeEntriesByProject(
   return snap.docs.map((d) => parseTimeEntryDoc({ id: d.id, data: d.data.bind(d) }));
 }
 
+/**
+ * Get total minutes spent on a project (last 24 months).
+ * Returns 0 if no entries or no access.
+ */
+export async function getProjectTotalMinutes(projectId: string): Promise<number> {
+  if (!projectId) return 0;
+  const now = new Date();
+  const toYmd = now.toISOString().slice(0, 10);
+  const fromDate = new Date(now);
+  fromDate.setMonth(fromDate.getMonth() - 24);
+  const fromYmd = fromDate.toISOString().slice(0, 10);
+  const entries = await listTimeEntriesByProject(projectId, fromYmd, toYmd);
+  return entries.reduce((sum, e) => sum + (e.durationMinutes ?? 0), 0);
+}
+
 const IN_QUERY_CHUNK_SIZE = 10;
 
 /**

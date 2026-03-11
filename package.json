@@ -1,6 +1,6 @@
 {
   "name": "mobile",
-  "version": "1.8.0",
+  "version": "1.9.0",
   "main": "index.ts",
   "expo": {
     "install": {
@@ -70,6 +70,7 @@
     "expo-localization": "~17.0.3",
     "expo-location": "~19.0.8",
     "expo-notifications": "~0.32.16",
+    "expo-print": "~15.0.8",
     "expo-sharing": "~14.0.8",
     "expo-speech-recognition": "^3.1.0",
     "expo-splash-screen": "~31.0.13",

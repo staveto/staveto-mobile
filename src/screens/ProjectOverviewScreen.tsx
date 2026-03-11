@@ -61,6 +61,8 @@ import { EUROPEAN_COUNTRIES, buildAddressWithCountry, parseCountryFromAddress } 
 import { COUNTRY_CODES, getDeviceRegionCode, getLocalizedCountryName } from "../utils/countries";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { exportProjectToCsv } from "../services/projectExport";
+import { exportProjectAsProtocol } from "../services/projectProtocolExport";
+import * as timeTracking from "../services/timeTracking";
 import { updateTaskStatus } from "../services/taskService";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
 import { addPhasesToProject } from "../services/addPhasesToProject";
@@ -133,6 +135,7 @@ export function ProjectOverviewScreen() {
   const [expandedDiary, setExpandedDiary] = useState(false);
   const [expandedProblems, setExpandedProblems] = useState(false);
   const [openProblemsCount, setOpenProblemsCount] = useState(0);
+  const [projectHoursMinutes, setProjectHoursMinutes] = useState<number>(0);
   const [expandedDocuments, setExpandedDocuments] = useState(false);
   const [showNewTask, setShowNewTask] = useState(false);
   const [showTaskDescriptionModal, setShowTaskDescriptionModal] = useState(false);
@@ -670,11 +673,22 @@ export function ProjectOverviewScreen() {
     access.canReadDocuments,
   ]);
   
+  const loadProjectHours = useCallback(async () => {
+    if (!projectId || (!access.isOwner && !access.canWrite)) return;
+    try {
+      const mins = await timeTracking.getProjectTotalMinutes(projectId);
+      setProjectHoursMinutes(mins);
+    } catch {
+      setProjectHoursMinutes(0);
+    }
+  }, [projectId, access.isOwner, access.canWrite]);
+
   const onRefresh = useCallback(() => {
     load(true);
     loadActivity();
     loadWeather(true);
-  }, [load, loadActivity, loadWeather]);
+    loadProjectHours();
+  }, [load, loadActivity, loadWeather, loadProjectHours]);
 
   useEffect(() => {
     if (!projectId || access.loading) return;
@@ -688,6 +702,12 @@ export function ProjectOverviewScreen() {
   useEffect(() => {
     loadWeather();
   }, [loadWeather]);
+
+  useEffect(() => {
+    if (!projectId || access.loading) return;
+    if (access.isOwner || access.canWrite) loadProjectHours();
+    else setProjectHoursMinutes(0);
+  }, [projectId, access.loading, access.isOwner, access.canWrite, loadProjectHours]);
 
   useFocusEffect(
     useCallback(() => {
@@ -1150,6 +1170,37 @@ export function ProjectOverviewScreen() {
     }
   };
 
+  const handleExportProtocol = async () => {
+    try {
+      const result = await exportProjectAsProtocol(projectId, {
+        title: t("projectOverview.exportProtocol.title"),
+        exportDate: t("projectOverview.exportProtocol.exportDate"),
+        status: t("projectOverview.exportProtocol.status"),
+        tasks: t("projectOverview.exportProtocol.tasks"),
+        expenses: t("projectOverview.exportProtocol.expenses"),
+        diary: t("projectOverview.exportProtocol.diary"),
+        problems: t("projectOverview.exportProtocol.problems"),
+        phase: t("projectOverview.exportProtocol.phase"),
+        task: t("projectOverview.exportProtocol.task"),
+        responsible: t("projectOverview.exportProtocol.responsible"),
+        photos: t("projectOverview.exportProtocol.photos"),
+        signature: t("projectOverview.exportProtocol.signature"),
+        statusLabel: t("projectOverview.exportProtocol.statusLabel"),
+        date: t("projectOverview.exportProtocol.date"),
+        amount: t("projectOverview.exportProtocol.amount"),
+        description: t("projectOverview.exportProtocol.description"),
+        total: t("projectOverview.exportProtocol.total"),
+        footer: t("projectOverview.exportProtocol.footer"),
+      });
+      if (!result.ok) {
+        Alert.alert(t("common.error"), result.error || t("projectOverview.exportFailed"));
+      }
+    } catch (err: unknown) {
+      const msg = err instanceof Error ? err.message : String(err);
+      Alert.alert(t("common.error"), msg);
+    }
+  };
+
   const handleMenuPress = () => {
     if (Platform.OS === 'ios') {
       const actions = [
@@ -1157,6 +1208,7 @@ export function ProjectOverviewScreen() {
         ...(isOwner ? [{ key: "cover", label: t("cover.changeCover"), onPress: handleChangeCover }] : []),
         ...(whatsappDiaryEnabled ? [{ key: "updates", label: t("projectOverview.updates"), onPress: () => (navigation as any).navigate("Updates", { projectId }) }] : []),
         ...(contractorsEnabled ? [{ key: "suppliers", label: t("projectOverview.suppliers"), onPress: () => (navigation as any).navigate("ProjectSuppliers", { projectId }) }] : []),
+        { key: "protocol", label: t("projectOverview.exportProtocol.title"), onPress: handleExportProtocol },
         { key: "export", label: t("projectOverview.exportToCsv"), onPress: handleExportCsv },
         ...(isOwner ? [{ key: "delete", label: t("projectOverview.deleteProject"), onPress: handleDeleteProject }] : []),
       ];
@@ -1187,6 +1239,7 @@ export function ProjectOverviewScreen() {
           ...(isOwner ? [{ text: t("cover.changeCover"), onPress: handleChangeCover }] : []),
           ...(whatsappDiaryEnabled ? [{ text: t("projectOverview.updates"), onPress: () => (navigation as any).navigate("Updates", { projectId }) }] : []),
           ...(contractorsEnabled ? [{ text: t("projectOverview.suppliers"), onPress: () => (navigation as any).navigate("ProjectSuppliers", { projectId }) }] : []),
+          { text: t("projectOverview.exportProtocol.title"), onPress: handleExportProtocol },
           { text: t("projectOverview.exportToCsv"), onPress: handleExportCsv },
           ...(isOwner ? [{ text: t("projectOverview.deleteProject"), style: 'destructive', onPress: handleDeleteProject }] : []),
         ]
@@ -4077,6 +4130,31 @@ export function ProjectOverviewScreen() {
               )}
             </View>
             )}
+          </View>
+        )}
+
+        {/* Hours spent on project - only show if > 0 */}
+        {!access.loading && projectHoursMinutes > 0 && (access.isOwner || access.canWrite) && (
+          <View style={styles.expensesSection}>
+          <TouchableOpacity 
+            style={styles.expensesHeader}
+            onPress={() => (navigation as any).navigate("AttendanceReportScreen")}
+            activeOpacity={0.7}
+          >
+            <View style={styles.expensesHeaderLeft}>
+              <Ionicons 
+                name="time-outline" 
+                size={20} 
+                color={colors.text} 
+                style={{ marginRight: spacing.sm }}
+              />
+              <Text style={styles.expensesHeaderText}>{t("projectOverview.hoursSpentOnProject")}</Text>
+              <Text style={styles.expensesCount}>
+                ({Math.floor(projectHoursMinutes / 60)} {t("time.hoursShort")})
+              </Text>
+            </View>
+            <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+          </TouchableOpacity>
           </View>
         )}
 

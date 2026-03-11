@@ -15,17 +15,10 @@ import {
   ActivityIndicator,
   Alert,
   RefreshControl,
-  Modal,
-  TextInput,
-  Pressable,
-  KeyboardAvoidingView,
-  Platform,
   Linking,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { useNavigation } from "@react-navigation/native";
-import { Ionicons } from "@expo/vector-icons";
-import { redeemPromoCode as redeemPromoCodeService } from "../services/subscription";
 import {
   getEntitlement,
   purchaseMonthly,
@@ -48,10 +41,6 @@ export function SubscriptionScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [purchasing, setPurchasing] = useState(false);
-  const [showPromoModal, setShowPromoModal] = useState(false);
-  const [promoCodeInput, setPromoCodeInput] = useState("");
-  const [promoRedeeming, setPromoRedeeming] = useState(false);
-
   const loadUsage = async () => {
     try {
       const ent = await getEntitlement();
@@ -151,54 +140,6 @@ export function SubscriptionScreen() {
       Alert.alert(t("paywall.restoreFailed"), String(e));
     } finally {
       setPurchasing(false);
-    }
-  };
-
-  const getPromoErrorMessage = (code: string): string => {
-    const c = (code || "").toUpperCase();
-    switch (c) {
-      case "INVALID_CODE":
-        return t("subscription.promoInvalidCode");
-      case "EXPIRED":
-        return t("subscription.promoExpired");
-      case "LIMIT_REACHED":
-        return t("subscription.promoLimitReached");
-      case "ALREADY_REDEEMED":
-        return t("subscription.promoAlreadyRedeemed");
-      case "UNAUTHENTICATED":
-        return t("subscription.promoUnauthenticated");
-      case "USER_NOT_FOUND":
-        return t("subscription.promoInternalError");
-      case "INTERNAL":
-        return t("subscription.promoInternalError");
-      default:
-        return t("common.error") + ": " + (code || "Unknown error");
-    }
-  };
-
-  const handleRedeemPromoCode = async () => {
-    const code = promoCodeInput.trim();
-    if (!code) return;
-    setPromoRedeeming(true);
-    try {
-      await redeemPromoCodeService(code);
-      showToast(t("subscription.promoCodeSuccess"));
-      setShowPromoModal(false);
-      setPromoCodeInput("");
-      await refreshUser();
-    } catch (error: any) {
-      const isInternal =
-        (typeof error?.code === "string" && error.code.includes("internal")) ||
-        (typeof error?.message === "string" && error.message.toUpperCase().includes("INTERNAL"));
-      const rawMessage = error?.message || error?.details || "";
-      const errCode = isInternal ? "INTERNAL" : rawMessage;
-      if (__DEV__) console.warn("[Subscription] redeemPromoCode error:", error?.code, error?.message, error);
-      const displayMsg = isInternal
-        ? `${t("subscription.promoInternalError")}${__DEV__ && rawMessage ? `\n\n${rawMessage}` : ""}`
-        : getPromoErrorMessage(errCode);
-      Alert.alert(t("common.error"), displayMsg);
-    } finally {
-      setPromoRedeeming(false);
     }
   };
 
@@ -327,18 +268,6 @@ export function SubscriptionScreen() {
           </View>
         </View>
         )}
-
-        <TouchableOpacity
-          style={styles.promoButton}
-          onPress={() => setShowPromoModal(true)}
-          accessibilityRole="button"
-          accessibilityLabel={t("subscription.havePromoCode")}
-        >
-          <Ionicons name="pricetag-outline" size={20} color={colors.primary} />
-          <Text style={styles.promoButtonText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-            {t("subscription.havePromoCode")}
-          </Text>
-        </TouchableOpacity>
       </View>
 
       <View style={styles.footer}>
@@ -355,57 +284,6 @@ export function SubscriptionScreen() {
           </Text>
         </View>
       </View>
-
-      <Modal visible={showPromoModal} transparent animationType="fade">
-        <Pressable style={styles.modalOverlay} onPress={() => !promoRedeeming && setShowPromoModal(false)}>
-          <KeyboardAvoidingView
-            behavior={Platform.OS === "ios" ? "padding" : undefined}
-            keyboardVerticalOffset={0}
-          >
-          <Pressable style={styles.promoModal} onPress={(e) => e.stopPropagation()}>
-            <Text style={styles.promoModalTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-              {t("subscription.havePromoCode")}
-            </Text>
-            <TextInput
-              style={styles.promoInput}
-              placeholder={t("subscription.promoCodePlaceholder")}
-              placeholderTextColor={colors.textMuted}
-              value={promoCodeInput}
-              onChangeText={setPromoCodeInput}
-              autoCapitalize="characters"
-              autoCorrect={false}
-              editable={!promoRedeeming}
-              accessibilityLabel={t("subscription.promoCodePlaceholder")}
-              maxFontSizeMultiplier={1.3}
-            />
-            <View style={styles.promoModalActions}>
-              <TouchableOpacity
-                style={styles.promoCancelButton}
-                onPress={() => !promoRedeeming && setShowPromoModal(false)}
-                disabled={promoRedeeming}
-              >
-                <Text style={styles.promoCancelText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-                  {t("common.cancel")}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.promoApplyButton, promoRedeeming && styles.upgradeButtonDisabled]}
-                onPress={handleRedeemPromoCode}
-                disabled={!promoCodeInput.trim() || promoRedeeming}
-              >
-                {promoRedeeming ? (
-                  <ActivityIndicator size="small" color="#fff" />
-                ) : (
-                  <Text style={styles.promoApplyText} maxFontSizeMultiplier={1.1} numberOfLines={1}>
-                    {t("subscription.promoCodeApply")}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          </Pressable>
-          </KeyboardAvoidingView>
-        </Pressable>
-      </Modal>
     </ScrollView>
   );
 }
@@ -540,77 +418,6 @@ const styles = StyleSheet.create({
     fontSize: 12,
     color: colors.text,
     fontWeight: "500",
-  },
-  promoButton: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: colors.card,
-    borderRadius: radius,
-    padding: spacing.md,
-    borderWidth: 1,
-    borderColor: colors.border,
-    gap: spacing.sm,
-  },
-  promoButtonText: {
-    color: colors.primary,
-    fontSize: 14,
-    fontWeight: "500",
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: "rgba(0,0,0,0.5)",
-    justifyContent: "center",
-    alignItems: "center",
-    padding: spacing.lg,
-  },
-  promoModal: {
-    backgroundColor: colors.card,
-    borderRadius: radius,
-    padding: spacing.lg,
-    width: "100%",
-    maxWidth: 340,
-  },
-  promoModalTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: colors.text,
-    marginBottom: spacing.md,
-  },
-  promoInput: {
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: radius,
-    padding: spacing.md,
-    fontSize: 16,
-    color: colors.text,
-    marginBottom: spacing.md,
-  },
-  promoModalActions: {
-    flexDirection: "row",
-    gap: spacing.md,
-    justifyContent: "flex-end",
-  },
-  promoCancelButton: {
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-  },
-  promoCancelText: {
-    color: colors.textMuted,
-    fontSize: 14,
-  },
-  promoApplyButton: {
-    backgroundColor: colors.primary,
-    borderRadius: radius,
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.lg,
-    minWidth: 80,
-    alignItems: "center",
-  },
-  promoApplyText: {
-    color: "#fff",
-    fontSize: 14,
-    fontWeight: "600",
   },
   upgradeButtonDisabled: {
     opacity: 0.6,

@@ -59,6 +59,8 @@ export function ProjectMembersScreen() {
   const [shareTimeTracking, setShareTimeTracking] = useState(true);
   const [shareEquipment, setShareEquipment] = useState(false);
   const [selectedPhaseIds, setSelectedPhaseIds] = useState<string[]>([]);
+  const [addHourlyRate, setAddHourlyRate] = useState("");
+  const [editHourlyRate, setEditHourlyRate] = useState("");
 
   const goBack = () => navigation.goBack();
 
@@ -124,6 +126,7 @@ export function ProjectMembersScreen() {
     setShareEquipment(false);
     setSelectedPhaseIds([]);
     setSelectedEquipmentIds([]);
+    setAddHourlyRate("");
     setShowAddMember(true);
   };
   
@@ -131,6 +134,7 @@ export function ProjectMembersScreen() {
     setShowAddMember(false);
     setAddMemberEmail("");
     setAddMemberName("");
+    setAddHourlyRate("");
     setPermissionLevel('editor');
     setShareTasks(true);
     setSharePhases(true);
@@ -162,6 +166,7 @@ export function ProjectMembersScreen() {
 
     setSubmitting(true);
     try {
+      const parsedRate = addHourlyRate.trim() ? parseFloat(addHourlyRate.trim()) : undefined;
       await projectMembersService.inviteMemberByEmail(
         projectId,
         addMemberEmail.trim(),
@@ -176,7 +181,8 @@ export function ProjectMembersScreen() {
           timeTracking: permissionLevel === 'editor' ? shareTimeTracking : false,
         },
         sharePhases ? selectedPhaseIds : [],
-        projectType === 'MAINTENANCE' ? (shareEquipment ? selectedEquipmentIds : []) : undefined
+        projectType === 'MAINTENANCE' ? (shareEquipment ? selectedEquipmentIds : []) : undefined,
+        parsedRate != null && !isNaN(parsedRate) && parsedRate > 0 ? parsedRate : undefined
       );
 
       const inviterName = user?.name || user?.firstName || user?.email || "";
@@ -233,6 +239,7 @@ export function ProjectMembersScreen() {
     setEditingMember(member);
     const perm = (member.permissionLevel as 'viewer' | 'editor') || 'viewer';
     setEditPermissionLevel(perm);
+    setEditHourlyRate(member.hourlyRateEur != null ? String(member.hourlyRateEur) : "");
     setEditShareTasks(member.sharedItems?.tasks ?? true);
     setEditSharePhases(member.sharedItems?.phases ?? true);
     setEditShareExpenses(member.sharedItems?.expenses ?? false);
@@ -246,6 +253,7 @@ export function ProjectMembersScreen() {
 
   const closeEditMember = () => {
     setEditingMember(null);
+    setEditHourlyRate("");
   };
 
   const handleUpdateMemberPermissions = async () => {
@@ -268,6 +276,12 @@ export function ProjectMembersScreen() {
         editSharePhases ? editSelectedPhaseIds : [],
         projectType === 'MAINTENANCE' ? (editShareEquipment ? editSelectedEquipmentIds : []) : undefined
       );
+      const parsedEditRate = editHourlyRate.trim();
+      const rateNum = parsedEditRate ? parseFloat(parsedEditRate) : NaN;
+      const newRate = !isNaN(rateNum) && rateNum > 0 ? rateNum : null;
+      if (newRate !== (editingMember.hourlyRateEur ?? null)) {
+        await projectMembersService.updateMemberHourlyRate(projectId, editingMember.id, newRate);
+      }
       try {
         await getCallable("syncMembersByUidForProject")({ projectId });
       } catch (e) {
@@ -623,7 +637,20 @@ export function ProjectMembersScreen() {
               placeholderTextColor={colors.textMuted}
               autoCapitalize="words"
             />
-            
+            {access.isOwner && (
+              <>
+                <Text style={styles.addMemberLabel}>{t('projectMembers.hourlyRateLabel') || 'Hodinová mzda (€)'}</Text>
+                <TextInput
+                  style={styles.addMemberInput}
+                  value={addHourlyRate}
+                  onChangeText={setAddHourlyRate}
+                  placeholder={t('projectMembers.hourlyRatePlaceholder') || 'napr. 15'}
+                  placeholderTextColor={colors.textMuted}
+                  keyboardType="decimal-pad"
+                />
+                <Text style={styles.addMemberHint}>{t('projectMembers.hourlyRateHint') || 'Voliteľné. Pre výpočet nákladov práce v reporte hodín.'}</Text>
+              </>
+            )}
             <Text style={styles.addMemberSectionTitle}>
               {t('projectMembers.permissionLevel') || 'Úroveň oprávnení'}
             </Text>
@@ -1135,6 +1162,22 @@ export function ProjectMembersScreen() {
                         )}
                       </View>
                     )}
+                  </>
+                )}
+                {access.isOwner && (
+                  <>
+                    <Text style={styles.addMemberSectionTitle}>
+                      {t('projectMembers.hourlyRateLabel') || 'Hodinová mzda (€)'}
+                    </Text>
+                    <TextInput
+                      style={styles.addMemberInput}
+                      value={editHourlyRate}
+                      onChangeText={setEditHourlyRate}
+                      placeholder={t('projectMembers.hourlyRatePlaceholder') || 'napr. 15'}
+                      placeholderTextColor={colors.textMuted}
+                      keyboardType="decimal-pad"
+                    />
+                    <Text style={styles.addMemberHint}>{t('projectMembers.hourlyRateHint') || 'Voliteľné. Pre výpočet nákladov práce v reporte hodín.'}</Text>
                   </>
                 )}
               </View>

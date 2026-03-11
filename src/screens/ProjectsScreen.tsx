@@ -25,6 +25,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
+import * as tasksService from "../services/tasks";
 import * as projectCoverService from "../services/projectCover";
 import * as projectFactory from "../services/projectFactory";
 import * as templateService from "../services/templateService";
@@ -34,7 +35,8 @@ import type { ProjectDoc } from "../services/projects";
 import { colors, radius, spacing } from "../theme";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
 import { CloneProjectModal } from "../components/CloneProjectModal";
-import { ProjectTypeCrossroad, type SelectableProjectType } from "../components/ProjectTypeCrossroad";
+import { CreateProjectWizard, type WizardResult } from "../components/CreateProjectWizard";
+import { isLegacyResidential } from "../lib/projectEnums";
 import { openInMaps } from "../lib/maps";
 import { COUNTRY_CODES, getLocalizedCountryName } from "../utils/countries";
 import { getCallable } from "../firebase";
@@ -50,7 +52,7 @@ const ALLOWED_CLONE_TYPES = ["BUILD", "RESIDENTIAL", "TRADE", "MANAGEMENT"] as c
 const PROJECTS_FILTER_KEY = "projects_filter_v1";
 const TYPE_FILTER_KEY = "projects_type_filter_v1";
 type ProjectFilter = "all" | "mine" | "shared";
-type TypeFilter = "ALL" | "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
+type TypeFilter = "ALL" | "MANAGEMENT" | "TRADE" | "MAINTENANCE";
 
 function formatCreatedAt(isoStr?: string): string {
   if (!isoStr) return "";
@@ -71,6 +73,15 @@ const DEFAULT_TEMPLATE_ID = "eu-construction-v1";
 function normalizeProjectType(projectType?: ProjectDoc["projectType"]): DisplayProjectType {
   if (projectType === "RESIDENTIAL" || projectType === "TRADE" || projectType === "MAINTENANCE") return projectType;
   return "MANAGEMENT";
+}
+
+/** Map project type to filter engine: RESIDENTIAL -> TRADE for filtering */
+function getEngineForFilter(projectType?: ProjectDoc["projectType"]): TypeFilter {
+  if (!projectType) return "TRADE";
+  if (projectType === "RESIDENTIAL" || projectType === "TRADE") return "TRADE";
+  if (projectType === "MANAGEMENT" || projectType === "BUILD") return "MANAGEMENT";
+  if (projectType === "MAINTENANCE") return "MAINTENANCE";
+  return "TRADE";
 }
 
 function getProjectInitials(name: string): string {
@@ -99,6 +110,7 @@ export function ProjectsScreen() {
   const [showNew, setShowNew] = useState(false);
   const [newStep, setNewStep] = useState<1 | 2 | 3>(1);
   const [selectedType, setSelectedType] = useState<ProjectCreationType | null>(null);
+  const [wizardResult, setWizardResult] = useState<WizardResult | null>(null);
   const [creationMethod, setCreationMethod] = useState<CreationMethod>("template");
   const [newName, setNewName] = useState("");
   const [newAddress, setNewAddress] = useState("");
@@ -120,6 +132,7 @@ export function ProjectsScreen() {
   const [cloneSourceProject, setCloneSourceProject] = useState<Project | null>(null);
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<TypeFilter>("ALL");
+  const [projectStats, setProjectStats] = useState<Map<string, { progress: number }>>(new Map());
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const menuBottomInset = Platform.OS === "android" ? Math.max(insets.bottom, 48) : insets.bottom;
@@ -229,8 +242,10 @@ export function ProjectsScreen() {
 
   useEffect(() => {
     AsyncStorage.getItem(TYPE_FILTER_KEY).then((saved) => {
-      if (saved === "MANAGEMENT" || saved === "RESIDENTIAL" || saved === "TRADE" || saved === "MAINTENANCE" || saved === "ALL") {
+      if (saved === "MANAGEMENT" || saved === "TRADE" || saved === "MAINTENANCE" || saved === "ALL") {
         setSelectedTypeFilter(saved);
+      } else if (saved === "RESIDENTIAL") {
+        setSelectedTypeFilter("TRADE");
       }
     });
   }, []);
@@ -287,6 +302,24 @@ export function ProjectsScreen() {
       const list = await projectsService.listAllMyProjects(orgId, { forceServerRead: isRefresh });
       console.log('[ProjectsScreen] Loaded', list.length, 'projects');
       setProjects(list);
+
+      // Load task stats for progress (100% = green in list)
+      const stats = new Map<string, { progress: number }>();
+      const taskPromises = list.map(async (project) => {
+        try {
+          const tasks = await tasksService.listTasksByProject(project.id);
+          const totalCount = tasks.length;
+          const doneCount = tasks.filter((t) => t.status === "DONE").length;
+          const progress = totalCount > 0 ? Math.round((doneCount / totalCount) * 100) : 0;
+          return { projectId: project.id, progress };
+        } catch (e) {
+          if (__DEV__) console.warn("[ProjectsScreen] Failed to load tasks for", project.id, e);
+          return { projectId: project.id, progress: 0 };
+        }
+      });
+      const results = await Promise.all(taskPromises);
+      results.forEach((r) => stats.set(r.projectId, { progress: r.progress }));
+      setProjectStats(stats);
     } catch (e: unknown) {
       console.error('[ProjectsScreen] Error loading projects:', e);
       setProjects([]);
@@ -311,10 +344,12 @@ export function ProjectsScreen() {
   const filterProjects = useCallback(
     (list: Project[]) => {
       let result = list;
+      // Hide templates from normal list (no "Templates" filter yet)
+      result = result.filter((p) => !p.isTemplate);
       if (projectFilter === "mine") result = result.filter((p) => p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0);
       else if (projectFilter === "shared") result = result.filter((p) => p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0);
       if (selectedTypeFilter !== "ALL") {
-        result = result.filter((p) => normalizeProjectType(p.projectType) === selectedTypeFilter);
+        result = result.filter((p) => getEngineForFilter(p.projectType) === selectedTypeFilter);
       }
       return result;
     },
@@ -328,6 +363,7 @@ export function ProjectsScreen() {
         setShowNew(true);
         setNewStep(1);
         setSelectedType(null);
+        setWizardResult(null);
         setCreationMethod("template");
         setNewName("");
         resetTemplateSelectionState();
@@ -344,6 +380,7 @@ export function ProjectsScreen() {
     setNewCity("");
     setNewNote("");
     setSelectedType(null);
+    setWizardResult(null);
     setCreationMethod("template");
     setNewName("");
     setNewAddress("");
@@ -351,19 +388,25 @@ export function ProjectsScreen() {
     setError(null);
   };
 
-  const handleSelectType = useCallback(
-    (type: SelectableProjectType) => {
-      setSelectedType(type);
+  const handleWizardComplete = useCallback(
+    (result: WizardResult) => {
+      setWizardResult(result);
+      setSelectedType(result.engineType === "BUILD" ? "BUILD" : result.engineType);
+      setCreationMethod(result.creationMode === "TEMPLATE" ? "template" : "empty");
+      if (result.creationMode === "TEMPLATE" && result.engineType === "BUILD") {
+        setCreationMethod("template");
+      } else if (result.creationMode === "MANUAL") {
+        setCreationMethod("empty");
+      }
       setError(null);
-      setCreationMethod("template");
-      resetTemplateSelectionState();
+      setNewStep(2);
     },
-    [resetTemplateSelectionState]
+    []
   );
 
   useEffect(() => {
     if (
-      selectedType === "MANAGEMENT" &&
+      (selectedType === "MANAGEMENT" || selectedType === "BUILD") &&
       newStep === 2 &&
       creationMethod === "template" &&
       !loadingPhases &&
@@ -374,7 +417,7 @@ export function ProjectsScreen() {
       return;
     }
 
-    if ((selectedType !== "MANAGEMENT" && selectedType !== "BUILD") || (selectedType === "MANAGEMENT" && creationMethod === "empty")) {
+    if ((selectedType !== "MANAGEMENT" && selectedType !== "BUILD") || (selectedType === "MANAGEMENT" && creationMethod === "empty") || (selectedType === "BUILD" && creationMethod === "empty")) {
       resetTemplateSelectionState();
     }
   }, [
@@ -390,13 +433,8 @@ export function ProjectsScreen() {
 
   const onNext = async () => {
     if (newStep === 1) {
-      if (!selectedType) {
-        setError(t("createProject.selectTypeRequired"));
-        return;
-      }
-
-      setError(null);
-      setNewStep(2);
+      // Step 1 is now CreateProjectWizard - it calls handleWizardComplete which goes to step 2
+      return;
     } else if (newStep === 2) {
       if (!newName.trim()) {
         setError(selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.groupNameRequired") : t("createProject.nameRequired"));
@@ -411,6 +449,8 @@ export function ProjectsScreen() {
   const onBack = () => {
     if (newStep === 2) {
       setNewStep(1);
+      setSelectedType(null);
+      setWizardResult(null);
       setError(null);
     } else if (newStep === 3) {
       setNewStep(2);
@@ -476,6 +516,9 @@ export function ProjectsScreen() {
         countryCode: countryCodeForCreate,
         city: cityForCreate,
         phaseCustomizations: customizationsArray,
+        workType: wizardResult?.workType ?? undefined,
+        businessMode: wizardResult?.businessMode ?? undefined,
+        creationMode: wizardResult?.creationMode ?? undefined,
       });
       const { logProjectCreateSuccess } = await import("../services/analytics");
       logProjectCreateSuccess(selectedType, "projects");
@@ -552,11 +595,35 @@ export function ProjectsScreen() {
     closeProjectMenu();
   };
 
+  const onMenuShareMembers = () => {
+    if (!menuProject) return;
+    closeProjectMenu();
+    (navigation as any).navigate("ProjectMembers", {
+      projectId: menuProject.id,
+      projectName: menuProject.name || t("projects.noName"),
+    });
+  };
+
   const onMenuClone = () => {
     if (!menuProject) return;
     setCloneSourceProject(menuProject);
     setShowCloneModal(true);
     closeProjectMenu();
+  };
+
+  const onMenuSaveAsTemplate = async () => {
+    if (!menuProject || !orgId) return;
+    const isTemplate = !!menuProject.isTemplate;
+    try {
+      await projectsService.setProjectAsTemplate(orgId, menuProject.id, !isTemplate);
+      load();
+      showToast(isTemplate ? t("projects.templateRemoved") : t("projects.templateSaved"));
+    } catch (e: unknown) {
+      const c = (e as { code?: string }).code;
+      showError(c === "permission-denied" ? t("projectOverview.noPermission") : (e instanceof Error ? e.message : "Chyba."));
+    } finally {
+      closeProjectMenu();
+    }
   };
 
   const onCloneSuccess = useCallback(
@@ -728,7 +795,7 @@ export function ProjectsScreen() {
             contentContainerStyle={[styles.typeFilterRow, { paddingRight: spacing.xl }]}
             style={[styles.typeFilterScroll, { width: windowWidth - 2 * spacing.md }]}
           >
-            {(["ALL", "MANAGEMENT", "RESIDENTIAL", "TRADE", "MAINTENANCE"] as TypeFilter[]).map((type) => (
+            {(["ALL", "MANAGEMENT", "TRADE", "MAINTENANCE"] as TypeFilter[]).map((type) => (
               <TouchableOpacity
                 key={type}
                 style={[styles.filterChip, selectedTypeFilter === type && styles.filterChipActive]}
@@ -764,7 +831,7 @@ export function ProjectsScreen() {
         <FlatList
           data={activeProjects}
           keyExtractor={(p) => p.id}
-          extraData={`${selectedTypeFilter}-${projectFilter}`}
+          extraData={`${selectedTypeFilter}-${projectFilter}-${projectStats.size}`}
           contentContainerStyle={styles.list}
           ListEmptyComponent={
             projects.length > 0 && activeProjects.length === 0 && archivedProjects.length === 0 ? (
@@ -791,11 +858,12 @@ export function ProjectsScreen() {
                 ? t("projectCard.equipmentCount", { count: String(item.equipmentCount) })
                 : null;
             const showCover = normalizedType !== "MAINTENANCE" && !!item.coverImageUrl;
+            const isCompleted = projectStats.get(item.id)?.progress === 100;
             
             const isOwner = !!item.ownerId && item.ownerId === user?.id;
             return (
               <TouchableOpacity
-                style={[styles.card, !isOwner && styles.cardMember]}
+                style={[styles.card, !isOwner && styles.cardMember, isCompleted && styles.cardCompleted]}
                 onPress={() => {
                   // Navigate to ProjectOverview screen
                   (navigation as any).navigate('ProjectOverview', {
@@ -807,7 +875,7 @@ export function ProjectsScreen() {
               >
                 <View style={styles.cardContent}>
                   <Pressable
-                    style={[styles.projectThumb, { backgroundColor: getThumbTint(item.projectType) }]}
+                    style={[styles.projectThumb, { backgroundColor: isCompleted ? "#22c55e22" : getThumbTint(item.projectType) }]}
                     onPress={() => {
                       if (isOwner) showCoverSheet(item);
                     }}
@@ -827,7 +895,7 @@ export function ProjectsScreen() {
                     <View style={styles.nameRow}>
                       <Text style={styles.name} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
                     </View>
-                    <ProjectBadgesRow isOwner={isOwner} sharedWithCount={item.sharedWithCount ?? 0} isSharedToMe={item.isSharedToMe} />
+                    <ProjectBadgesRow isOwner={isOwner} sharedWithCount={item.sharedWithCount ?? 0} isSharedToMe={item.isSharedToMe} showLegacyBadge={isLegacyResidential(item.projectType)} />
                     <View style={styles.typeBadgeRow}>
                       <View style={[styles.typeBadge, { borderColor: badgeColor }]}>
                         <Text style={[styles.typeBadgeText, { color: badgeColor }]} numberOfLines={1}>
@@ -929,7 +997,7 @@ export function ProjectsScreen() {
                           <View style={styles.nameRow}>
                             <Text style={[styles.name, styles.archivedText]} numberOfLines={1}>{item.name || t("projects.noName")}</Text>
                           </View>
-                          <ProjectBadgesRow isOwner={isOwnerArchived} sharedWithCount={item.sharedWithCount ?? 0} isSharedToMe={item.isSharedToMe} />
+                          <ProjectBadgesRow isOwner={isOwnerArchived} sharedWithCount={item.sharedWithCount ?? 0} isSharedToMe={item.isSharedToMe} showLegacyBadge={isLegacyResidential(item.projectType)} />
                           <View style={styles.typeBadgeRow}>
                             <View style={[styles.typeBadge, styles.typeBadgeArchived, { borderColor: badgeColor }]}>
                               <Text style={[styles.typeBadgeText, styles.typeBadgeTextArchived, { color: badgeColor }]} numberOfLines={1}>
@@ -1008,10 +1076,24 @@ export function ProjectsScreen() {
             </TouchableOpacity>
             {menuProject &&
               !!menuProject.ownerId &&
+              menuProject.ownerId === user?.id && (
+                <TouchableOpacity style={styles.menuItem} onPress={onMenuShareMembers}>
+                  <Text style={styles.menuText}>{t("projects.shareMembers")}</Text>
+                </TouchableOpacity>
+              )}
+            {menuProject &&
+              !!menuProject.ownerId &&
               menuProject.ownerId === user?.id &&
               ALLOWED_CLONE_TYPES.includes(menuProject.projectType as (typeof ALLOWED_CLONE_TYPES)[number]) && (
                 <TouchableOpacity style={styles.menuItem} onPress={onMenuClone}>
-                  <Text style={styles.menuText}>{t("projects.cloneStructure")}</Text>
+                  <Text style={styles.menuText}>{t("projects.duplicate")}</Text>
+                </TouchableOpacity>
+              )}
+            {menuProject &&
+              !!menuProject.ownerId &&
+              menuProject.ownerId === user?.id && (
+                <TouchableOpacity style={styles.menuItem} onPress={onMenuSaveAsTemplate}>
+                  <Text style={styles.menuText}>{menuProject.isTemplate ? t("projects.removeFromTemplates") : t("projects.saveAsTemplate")}</Text>
                 </TouchableOpacity>
               )}
             <TouchableOpacity style={styles.menuItem} onPress={onMenuArchive}>
@@ -1037,16 +1119,10 @@ export function ProjectsScreen() {
             </Text>
             {newStep === 1 ? (
               <View style={styles.stepOneBody}>
-                <Text style={styles.createHeader}>
-                  {selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.header") : t("createProject.header")}
-                </Text>
-                <ProjectTypeCrossroad
-                  selectedType={selectedType as SelectableProjectType | null}
-                  onSelectType={handleSelectType}
+                <CreateProjectWizard
+                  onComplete={handleWizardComplete}
+                  onCancel={closeNewModal}
                 />
-                <Text style={styles.createSubtextHero}>
-                  {selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.subtitle") : t("createProject.mainDirectionHint")}
-                </Text>
                 {error && (
                   <View style={styles.errorContainer}>
                     <Text style={styles.errorText}>{error}</Text>
@@ -1159,7 +1235,7 @@ export function ProjectsScreen() {
 
                 {renderContainsChecklist()}
 
-                {selectedType === "MANAGEMENT" && (
+                {(selectedType === "MANAGEMENT" || selectedType === "BUILD") && (
                   <>
                     <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("createProject.howToStart")}</Text>
                     <View style={styles.templateChoiceColumn}>
@@ -1271,7 +1347,7 @@ export function ProjectsScreen() {
                       <Text style={styles.summaryValue}>{newAddress.trim()}</Text>
                     </View>
                   ) : null}
-                  {selectedType === "MANAGEMENT" && (
+                  {(selectedType === "MANAGEMENT" || selectedType === "BUILD") && (
                     <View style={styles.summaryRow}>
                       <Text style={styles.summaryLabel}>{t("createProject.howToStart")}</Text>
                       <Text style={styles.summaryValue}>
@@ -1295,27 +1371,8 @@ export function ProjectsScreen() {
               </ScrollView>
             )}
             
-            {/* Tlačidlá - vždy viditeľné mimo ScrollView */}
-            {newStep === 1 ? (
-              <View style={styles.modalButtons}>
-                <TouchableOpacity 
-                  style={styles.modalCancel} 
-                  onPress={closeNewModal}
-                >
-                  <Text style={styles.modalCancelText}>{t("projects.cancel")}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[
-                    styles.modalOk, 
-                    !selectedType && styles.modalOkDisabled
-                  ]}
-                  onPress={onNext}
-                  disabled={!selectedType}
-                >
-                  <Text style={styles.modalOkText}>{t("common.continue")}</Text>
-                </TouchableOpacity>
-              </View>
-            ) : newStep === 2 ? (
+            {/* Tlačidlá - step 1 má CreateProjectWizard vlastné tlačidlá */}
+            {newStep === 1 ? null : newStep === 2 ? (
               <View style={styles.modalButtons}>
                 <TouchableOpacity 
                   style={styles.modalCancel} 
@@ -1452,6 +1509,11 @@ const styles = StyleSheet.create({
     marginBottom: spacing.sm,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  cardCompleted: {
+    borderColor: "#22c55e",
+    borderWidth: 2,
+    backgroundColor: "#22c55e08",
   },
   archivedSection: {
     marginTop: spacing.lg,

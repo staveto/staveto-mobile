@@ -19,7 +19,10 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import * as timeTracking from "../services/timeTracking";
+import * as projectMembersService from "../services/projectMembers";
 import type { TimeEntryDoc } from "../services/timeTracking";
+import { doc, getDoc } from "../lib/rnFirestore";
+import { db } from "../firebase";
 import { colors, spacing } from "../theme";
 
 const LOCALE_MAP: Record<string, string> = {
@@ -43,19 +46,25 @@ function formatMinutesWithUnits(minutes: number, hLabel: string, minLabel: strin
   return `${h} ${hLabel} ${String(m).padStart(2, "0")} ${minLabel}`;
 }
 
+function formatEur(amount: number): string {
+  return `${amount.toFixed(2)} €`;
+}
+
 type ProjectSummary = {
   projectId: string;
   projectName: string;
   totalMinutes: number;
   meMinutes: number;
   teamMinutes: number;
+  labourCostEur?: number;
 };
 
 type PersonSummary = {
   userId: string;
   userName: string;
   totalMinutes: number;
-  byProject: { projectId: string; projectName: string; minutes: number }[];
+  totalLabourCostEur?: number;
+  byProject: { projectId: string; projectName: string; minutes: number; labourCostEur?: number }[];
 };
 
 export function AttendanceReportScreen() {
@@ -73,6 +82,7 @@ export function AttendanceReportScreen() {
   const [mode, setMode] = useState<"me" | "team">("me");
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [memberRatesByProject, setMemberRatesByProject] = useState<Map<string, Map<string, number>>>(new Map());
   const loadIdRef = useRef(0);
 
   const fromYmd = `${year}-${String(month).padStart(2, "0")}-01`;
@@ -107,13 +117,65 @@ export function AttendanceReportScreen() {
         setEntries(myList);
         setTeamProjectIds(projectIds);
 
+        let teamList: TimeEntryDoc[] = [];
         if (projectIds.length > 0) {
-          const allTeam = await timeTracking.listTimeEntriesForProjects(projectIds, fromYmd, toYmd);
+          teamList = await timeTracking.listTimeEntriesForProjects(projectIds, fromYmd, toYmd);
           if (loadId !== loadIdRef.current) return;
-          setTeamEntries(allTeam);
+          setTeamEntries(teamList);
         } else {
           setTeamEntries([]);
         }
+
+        const allProjectIds = [...new Set([...myList.map((e) => e.projectId), ...teamList.map((e) => e.projectId)])];
+        const allUserIds = [...new Set([...myList.map((e) => e.userId).filter(Boolean), ...teamList.map((e) => e.userId).filter(Boolean)])] as string[];
+        const profileRates = new Map<string, number>();
+        await Promise.all(
+          allUserIds.map(async (uid) => {
+            try {
+              const snap = await getDoc(doc(db, "users", uid));
+              if (snap.exists()) {
+                const data = snap.data() as { hourlyRateEur?: number };
+                if (data.hourlyRateEur != null && data.hourlyRateEur > 0) {
+                  profileRates.set(uid, data.hourlyRateEur);
+                }
+              }
+            } catch {
+              /* ignore */
+            }
+          })
+        );
+        if (loadId !== loadIdRef.current) return;
+
+        const ratesMap = new Map<string, Map<string, number>>();
+        const userIdsByProject = new Map<string, Set<string>>();
+        for (const e of [...myList, ...teamList]) {
+          const uid = e.userId;
+          if (!uid) continue;
+          const set = userIdsByProject.get(e.projectId) ?? new Set();
+          set.add(uid);
+          userIdsByProject.set(e.projectId, set);
+        }
+        await Promise.all(
+          allProjectIds.map(async (pid) => {
+            try {
+              const members = await projectMembersService.listProjectMembers(pid, false);
+              const byUser = new Map<string, number>();
+              for (const m of members) {
+                if (!m.userId) continue;
+                const rate = m.hourlyRateEur != null && m.hourlyRateEur > 0 ? m.hourlyRateEur : profileRates.get(m.userId);
+                if (rate != null && rate > 0) byUser.set(m.userId, rate);
+              }
+              for (const uid of userIdsByProject.get(pid) ?? []) {
+                if (!byUser.has(uid) && profileRates.has(uid)) byUser.set(uid, profileRates.get(uid)!);
+              }
+              if (byUser.size > 0) ratesMap.set(pid, byUser);
+            } catch {
+              /* ignore */
+            }
+          })
+        );
+        if (loadId !== loadIdRef.current) return;
+        setMemberRatesByProject(ratesMap);
       } catch (err) {
         console.warn("[AttendanceReport] Load error:", err);
         if (loadId !== loadIdRef.current) return;
@@ -162,16 +224,19 @@ export function AttendanceReportScreen() {
   const projectSummaries: ProjectSummary[] = useMemo(() => {
     const map = new Map<
       string,
-      { projectName: string; totalMinutes: number; meMinutes: number; teamMinutes: number }
+      { projectName: string; totalMinutes: number; meMinutes: number; teamMinutes: number; labourCostEur: number }
     >();
     const source = canSeeTeam ? [...entries, ...teamOnlyEntries] : entries;
     for (const e of source) {
       const key = e.projectId;
       const mins = e.durationMinutes ?? 0;
       const isMe = e.userId === userId;
+      const rate = memberRatesByProject.get(key)?.get(e.userId || "");
+      const cost = rate != null && mins > 0 ? (mins / 60) * rate : 0;
       const existing = map.get(key);
       if (existing) {
         existing.totalMinutes += mins;
+        existing.labourCostEur += cost;
         if (isMe) existing.meMinutes += mins;
         else existing.teamMinutes += mins;
       } else {
@@ -180,62 +245,82 @@ export function AttendanceReportScreen() {
           totalMinutes: mins,
           meMinutes: isMe ? mins : 0,
           teamMinutes: isMe ? 0 : mins,
+          labourCostEur: cost,
         });
       }
     }
     return Array.from(map.entries())
-      .map(([projectId, { projectName, totalMinutes: mins, meMinutes, teamMinutes }]) => ({
+      .map(([projectId, { projectName, totalMinutes: mins, meMinutes, teamMinutes, labourCostEur }]) => ({
         projectId,
         projectName,
         totalMinutes: mins,
         meMinutes,
         teamMinutes,
+        labourCostEur: labourCostEur > 0 ? Math.round(labourCostEur * 100) / 100 : undefined,
       }))
       .sort((a, b) => b.totalMinutes - a.totalMinutes);
-  }, [canSeeTeam, entries, teamOnlyEntries, userId]);
+  }, [canSeeTeam, entries, teamOnlyEntries, userId, memberRatesByProject]);
 
   const personSummaries: PersonSummary[] = useMemo(() => {
     const map = new Map<
       string,
-      { userName: string; totalMinutes: number; byProject: Map<string, { projectName: string; minutes: number }> }
+      { userName: string; totalMinutes: number; totalLabourCostEur: number; byProject: Map<string, { projectName: string; minutes: number; labourCostEur: number }> }
     >();
     const source = mode === "team" ? teamOnlyEntries : entries;
     for (const e of source) {
       const uid = e.userId || "unknown";
       const mins = e.durationMinutes ?? 0;
       const name = e.userNameSnapshot?.trim() || e.userId || "—";
+      const rate = memberRatesByProject.get(e.projectId)?.get(uid);
+      const cost = rate != null && mins > 0 ? (mins / 60) * rate : 0;
       const existing = map.get(uid);
       if (existing) {
         existing.totalMinutes += mins;
+        existing.totalLabourCostEur += cost;
         const proj = existing.byProject.get(e.projectId);
         if (proj) {
           proj.minutes += mins;
+          proj.labourCostEur += cost;
         } else {
           existing.byProject.set(e.projectId, {
             projectName: e.projectNameSnapshot || "Project",
             minutes: mins,
+            labourCostEur: cost,
           });
         }
       } else {
-        const byProject = new Map<string, { projectName: string; minutes: number }>();
+        const byProject = new Map<string, { projectName: string; minutes: number; labourCostEur: number }>();
         byProject.set(e.projectId, {
           projectName: e.projectNameSnapshot || "Project",
           minutes: mins,
+          labourCostEur: cost,
         });
-        map.set(uid, { userName: name, totalMinutes: mins, byProject });
+        map.set(uid, { userName: name, totalMinutes: mins, totalLabourCostEur: cost, byProject });
       }
     }
     return Array.from(map.entries())
-      .map(([userId, { userName, totalMinutes: mins, byProject }]) => ({
-        userId,
+      .map(([uid, { userName, totalMinutes: mins, totalLabourCostEur, byProject }]) => ({
+        userId: uid,
         userName,
         totalMinutes: mins,
+        totalLabourCostEur: totalLabourCostEur > 0 ? Math.round(totalLabourCostEur * 100) / 100 : undefined,
         byProject: Array.from(byProject.entries())
-          .map(([projectId, { projectName, minutes }]) => ({ projectId, projectName, minutes }))
+          .map(([projectId, { projectName, minutes, labourCostEur }]) => ({
+            projectId,
+            projectName,
+            minutes,
+            labourCostEur: labourCostEur > 0 ? Math.round(labourCostEur * 100) / 100 : undefined,
+          }))
           .sort((a, b) => b.minutes - a.minutes),
       }))
       .sort((a, b) => a.userName.localeCompare(b.userName, undefined, { sensitivity: "base" }));
-  }, [mode, canSeeTeam, entries, teamOnlyEntries]);
+  }, [mode, canSeeTeam, entries, teamOnlyEntries, memberRatesByProject]);
+
+  const grandTotalLabourCostEur = useMemo(() => {
+    let sum = 0;
+    for (const p of projectSummaries) sum += p.labourCostEur ?? 0;
+    return sum > 0 ? Math.round(sum * 100) / 100 : undefined;
+  }, [projectSummaries]);
 
   const stackNav = navigation as { goBack: () => void };
 
@@ -286,6 +371,11 @@ export function AttendanceReportScreen() {
           <View style={styles.kpiCard}>
             <Text style={styles.kpiLabel}>{t("attendance.totalSum")}</Text>
             <Text style={styles.kpiValue}>{fmt(grandTotalMinutes)}</Text>
+            {grandTotalLabourCostEur != null && grandTotalLabourCostEur > 0 && (
+              <Text style={styles.kpiSub}>
+                {t("attendance.labourCost")}: {formatEur(grandTotalLabourCostEur)}
+              </Text>
+            )}
             {canSeeTeam && (
               <Text style={styles.kpiSub}>
                 {t("time.dailyProtocol.me")} {fmt(totalMinutes)} • {t("time.dailyProtocol.team")}{" "}
@@ -336,14 +426,24 @@ export function AttendanceReportScreen() {
                     <Text style={styles.meBadge}> {t("time.dailyProtocol.meBadge")}</Text>
                   )}
                 </Text>
-                <Text style={styles.personTotal}>{fmt(person.totalMinutes)}</Text>
+                <View style={{ alignItems: "flex-end" }}>
+                  <Text style={styles.personTotal}>{fmt(person.totalMinutes)}</Text>
+                  {person.totalLabourCostEur != null && person.totalLabourCostEur > 0 && (
+                    <Text style={styles.personLabourCost}>{formatEur(person.totalLabourCostEur)}</Text>
+                  )}
+                </View>
               </View>
               {person.byProject.map((proj) => (
                 <View key={proj.projectId} style={styles.personProjectRow}>
                   <Text style={styles.personProjectName} numberOfLines={1}>
                     {proj.projectName}
                   </Text>
-                  <Text style={styles.personProjectHours}>{fmt(proj.minutes)}</Text>
+                  <View style={{ alignItems: "flex-end" }}>
+                    <Text style={styles.personProjectHours}>{fmt(proj.minutes)}</Text>
+                    {proj.labourCostEur != null && proj.labourCostEur > 0 && (
+                      <Text style={styles.personProjectCost}>{formatEur(proj.labourCostEur)}</Text>
+                    )}
+                  </View>
                 </View>
               ))}
             </View>
@@ -376,6 +476,9 @@ export function AttendanceReportScreen() {
               <View style={styles.projectTotalCol}>
                 <Text style={styles.projectTotalLabel}>{t("attendance.projectTotal")}</Text>
                 <Text style={styles.projectRowHours}>{fmt(row.totalMinutes)}</Text>
+                {row.labourCostEur != null && row.labourCostEur > 0 && (
+                  <Text style={styles.projectRowCost}>{formatEur(row.labourCostEur)}</Text>
+                )}
               </View>
             </View>
           ))
@@ -549,6 +652,21 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.primary,
     fontWeight: "500",
+  },
+  personLabourCost: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  personProjectCost: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  projectRowCost: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
   },
   projectRow: {
     flexDirection: "row",

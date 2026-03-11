@@ -1,4 +1,4 @@
-import { collection, addDoc, query, getDocs, deleteDoc, doc, serverTimestamp, where, getDoc, writeBatch } from "../lib/rnFirestore";
+import { collection, addDoc, query, getDocs, deleteDoc, doc, serverTimestamp, where, getDoc, writeBatch, updateDoc } from "../lib/rnFirestore";
 import firestore from "@react-native-firebase/firestore";
 import { getDocsSmart } from "./firestoreSmartRead";
 import { db, auth, getCallable } from "../firebase";
@@ -29,6 +29,8 @@ export type ProjectMemberDoc = {
   };
   sharedPhaseIds?: string[]; // Specific phases to share (if phases=true)
   sharedEquipmentIds?: string[]; // Specific equipment to share (MAINTENANCE projects only)
+  /** Hourly rate in EUR for labour cost calculation (owner sets per project) */
+  hourlyRateEur?: number;
 };
 
 /**
@@ -86,6 +88,7 @@ export async function listProjectMembers(
         })(),
         sharedPhaseIds: data.sharedPhaseIds || [],
         sharedEquipmentIds: data.sharedEquipmentIds || [],
+        hourlyRateEur: typeof data.hourlyRateEur === "number" ? data.hourlyRateEur : undefined,
       };
     });
   } catch (error: any) {
@@ -113,7 +116,8 @@ export async function inviteMemberByEmail(
     timeTracking?: boolean;
   },
   sharedPhaseIds?: string[],
-  sharedEquipmentIds?: string[]
+  sharedEquipmentIds?: string[],
+  hourlyRateEur?: number
 ): Promise<void> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
@@ -158,6 +162,7 @@ export async function inviteMemberByEmail(
       },
       sharedPhaseIds: sharedPhaseIds || [],
       sharedEquipmentIds: sharedEquipmentIds || [],
+      ...(typeof hourlyRateEur === "number" && hourlyRateEur > 0 && { hourlyRateEur }),
     };
 
     await addDoc(membersRef, memberData);
@@ -276,4 +281,25 @@ export async function updateMemberPermissions(
   }
 
   console.log(`[projectMembers] Updated permissions for member ${memberId} in project ${projectId}`);
+}
+
+/**
+ * Update a member's hourly rate (owner only).
+ * Uses direct Firestore update. If rules deny, consider extending updateMemberPermissions Cloud Function.
+ */
+export async function updateMemberHourlyRate(
+  projectId: string,
+  memberId: string,
+  hourlyRateEur: number | null
+): Promise<void> {
+  const u = auth.currentUser;
+  if (!u) throw new Error("NO_AUTH_USER");
+
+  const memberRef = doc(db, paths.projectMember(projectId, memberId));
+  const updateData: Record<string, unknown> =
+    hourlyRateEur != null && hourlyRateEur > 0
+      ? { hourlyRateEur }
+      : { hourlyRateEur: firestore.FieldValue.delete() };
+  await updateDoc(memberRef, updateData);
+  console.log(`[projectMembers] Updated hourly rate for member ${memberId} in project ${projectId}`);
 }

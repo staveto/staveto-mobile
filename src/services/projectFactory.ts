@@ -10,6 +10,7 @@ import { paths } from '../lib/firestorePaths';
 import { getTemplatePhases, getTemplateTasks } from './templateService';
 import { createProjectCreatedNotification } from './notifications';
 import type { ProjectType } from '../lib/types';
+import type { WorkType, BusinessMode, CreationMode } from '../lib/projectEnums';
 
 export type PhaseStatus = 'completed' | 'active' | 'later';
 
@@ -28,6 +29,10 @@ export interface CreateProjectFromTemplateParams {
   countryCode?: string; // ISO 3166-1 alpha-2
   city?: string;
   phaseCustomizations?: PhaseCustomization[]; // Optional: customize phases
+  /** New attribute fields (nullable for backward compat) */
+  workType?: WorkType | null;
+  businessMode?: BusinessMode | null;
+  creationMode?: CreationMode | null;
 }
 
 /**
@@ -121,6 +126,10 @@ export async function instantiateTemplate(
   if (params.city && params.city.trim()) {
     projectData.city = params.city.trim();
   }
+  // New attribute fields
+  if (params.workType) projectData.workType = params.workType;
+  if (params.businessMode) projectData.businessMode = params.businessMode;
+  if (params.creationMode) projectData.creationMode = params.creationMode;
   
   // Final verification before write
   console.log(`[projectFactory] Final verification before Firestore write:`);

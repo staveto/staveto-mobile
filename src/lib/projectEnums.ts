@@ -9,8 +9,22 @@ export type ProjectEngineType = "BUILD" | "TRADE" | "MAINTENANCE";
 /** Legacy RESIDENTIAL maps to TRADE in UI. MANAGEMENT maps to BUILD. */
 export type ProjectType = ProjectEngineType | "RESIDENTIAL" | "MANAGEMENT";
 
-/** Work type attribute */
-export type WorkType = "NEW_BUILD" | "RENOVATION" | "INSTALLATION" | "SERVICE";
+/** Work type – BUILD (construction) */
+export type WorkTypeBuild = "NEW_BUILD" | "RENOVATION" | "INSTALLATION" | "SERVICE";
+
+/** Work type – TRADE (Aufträge, craftsmen) */
+export type WorkTypeTrade = "INSTALLATION" | "REPAIR" | "RENOVATION" | "DELIVERY";
+
+/** Maintenance scope – MAINTENANCE (Wartung) */
+export type MaintenanceScope = "FLEET" | "MACHINERY" | "PROPERTY" | "EQUIPMENT";
+
+/** Work type attribute – union for storage (engine-specific at wizard) */
+export type WorkType = WorkTypeBuild | WorkTypeTrade | MaintenanceScope;
+
+/** Step 2 options per engine */
+export const WORK_TYPES_BUILD: WorkTypeBuild[] = ["NEW_BUILD", "RENOVATION", "INSTALLATION", "SERVICE"];
+export const WORK_TYPES_TRADE: WorkTypeTrade[] = ["INSTALLATION", "REPAIR", "RENOVATION", "DELIVERY"];
+export const MAINTENANCE_SCOPES: MaintenanceScope[] = ["FLEET", "MACHINERY", "PROPERTY", "EQUIPMENT"];
 
 /** Business mode attribute */
 export type BusinessMode = "DIRECT" | "SUBCONTRACT" | "INTERNAL";

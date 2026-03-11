@@ -3,7 +3,17 @@ import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, Pressable 
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
-import type { ProjectEngineType, WorkType, BusinessMode, CreationMode } from "../lib/projectEnums";
+import type {
+  ProjectEngineType,
+  WorkType,
+  BusinessMode,
+  CreationMode,
+} from "../lib/projectEnums";
+import {
+  WORK_TYPES_BUILD,
+  WORK_TYPES_TRADE,
+  MAINTENANCE_SCOPES,
+} from "../lib/projectEnums";
 
 export type WizardResult = {
   engineType: ProjectEngineType;
@@ -13,9 +23,7 @@ export type WizardResult = {
 };
 
 const ENGINE_TYPES: ProjectEngineType[] = ["BUILD", "TRADE", "MAINTENANCE"];
-const WORK_TYPES: WorkType[] = ["NEW_BUILD", "RENOVATION", "INSTALLATION", "SERVICE"];
 const BUSINESS_MODES: BusinessMode[] = ["DIRECT", "SUBCONTRACT", "INTERNAL"];
-const CREATION_MODES: CreationMode[] = ["AI", "MANUAL", "TEMPLATE"];
 
 type Props = {
   onComplete: (result: WizardResult) => void;
@@ -23,7 +31,7 @@ type Props = {
 };
 
 export function CreateProjectWizard({ onComplete, onCancel }: Props) {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [step, setStep] = useState(1);
   const [engineType, setEngineType] = useState<ProjectEngineType | null>(null);
   const [workType, setWorkType] = useState<WorkType | null>(null);
@@ -35,7 +43,16 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
     if (step === 1 && engineType) {
       setStep(2);
     } else if (step === 2) {
-      setStep(3);
+      if (engineType === "MAINTENANCE") {
+        onComplete({
+          engineType: "MAINTENANCE",
+          workType,
+          businessMode: null,
+          creationMode: "MANUAL",
+        });
+      } else {
+        setStep(3);
+      }
     } else if (step === 3) {
       setStep(4);
     } else if (step === 4 && creationMode) {
@@ -61,8 +78,8 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
 
   const getStepTitle = () => {
     if (step === 1) return t("createProject.wizard.step1Title");
-    if (step === 2) return t("createProject.wizard.step2Title");
-    if (step === 3) return t("createProject.wizard.step3Title");
+    if (step === 2 && engineType) return t(`createProject.wizard.step2Title.${engineType}`);
+    if (step === 3 && engineType) return t(`createProject.wizard.step3Title.${engineType}`);
     return t("createProject.wizard.step4Title");
   };
 
@@ -122,10 +139,19 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
           </>
         )}
 
-        {step === 2 && (
+        {step === 2 && engineType && (
           <View style={styles.chipsRow}>
-            {WORK_TYPES.map((type) => {
+            {(engineType === "BUILD"
+              ? WORK_TYPES_BUILD
+              : engineType === "TRADE"
+                ? WORK_TYPES_TRADE
+                : MAINTENANCE_SCOPES
+            ).map((type) => {
               const isActive = workType === type;
+              const keyPrefix =
+                engineType === "MAINTENANCE"
+                  ? "createProject.wizard.maintenanceScope"
+                  : "createProject.wizard.workType";
               return (
                 <TouchableOpacity
                   key={type}
@@ -134,7 +160,7 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
                   activeOpacity={0.8}
                 >
                   <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
-                    {t(`createProject.wizard.workType.${type}`)}
+                    {t(`${keyPrefix}.${type}`)}
                   </Text>
                 </TouchableOpacity>
               );
@@ -142,7 +168,7 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
           </View>
         )}
 
-        {step === 3 && (
+        {step === 3 && engineType && engineType !== "MAINTENANCE" && (
           <View style={styles.chipsRow}>
             {BUSINESS_MODES.map((mode) => {
               const isActive = businessMode === mode;
@@ -154,7 +180,7 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
                   activeOpacity={0.8}
                 >
                   <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
-                    {t(`createProject.wizard.businessMode.${mode}`)}
+                    {t(`createProject.wizard.businessMode.${engineType}.${mode}`)}
                   </Text>
                 </TouchableOpacity>
               );
@@ -162,9 +188,14 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
           </View>
         )}
 
-        {step === 4 && (
+        {step === 4 && engineType && (
           <View style={styles.creationButtons}>
-            {CREATION_MODES.map((mode) => {
+            {(engineType === "TRADE"
+              ? (["AI", "MANUAL"] as const)
+              : engineType === "BUILD"
+                ? (locale === "sk" ? (["AI", "MANUAL", "TEMPLATE"] as const) : (["AI", "MANUAL"] as const))
+                : []
+            ).map((mode) => {
               const isActive = creationMode === mode;
               const icon = mode === "AI" ? "sparkles-outline" : mode === "MANUAL" ? "create-outline" : "copy-outline";
               return (

@@ -179,10 +179,15 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
     !!t.dueDate && t.dueDate < todayYmd && normalizeStatusValue(t.status) !== "DONE";
   const isTaskCompletedPastDue = (t: TaskWithProject) =>
     !!t.dueDate && t.dueDate < todayYmd && normalizeStatusValue(t.status) === "DONE";
+  const isProblemOverdue = (p: ProblemWithProject) => {
+    const ymd = normalizeDueDateToYmd(p.dueDate);
+    if (!ymd || ymd >= todayYmd) return false;
+    return p.status === "open" || p.status === "in_progress";
+  };
   const getTasksForDay = (day: Date) => tasksByYmd.get(toYmd(day)) ?? [];
   const getProblemsForDay = (day: Date) => problemsByYmd.get(toYmd(day)) ?? [];
   const hasOverdueOnDay = (day: Date) =>
-    getTasksForDay(day).some(isTaskOverdue);
+    getTasksForDay(day).some(isTaskOverdue) || getProblemsForDay(day).some(isProblemOverdue);
   const hasCompletedPastDueOnDay = (day: Date) =>
     getTasksForDay(day).some(isTaskCompletedPastDue);
   const getTaskType = (t: TaskWithProject) =>
@@ -375,22 +380,24 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                   <>
                     {problemsForSelected
                       .slice(0, 5)
-                      .map((p) => (
+                      .map((p) => {
+                        const overdue = isProblemOverdue(p);
+                        return (
                         <TouchableOpacity
                           key={`problem-${p.projectId}-${p.id}`}
-                          style={styles.taskRow}
+                          style={[styles.taskRow, overdue && styles.taskRowOverdue]}
                           onPress={() => handleProblemPress(p)}
                           activeOpacity={0.7}
                         >
-                          <Ionicons name="warning-outline" size={18} color={COLOR_BY_TYPE.problem} />
-                          <Text style={styles.taskTitle} numberOfLines={1}>
+                          <Ionicons name="warning-outline" size={18} color={overdue ? COLOR_BY_TYPE.overdue : COLOR_BY_TYPE.problem} />
+                          <Text style={[styles.taskTitle, overdue && styles.taskTitleOverdue]} numberOfLines={1}>
                             {p.shortDescription || t("problems.noDescription")}
                           </Text>
-                          <Text style={styles.taskProject} numberOfLines={1}>
+                          <Text style={[styles.taskProject, overdue && styles.taskProjectOverdue]} numberOfLines={1}>
                             {p.projectName ?? ""}
                           </Text>
                         </TouchableOpacity>
-                      ))}
+                      );})}
                     {tasksForSelected.length > 0 &&
                       tasksForSelected
                         .slice(0, 5 - problemsForSelected.length)

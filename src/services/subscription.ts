@@ -9,7 +9,6 @@
 
 import { doc, getDoc, onSnapshot, Unsubscribe } from "../lib/rnFirestore";
 import { db } from "../firebase";
-import { getCallableWithTimeout } from "./functionsClient";
 
 export type SubscriptionTier = "FREE" | "BASIC" | "PRO" | "ENTERPRISE";
 export type SubscriptionStatus = "trialing" | "active" | "past_due" | "canceled";
@@ -21,8 +20,6 @@ export interface Subscription {
   stripeSubscriptionId?: string;
   currentPeriodEnd?: string; // ISO date string or Firestore Timestamp
   updatedAt?: string; // ISO date string
-  source?: string; // "promo" | "stripe"
-  promoCode?: string;
 }
 
 export interface SubscriptionLimits {
@@ -87,20 +84,17 @@ function toMillis(ts: unknown): number {
 
 /**
  * Get user's current subscription tier (defaults to FREE if not set)
+ * PRO only via IAP (RevenueCat) – no promo (Apple 3.1.1)
  */
 export async function getUserTier(userId: string): Promise<SubscriptionTier> {
   const subscription = await getUserSubscription(userId);
   if (!subscription || subscription.status === "canceled") {
     return "FREE";
   }
-  // Promo subscriptions expire when currentPeriodEnd passes
-  if (subscription.source === "promo" && subscription.currentPeriodEnd) {
+  // IAP subscription: check period end
+  if (subscription.currentPeriodEnd) {
     const endMs = toMillis(subscription.currentPeriodEnd);
-    if (endMs > 0 && endMs <= Date.now()) {
-      if (__DEV__) console.log("[subscription] Promo expired for user", userId, "endMs:", endMs);
-      return "FREE";
-    }
-    if (__DEV__) console.log("[subscription] Promo PRO active until", new Date(endMs).toISOString(), "userId:", userId);
+    if (endMs > 0 && endMs <= Date.now()) return "FREE";
   }
   return subscription.tier;
 }
@@ -123,21 +117,6 @@ export function subscribeToSubscription(
     const data = snapshot.data();
     callback(data?.subscription || null);
   });
-}
-
-/**
- * Redeem promo code (calls Cloud Function)
- * 
- * Returns { ok, tier, currentPeriodEnd } on success.
- * Throws with code: INVALID_CODE | EXPIRED | LIMIT_REACHED | ALREADY_REDEEMED | UNAUTHENTICATED
- */
-/** 15s timeout – Firestore transaction + cold start can be slow, especially on iOS */
-const REDEEM_PROMO_TIMEOUT_MS = 15000;
-
-export async function redeemPromoCode(code: string): Promise<{ ok: boolean; tier: string; currentPeriodEnd: string }> {
-  const fn = getCallableWithTimeout("redeemPromoCode", REDEEM_PROMO_TIMEOUT_MS);
-  const result = await fn({ code });
-  return result.data as { ok: boolean; tier: string; currentPeriodEnd: string };
 }
 
 /**

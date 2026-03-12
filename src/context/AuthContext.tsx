@@ -145,12 +145,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
           setLastBootStep("user_doc_error");
         }
         bootStep("revenuecat_configure_before", "H6", {}).catch(() => {});
-        configurePurchases(fbUser.uid)
-          .then(() => bootStep("revenuecat_configure_after", "H6", {}).catch(() => {}))
-          .catch(() => {});
+        try {
+          await configurePurchases(fbUser.uid);
+          bootStep("revenuecat_configure_after", "H6", {}).catch(() => {});
+        } catch (e) {
+          if (__DEV__) console.warn("[auth] configurePurchases failed:", e);
+        }
         setLastBootStep("billing_loading");
-        const billing = await fetchBillingStatus(fbUser.uid);
-        setLastBootStep("billing_loaded");
+        let billing: Awaited<ReturnType<typeof fetchBillingStatus>> | null = null;
+        try {
+          billing = await fetchBillingStatus(fbUser.uid);
+          setLastBootStep("billing_loaded");
+        } catch (e) {
+          if (__DEV__) console.warn("[auth] fetchBillingStatus failed:", e);
+          setLastBootStep("billing_error");
+        }
         user = { ...user, billing: billing ?? undefined };
         if (!claimedInviteSessionsRef.current.has(fbUser.uid)) {
           claimedInviteSessionsRef.current.add(fbUser.uid);

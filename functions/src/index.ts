@@ -1087,7 +1087,7 @@ export { inboundWebhook } from "./whatsapp";
 export { addProjectMemberByEmail, removeProjectMember, updateMemberPermissions, backfillProjectSharedCounts } from "./team";
 export { cloneProjectStructure } from "./cloneProject";
 export { calculateDistanceKm } from "./distance";
-export { redeemPromoCode } from "./promo";
+export { redeemPromoCode } from "./promo"; // disabled – no-op, throws PROMO_DISABLED
 export { checkEntitlement } from "./billing";
 
 /** Send in-app notification + FCM push when a project member invite is created (status invited, emailLower set). */

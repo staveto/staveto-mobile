@@ -32,6 +32,7 @@ export function LoginScreen() {
   const [forgotEmail, setForgotEmail] = useState("");
   const [forgotSubmitting, setForgotSubmitting] = useState(false);
   const [appleSignInAvailable, setAppleSignInAvailable] = useState(false);
+  const [appleSubmitting, setAppleSubmitting] = useState(false);
 
   useEffect(() => {
     if (Platform.OS === "ios") {
@@ -96,16 +97,35 @@ export function LoginScreen() {
     }
   };
 
+  const APPLE_TIMEOUT_MS = 10_000;
+
   const onAppleLogin = async () => {
-    setSubmitting(true);
+    setAppleSubmitting(true);
     setError("");
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        const err = new Error("Apple sign-in timed out.") as Error & { code?: string };
+        err.code = "auth/apple-timeout";
+        reject(err);
+      }, APPLE_TIMEOUT_MS);
+    });
+
     try {
-      await loginWithApple();
+      await Promise.race([loginWithApple(), timeoutPromise]);
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code;
-      setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("login.failed")));
+      if (code === "auth/cancelled") return;
+      const msg = code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("login.failed"));
+      setError(msg);
+      Alert.alert(
+        t("common.error"),
+        `${msg}\n\nContact support with code: APPLE_LOGIN_FAILED`,
+        [{ text: t("common.ok") }]
+      );
     } finally {
-      setSubmitting(false);
+      if (timeoutId) clearTimeout(timeoutId);
+      setAppleSubmitting(false);
     }
   };
 
@@ -137,17 +157,23 @@ export function LoginScreen() {
         <Text style={styles.forgotLinkText}>{t("login.forgotPassword")}</Text>
       </TouchableOpacity>
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      <TouchableOpacity style={styles.button} onPress={onLogin} disabled={submitting}>
+      <TouchableOpacity style={styles.button} onPress={onLogin} disabled={submitting || appleSubmitting}>
         {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("login.button")}</Text>}
       </TouchableOpacity>
-      <TouchableOpacity style={styles.googleBtn} onPress={onGoogleLogin} disabled={submitting}>
+      <TouchableOpacity style={styles.googleBtn} onPress={onGoogleLogin} disabled={submitting || appleSubmitting}>
         <Ionicons name="logo-google" size={20} color="#fff" />
         <Text style={styles.googleBtnText}>{t("register.google")}</Text>
       </TouchableOpacity>
       {Platform.OS === "ios" && appleSignInAvailable && (
-        <TouchableOpacity style={styles.appleBtn} onPress={onAppleLogin} disabled={submitting}>
-          <Ionicons name="logo-apple" size={22} color="#fff" />
-          <Text style={styles.appleBtnText}>{t("login.apple")}</Text>
+        <TouchableOpacity style={styles.appleBtn} onPress={onAppleLogin} disabled={submitting || appleSubmitting}>
+          {appleSubmitting ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <>
+              <Ionicons name="logo-apple" size={22} color="#fff" />
+              <Text style={styles.appleBtnText}>{t("login.apple")}</Text>
+            </>
+          )}
         </TouchableOpacity>
       )}
       <TouchableOpacity

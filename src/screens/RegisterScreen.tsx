@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useState, useEffect } from "react";
 import {
   View,
   Text,
@@ -9,12 +9,13 @@ import {
   KeyboardAvoidingView,
   Platform,
   Image,
+  Alert,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
-import { getAuthErrorMessage, loginWithApple, loginWithGoogle } from "../services/auth";
+import { getAuthErrorMessage, isAppleSignInAvailable, loginWithApple, loginWithGoogle } from "../services/auth";
 import { colors, radius, spacing } from "../theme";
 
 export function RegisterScreen() {
@@ -27,6 +28,14 @@ export function RegisterScreen() {
   const [passwordConfirm, setPasswordConfirm] = useState("");
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState("");
+  const [appleSignInAvailable, setAppleSignInAvailable] = useState(false);
+  const [appleSubmitting, setAppleSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (Platform.OS === "ios") {
+      isAppleSignInAvailable().then(setAppleSignInAvailable);
+    }
+  }, []);
 
   const onRegister = async () => {
     if (!email.trim() || !password) {
@@ -62,16 +71,35 @@ export function RegisterScreen() {
     }
   };
 
+  const APPLE_TIMEOUT_MS = 10_000;
+
   const onAppleRegister = async () => {
-    setSubmitting(true);
+    setAppleSubmitting(true);
     setError("");
+    let timeoutId: ReturnType<typeof setTimeout> | null = null;
+    const timeoutPromise = new Promise<never>((_, reject) => {
+      timeoutId = setTimeout(() => {
+        const err = new Error("Apple sign-in timed out.") as Error & { code?: string };
+        err.code = "auth/apple-timeout";
+        reject(err);
+      }, APPLE_TIMEOUT_MS);
+    });
+
     try {
-      await loginWithApple();
+      await Promise.race([loginWithApple(), timeoutPromise]);
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code;
-      setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("register.failed")));
+      if (code === "auth/cancelled") return;
+      const msg = code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("register.failed"));
+      setError(msg);
+      Alert.alert(
+        t("common.error"),
+        `${msg}\n\nContact support with code: APPLE_LOGIN_FAILED`,
+        [{ text: t("common.ok") }]
+      );
     } finally {
-      setSubmitting(false);
+      if (timeoutId) clearTimeout(timeoutId);
+      setAppleSubmitting(false);
     }
   };
 
@@ -114,17 +142,23 @@ export function RegisterScreen() {
         secureTextEntry
       />
       {error ? <Text style={styles.error}>{error}</Text> : null}
-      <TouchableOpacity style={styles.button} onPress={onRegister} disabled={submitting}>
+      <TouchableOpacity style={styles.button} onPress={onRegister} disabled={submitting || appleSubmitting}>
         {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("register.button")}</Text>}
       </TouchableOpacity>
-      <TouchableOpacity style={styles.googleBtn} onPress={onGoogleRegister} disabled={submitting}>
+      <TouchableOpacity style={styles.googleBtn} onPress={onGoogleRegister} disabled={submitting || appleSubmitting}>
         <Ionicons name="logo-google" size={20} color="#fff" />
         <Text style={styles.googleBtnText}>{t("register.google")}</Text>
       </TouchableOpacity>
-      {Platform.OS === "ios" && (
-        <TouchableOpacity style={styles.appleBtn} onPress={onAppleRegister} disabled={submitting}>
-          <Ionicons name="logo-apple" size={22} color="#fff" />
-          <Text style={styles.appleBtnText}>{t("login.apple")}</Text>
+      {Platform.OS === "ios" && appleSignInAvailable && (
+        <TouchableOpacity style={styles.appleBtn} onPress={onAppleRegister} disabled={submitting || appleSubmitting}>
+          {appleSubmitting ? (
+            <ActivityIndicator color="#fff" size="small" />
+          ) : (
+            <>
+              <Ionicons name="logo-apple" size={22} color="#fff" />
+              <Text style={styles.appleBtnText}>{t("register.apple")}</Text>
+            </>
+          )}
         </TouchableOpacity>
       )}
       <TouchableOpacity style={styles.link} onPress={() => (navigation as any).navigate("Login")}>

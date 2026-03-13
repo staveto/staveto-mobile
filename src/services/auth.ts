@@ -1,5 +1,8 @@
 import { Platform } from "react-native";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
+import * as AppleAuthentication from "expo-apple-authentication";
+import * as Crypto from "expo-crypto";
+import auth from "@react-native-firebase/auth";
 import { doc, setDoc, getDoc, serverTimestamp } from "../lib/rnFirestore";
 import { db, getAuth } from "../firebase";
 import { getDeviceRegionCode } from "../utils/countries";
@@ -166,9 +169,8 @@ export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string
   }
 
   const idToken = response.data.idToken;
-  const authMod = require("@react-native-firebase/auth").default;
-  const googleCredential = authMod.GoogleAuthProvider.credential(idToken);
-  const cred = await authMod().signInWithCredential(googleCredential);
+  const googleCredential = auth.GoogleAuthProvider.credential(idToken);
+  const cred = await auth().signInWithCredential(googleCredential);
   const user = toAuthUser(cred.user);
   await ensureUserProfile(user);
   const token = await cred.user.getIdToken();
@@ -179,9 +181,7 @@ export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string
 export async function isAppleSignInAvailable(): Promise<boolean> {
   if (Platform.OS !== "ios") return false;
   try {
-    const mod = require("expo-apple-authentication");
-    const AppleAuthentication = mod?.default ?? mod;
-    return !!(AppleAuthentication && typeof AppleAuthentication.isAvailableAsync === "function" && (await AppleAuthentication.isAvailableAsync()));
+    return await AppleAuthentication.isAvailableAsync();
   } catch {
     return false;
   }
@@ -196,17 +196,6 @@ export async function loginWithApple(): Promise<{ user: AuthUser; token: string 
   }
 
   try {
-    const mod = require("expo-apple-authentication");
-    const AppleAuthentication = mod?.default ?? mod;
-    if (!AppleAuthentication || typeof AppleAuthentication.isAvailableAsync !== "function") {
-      const err = new Error("Sign in with Apple is not available on this device. Please sign in with email.") as Error & { code?: string };
-      err.code = "auth/apple-unavailable";
-      throw err;
-    }
-
-    const Crypto = require("expo-crypto");
-    const authMod = require("@react-native-firebase/auth").default;
-
     const isAvailable = await AppleAuthentication.isAvailableAsync();
     if (!isAvailable) {
       const err = new Error("Sign in with Apple is not available on this device.") as Error & { code?: string };
@@ -230,9 +219,6 @@ export async function loginWithApple(): Promise<{ user: AuthUser; token: string 
     });
 
     if (!credential?.identityToken) {
-      if (__DEV__) {
-        console.warn("[auth] Apple credential missing identityToken. credential:", credential ? Object.keys(credential) : "null");
-      }
       const err = new Error(
         credential ? "Apple sign-in did not return required data. Please try again or use email." : "Používateľ zrušil prihlásenie."
       ) as Error & { code?: string };
@@ -240,13 +226,16 @@ export async function loginWithApple(): Promise<{ user: AuthUser; token: string 
       throw err;
     }
 
-    const provider = new authMod.OAuthProvider("apple.com");
+    const fbAuth = getAuth();
+    if (!fbAuth) throw new Error("FIREBASE_DISABLED");
+
+    const provider = new auth.OAuthProvider("apple.com");
     const appleCredential = provider.credential({
       idToken: credential.identityToken,
       rawNonce,
     });
 
-    const cred = await authMod().signInWithCredential(appleCredential);
+    const cred = await fbAuth.signInWithCredential(appleCredential);
 
     const fullName = credential.fullName;
     const appleEmail = credential.email?.trim() || "";
@@ -270,17 +259,28 @@ export async function loginWithApple(): Promise<{ user: AuthUser; token: string 
   } catch (e) {
     const code = (e as { code?: string })?.code;
     const message = (e as { message?: string })?.message ?? "";
+    const stack = (e as { stack?: string })?.stack ?? "";
+
     if (__DEV__) {
-      console.warn("[auth] Apple sign-in error:", { code, message });
+      console.error("[auth] Apple raw error:", e, message, stack);
     }
-    // Normalize expo cancel code so UI can ignore it
-    if (code === "ERR_REQUEST_CANCELED") {
+
+    // User cancelled – UI should not show alert
+    if (code === "ERR_REQUEST_CANCELED" || code === "ERR_CANCELED" || code === "auth/cancelled") {
       const err = new Error("Používateľ zrušil prihlásenie.") as Error & { code?: string };
       err.code = "auth/cancelled";
       throw err;
     }
-    // Re-throw original error – do not replace with generic apple-unavailable
-    throw e;
+
+    // Preserve known Firebase auth codes so getAuthErrorMessage shows specific message
+    if (code && code.startsWith("auth/")) {
+      throw e;
+    }
+
+    // Never surface technical errors (e.g. "undefined is not a function") to users
+    const err = new Error("Prihlásenie cez Apple zlyhalo. Skúste znova alebo použite email.") as Error & { code?: string };
+    err.code = "auth/apple-unavailable";
+    throw err;
   }
 }
 

@@ -8,6 +8,7 @@ import {
 import { db, getAuth } from '../firebase';
 import { paths } from '../lib/firestorePaths';
 import { getTemplatePhases, getTemplateTasks } from './templateService';
+import { FALLBACK_TEMPLATE_ID } from '../utils/templateResolver';
 import { createProjectCreatedNotification } from './notifications';
 import type { ProjectType } from '../lib/types';
 import type { WorkType, BusinessMode, CreationMode } from '../lib/projectEnums';
@@ -184,7 +185,21 @@ export async function instantiateTemplate(
       
       if (phases.length === 0 && tasks.length === 0) {
         console.warn(`[projectFactory] ⚠️ Template ${templateId} je prázdny (žiadne phases/tasks)`);
-        console.warn(`[projectFactory] Skontrolujte, či template existuje v catalogTemplates/${templateId}`);
+        if (templateId !== FALLBACK_TEMPLATE_ID) {
+          try {
+            console.log(`[projectFactory] Fallback: trying ${FALLBACK_TEMPLATE_ID} (empty template)...`);
+            const [fbPhases, fbTasks] = await Promise.all([
+              getTemplatePhases(FALLBACK_TEMPLATE_ID),
+              getTemplateTasks(FALLBACK_TEMPLATE_ID),
+            ]);
+            phases = fbPhases || [];
+            tasks = fbTasks || [];
+            projectData.templateId = FALLBACK_TEMPLATE_ID;
+            console.log(`[projectFactory] ✅ Fallback template loaded: ${phases.length} phases, ${tasks.length} tasks`);
+          } catch (fbErr: any) {
+            console.warn(`[projectFactory] Fallback failed: ${fbErr?.message}`);
+          }
+        }
       }
     } catch (error: any) {
       console.error(`[projectFactory] ❌ Error loading template ${templateId}:`, error);
@@ -196,10 +211,28 @@ export async function instantiateTemplate(
         throw new Error(`Nemáte oprávnenie načítavať šablónu "${templateId}". Skontrolujte Firestore rules pre catalogTemplates.`);
       }
       
-      // Pre iné chyby pokračujeme s prázdnymi arrays - projekt sa vytvorí aj bez phases/tasks
-      console.warn(`[projectFactory] ⚠️ Pokračujem bez phases/tasks kvôli chybe: ${errorMessage}`);
-      phases = [];
-      tasks = [];
+      // Fallback to eu-construction-v1 if localized template is missing
+      if (templateId !== FALLBACK_TEMPLATE_ID) {
+        try {
+          console.log(`[projectFactory] Fallback: trying ${FALLBACK_TEMPLATE_ID}...`);
+          const [fbPhases, fbTasks] = await Promise.all([
+            getTemplatePhases(FALLBACK_TEMPLATE_ID),
+            getTemplateTasks(FALLBACK_TEMPLATE_ID),
+          ]);
+          phases = fbPhases || [];
+          tasks = fbTasks || [];
+          projectData.templateId = FALLBACK_TEMPLATE_ID;
+          console.log(`[projectFactory] ✅ Fallback template loaded: ${phases.length} phases, ${tasks.length} tasks`);
+        } catch (fbError: any) {
+          console.warn(`[projectFactory] ⚠️ Fallback failed: ${fbError?.message}. Creating project without phases/tasks.`);
+          phases = [];
+          tasks = [];
+        }
+      } else {
+        console.warn(`[projectFactory] ⚠️ Pokračujem bez phases/tasks kvôli chybe: ${errorMessage}`);
+        phases = [];
+        tasks = [];
+      }
     }
   } else {
     console.log(`[projectFactory] ⚠️ No template ID provided (templateId="${templateId}"), creating project without phases/tasks`);

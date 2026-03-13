@@ -39,6 +39,7 @@ import { CreateProjectWizard, type WizardResult } from "../components/CreateProj
 import { isLegacyResidential } from "../lib/projectEnums";
 import { openInMaps } from "../lib/maps";
 import { COUNTRY_CODES, getLocalizedCountryName } from "../utils/countries";
+import { resolveTemplateIdForCountry, FALLBACK_TEMPLATE_ID } from "../utils/templateResolver";
 import { getCallable } from "../firebase";
 import { showToast } from "../helpers/toast";
 
@@ -67,8 +68,6 @@ function formatCreatedAt(isoStr?: string): string {
 type ProjectCreationType = NonNullable<ProjectDoc["projectType"]>;
 type CreationMethod = "template" | "empty";
 type DisplayProjectType = "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
-
-const DEFAULT_TEMPLATE_ID = "eu-construction-v1";
 
 function normalizeProjectType(projectType?: ProjectDoc["projectType"]): DisplayProjectType {
   if (projectType === "RESIDENTIAL" || projectType === "TRADE" || projectType === "MAINTENANCE") return projectType;
@@ -151,11 +150,12 @@ export function ProjectsScreen() {
     setLoadingPhases(false);
   }, []);
 
-  const loadDefaultTemplatePhases = useCallback(async () => {
-    setTemplateId(DEFAULT_TEMPLATE_ID);
+  const loadTemplatePhasesForCountry = useCallback(async (countryCode: string | undefined) => {
+    const templateIdToLoad = resolveTemplateIdForCountry(countryCode);
+    setTemplateId(templateIdToLoad);
     setLoadingPhases(true);
     try {
-      const phases = await templateService.getTemplatePhases(DEFAULT_TEMPLATE_ID);
+      const phases = await templateService.getTemplatePhases(templateIdToLoad);
       setTemplatePhases(phases);
 
       const customizations = new Map<string, PhaseCustomization>();
@@ -168,9 +168,30 @@ export function ProjectsScreen() {
       });
       setPhaseCustomizations(customizations);
     } catch (e) {
-      console.warn("[ProjectsScreen] Could not load default template phases:", e);
-      setTemplatePhases([]);
-      setPhaseCustomizations(new Map());
+      console.warn("[ProjectsScreen] Could not load template", templateIdToLoad, e);
+      if (templateIdToLoad !== FALLBACK_TEMPLATE_ID) {
+        try {
+          const fallbackPhases = await templateService.getTemplatePhases(FALLBACK_TEMPLATE_ID);
+          setTemplateId(templateIdToLoad);
+          setTemplatePhases(fallbackPhases);
+          const customizations = new Map<string, PhaseCustomization>();
+          fallbackPhases.forEach((phase) => {
+            customizations.set(phase.id, {
+              phaseId: phase.id,
+              enabled: true,
+              status: "active",
+            });
+          });
+          setPhaseCustomizations(customizations);
+        } catch (fbErr) {
+          console.warn("[ProjectsScreen] Fallback template also failed:", fbErr);
+          setTemplatePhases([]);
+          setPhaseCustomizations(new Map());
+        }
+      } else {
+        setTemplatePhases([]);
+        setPhaseCustomizations(new Map());
+      }
     } finally {
       setLoadingPhases(false);
     }
@@ -410,10 +431,9 @@ export function ProjectsScreen() {
       newStep === 2 &&
       creationMethod === "template" &&
       !loadingPhases &&
-      !templatePhases.length &&
-      !templateId
+      (!templatePhases.length || templateId !== resolveTemplateIdForCountry(newCountry?.trim() || undefined))
     ) {
-      loadDefaultTemplatePhases();
+      loadTemplatePhasesForCountry(newCountry?.trim() || undefined);
       return;
     }
 
@@ -424,10 +444,11 @@ export function ProjectsScreen() {
     selectedType,
     newStep,
     creationMethod,
+    newCountry,
     loadingPhases,
     templatePhases.length,
     templateId,
-    loadDefaultTemplatePhases,
+    loadTemplatePhasesForCountry,
     resetTemplateSelectionState,
   ]);
 
@@ -487,7 +508,10 @@ export function ProjectsScreen() {
     try {
       const shouldUseTemplate =
         selectedType === "BUILD" || (selectedType === "MANAGEMENT" && creationMethod === "template");
-      const finalTemplateId = shouldUseTemplate ? DEFAULT_TEMPLATE_ID : "";
+      const countryCodeForCreate = selectedType === "MAINTENANCE" ? undefined : (newCountry.trim() || undefined);
+      const finalTemplateId = shouldUseTemplate
+        ? resolveTemplateIdForCountry(countryCodeForCreate)
+        : "";
 
       console.log(
         `[ProjectsScreen] Creating project: type="${selectedType}", name="${newName.trim()}", templateId="${finalTemplateId}"`
@@ -505,7 +529,6 @@ export function ProjectsScreen() {
         selectedType === "MAINTENANCE"
           ? [newAddress.trim(), newNote.trim()].filter(Boolean).join("\n") || undefined
           : newAddress.trim() || undefined;
-      const countryCodeForCreate = selectedType === "MAINTENANCE" ? undefined : (newCountry.trim() || undefined);
       const cityForCreate = selectedType === "MAINTENANCE" ? undefined : (newCity.trim() || undefined);
 
       await projectFactory.createProjectFromTemplate({
@@ -1201,7 +1224,15 @@ export function ProjectsScreen() {
                         <TouchableOpacity
                           key={code}
                           style={[styles.countryChip, newCountry === code && styles.countryChipActive]}
-                          onPress={() => setNewCountry(code)}
+                          onPress={() => {
+                            setNewCountry(code);
+                            if (
+                              (selectedType === "MANAGEMENT" || selectedType === "BUILD") &&
+                              creationMethod === "template"
+                            ) {
+                              resetTemplateSelectionState();
+                            }
+                          }}
                         >
                           <Text style={[styles.countryChipText, newCountry === code && styles.countryChipTextActive]}>
                             {getLocalizedCountryName(code, locale)}
@@ -1253,7 +1284,7 @@ export function ProjectsScreen() {
                             color={creationMethod === "template" ? colors.primary : colors.textMuted}
                           />
                           <Text style={[styles.templateChoiceText, creationMethod === "template" && styles.templateChoiceTextActive]}>
-                            {t("createProject.method.template.title")}
+                            {t("createProject.method.template.title", { country: newCountry || "SK" })}
                           </Text>
                         </View>
                         <Text style={styles.templateChoiceSubtext}>{t("createProject.method.template.helper")}</Text>

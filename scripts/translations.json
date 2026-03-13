@@ -1,0 +1,117 @@
+{
+  "cz": {
+    "_meta": {
+      "name": "Stavba rodinného domu (CZ)",
+      "country": "CZ",
+      "language": "cs",
+      "locale": "cs-CZ",
+      "currency": "CZK"
+    },
+    "phase.PH1.name": "Příprava a povolení",
+    "phase.PH1.description": "Plánování, stavební povolení, ohlášení stavby",
+    "phase.PH2.name": "Zemní práce a základy",
+    "phase.PH2.description": "Výkop, základy, sklep",
+    "phase.PH3.name": "Hrubá stavba",
+    "phase.PH3.description": "Zdivo, stropy, střecha",
+    "task.PH1-1.title": "Získat stavební povolení",
+    "task.PH1-2.title": "Ohlášení stavby",
+    "task.PH1-3.title": "Stavební dozor",
+    "task.PH2-1.title": "Výkop",
+    "task.PH2-2.title": "Betonáž základů",
+    "task.PH3-1.title": "Zdivo – přízemí",
+    "task.PH3-2.title": "Stropy",
+    "task.PH3-3.title": "Krov"
+  },
+  "de": {
+    "_meta": {
+      "name": "Einfamilienhausbau (DE)",
+      "country": "DE",
+      "language": "de",
+      "locale": "de-DE",
+      "currency": "EUR"
+    },
+    "phase.PH1.name": "Vorbereitung und Genehmigung",
+    "phase.PH1.description": "Planung, Baugenehmigung, Bauantrag",
+    "phase.PH2.name": "Erdarbeiten und Fundament",
+    "phase.PH2.description": "Aushub, Fundament, Keller",
+    "phase.PH3.name": "Rohbau",
+    "phase.PH3.description": "Mauerwerk, Decken, Dach",
+    "task.PH1-1.title": "Baugenehmigung einholen",
+    "task.PH1-2.title": "Bauantrag stellen",
+    "task.PH1-3.title": "Bauleiter bestellen",
+    "task.PH2-1.title": "Aushub",
+    "task.PH2-2.title": "Fundament gießen",
+    "task.PH3-1.title": "Mauerwerk – Erdgeschoss",
+    "task.PH3-2.title": "Decken",
+    "task.PH3-3.title": "Dachstuhl"
+  },
+  "es": {
+    "_meta": {
+      "name": "Construcción vivienda unifamiliar (ES)",
+      "country": "ES",
+      "language": "es",
+      "locale": "es-ES",
+      "currency": "EUR"
+    },
+    "phase.PH1.name": "Preparación y permisos",
+    "phase.PH1.description": "Planificación, licencia de obra, proyecto técnico",
+    "phase.PH2.name": "Movimiento de tierras y cimentación",
+    "phase.PH2.description": "Excavación, cimentación, sótano",
+    "phase.PH3.name": "Estructura",
+    "phase.PH3.description": "Obra de fábrica, forjados, cubierta",
+    "task.PH1-1.title": "Obtener licencia de obra",
+    "task.PH1-2.title": "Proyecto técnico visado",
+    "task.PH1-3.title": "Dirección de obra",
+    "task.PH2-1.title": "Excavación",
+    "task.PH2-2.title": "Hormigonado de cimentación",
+    "task.PH3-1.title": "Fábrica – planta baja",
+    "task.PH3-2.title": "Forjados",
+    "task.PH3-3.title": "Estructura de cubierta"
+  },
+  "pl": {
+    "_meta": {
+      "name": "Budowa domu jednorodzinnego (PL)",
+      "country": "PL",
+      "language": "pl",
+      "locale": "pl-PL",
+      "currency": "PLN"
+    },
+    "phase.PH1.name": "Przygotowanie i pozwolenia",
+    "phase.PH1.description": "Planowanie, pozwolenie na budowę, zgłoszenie",
+    "phase.PH2.name": "Roboty ziemne i fundamenty",
+    "phase.PH2.description": "Wykop, fundament, piwnica",
+    "phase.PH3.name": "Stan surowy",
+    "phase.PH3.description": "Mury, stropy, dach",
+    "task.PH1-1.title": "Uzyskać pozwolenie na budowę",
+    "task.PH1-2.title": "Zgłoszenie robót budowlanych",
+    "task.PH1-3.title": "Kierownik budowy",
+    "task.PH2-1.title": "Wykop",
+    "task.PH2-2.title": "Wylanie fundamentów",
+    "task.PH3-1.title": "Mury – parter",
+    "task.PH3-2.title": "Stropy",
+    "task.PH3-3.title": "Konstrukcja dachu"
+  },
+  "it": {
+    "_meta": {
+      "name": "Costruzione casa unifamiliare (IT)",
+      "country": "IT",
+      "language": "it",
+      "locale": "it-IT",
+      "currency": "EUR"
+    },
+    "phase.PH1.name": "Preparazione e permessi",
+    "phase.PH1.description": "Pianificazione, permesso di costruire, SCIA",
+    "phase.PH2.name": "Scavi e fondazioni",
+    "phase.PH2.description": "Scavo, fondazione, seminterrato",
+    "phase.PH3.name": "Struttura",
+    "phase.PH3.description": "Muratura, solai, tetto",
+    "task.PH1-1.title": "Ottenere permesso di costruire",
+    "task.PH1-2.title": "SCIA / Permesso di costruire",
+    "task.PH1-3.title": "Direttore dei lavori",
+    "task.PH2-1.title": "Scavo",
+    "task.PH2-2.title": "Getto fondazioni",
+    "task.PH3-1.title": "Muratura – piano terra",
+    "task.PH3-2.title": "Solai",
+    "task.PH3-3.title": "Struttura del tetto"
+  }
+}

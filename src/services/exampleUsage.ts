@@ -10,6 +10,7 @@ import { getMyProjects } from './projectOverviewService';
 
 /**
  * Example: Create a new project from template
+ * For country-based templates, use resolveTemplateIdForCountry(countryCode) from utils/templateResolver
  */
 export async function exampleCreateProject() {
   try {

@@ -3,7 +3,6 @@ import React, { useCallback, useEffect, useRef, useState } from "react";
 import { SafeAreaProvider } from "react-native-safe-area-context";
 import { bootStep, bootFail } from "./src/lib/bootLogger";
 import { DiagnosticScreen } from "./src/screens/DiagnosticScreen";
-import { I18nProvider } from "./src/i18n/I18nContext";
 import { LazyAppWithI18n } from "./src/components/LazyAppWithI18n";
 import { View, StyleSheet, Text, TouchableOpacity, Platform, Pressable } from "react-native";
 import { colors } from "./src/theme";
@@ -464,17 +463,15 @@ export default function App() {
 
   return (
     <AppErrorBoundary onError={handleError}>
-      <I18nProvider>
-        <SafeAreaProvider>
-          {isDiagnosticMode && diagnosticActive ? (
-            <DiagnosticScreenWithSplashHide onContinue={() => setDiagnosticActive(false)} />
-          ) : (
-            <BootLoader>
-              <LazyAppWithI18n enabled={true} />
-            </BootLoader>
-          )}
-        </SafeAreaProvider>
-      </I18nProvider>
+      <SafeAreaProvider>
+        {isDiagnosticMode && diagnosticActive ? (
+          <DiagnosticScreenWithSplashHide onContinue={() => setDiagnosticActive(false)} />
+        ) : (
+          <BootLoader>
+            <LazyAppWithI18n enabled={true} />
+          </BootLoader>
+        )}
+      </SafeAreaProvider>
     </AppErrorBoundary>
   );
 }

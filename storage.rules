@@ -108,5 +108,12 @@ service firebase.storage {
       allow write: if signedIn() && uid() == userId
         && request.resource.size < 10 * 1024 * 1024; // Max 10MB
     }
+
+    // AI project draft documents (uploaded before project exists, for AI context)
+    match /users/{userId}/aiProjectDrafts/{draftId}/documents/{fileName} {
+      allow read: if signedIn() && uid() == userId;
+      allow write: if signedIn() && uid() == userId
+        && request.resource.size < 20 * 1024 * 1024; // Max 20MB per document
+    }
   }
 }

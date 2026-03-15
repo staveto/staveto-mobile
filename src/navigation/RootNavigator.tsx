@@ -39,8 +39,20 @@ import { UpdatesScreen } from "../screens/projects/UpdatesScreen";
 import { ProjectTeamScreen } from "../screens/projects/ProjectTeamScreen";
 import { ProjectInvitesScreen } from "../screens/ProjectInvitesScreen";
 import { ProblemsListScreen } from "../screens/ProblemsListScreen";
-import { ProblemDetailScreen } from "../screens/ProblemDetailScreen";
 import { CreateProblemScreen } from "../screens/CreateProblemScreen";
+
+// Lazy-load ProblemDetailScreen (react-native-maps) – speeds up initial app load
+const ProblemDetailScreenLazy = React.lazy(() =>
+  import("../screens/ProblemDetailScreen").then((m) => ({ default: m.ProblemDetailScreen }))
+);
+
+function ProblemDetailScreenWithSuspense(props: object) {
+  return (
+    <React.Suspense fallback={<LoadingScreen />}>
+      <ProblemDetailScreenLazy {...props} />
+    </React.Suspense>
+  );
+}
 import { AppDrawer } from "./AppDrawer";
 import { OfflineBanner } from "../components/OfflineBanner";
 import { colors, spacing } from "../theme";
@@ -320,7 +332,7 @@ export function RootNavigator() {
       />
       <Stack.Screen
         name="ProblemDetail"
-        component={ProblemDetailScreen}
+        component={ProblemDetailScreenWithSuspense}
         options={{ headerShown: true, title: t("problems.detail") || "Detail problému" }}
       />
       <Stack.Screen

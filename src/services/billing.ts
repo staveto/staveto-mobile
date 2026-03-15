@@ -92,7 +92,13 @@ export async function configurePurchases(userId?: string | null): Promise<void> 
     if (__DEV__ && typeof (Purchases as any).setLogLevel === "function" && LOG_LEVEL?.DEBUG != null) {
       (Purchases as any).setLogLevel(LOG_LEVEL.DEBUG);
     }
-    await Purchases.configure({ apiKey, appUserID: userId ?? undefined });
+    await Purchases.configure({
+      apiKey,
+      appUserID: userId ?? undefined,
+      // Disable automatic in-app messages – prevents "BillingWrapper is not attached to a listener"
+      // in emulator or when billing client isn't ready (common on Android emulator)
+      shouldShowInAppMessagesAutomatically: false,
+    });
     purchasesConfigured = true;
     if (__DEV__) console.log("[billing] RevenueCat configured");
   } catch (e) {

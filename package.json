@@ -21,6 +21,7 @@
     "start:emulator": "powershell -ExecutionPolicy Bypass -File ./scripts/start-emulator.ps1",
     "dev:android:external": "powershell -ExecutionPolicy Bypass -File ./scripts/build-android-external.ps1",
     "ios": "expo run:ios",
+    "run:ios": "expo start --tunnel --dev-client",
     "web": "expo start --web",
     "build:android": "eas build --platform android --profile production",
     "build:ios": "eas build --platform ios --profile production",
@@ -95,8 +96,10 @@
   "devDependencies": {
     "@types/react": "~19.1.0",
     "babel-preset-expo": "~54.0.10",
+    "firebase-admin": "^13.7.0",
     "sharp": "^0.34.5",
-    "typescript": "~5.9.2"
+    "typescript": "~5.9.2",
+    "xlsx": "^0.18.5"
   },
   "private": true
 }

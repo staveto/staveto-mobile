@@ -36,6 +36,7 @@ import { colors, radius, spacing } from "../theme";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
 import { CloneProjectModal } from "../components/CloneProjectModal";
 import { CreateProjectWizard, type WizardResult } from "../components/CreateProjectWizard";
+import { CreateProjectAIFlow } from "../components/CreateProjectAIFlow";
 import { isLegacyResidential } from "../lib/projectEnums";
 import { openInMaps } from "../lib/maps";
 import { COUNTRY_CODES, getLocalizedCountryName } from "../utils/countries";
@@ -111,6 +112,7 @@ export function ProjectsScreen() {
   const [selectedType, setSelectedType] = useState<ProjectCreationType | null>(null);
   const [wizardResult, setWizardResult] = useState<WizardResult | null>(null);
   const [creationMethod, setCreationMethod] = useState<CreationMethod>("template");
+  const [creationPath, setCreationPath] = useState<"ai" | "manual">("manual");
   const [newName, setNewName] = useState("");
   const [newAddress, setNewAddress] = useState("");
   const [newCountry, setNewCountry] = useState<string>("SK");
@@ -386,6 +388,7 @@ export function ProjectsScreen() {
         setSelectedType(null);
         setWizardResult(null);
         setCreationMethod("template");
+        setCreationPath("manual");
         setNewName("");
         resetTemplateSelectionState();
         setError(null);
@@ -403,6 +406,7 @@ export function ProjectsScreen() {
     setSelectedType(null);
     setWizardResult(null);
     setCreationMethod("template");
+    setCreationPath("manual");
     setNewName("");
     setNewAddress("");
     resetTemplateSelectionState();
@@ -413,11 +417,16 @@ export function ProjectsScreen() {
     (result: WizardResult) => {
       setWizardResult(result);
       setSelectedType(result.engineType === "BUILD" ? "BUILD" : result.engineType);
-      setCreationMethod(result.creationMode === "TEMPLATE" ? "template" : "empty");
-      if (result.creationMode === "TEMPLATE" && result.engineType === "BUILD") {
-        setCreationMethod("template");
-      } else if (result.creationMode === "MANUAL") {
+      if (result.creationMode === "AI" && (result.engineType === "BUILD" || result.engineType === "TRADE")) {
+        setCreationPath("ai");
         setCreationMethod("empty");
+      } else {
+        setCreationMethod(result.creationMode === "TEMPLATE" ? "template" : "empty");
+        if (result.creationMode === "TEMPLATE" && result.engineType === "BUILD") {
+          setCreationMethod("template");
+        } else if (result.creationMode === "MANUAL") {
+          setCreationMethod("empty");
+        }
       }
       setError(null);
       setNewStep(2);
@@ -1132,15 +1141,37 @@ export function ProjectsScreen() {
       </Modal>
       <Modal visible={showNew} transparent animationType="slide">
         <KeyboardAvoidingView
-          style={[styles.modalOverlay, newStep === 1 && styles.modalOverlayHero]}
+          style={[styles.modalOverlay, (creationPath === "ai" || newStep === 1) && styles.modalOverlayHero]}
           behavior="padding"
           keyboardVerticalOffset={0}
         >
-          <View style={[styles.modal, newStep === 1 && styles.modalHero, newStep === 1 && { height: heroModalHeight }]}>
+          <View style={[styles.modal, (creationPath === "ai" || newStep === 1) && styles.modalHero, (creationPath === "ai" || newStep === 1) && { height: heroModalHeight }]}>
             <Text style={styles.modalTitle}>
-              {selectedType === "MAINTENANCE" ? t("createProject.maintenanceGroup.header") : t("projects.modalTitle")}
+              {creationPath === "ai"
+                ? t("createProject.ai.title")
+                : selectedType === "MAINTENANCE"
+                  ? t("createProject.maintenanceGroup.header")
+                  : t("projects.modalTitle")}
             </Text>
-            {newStep === 1 ? (
+            {creationPath === "ai" ? (
+              <View style={styles.stepOneBody}>
+                <CreateProjectAIFlow
+                  engineType={selectedType ?? undefined}
+                  workType={wizardResult?.workType ?? undefined}
+                  onCreated={(projectId) => {
+                    closeNewModal();
+                    load();
+                    navigation.navigate("ProjectOverview", { projectId });
+                  }}
+                  onManual={() => {
+                    setCreationPath("manual");
+                    setNewStep(1);
+                    setCreationMethod("template");
+                  }}
+                  onCancel={closeNewModal}
+                />
+              </View>
+            ) : newStep === 1 ? (
               <View style={styles.stepOneBody}>
                 <CreateProjectWizard
                   onComplete={handleWizardComplete}

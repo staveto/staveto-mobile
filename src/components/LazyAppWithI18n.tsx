@@ -49,8 +49,11 @@ export function LazyAppWithI18n({ enabled }: { enabled: boolean }) {
 
   if (!Mod) {
     return (
-      <View style={{ flex: 1, alignItems: "center", justifyContent: "center" }}>
+      <View style={{ flex: 1, alignItems: "center", justifyContent: "center", padding: 24 }}>
         <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={{ marginTop: 16, color: colors.textMuted, fontSize: 14 }}>
+          Načítavam aplikáciu…
+        </Text>
       </View>
     );
   }

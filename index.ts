@@ -48,6 +48,7 @@ try {
 } catch {}
 // #endregion
 import { registerRootComponent } from "expo";
+import { I18nProvider } from "./src/i18n/I18nContext";
 
 // Prevent auto-hide (fire-and-forget – must NOT block; iOS can hang here)
 (async () => {
@@ -99,7 +100,7 @@ registerRootComponent(() => {
     }, []);
 
     if (!App) return null;
-    return React.createElement(App);
+    return React.createElement(I18nProvider, null, React.createElement(App));
   }
 
   return React.createElement(Entry);

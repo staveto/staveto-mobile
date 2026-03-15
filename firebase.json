@@ -9,5 +9,10 @@
   },
   "storage": {
     "rules": "mobile/storage.rules"
+  },
+  "emulators": {
+    "firestore": {
+      "port": 8080
+    }
   }
 }

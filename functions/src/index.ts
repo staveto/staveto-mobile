@@ -828,6 +828,27 @@ export const declineProjectInvite = onCall(
   }
 );
 
+/** Callable: request account deletion. Logs request; actual deletion handled manually or via scheduled job. */
+export const requestAccountDeletion = onCall(
+  {
+    region: "europe-west1",
+    timeoutSeconds: 30,
+    memory: "256MiB",
+    invoker: "public",
+  },
+  async (request) => {
+    if (!request.auth?.uid) {
+      throw new HttpsError("unauthenticated", "Authentication required.");
+    }
+    const uid = request.auth.uid;
+    const data = (request.data ?? {}) as { reason?: string };
+    const reason = typeof data.reason === "string" ? data.reason : "user_initiated";
+    log("[requestAccountDeletion] Request received", { uid, reason });
+    // TODO: Write to deletion queue or trigger async job for GDPR-compliant deletion
+    return { status: "requested" };
+  }
+);
+
 export const extractInvoiceData = onCall(
   {
     region: "europe-west1",
@@ -1084,11 +1105,21 @@ export const extractInvoiceData = onCall(
 );
 
 export { inboundWebhook } from "./whatsapp";
-export { addProjectMemberByEmail, removeProjectMember, updateMemberPermissions, backfillProjectSharedCounts } from "./team";
+export { revenuecatWebhook } from "./revenuecatWebhook";
+export {
+  addProjectMemberByEmail,
+  removeProjectMember,
+  updateMemberPermissions,
+  backfillProjectSharedCounts,
+  syncMembersByUidForProject,
+  syncMyProjectsSharedCount,
+} from "./team";
 export { cloneProjectStructure } from "./cloneProject";
+export { generateProjectStructure } from "./generateProjectStructure";
+export { createProjectFromAiPlan } from "./createProjectFromAiPlan";
 export { calculateDistanceKm } from "./distance";
 export { redeemPromoCode } from "./promo"; // disabled – no-op, throws PROMO_DISABLED
-export { checkEntitlement } from "./billing";
+export { getBillingStatus, checkEntitlement } from "./billing";
 
 /** Send in-app notification + FCM push when a project member invite is created (status invited, emailLower set). */
 export const onMemberInviteCreated = onDocumentCreated(

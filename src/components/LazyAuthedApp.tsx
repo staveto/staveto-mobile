@@ -2,6 +2,7 @@ import React, { useEffect, useState } from "react";
 import { View, Text, ActivityIndicator, InteractionManager, Platform } from "react-native";
 import { colors } from "../theme";
 import { IOS_SKIP_AUTH } from "../lib/iosDiagnostic";
+import { isFirebaseAvailable } from "../lib/firebaseAvailable";
 
 export function LazyAuthedApp({ enabled }: { enabled: boolean }) {
   const [Mod, setMod] = useState<React.ComponentType | null>(null);
@@ -28,7 +29,7 @@ export function LazyAuthedApp({ enabled }: { enabled: boolean }) {
       setErr(String((e as Error)?.message ?? e));
     };
     const doLoad = () => {
-      if (IOS_SKIP_AUTH) {
+      if (IOS_SKIP_AUTH || !isFirebaseAvailable()) {
         import("../AppShellMinimal").then(loadShell).catch(onErr);
       } else {
         import("../AppShellAuthed").then(loadShell).catch(onErr);

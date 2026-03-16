@@ -1,9 +1,19 @@
 /**
  * Analytics service – production-safe GA4 event logging via Firebase Analytics.
  * Strips PII, truncates values, limits params. Never throws.
+ * In Expo Go (no native Firebase): no-ops silently.
  */
 
-import analytics from "@react-native-firebase/analytics";
+import { isFirebaseAvailable } from "../lib/firebaseAvailable";
+
+function getAnalytics(): ReturnType<typeof import("@react-native-firebase/analytics")["default"]> | null {
+  if (!isFirebaseAvailable()) return null;
+  try {
+    return require("@react-native-firebase/analytics").default();
+  } catch {
+    return null;
+  }
+}
 
 const MAX_PARAMS = 10;
 const MAX_STRING_LENGTH = 80;
@@ -67,11 +77,13 @@ function sanitizeParams(params?: Record<string, unknown>): Record<string, unknow
  */
 export function logEventSafe(name: string, params?: Record<string, unknown>): void {
   try {
+    const a = getAnalytics();
+    if (!a) return;
     const safe = sanitizeParams(params);
     if (safe) {
-      analytics().logEvent(name, safe);
+      a.logEvent(name, safe);
     } else {
-      analytics().logEvent(name);
+      a.logEvent(name);
     }
   } catch (e) {
     if (__DEV__) console.warn("[analytics] logEvent failed:", name, e);
@@ -84,8 +96,10 @@ export function logEventSafe(name: string, params?: Record<string, unknown>): vo
  */
 export function logScreenSafe(screenName: string): void {
   try {
+    const a = getAnalytics();
+    if (!a) return;
     const safe = screenName?.slice(0, MAX_STRING_LENGTH) || "unknown";
-    analytics().logScreenView({ screen_name: safe, screen_class: safe });
+    a.logScreenView({ screen_name: safe, screen_class: safe });
   } catch (e) {
     if (__DEV__) console.warn("[analytics] logScreenView failed:", screenName, e);
   }

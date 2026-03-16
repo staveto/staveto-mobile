@@ -11,6 +11,7 @@ import { IOS_DIAGNOSTIC, getDiagnosticEnvRaw } from "./lib/iosDiagnostic";
 
 function getFirebaseStatus(): string {
   try {
+    if (!require("./lib/firebaseAvailable").isFirebaseAvailable()) return "not available (Expo Go?)";
     const { getApps, getApp } = require("@react-native-firebase/app");
     const apps = getApps();
     const count = apps?.length ?? 0;
@@ -36,8 +37,14 @@ export default function AppShellMinimal() {
     <GestureHandlerRootView style={styles.root}>
       <View style={styles.center}>
         <Text style={styles.title}>Staveto</Text>
-        <Text style={styles.subtitle}>iOS diagnostic – Firebase disabled</Text>
-        <Text style={styles.hint}>If you see this, the crash was in Firebase/Auth</Text>
+        <Text style={styles.subtitle}>
+          {firebaseStatus.includes("not available") ? "Expo Go – Firebase nie je dostupný" : "iOS diagnostic – Firebase disabled"}
+        </Text>
+        <Text style={styles.hint}>
+          {firebaseStatus.includes("not available")
+            ? "Pre plnú funkcionalitu použite development build (eas build --profile development)"
+            : "If you see this, the crash was in Firebase/Auth"}
+        </Text>
         <Text style={styles.debugLine} selectable>
           IOS_DIAGNOSTIC={String(IOS_DIAGNOSTIC)} | EXPO_PUBLIC_IOS_DIAGNOSTIC="{diagRaw || "(empty)"}"
         </Text>

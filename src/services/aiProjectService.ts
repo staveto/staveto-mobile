@@ -13,11 +13,17 @@ import {
 } from "../lib/aiProjectSchema";
 import { createProjectCreatedNotification } from "./notifications";
 import { getStorage, getAuth, getFunctionsInstance } from "../firebase";
+import { getExtraEnv } from "../lib/env";
 
 const REGION = "europe-west1";
 
-/** v2 Callable functions need full URL for auth to work (RN Firebase known issue) */
+/** v2 Callable: use explicit URL from env, or fallback to cloudfunctions.net (may not work for v2) */
 function getCallableUrl(name: string): string {
+  const envKey = name === "generateProjectStructure"
+    ? "EXPO_PUBLIC_AI_GENERATE_PROJECT_URL"
+    : "EXPO_PUBLIC_AI_CREATE_PROJECT_URL";
+  const url = getExtraEnv(envKey);
+  if (url?.trim()) return url.trim();
   const projectId = getApp().options?.projectId ?? "staveto-mvp-5f251";
   return `https://${REGION}-${projectId}.cloudfunctions.net/${name}`;
 }
@@ -95,7 +101,9 @@ export async function generateProjectStructureWithAI(
     throw new Error("Firebase Functions nie sú dostupné.");
   }
 
-  // Use httpsCallableFromUrl – v2 Callable + RN Firebase: auth token only works with full URL
+  // v2 Callable + RN Firebase: use httpsCallableFromUrl with explicit URL (auth fix)
+  const url = getCallableUrl("generateProjectStructure");
+  if (__DEV__) console.log("[aiProject] Function URL:", url);
   const fn = httpsCallableFromUrl<
     {
       projectBrief: string;
@@ -104,7 +112,7 @@ export async function generateProjectStructureWithAI(
       documentStoragePaths?: string[];
     },
     { plan: unknown; raw?: string }
-  >(functions, getCallableUrl("generateProjectStructure"));
+  >(functions, url);
 
   if (__DEV__) {
     console.log("[aiProject] Calling generateProjectStructure", {

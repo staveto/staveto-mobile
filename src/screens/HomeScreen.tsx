@@ -50,7 +50,7 @@ import { normalizeRoleKey } from "../helpers/role";
 import type { RoleKey } from "../helpers/role";
 import { getKpiCardsWithTasks } from "../helpers/kpi/getKpiCards";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
-import analytics from "@react-native-firebase/analytics";
+import { logEventSafe } from "../services/analytics";
 import { hasShownFirstProjectPrompt, markFirstProjectPromptShown } from "../utils/firstProjectPrompt";
 import { KpiCardComponent } from "../components/KpiCard";
 import type { KpiCard } from "../helpers/kpi/getKpiCards";
@@ -298,7 +298,7 @@ export function HomeScreen() {
   useEffect(() => {
     (async () => {
       try {
-        await analytics().logEvent("staveto_test_event", { where: "after_login", screen: "Home" });
+        logEventSafe("staveto_test_event", { where: "after_login", screen: "Home" });
       } catch (e) {
         if (__DEV__) console.log("[analytics] test event failed:", e);
       }

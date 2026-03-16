@@ -229,11 +229,7 @@ export async function loginWithApple(): Promise<{ user: AuthUser; token: string 
     const fbAuth = getAuth();
     if (!fbAuth) throw new Error("FIREBASE_DISABLED");
 
-    const provider = new auth.OAuthProvider("apple.com");
-    const appleCredential = provider.credential({
-      idToken: credential.identityToken,
-      rawNonce,
-    });
+    const appleCredential = auth.AppleAuthProvider.credential(credential.identityToken, rawNonce);
 
     const cred = await fbAuth.signInWithCredential(appleCredential);
 

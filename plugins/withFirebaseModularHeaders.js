@@ -3,9 +3,11 @@ const { mergeContents } = require("@expo/config-plugins/build/utils/generateCode
 
 /**
  * Firebase iOS Podfile fixes for React Native Firebase:
- * 1. use_modular_headers! - for Firebase Swift pods (FirebaseCoreInternal, etc.)
- * 2. $RNFirebaseAsStaticFramework = true - for RNFB to build correctly
- * 3. CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES - fixes "include of non-modular header inside framework module" (RNFBApp, RCTConvert.h)
+ * 1. $RNFirebaseAsStaticFramework = true - for RNFB to build correctly
+ * 2. CLANG_ALLOW_NON_MODULAR_INCLUDES_IN_FRAMEWORK_MODULES = YES - fixes "include of non-modular header inside framework module" (RNFBApp, RCTConvert.h)
+ *
+ * NOTE: Do NOT add use_modular_headers! - RNFB maintainer: "any use of modular_headers will mean support is denied"
+ * and it causes "Native module RNFBAppModule not found".
  */
 function withFirebaseModularHeaders(config) {
   return withPodfile(config, (config) => {
@@ -26,23 +28,6 @@ function withFirebaseModularHeaders(config) {
         if (rnfbResult.didMerge || rnfbResult.didClear) contents = rnfbResult.contents;
       } catch (e) {
         console.warn("[withFirebaseModularHeaders] Could not add RNFirebaseAsStaticFramework:", e.message);
-      }
-    }
-
-    // Add use_modular_headers! for Firebase Swift pods
-    if (!contents.includes("use_modular_headers!")) {
-      try {
-        const modResult = mergeContents({
-          tag: "use-modular-headers-firebase",
-          src: contents,
-          newSrc: "use_modular_headers!",
-          anchor: /use_native_modules!/,
-          offset: -1,
-          comment: "#",
-        });
-        if (modResult.didMerge || modResult.didClear) contents = modResult.contents;
-      } catch (e) {
-        console.warn("[withFirebaseModularHeaders] Could not add use_modular_headers!:", e.message);
       }
     }
 

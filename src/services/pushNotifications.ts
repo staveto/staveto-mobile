@@ -1,8 +1,17 @@
-import messaging from "@react-native-firebase/messaging";
 import { Platform, PermissionsAndroid } from "react-native";
 import { doc, setDoc } from "../lib/rnFirestore";
 import { getAuth, getFirestore, db } from "../firebase";
 import { getExtraEnv } from "../lib/env";
+import { isFirebaseAvailable } from "../lib/firebaseAvailable";
+
+function getMessaging(): ReturnType<typeof import("@react-native-firebase/messaging")["default"]> | null {
+  if (!isFirebaseAvailable()) return null;
+  try {
+    return require("@react-native-firebase/messaging").default();
+  } catch {
+    return null;
+  }
+}
 
 /** When EXPO_PUBLIC_DISABLE_PUSH=1, all messaging is disabled (test for iOS boot crash). */
 function isPushDisabled(): boolean {
@@ -33,8 +42,10 @@ function getDeviceId(): string {
  * Android 13+: PermissionsAndroid.request(POST_NOTIFICATIONS)
  */
 async function requestNotificationPermission(): Promise<boolean> {
+  const messaging = getMessaging();
+  if (!messaging) return false;
   if (Platform.OS === "ios") {
-    const authStatus = await messaging().requestPermission();
+    const authStatus = await messaging.requestPermission();
     return (
       authStatus === messaging.AuthorizationStatus.AUTHORIZED ||
       authStatus === messaging.AuthorizationStatus.PROVISIONAL
@@ -56,8 +67,8 @@ async function requestNotificationPermission(): Promise<boolean> {
  * Shows native permission dialog at first login (like camera/microphone).
  */
 export async function registerForPushNotifications(): Promise<string | null> {
-  if (isPushDisabled()) {
-    if (__DEV__) console.log("[push] Push disabled via env");
+  if (isPushDisabled() || !isFirebaseAvailable()) {
+    if (__DEV__ && isPushDisabled()) console.log("[push] Push disabled via env");
     return null;
   }
   const uid = getAuth()?.currentUser?.uid ?? null;
@@ -71,7 +82,9 @@ export async function registerForPushNotifications(): Promise<string | null> {
       return null;
     }
 
-    const token = await messaging().getToken();
+    const messaging = getMessaging();
+    if (!messaging) return null;
+    const token = await messaging.getToken();
     if (!token) {
       console.warn("[push] No FCM token received");
       return null;
@@ -104,7 +117,7 @@ export async function registerForPushNotifications(): Promise<string | null> {
  * Remove device token on logout (optional - tokens expire).
  */
 export async function removePushToken(): Promise<void> {
-  if (isPushDisabled()) return;
+  if (isPushDisabled() || !isFirebaseAvailable()) return;
   const uid = getAuth()?.currentUser?.uid ?? null;
   if (!uid) return;
   if (!getFirestore()) return;
@@ -125,11 +138,13 @@ export function setupPushNotifications(
   onTokenRefresh?: (token: string) => void,
   onNotificationOpened?: (data: Record<string, string>) => void
 ): () => void {
-  if (isPushDisabled()) {
-    if (__DEV__) console.log("[push] Push disabled via env");
+  if (isPushDisabled() || !isFirebaseAvailable()) {
+    if (__DEV__ && isPushDisabled()) console.log("[push] Push disabled via env");
     return () => {};
   }
-  const unsubscribeToken = messaging().onTokenRefresh(async (token) => {
+  const messaging = getMessaging();
+  if (!messaging) return () => {};
+  const unsubscribeToken = messaging.onTokenRefresh(async (token) => {
     const uid = getAuth()?.currentUser?.uid ?? null;
     if (!uid) return;
     if (!getFirestore()) return;
@@ -152,12 +167,12 @@ export function setupPushNotifications(
     }
   });
 
-  const unsubscribeOpened = messaging().onNotificationOpenedApp((remoteMessage) => {
+  const unsubscribeOpened = messaging.onNotificationOpenedApp((remoteMessage) => {
     const data = (remoteMessage?.data as Record<string, string>) ?? {};
     onNotificationOpened?.(data);
   });
 
-  messaging()
+  messaging
     .getInitialNotification()
     .then((remoteMessage) => {
       if (remoteMessage?.data) {

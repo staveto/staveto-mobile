@@ -1,5 +1,10 @@
-import firestore from "@react-native-firebase/firestore";
-import { getDoc as getDocModular, getDocs as getDocsModular } from "@react-native-firebase/firestore";
+import { getFirestore } from "../firebase";
+
+function firestoreInstance() {
+  const fs = getFirestore();
+  if (!fs) throw new Error("FIRESTORE_NOT_READY");
+  return fs;
+}
 
 type CollectionRef = FirebaseFirestore.CollectionReference<FirebaseFirestore.DocumentData>;
 type DocumentRef = FirebaseFirestore.DocumentReference<FirebaseFirestore.DocumentData>;
@@ -26,24 +31,24 @@ type LimitConstraint = {
 type QueryConstraint = WhereConstraint | OrderByConstraint | LimitConstraint;
 
 export function collection(_db: unknown, path: string): CollectionRef {
-  return firestore().collection(path);
+  return firestoreInstance().collection(path);
 }
 
 export function collectionGroup(_db: unknown, path: string): QueryRef {
-  return firestore().collectionGroup(path);
+  return firestoreInstance().collectionGroup(path);
 }
 
 export function doc(target: unknown, ...pathSegments: string[]): DocumentRef {
   if (typeof target === "string") {
     const path = [target, ...pathSegments].join("/");
-    return firestore().doc(path);
+    return firestoreInstance().doc(path);
   }
   if (target && typeof (target as DocumentRef).doc === "function") {
     const path = pathSegments.join("/");
     return (target as CollectionRef).doc(path);
   }
   const path = pathSegments.join("/");
-  return firestore().doc(path);
+  return firestoreInstance().doc(path);
 }
 
 export function where(fieldPath: string, opStr: FirebaseFirestore.WhereFilterOp, value: unknown): WhereConstraint {
@@ -76,14 +81,14 @@ export function getDoc(ref: DocumentRef, options?: FirebaseFirestore.GetOptions)
   if (options != null) {
     return (ref as FirebaseFirestore.DocumentReference).get(options);
   }
-  return getDocModular(ref);
+  return require("@react-native-firebase/firestore").getDoc(ref);
 }
 
 export function getDocs(ref: QueryRef | CollectionRef, options?: FirebaseFirestore.GetOptions) {
   if (options != null) {
     return (ref as FirebaseFirestore.Query).get(options);
   }
-  return getDocsModular(ref);
+  return require("@react-native-firebase/firestore").getDocs(ref);
 }
 
 export function addDoc(ref: CollectionRef, data: FirebaseFirestore.DocumentData) {
@@ -103,20 +108,33 @@ export function deleteDoc(ref: DocumentRef) {
 }
 
 export function writeBatch(_db?: unknown) {
-  return firestore().batch();
+  return firestoreInstance().batch();
 }
 
 export function runTransaction<T>(
   updateFunction: (transaction: FirebaseFirestore.Transaction) => Promise<T>
 ): Promise<T> {
-  return firestore().runTransaction(updateFunction);
+  return firestoreInstance().runTransaction(updateFunction);
 }
 
 export function serverTimestamp() {
-  return firestore.FieldValue.serverTimestamp();
+  const { firebase } = require("@react-native-firebase/app");
+  return firebase.firestore.FieldValue.serverTimestamp();
 }
 
-export const Timestamp = firestore.Timestamp;
+let _TimestampClass: FirebaseFirestore.Timestamp | null = null;
+function getTimestampClass(): FirebaseFirestore.Timestamp {
+  if (!_TimestampClass) _TimestampClass = firestoreInstance().Timestamp;
+  return _TimestampClass;
+}
+export const Timestamp = new Proxy(function Timestamp() {} as unknown as FirebaseFirestore.Timestamp, {
+  get(_, prop) {
+    return (getTimestampClass() as Record<string, unknown>)[prop as string];
+  },
+  construct(_target, args) {
+    return new (getTimestampClass() as unknown as new (...a: unknown[]) => FirebaseFirestore.Timestamp)(...args);
+  },
+});
 
 export type Unsubscribe = () => void;
 

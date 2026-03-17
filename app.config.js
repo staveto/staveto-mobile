@@ -77,6 +77,7 @@ module.exports = ({ config }) => {
       ["expo-build-properties", { ios: { useFrameworks: "static", forceStaticLinking: ["RNFBApp", "RNFBAuth", "RNFBFirestore", "RNFBFunctions", "RNFBMessaging", "RNFBStorage", "RNFBAnalytics"], buildReactNativeFromSource: true } }],
       "./plugins/withFirebaseModularHeaders",
       "@react-native-community/datetimepicker",
+      "expo-quick-actions",
     ],
 
     extra: {

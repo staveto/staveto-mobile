@@ -89,15 +89,20 @@ function convertTimestamp(ts: unknown): string | undefined {
   return undefined;
 }
 
-function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ProblemDoc {
+function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ProblemDoc | null {
   const d = docSnap.data();
+  if (!d || typeof d !== "object") {
+    if (__DEV__) console.warn(`[problems] toDoc: document ${docSnap.id} has no/invalid data, skipping`);
+    return null;
+  }
   const photosRaw = (d.photos as unknown[]) ?? [];
-  const photos: ProblemPhoto[] = photosRaw.map((p: any) => ({
-    path: p?.path ?? "",
-    downloadURL: p?.downloadURL,
-    width: p?.width,
-    height: p?.height,
-  }));
+  const photos: ProblemPhoto[] = Array.isArray(photosRaw)
+    ? photosRaw.map((p: unknown) =>
+        p && typeof p === "object"
+          ? { path: String((p as { path?: string }).path ?? ""), downloadURL: (p as { downloadURL?: string }).downloadURL, width: (p as { width?: number }).width, height: (p as { height?: number }).height }
+          : { path: "" }
+      )
+    : [];
   return {
     id: docSnap.id,
     projectId: (d.projectId as string) ?? "",
@@ -124,7 +129,10 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     archivedByUid: (d.archivedByUid as string) ?? null,
     photos,
     locationHint: (d.locationHint as string) ?? null,
-    audit: d.audit as { lastStatusByUid?: string; lastStatusAt?: string } | undefined,
+    audit:
+      d.audit && typeof d.audit === "object"
+        ? { lastStatusByUid: (d.audit as { lastStatusByUid?: string }).lastStatusByUid, lastStatusAt: (d.audit as { lastStatusAt?: string }).lastStatusAt }
+        : undefined,
     attachments: (d.attachments as string[]) ?? undefined,
     audioAttachmentId: (d.audioAttachmentId as string) ?? null,
     audioUrl: (d.audioUrl as string) ?? null,
@@ -168,7 +176,16 @@ export async function listProblems(
   const c = collection(db, paths.projectProblems(projectId));
   const q = query(c, orderBy("createdAt", "desc"));
   const snap = await getDocsSmart(q);
-  let list = snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) }));
+  let list = snap.docs
+    .map((d) => {
+      try {
+        return toDoc({ id: d.id, data: d.data.bind(d) });
+      } catch (err) {
+        if (__DEV__) console.warn(`[problems] toDoc failed for doc ${d.id}:`, err);
+        return null;
+      }
+    })
+    .filter((p): p is ProblemDoc => p != null);
 
   if (filters?.status) {
     const statuses = Array.isArray(filters.status) ? filters.status : [filters.status];

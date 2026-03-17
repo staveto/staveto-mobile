@@ -53,8 +53,12 @@ export type ProjectDoc = {
 
 export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
 
-function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ProjectDoc {
+function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ProjectDoc | null {
   const d = docSnap.data();
+  if (!d || typeof d !== "object") {
+    if (__DEV__) console.warn(`[projects] toDoc: document ${docSnap.id} has no/invalid data, skipping`);
+    return null;
+  }
   let createdAt: string | undefined;
   const raw = d.createdAt;
   if (raw) {
@@ -166,17 +170,26 @@ export async function listProjectPhases(projectId: string): Promise<ProjectPhase
     const snap = await getDocsSmart(q);
     console.log(`[projects] Found ${snap.docs.length} phases in Firestore`);
     
-    const phases = snap.docs.map((d) => {
-      const x = d.data();
-      const phase = {
-        id: d.id,
-        name: (x.name as string) ?? "",
-        description: x.description as string | undefined,
-        order: (x.order as number) ?? 0,
-      };
-      console.log(`[projects] Phase: id=${phase.id}, name="${phase.name}", order=${phase.order}`);
-      return phase;
-    });
+    const phases = snap.docs
+      .map((d) => {
+        try {
+          const x = d.data();
+          if (!x || typeof x !== "object") {
+            if (__DEV__) console.warn(`[projects] listProjectPhases: doc ${d.id} has no data, skipping`);
+            return null;
+          }
+          return {
+            id: d.id,
+            name: (x.name as string) ?? "",
+            description: x.description as string | undefined,
+            order: (x.order as number) ?? 0,
+          };
+        } catch (err) {
+          if (__DEV__) console.warn(`[projects] listProjectPhases: failed for doc ${d.id}:`, err);
+          return null;
+        }
+      })
+      .filter((p): p is { id: string; name: string; description?: string; order: number } => p != null);
     return phases;
   } catch (error: any) {
     console.error(`[projects] listProjectPhases error:`, error);
@@ -236,7 +249,8 @@ export async function getProject(projectId: string): Promise<ProjectDoc | null> 
       // If rules allowed access, we can return the project
     }
     
-    return toDoc({ id: docSnap.id, data: docSnap.data.bind(docSnap) });
+    const project = toDoc({ id: docSnap.id, data: docSnap.data.bind(docSnap) });
+    return project ?? null;
   } catch (error: any) {
     console.error(`[projects] getProject error:`, error);
     const errorCode = error.code || '';
@@ -296,7 +310,9 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
       console.log(`[projects] Project ${doc.id}: ownerId="${docOwnerId}", match? ${docOwnerId === actualOwnerId ? 'YES ✅' : 'NO ❌'}`);
     });
 
-    const ownerProjects = ownerSnap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) })) as ProjectDoc[];
+    const ownerProjects = ownerSnap.docs
+      .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }))
+      .filter((p): p is ProjectDoc => p != null);
 
     // Include projects shared via invite claim (projectRefs) and via membership (projects/*/members).
     let memberProjectIds = new Set<string>();
@@ -351,7 +367,8 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
       try {
         const snap = await getDocSmart(doc(db, COLLECTION, projectId), smartOpts);
         if (!snap.exists()) continue;
-        const p = toDoc({ id: snap.id, data: snap.data.bind(snap) }) as ProjectDoc;
+        const p = toDoc({ id: snap.id, data: snap.data.bind(snap) });
+        if (!p) continue;
         p.isSharedToMe = true;
         memberProjects.push(p);
       } catch (error) {

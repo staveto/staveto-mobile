@@ -7,11 +7,12 @@ import { TimeDailyProtocolScreen } from "../screens/TimeDailyProtocolScreen";
 import { ProjectOverviewScreen } from "../screens/ProjectOverviewScreen";
 import { ProjectMembersScreen } from "../screens/ProjectMembersScreen";
 import { TasksScreen } from "../screens/TasksScreen";
+import { QuickNotesInboxScreen } from "../screens/QuickNotesInboxScreen";
 import { useI18n } from "../i18n/I18nContext";
 
 const Stack = createNativeStackNavigator();
 
-/** Home tab stack: HomeScreen → ExpensesKpiScreen → AttendanceReportScreen → ProjectOverview → ProjectMembers → Tasks. Tab bar stays visible. */
+/** Home tab stack: HomeScreen → ExpensesKpiScreen → AttendanceReportScreen → ProjectOverview → ProjectMembers → Tasks → QuickNotesInbox. Tab bar stays visible. */
 export function HomeStack() {
   const { t } = useI18n();
   return (
@@ -23,6 +24,7 @@ export function HomeStack() {
       <Stack.Screen name="ProjectOverview" component={ProjectOverviewScreen} />
       <Stack.Screen name="ProjectMembers" component={ProjectMembersScreen} />
       <Stack.Screen name="Tasks" component={TasksScreen} options={{ headerShown: true, title: t("nav.tasks") }} />
+      <Stack.Screen name="QuickNotesInbox" component={QuickNotesInboxScreen} options={{ headerShown: false }} />
     </Stack.Navigator>
   );
 }

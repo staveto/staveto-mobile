@@ -57,9 +57,13 @@ export type TaskDoc = {
 function toDoc(
   docSnap: { id: string; data: () => Record<string, unknown> },
   projectId: string
-): TaskDoc {
+): TaskDoc | null {
   const d = docSnap.data();
-  
+  if (!d || typeof d !== "object") {
+    if (__DEV__) console.warn(`[tasks] toDoc: document ${docSnap.id} has no/invalid data, skipping`);
+    return null;
+  }
+
   // Convert Firestore Timestamp to ISO string
   const convertTimestamp = (ts: unknown): string | undefined => {
     if (!ts) return undefined;
@@ -102,12 +106,21 @@ function toDoc(
     serviceRuleId: (d.serviceRuleId as string | null) ?? undefined,
     checklist: (d.checklist as Array<{ id: string; title: string; done: boolean }>) ?? undefined,
     // subtasks: prefer from doc, else map from checklist (backward compat)
+    // Avoid spreading Firestore objects (can trigger "Cannot convert undefined value to object")
     subtasks: (() => {
-      const raw = d.subtasks as Array<{ id: string; title: string; done: boolean; order: number }> | undefined;
-      if (raw && raw.length > 0) return raw;
-      const checklist = d.checklist as Array<{ id: string; title: string; done: boolean }> | undefined;
-      if (checklist && checklist.length > 0) {
-        return checklist.map((c, i) => ({ ...c, order: i }));
+      const raw = d.subtasks as Array<{ id?: string; title?: string; done?: boolean; order?: number }> | undefined;
+      if (Array.isArray(raw) && raw.length > 0) {
+        const mapped = raw
+          .map((c) => (c && typeof c === "object" ? { id: String(c.id ?? ""), title: String(c.title ?? ""), done: !!c.done, order: c.order ?? 0 } : null))
+          .filter((x): x is { id: string; title: string; done: boolean; order: number } => x != null);
+        return mapped.length > 0 ? mapped : undefined;
+      }
+      const checklist = d.checklist as Array<{ id?: string; title?: string; done?: boolean }> | undefined;
+      if (Array.isArray(checklist) && checklist.length > 0) {
+        const mapped = checklist
+          .map((c, i) => (c && typeof c === "object" ? { id: String(c.id ?? ""), title: String(c.title ?? ""), done: !!c.done, order: i } : null))
+          .filter((x): x is { id: string; title: string; done: boolean; order: number } => x != null);
+        return mapped.length > 0 ? mapped : undefined;
       }
       return undefined;
     })(),
@@ -303,6 +316,10 @@ export async function createTask(
  * Legacy tasks (isActive === undefined) are treated as active
  */
 export async function listTasksByProject(projectId: string): Promise<TaskDoc[]> {
+  if (!projectId || typeof projectId !== "string") {
+    console.warn("[tasks] listTasksByProject: invalid projectId, returning empty array");
+    return [];
+  }
   console.log(`[tasks] listTasksByProject called for projectId: ${projectId}`);
   
   // DEBUG: Check auth state
@@ -325,7 +342,15 @@ export async function listTasksByProject(projectId: string): Promise<TaskDoc[]> 
     console.log(`[tasks] Found ${snap.docs.length} tasks in Firestore (before filtering)`);
     
     const list = snap.docs
-      .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }, projectId))
+      .map((d) => {
+        try {
+          return toDoc({ id: d.id, data: d.data.bind(d) }, projectId);
+        } catch (err) {
+          if (__DEV__) console.warn(`[tasks] toDoc failed for doc ${d.id}:`, err);
+          return null;
+        }
+      })
+      .filter((task): task is TaskDoc => task != null)
       .filter((task) => {
         // Filter: isActive !== false (include true and undefined/legacy)
         return task.isActive !== false;

@@ -143,16 +143,21 @@ export function LoginScreen() {
         autoCapitalize="none"
         autoCorrect={false}
       />
-      <TextInput
-        style={[styles.input, { marginTop: spacing.sm }]}
-        value={password}
-        onChangeText={setPassword}
-        placeholder={t("register.placeholderPassword")}
-        placeholderTextColor={colors.textMuted}
-        secureTextEntry={true}
-        autoCapitalize="none"
-        autoCorrect={false}
-      />
+      <View style={styles.passwordContainer}>
+        <TextInput
+          style={styles.passwordInput}
+          value={password}
+          onChangeText={setPassword}
+          placeholder={t("register.placeholderPassword")}
+          placeholderTextColor={colors.textMuted}
+          secureTextEntry={!showPassword}
+          autoCapitalize="none"
+          autoCorrect={false}
+        />
+        <TouchableOpacity style={styles.passwordToggle} onPress={() => setShowPassword((v) => !v)} accessibilityLabel={showPassword ? "Hide password" : "Show password"}>
+          <Ionicons name={showPassword ? "eye-off-outline" : "eye-outline"} size={22} color={colors.textMuted} />
+        </TouchableOpacity>
+      </View>
       <TouchableOpacity style={styles.forgotLink} onPress={onForgotPassword}>
         <Text style={styles.forgotLinkText}>{t("login.forgotPassword")}</Text>
       </TouchableOpacity>

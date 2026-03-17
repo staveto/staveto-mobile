@@ -24,16 +24,35 @@ export type DashboardViewModel = {
  * Load dashboard data for a user
  * @param forceServerRead - When true, bypasses Firestore cache (use after sync to get fresh sharedWithCount)
  */
+const EMPTY_DASHBOARD: DashboardViewModel = {
+  projects: [],
+  todayTasks: [],
+  kpis: { openCount: 0, doneTodayCount: 0, blockedCount: 0, expensesMonthSum: 0, expensesTotalSum: 0, hasExpensesAccess: false },
+  projectStats: new Map(),
+  timeTrackingProjectIds: [],
+};
+
 export async function loadDashboardData(ownerId: string, options?: { forceServerRead?: boolean }): Promise<DashboardViewModel> {
   if (!ownerId) {
     throw new Error('Musíte byť prihlásený na načítanie dashboard dát.');
   }
 
+  try {
+    return await loadDashboardDataInternal(ownerId, options);
+  } catch (error: unknown) {
+    console.error("[dashboard] loadDashboardData failed:", error);
+    return EMPTY_DASHBOARD;
+  }
+}
+
+async function loadDashboardDataInternal(ownerId: string, options?: { forceServerRead?: boolean }): Promise<DashboardViewModel> {
   // Load projects
   const projects = await projectsService.listMyProjects(ownerId, { forceServerRead: options?.forceServerRead });
 
-  // Load all tasks from all projects in parallel
-  const allTasksPromises = projects.map(async (project) => {
+  // Load all tasks from all projects in parallel (skip projects without valid id)
+  const allTasksPromises = projects
+    .filter((p) => p?.id)
+    .map(async (project) => {
     try {
       const tasks = await tasksService.listTasksByProject(project.id);
       return tasks.map(task => ({ ...task, projectId: project.id }));

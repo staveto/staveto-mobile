@@ -67,9 +67,13 @@ export type ExpenseDoc = {
   travel?: TravelExpenseData;
 };
 
-function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ExpenseDoc {
+function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ExpenseDoc | null {
   const d = docSnap.data();
-  
+  if (!d || typeof d !== "object") {
+    if (__DEV__) console.warn(`[expenses] toDoc: document ${docSnap.id} has no/invalid data, skipping`);
+    return null;
+  }
+
   const convertTimestamp = (ts: unknown): string | undefined => {
     if (!ts) return undefined;
     if (ts instanceof Timestamp) {
@@ -316,7 +320,9 @@ export async function listExpensesByProject(projectId: string): Promise<ExpenseD
   const c = collection(db, paths.projectExpenses(projectId));
   const q = query(c, orderBy("date", "desc"));
   const snap = await getDocs(q);
-  const list = snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) }));
+  const list = snap.docs
+    .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }))
+    .filter((e): e is ExpenseDoc => e != null);
   return list;
 }
 

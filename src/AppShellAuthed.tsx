@@ -6,6 +6,7 @@ import type { NavigationState } from "@react-navigation/native";
 import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { AuthProvider } from "./context/AuthContext";
+import { QuickNoteProvider } from "./context/QuickNoteContext";
 import { IOS_SKIP_BOTTOMSHEET } from "./lib/iosDiagnostic";
 import { UnreadCountProvider } from "./context/UnreadCountContext";
 import { RootNavigator } from "./navigation/RootNavigator";
@@ -64,11 +65,13 @@ export default function AppShellAuthed() {
       }}
     >
       <AuthProvider>
-        <UnreadCountProvider>
-          <PushNotificationHandler />
+        <QuickNoteProvider>
+          <UnreadCountProvider>
+            <PushNotificationHandler />
           <StatusBar style="light" />
-          <RootNavigator />
-        </UnreadCountProvider>
+            <RootNavigator />
+          </UnreadCountProvider>
+        </QuickNoteProvider>
       </AuthProvider>
     </NavigationContainer>
   );

@@ -55,6 +55,9 @@ import { hasShownFirstProjectPrompt, markFirstProjectPromptShown } from "../util
 import { KpiCardComponent } from "../components/KpiCard";
 import type { KpiCard } from "../helpers/kpi/getKpiCards";
 import { CurrencyDropdown } from "../components/CurrencyDropdown";
+import { QuickNoteModal } from "../components/QuickNoteModal";
+import * as quickNotesService from "../services/quickNotes";
+import { useQuickNoteContext } from "../context/QuickNoteContext";
 
 // Conditional imports for image/document picker
 let ImagePicker: typeof import('expo-image-picker') | null = null;
@@ -398,6 +401,14 @@ export function HomeScreen() {
   const [activeTimer, setActiveTimer] = useState<timeTracking.ActiveTimer | null>(null);
   const [timerTick, setTimerTick] = useState(0);
   const [monthlyMinutes, setMonthlyMinutes] = useState<number>(0);
+  const [showQuickNoteModal, setShowQuickNoteModal] = useState(false);
+  const [todayNotesCount, setTodayNotesCount] = useState(0);
+  const quickNoteCtx = useQuickNoteContext();
+
+  useEffect(() => {
+    const unregister = quickNoteCtx?.registerOpenQuickNote(() => setShowQuickNoteModal(true));
+    return () => unregister?.();
+  }, [quickNoteCtx]);
 
   useEffect(() => {
     loadHomeLayout().then((layout) => setHomeLayout(layout));
@@ -438,6 +449,7 @@ export function HomeScreen() {
     useCallback(() => {
       if (!user?.id) return;
       refreshActiveTimer();
+      quickNotesService.getTodayNotesCount(user.id).then(setTodayNotesCount);
       timeTracking.checkAutoStopOnAppOpen().then((entry) => {
         if (entry) {
           setActiveTimer(null);
@@ -598,12 +610,15 @@ export function HomeScreen() {
           }
         }
       }
-      const [data, monthlyMins] = await Promise.all([
-        dashboardService.loadDashboardData(orgId, { forceServerRead: isRefresh }),
-        user?.id
-          ? timeTracking.getMonthlyMinutes(user.id, new Date().getFullYear(), new Date().getMonth() + 1)
-          : Promise.resolve(0),
-      ]);
+      const data = await dashboardService.loadDashboardData(orgId, { forceServerRead: isRefresh });
+      let monthlyMins = 0;
+      try {
+        monthlyMins = user?.id
+          ? await timeTracking.getMonthlyMinutes(user.id, new Date().getFullYear(), new Date().getMonth() + 1)
+          : 0;
+      } catch (e) {
+        console.warn("[HomeScreen] getMonthlyMinutes failed:", e);
+      }
       setMonthlyMinutes(monthlyMins);
 
       // Ensure overdue notifications exist (for tasks past due date)
@@ -614,27 +629,37 @@ export function HomeScreen() {
       }
 
       // Enrich today tasks with project names and phase names
-      // Filter out tasks from BUILD projects
-      const enrichedTasks = await Promise.all(
-        data.todayTasks.map(async (task) => {
-          const project = data.projects.find((p) => p.id === task.projectId);
-          let phaseName: string | undefined;
-          if (task.phaseId && project) {
+      let enrichedTasks: typeof data.todayTasks = [];
+      try {
+        enrichedTasks = await Promise.all(
+          data.todayTasks.map(async (task) => {
             try {
-              const phases = await projectsService.listProjectPhases(project.id);
-              const phase = phases.find((p) => p.id === task.phaseId);
-              phaseName = phase?.name;
-            } catch (error) {
-              // Ignore phase loading errors
+              const project = data.projects.find((p) => p.id === task.projectId);
+              let phaseName: string | undefined;
+              if (task?.phaseId && project) {
+                try {
+                  const phases = await projectsService.listProjectPhases(project.id);
+                  const phase = phases.find((p) => p.id === task.phaseId);
+                  phaseName = phase?.name;
+                } catch {
+                  // Ignore phase loading errors
+                }
+              }
+              return {
+                ...(task && typeof task === "object" ? task : {}),
+                projectName: project?.name || "Unknown",
+                phaseName,
+              };
+            } catch (err) {
+              if (__DEV__) console.warn("[HomeScreen] enrich task failed:", err);
+              return { ...task, projectName: "Unknown", phaseName: undefined };
             }
-          }
-          return {
-            ...task,
-            projectName: project?.name || "Unknown",
-            phaseName,
-          };
-        })
-      );
+          })
+        );
+      } catch (err) {
+        console.warn("[HomeScreen] enrichTasks failed, using raw:", err);
+        enrichedTasks = data.todayTasks.map((t) => ({ ...t, projectName: "Unknown", phaseName: undefined }));
+      }
 
       setDashboardData({
         projects: data.projects,
@@ -1217,10 +1242,6 @@ export function HomeScreen() {
   );
 
   const startFabFlow = useCallback(() => {
-    if (!dashboardData || dashboardData.projects.length === 0) {
-      goToProjects({ openNew: true });
-      return;
-    }
     setPendingAction(null);
     setPendingExpenseType(null);
     setActionProjectId(null);
@@ -1228,7 +1249,7 @@ export function HomeScreen() {
     setShowExpenseTypeModal(false);
     setShowActionSheet(false);
     setShowProjectSelector(true);
-  }, [dashboardData, goToProjects]);
+  }, []);
 
   const handleTaskClick = useCallback(
     (task: TaskDoc & { projectName: string }) => {
@@ -1612,7 +1633,44 @@ export function HomeScreen() {
                 <Ionicons name="close" size={24} color="#FFFFFF" />
               </TouchableOpacity>
             </View>
+            <View style={styles.quickNoteSection}>
+              <TouchableOpacity
+                style={styles.quickNoteRow}
+                onPress={() => {
+                  setShowProjectSelector(false);
+                  setShowQuickNoteModal(true);
+                }}
+              >
+                <Ionicons name="create-outline" size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
+                <Text style={styles.quickNoteRowText}>{t("quickNotes.add") || "Rýchly zápis"}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.quickNoteRow}
+                onPress={() => {
+                  setShowProjectSelector(false);
+                  (stackNav as { navigate: (a: string, b?: object) => void }).navigate("QuickNotesInbox");
+                }}
+              >
+                <Ionicons name="folder-open-outline" size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
+                <Text style={styles.quickNoteRowText}>
+                  {t("quickNotes.viewInbox") || "Zobraziť zápisky"}
+                  {todayNotesCount > 0 ? ` (${todayNotesCount})` : ""}
+                </Text>
+              </TouchableOpacity>
+            </View>
             <ScrollView style={styles.projectList}>
+              {(!dashboardData?.projects || dashboardData.projects.length === 0) && (
+                <TouchableOpacity
+                  style={styles.projectItem}
+                  onPress={() => {
+                    setShowProjectSelector(false);
+                    goToProjects({ openNew: true });
+                  }}
+                >
+                  <Ionicons name="add-circle-outline" size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
+                  <Text style={styles.projectItemText}>{t("home.createFirstProject") || "Vytvoriť prvý projekt"}</Text>
+                </TouchableOpacity>
+              )}
               {dashboardData?.projects.map((project) => (
                 <TouchableOpacity
                   key={project.id}
@@ -2115,6 +2173,19 @@ export function HomeScreen() {
           }
         }}
         t={t}
+      />
+      <QuickNoteModal
+        visible={showQuickNoteModal}
+        onClose={() => setShowQuickNoteModal(false)}
+        onSaved={() => {
+          if (user?.id) quickNotesService.getTodayNotesCount(user.id).then(setTodayNotesCount);
+        }}
+        onSubmit={async (text) => {
+          if (!user?.id) return;
+          await quickNotesService.addQuickNote(user.id, text);
+        }}
+        placeholder={t("quickNotes.placeholder") || "Čo si chcete zapamätať?"}
+        saveLabel={t("quickNotes.save") || "Uložiť"}
       />
     </View>
   );
@@ -3115,6 +3186,27 @@ const styles = StyleSheet.create({
     fontSize: 18,
     fontWeight: "600",
     color: "#FFFFFF",
+  },
+  quickNoteSection: {
+    marginBottom: spacing.md,
+    paddingBottom: spacing.md,
+    borderBottomWidth: 1,
+    borderBottomColor: "rgba(255,255,255,0.2)",
+  },
+  quickNoteRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    padding: spacing.md,
+    backgroundColor: colors.background,
+    borderRadius: radius,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  quickNoteRowText: {
+    fontSize: 16,
+    color: "#FFFFFF",
+    flex: 1,
   },
   projectList: {
     maxHeight: 400,

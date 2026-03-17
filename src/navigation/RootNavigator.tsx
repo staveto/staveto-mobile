@@ -40,6 +40,7 @@ import { ProjectTeamScreen } from "../screens/projects/ProjectTeamScreen";
 import { ProjectInvitesScreen } from "../screens/ProjectInvitesScreen";
 import { ProblemsListScreen } from "../screens/ProblemsListScreen";
 import { CreateProblemScreen } from "../screens/CreateProblemScreen";
+import { QuickActionsSetup } from "../components/QuickActionsSetup";
 
 // Lazy-load ProblemDetailScreen (react-native-maps) – speeds up initial app load
 const ProblemDetailScreenLazy = React.lazy(() =>
@@ -264,6 +265,7 @@ export function RootNavigator() {
 
   return (
     <View style={{ flex: 1 }}>
+      <QuickActionsSetup />
       <OfflineBanner />
       <Stack.Navigator
         screenOptions={{

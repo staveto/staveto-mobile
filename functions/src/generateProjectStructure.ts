@@ -104,6 +104,7 @@ export const generateProjectStructure = onCall(
       engineType?: string;
       workType?: string;
       documentStoragePaths?: string[];
+      projectDetails?: string;
     };
     const raw = typeof data.projectBrief === "string" ? data.projectBrief.trim() : "";
     if (!raw) {
@@ -112,6 +113,7 @@ export const generateProjectStructure = onCall(
     const projectBrief = raw.slice(0, MAX_BRIEF_LEN);
     const engineType = typeof data.engineType === "string" ? data.engineType.trim() : "";
     const workType = typeof data.workType === "string" ? data.workType.trim() : "";
+    const projectDetails = typeof data.projectDetails === "string" ? data.projectDetails.trim().slice(0, 400) : "";
     const docPaths = Array.isArray(data.documentStoragePaths)
       ? data.documentStoragePaths
           .filter((p): p is string => typeof p === "string" && p.length > 0)
@@ -158,7 +160,10 @@ export const generateProjectStructure = onCall(
       docPaths.length > 0
         ? "\nThe user has attached technical documents (PDF/images). Use them to refine the plan: extract specs, dimensions, or requirements mentioned in the documents."
         : "";
-    const userPrompt = `Create a project plan for review. User will approve before creation.${contextStr}${docHint}\nUser brief: ${projectBrief}`;
+    const detailsStr = projectDetails
+      ? `\nUser-provided project details: ${projectDetails}\n`
+      : "";
+    const userPrompt = `Create a project plan for review. User will approve before creation.${contextStr}${detailsStr}${docHint}\nUser brief: ${projectBrief}`;
 
     const parts: Array<{ text?: string; inlineData?: { mimeType: string; data: string } }> = [
       { text: `${SYSTEM_PROMPT}\n\n${userPrompt}` },

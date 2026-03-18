@@ -141,8 +141,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (dn && !user.name) user = { ...user, name: dn };
             if (!user.name && fn && ln) user = { ...user, name: `${fn} ${ln}`.trim() };
           }
-        } catch {
+        } catch (e) {
           setLastBootStep("user_doc_error");
+          if (__DEV__) console.warn("[auth] load user doc failed:", e);
         }
         bootStep("revenuecat_configure_before", "H6", {}).catch(() => {});
         try {

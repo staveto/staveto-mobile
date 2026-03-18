@@ -52,6 +52,7 @@ import { getKpiCardsWithTasks } from "../helpers/kpi/getKpiCards";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
 import { logEventSafe } from "../services/analytics";
 import { hasShownFirstProjectPrompt, markFirstProjectPromptShown } from "../utils/firstProjectPrompt";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { KpiCardComponent } from "../components/KpiCard";
 import type { KpiCard } from "../helpers/kpi/getKpiCards";
 import { CurrencyDropdown } from "../components/CurrencyDropdown";
@@ -286,6 +287,7 @@ export function HomeScreen() {
   const { width: windowWidth } = useWindowDimensions();
   const { t } = useI18n();
   const { user, orgId } = useAuth();
+  const { isOnline } = useOnlineStatus();
   const [dashboardData, setDashboardData] = useState<DashboardViewModel | null>(null);
   const [allTasks, setAllTasks] = useState<TaskDoc[]>([]);
   const [liveRows, setLiveRows] = useState<LiveProjectRow[]>([]);
@@ -817,6 +819,7 @@ export function HomeScreen() {
   useFocusEffect(
     useCallback(() => {
       loadDashboard(false);
+      if (isOnline) loadDashboard(true);
       setCalendarRefreshTrigger((prev) => prev + 1);
       (async () => {
         await trackPaywallEvent("app_opened");
@@ -826,7 +829,7 @@ export function HomeScreen() {
           // ignore
         }
       })();
-    }, [loadDashboard, navigation, user?.billing])
+    }, [loadDashboard, navigation, user?.billing, isOnline])
   );
 
   // Save last used project ID

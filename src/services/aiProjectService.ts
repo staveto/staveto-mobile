@@ -33,6 +33,8 @@ export interface GenerateProjectStructureOptions {
   workType?: string | null;
   /** Storage paths of uploaded technical documents (PDF, images) for AI context */
   documentStoragePaths?: string[];
+  /** User-provided details: roof type, area, floor count, etc. */
+  projectDetails?: string;
 }
 
 export interface AiDraftDocument {
@@ -110,6 +112,7 @@ export async function generateProjectStructureWithAI(
       engineType?: string;
       workType?: string;
       documentStoragePaths?: string[];
+      projectDetails?: string;
     },
     { plan: unknown; raw?: string }
   >(functions, url);
@@ -121,6 +124,7 @@ export async function generateProjectStructureWithAI(
       engineType: options?.engineType,
       workType: options?.workType,
       hasDocs: (options?.documentStoragePaths?.length ?? 0) > 0,
+      hasDetails: !!options?.projectDetails,
     });
   }
 
@@ -133,6 +137,7 @@ export async function generateProjectStructureWithAI(
       documentStoragePaths: options?.documentStoragePaths?.length
         ? options.documentStoragePaths
         : undefined,
+      projectDetails: options?.projectDetails?.trim() || undefined,
     });
   } catch (e: unknown) {
     const err = e as { code?: string; message?: string; details?: unknown };

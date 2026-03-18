@@ -31,8 +31,14 @@ import type { AiProjectPlan } from "../lib/aiProjectSchema";
 import type { ProjectEngineType, WorkType } from "../lib/projectEnums";
 
 let DocumentPicker: typeof import("expo-document-picker") | null = null;
+let ImagePicker: typeof import("expo-image-picker") | null = null;
 try {
   DocumentPicker = require("expo-document-picker");
+} catch {
+  // optional
+}
+try {
+  ImagePicker = require("expo-image-picker");
 } catch {
   // optional
 }
@@ -60,15 +66,66 @@ function getScopeLabel(scope: string, t: (key: string) => string): string {
   return translated !== key ? translated : scope;
 }
 
+function getAiErrorMessage(code: string | undefined, message: string, t: (key: string) => string): string {
+  const codeLower = (code ?? "").toLowerCase();
+  const msgLower = (message ?? "").toLowerCase();
+  if (!message && !code) return t("createProject.ai.error") || "AI nemohla vytvoriť plán. Skús znova alebo vytvor manuálne.";
+  if (codeLower === "unauthenticated" || msgLower.includes("authentication required")) {
+    return t("createProject.ai.errorAuth") || "Musíte byť prihlásený. Skúste sa odhlásiť a znova prihlásiť.";
+  }
+  if (codeLower === "failed-precondition" || msgLower.includes("not configured") || msgLower.includes("api key")) {
+    return t("createProject.ai.errorNotConfigured") || "AI služba nie je nakonfigurovaná. Kontaktujte podporu.";
+  }
+  if (msgLower.includes("network") || msgLower.includes("timeout") || msgLower.includes("slabé pripojenie")) {
+    return t("createProject.ai.errorNetwork") || "Slabé pripojenie alebo žiadny internet. Skúste znova.";
+  }
+  return message && message.length < 120 ? message : (t("createProject.ai.error") || "AI nemohla vytvoriť plán. Skús znova alebo vytvor manuálne.");
+}
+
 export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType, workType }: Props) {
   const { t } = useI18n();
   const [step, setStep] = useState<Step>("brief");
   const [brief, setBrief] = useState("");
   const [documents, setDocuments] = useState<AiDraftDocument[]>([]);
+  const [roofType, setRoofType] = useState("");
+  const [areaM2, setAreaM2] = useState("");
+  const [floorCount, setFloorCount] = useState("");
   const [plan, setPlan] = useState<AiProjectPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
+  /** Raw error for dev debugging (code + message) */
+  const [rawError, setRawError] = useState<{ code?: string; message: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingDocs, setUploadingDocs] = useState(false);
+
+  const pickPhoto = async () => {
+    if (!ImagePicker) {
+      Alert.alert(t("common.error"), t("createProject.ai.imagePickerNotInstalled"));
+      return;
+    }
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(t("common.error"), t("createProject.ai.photoPermissionDenied"));
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsMultipleSelection: true,
+        quality: 0.8,
+      });
+      if (!result.canceled && result.assets?.length) {
+        const newDocs = result.assets.map((asset, i) => ({
+          localUri: asset.uri,
+          fileName: asset.fileName ?? `foto_${Date.now()}_${i}.jpg`,
+          mimeType: asset.mimeType ?? "image/jpeg",
+        }));
+        setDocuments((prev) => [...prev, ...newDocs]);
+      }
+    } catch (err) {
+      console.error("[CreateProjectAIFlow] Photo pick error:", err);
+      Alert.alert(t("common.error"), t("createProject.ai.photoPickFailed"));
+    }
+  };
 
   const pickDocument = async () => {
     if (!DocumentPicker) {
@@ -77,18 +134,14 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
     }
     try {
       const result = await DocumentPicker.getDocumentAsync({
-        type: ["application/pdf", "image/*"],
+        type: ["application/pdf"],
         copyToCacheDirectory: true,
       });
       const asset = result?.assets?.[0];
       if (!result?.canceled && asset?.uri) {
         const mimeType = asset.mimeType ?? "application/pdf";
-        const fileName =
-          asset.name ?? asset.fileName ?? `dokument_${Date.now()}.${mimeType.includes("pdf") ? "pdf" : "jpg"}`;
-        setDocuments((prev) => [
-          ...prev,
-          { localUri: asset.uri, fileName, mimeType },
-        ]);
+        const fileName = asset.name ?? asset.fileName ?? `dokument_${Date.now()}.pdf`;
+        setDocuments((prev) => [...prev, { localUri: asset.uri, fileName, mimeType }]);
       }
     } catch (err) {
       console.error("[CreateProjectAIFlow] Document pick error:", err);
@@ -108,6 +161,7 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
     }
 
     setError(null);
+    setRawError(null);
     setStep("generating");
 
     try {
@@ -122,10 +176,17 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
         setUploadingDocs(false);
       }
 
+      const details: string[] = [];
+      if (roofType.trim()) details.push(`${t("createProject.ai.roofType")}: ${roofType.trim()}`);
+      if (areaM2.trim()) details.push(`${t("createProject.ai.areaM2")}: ${areaM2.trim()}`);
+      if (floorCount.trim()) details.push(`${t("createProject.ai.floorCount")}: ${floorCount.trim()}`);
+      const projectDetails = details.length > 0 ? details.join("; ") : undefined;
+
       const result = await generateProjectStructureWithAI(trimmed, {
         engineType,
         workType,
         documentStoragePaths: documentStoragePaths.length > 0 ? documentStoragePaths : undefined,
+        projectDetails,
       });
       setPlan(result);
       setStep("preview");
@@ -135,7 +196,8 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
       if (__DEV__) {
         console.error("[CreateProjectAIFlow] AI generation failed:", { code, message: msg, error: e });
       }
-      setError(t("createProject.ai.error"));
+      setRawError({ code, message: msg });
+      setError(getAiErrorMessage(code, msg, t));
       setStep("brief");
       setUploadingDocs(false);
     }
@@ -148,11 +210,13 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
   const handleChangeDescription = () => {
     setStep("brief");
     setError(null);
+    setRawError(null);
   };
 
   const handleGenerateAgain = async () => {
     if (!brief.trim()) return;
     setError(null);
+    setRawError(null);
     setStep("generating");
     try {
       let documentStoragePaths: string[] = [];
@@ -165,10 +229,17 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
         }
         setUploadingDocs(false);
       }
+      const details: string[] = [];
+      if (roofType.trim()) details.push(`${t("createProject.ai.roofType")}: ${roofType.trim()}`);
+      if (areaM2.trim()) details.push(`${t("createProject.ai.areaM2")}: ${areaM2.trim()}`);
+      if (floorCount.trim()) details.push(`${t("createProject.ai.floorCount")}: ${floorCount.trim()}`);
+      const projectDetails = details.length > 0 ? details.join("; ") : undefined;
+
       const result = await generateProjectStructureWithAI(brief.trim(), {
         engineType,
         workType,
         documentStoragePaths: documentStoragePaths.length > 0 ? documentStoragePaths : undefined,
+        projectDetails,
       });
       setPlan(result);
       setStep("preview");
@@ -178,7 +249,8 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
       if (__DEV__) {
         console.error("[CreateProjectAIFlow] AI generate again failed:", { code, message: msg });
       }
-      setError(t("createProject.ai.error"));
+      setRawError({ code, message: msg });
+      setError(getAiErrorMessage(code, msg, t));
       setStep("preview");
       setUploadingDocs(false);
     }
@@ -188,6 +260,7 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
     if (!plan) return;
 
     setError(null);
+    setRawError(null);
     setSubmitting(true);
 
     try {
@@ -199,6 +272,8 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
       onCreated(projectId);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e);
+      const code = (e as { code?: string })?.code;
+      setRawError({ code, message: msg });
       setError(msg);
     } finally {
       setSubmitting(false);
@@ -222,6 +297,7 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.container}
       >
+        <ScrollView style={styles.briefScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         <Text style={styles.question}>{t("createProject.ai.question")}</Text>
         <TextInput
           style={styles.textArea}
@@ -229,6 +305,7 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
           onChangeText={(text) => {
             setBrief(text);
             setError(null);
+            setRawError(null);
           }}
           placeholder={t("createProject.ai.placeholder")}
           placeholderTextColor="#666666"
@@ -236,27 +313,91 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
           numberOfLines={4}
           editable={true}
         />
-        <Text style={styles.documentsLabel}>{t("createProject.ai.documentsLabel")}</Text>
-        <TouchableOpacity style={styles.addDocBtn} onPress={pickDocument}>
-          <Ionicons name="document-attach-outline" size={20} color={colors.primary} />
-          <Text style={styles.addDocText}>{t("createProject.ai.addDocuments")}</Text>
-        </TouchableOpacity>
+        <Text style={styles.sectionLabel}>{t("createProject.ai.basicDetails")}</Text>
+        <View style={styles.basicFieldsRow}>
+          <View style={styles.basicField}>
+            <Text style={styles.basicFieldLabel}>{t("createProject.ai.roofType")}</Text>
+            <TextInput
+              style={styles.basicFieldInput}
+              value={roofType}
+              onChangeText={setRoofType}
+              placeholder={t("createProject.ai.roofTypePlaceholder")}
+              placeholderTextColor="#888"
+            />
+          </View>
+          <View style={styles.basicField}>
+            <Text style={styles.basicFieldLabel}>{t("createProject.ai.areaM2")}</Text>
+            <TextInput
+              style={styles.basicFieldInput}
+              value={areaM2}
+              onChangeText={setAreaM2}
+              placeholder={t("createProject.ai.areaPlaceholder")}
+              placeholderTextColor="#888"
+              keyboardType="numeric"
+            />
+          </View>
+          <View style={styles.basicField}>
+            <Text style={styles.basicFieldLabel}>{t("createProject.ai.floorCount")}</Text>
+            <TextInput
+              style={styles.basicFieldInput}
+              value={floorCount}
+              onChangeText={setFloorCount}
+              placeholder={t("createProject.ai.floorPlaceholder")}
+              placeholderTextColor="#888"
+              keyboardType="numeric"
+            />
+          </View>
+        </View>
+        <View style={styles.attachSection}>
+          <Text style={styles.attachSectionTitle}>{t("createProject.ai.attachTitle")}</Text>
+          <Text style={styles.attachSectionHint}>{t("createProject.ai.attachHint")}</Text>
+          <View style={styles.attachButtons}>
+            <TouchableOpacity style={styles.attachBtn} onPress={pickPhoto}>
+              <View style={styles.attachIconWrap}>
+                <Ionicons name="camera-outline" size={28} color={colors.primary} />
+              </View>
+              <Text style={styles.attachBtnText}>{t("createProject.ai.addPhoto")}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.attachBtn} onPress={pickDocument}>
+              <View style={styles.attachIconWrap}>
+                <Ionicons name="document-text-outline" size={28} color={colors.primary} />
+              </View>
+              <Text style={styles.attachBtnText}>{t("createProject.ai.addDocument")}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
         {documents.length > 0 && (
           <View style={styles.docList}>
-            {documents.map((doc, i) => (
-              <View key={i} style={styles.docItem}>
-                <Ionicons name="document-text-outline" size={16} color={colors.textMuted} />
-                <Text style={styles.docName} numberOfLines={1}>
-                  {doc.fileName}
-                </Text>
-                <TouchableOpacity onPress={() => removeDocument(i)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                  <Ionicons name="close-circle" size={20} color={colors.textMuted} />
-                </TouchableOpacity>
-              </View>
-            ))}
+            {documents.map((doc, i) => {
+              const isImage = (doc.mimeType ?? "").startsWith("image/");
+              return (
+                <View key={i} style={styles.docItem}>
+                  <Ionicons
+                    name={isImage ? "image-outline" : "document-text-outline"}
+                    size={18}
+                    color={colors.primary}
+                  />
+                  <Text style={styles.docName} numberOfLines={1}>
+                    {doc.fileName}
+                  </Text>
+                  <TouchableOpacity onPress={() => removeDocument(i)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
+                    <Ionicons name="close-circle" size={22} color={colors.textMuted} />
+                  </TouchableOpacity>
+                </View>
+              );
+            })}
           </View>
         )}
-        {error && <Text style={styles.errorText}>{error}</Text>}
+        {error && (
+          <View>
+            <Text style={styles.errorText}>{error}</Text>
+            {__DEV__ && rawError && (
+              <Text style={[styles.errorText, { fontSize: 11, opacity: 0.8, marginTop: 4 }]} selectable>
+                [{rawError.code ?? "—"}] {rawError.message}
+              </Text>
+            )}
+          </View>
+        )}
         <View style={styles.actions}>
           <TouchableOpacity
             style={[styles.btn, styles.btnPrimary]}
@@ -273,6 +414,7 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
         <TouchableOpacity style={styles.cancelBtn} onPress={onCancel}>
           <Text style={styles.cancelText}>{t("projects.cancel")}</Text>
         </TouchableOpacity>
+        </ScrollView>
       </KeyboardAvoidingView>
     );
   }
@@ -316,7 +458,16 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
             </View>
           ))}
         </ScrollView>
-        {error && <Text style={styles.errorText}>{error}</Text>}
+        {error && (
+          <View>
+            <Text style={styles.errorText}>{error}</Text>
+            {__DEV__ && rawError && (
+              <Text style={[styles.errorText, { fontSize: 11, opacity: 0.8, marginTop: 4 }]} selectable>
+                [{rawError.code ?? "—"}] {rawError.message}
+              </Text>
+            )}
+          </View>
+        )}
         <View style={styles.previewActions}>
           <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={handleChangeDescription}>
             <Text style={styles.btnSecondaryText}>{t("createProject.ai.changeDescription")}</Text>
@@ -378,6 +529,81 @@ const styles = StyleSheet.create({
     minHeight: 100,
     textAlignVertical: "top",
     marginBottom: spacing.md,
+  },
+  briefScroll: {
+    flex: 1,
+  },
+  sectionLabel: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  basicFieldsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  basicField: {
+    flex: 1,
+    minWidth: 90,
+  },
+  basicFieldLabel: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginBottom: 4,
+  },
+  basicFieldInput: {
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderRadius: radius,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    fontSize: 14,
+    color: colors.text,
+  },
+  attachSection: {
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: radius,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.2)",
+  },
+  attachSectionTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.textOnDark,
+    marginBottom: 4,
+  },
+  attachSectionHint: {
+    fontSize: 13,
+    color: "rgba(255,255,255,0.8)",
+    marginBottom: spacing.md,
+    lineHeight: 18,
+  },
+  attachButtons: {
+    flexDirection: "row",
+    gap: spacing.lg,
+  },
+  attachBtn: {
+    alignItems: "center",
+    flex: 1,
+  },
+  attachIconWrap: {
+    width: 56,
+    height: 56,
+    borderRadius: 12,
+    backgroundColor: "rgba(255,255,255,0.2)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: spacing.xs,
+  },
+  attachBtnText: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: colors.textOnDark,
   },
   documentsLabel: {
     fontSize: 13,

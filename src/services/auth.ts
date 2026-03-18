@@ -177,6 +177,44 @@ export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string
   return { user, token };
 }
 
+/** Stored when account-exists-with-different-credential – used for linkAppleToExistingAccount */
+let pendingAppleLink: { identityToken: string; rawNonce: string; email?: string } | null = null;
+
+export function getPendingAppleLinkEmail(): string | undefined {
+  return pendingAppleLink?.email;
+}
+
+export function clearPendingAppleLink(): void {
+  pendingAppleLink = null;
+}
+
+/**
+ * Link Apple credential to existing account (after user signs in with email/password).
+ * Call when loginWithApple threw auth/account-exists-with-different-credential.
+ */
+export async function linkAppleToExistingAccount(
+  email: string,
+  password: string
+): Promise<{ user: AuthUser; token: string }> {
+  const data = pendingAppleLink;
+  if (!data) {
+    const err = new Error("Apple prepojenie vypršalo. Skúste prihlásenie cez Apple znova.") as Error & { code?: string };
+    err.code = "auth/apple-link-expired";
+    throw err;
+  }
+  const trimEmail = email.trim().toLowerCase();
+  const fbAuth = getAuth();
+  if (!fbAuth) throw new Error("FIREBASE_DISABLED");
+  const cred = await fbAuth.signInWithEmailAndPassword(trimEmail, password);
+  const appleCredential = auth.AppleAuthProvider.credential(data.identityToken, data.rawNonce);
+  await cred.user.linkWithCredential(appleCredential);
+  pendingAppleLink = null;
+  const user = toAuthUser(cred.user);
+  await ensureUserProfile(user);
+  const token = await cred.user.getIdToken();
+  return { user, token };
+}
+
 /** Check if Sign in with Apple is available (iOS only). Use to hide button when unavailable. */
 export async function isAppleSignInAvailable(): Promise<boolean> {
   if (Platform.OS !== "ios") return false;
@@ -217,6 +255,7 @@ export async function loginWithApple(): Promise<{ user: AuthUser; token: string 
       ],
       nonce: hashedNonce,
     });
+    if (__DEV__) console.log("[APPLE_LOGIN_DEBUG] apple_step_signin_success");
 
     if (!credential?.identityToken) {
       const err = new Error(
@@ -225,13 +264,31 @@ export async function loginWithApple(): Promise<{ user: AuthUser; token: string 
       err.code = credential ? "auth/apple-missing-identity-token" : "auth/cancelled";
       throw err;
     }
+    if (__DEV__) console.log("[APPLE_LOGIN_DEBUG] apple_step_identity_token_ok");
 
     const fbAuth = getAuth();
     if (!fbAuth) throw new Error("FIREBASE_DISABLED");
 
     const appleCredential = auth.AppleAuthProvider.credential(credential.identityToken, rawNonce);
+    if (__DEV__) console.log("[APPLE_LOGIN_DEBUG] apple_step_firebase_credential_ok");
 
-    const cred = await fbAuth.signInWithCredential(appleCredential);
+    let cred: Awaited<ReturnType<typeof fbAuth.signInWithCredential>>;
+    try {
+      cred = await fbAuth.signInWithCredential(appleCredential);
+    } catch (linkErr: unknown) {
+      const linkCode = (linkErr as { code?: string })?.code;
+      if (linkCode === "auth/account-exists-with-different-credential") {
+        pendingAppleLink = {
+          identityToken: credential.identityToken,
+          rawNonce,
+          email: appleEmail || undefined,
+        };
+        if (__DEV__) console.log("[APPLE_LOGIN_DEBUG] account-exists, stored pending link, email:", appleEmail || "(none)");
+        throw linkErr;
+      }
+      throw linkErr;
+    }
+    if (__DEV__) console.log("[APPLE_LOGIN_DEBUG] apple_step_firebase_signin_ok");
 
     const fullName = credential.fullName;
     const appleEmail = credential.email?.trim() || "";
@@ -249,8 +306,20 @@ export async function loginWithApple(): Promise<{ user: AuthUser; token: string 
       lastName: fullName?.familyName ?? undefined,
     };
 
-    await ensureUserProfile(user);
+    try {
+      await ensureUserProfile(user);
+      if (__DEV__) console.log("[APPLE_LOGIN_DEBUG] apple_step_profile_ok");
+    } catch (profileErr) {
+      if (__DEV__) {
+        console.error("[APPLE_LOGIN_DEBUG] apple_step_profile_failed", (profileErr as Error)?.code, (profileErr as Error)?.message, (profileErr as Error)?.stack);
+      }
+      // User is already signed in to Firebase – don't fail the whole login
+      // Profile will be created/updated on next sign-in or by AuthContext
+      if (__DEV__) console.log("[APPLE_LOGIN_DEBUG] apple_step_profile_skipped_continue");
+    }
+
     const token = await fbUser.getIdToken();
+    if (__DEV__) console.log("[APPLE_LOGIN_DEBUG] apple_step_done");
     return { user, token };
   } catch (e) {
     const code = (e as { code?: string })?.code;
@@ -258,7 +327,7 @@ export async function loginWithApple(): Promise<{ user: AuthUser; token: string 
     const stack = (e as { stack?: string })?.stack ?? "";
 
     if (__DEV__) {
-      console.error("[auth] Apple raw error:", e, message, stack);
+      console.error("[APPLE_LOGIN_DEBUG]", code, message, stack);
     }
 
     // User cancelled – UI should not show alert
@@ -312,6 +381,7 @@ export function getAuthErrorMessage(code: string): string {
     "auth/apple-unavailable": "Prihlásenie cez Apple nie je na tomto zariadení dostupné. Použite prihlásenie emailom.",
     "auth/apple-missing-identity-token": "Apple sign-in did not return required data. Please try again or use email.",
     "auth/apple-timeout": "Apple sign-in timed out. Please try again.",
+    "auth/apple-link-expired": "Apple prepojenie vypršalo. Skúste prihlásenie cez Apple znova.",
     "auth/cancelled": "Používateľ zrušil prihlásenie.",
     "DEVELOPER_ERROR": "Chyba konfigurácie. Skontrolujte SHA-1 v Firebase a Web Client ID.",
     "SIGN_IN_REQUIRED": "Používateľ zrušil prihlásenie.",

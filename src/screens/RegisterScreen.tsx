@@ -10,12 +10,22 @@ import {
   Platform,
   Image,
   Alert,
+  Modal,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
-import { getAuthErrorMessage, isAppleSignInAvailable, loginWithApple, loginWithGoogle } from "../services/auth";
+import { getAuth } from "../firebase";
+import {
+  clearPendingAppleLink,
+  getAuthErrorMessage,
+  getPendingAppleLinkEmail,
+  isAppleSignInAvailable,
+  linkAppleToExistingAccount,
+  loginWithApple,
+  loginWithGoogle,
+} from "../services/auth";
 import { colors, radius, spacing } from "../theme";
 
 export function RegisterScreen() {
@@ -30,6 +40,10 @@ export function RegisterScreen() {
   const [error, setError] = useState("");
   const [appleSignInAvailable, setAppleSignInAvailable] = useState(false);
   const [appleSubmitting, setAppleSubmitting] = useState(false);
+  const [showAppleLinkModal, setShowAppleLinkModal] = useState(false);
+  const [linkEmail, setLinkEmail] = useState("");
+  const [linkPassword, setLinkPassword] = useState("");
+  const [linkSubmitting, setLinkSubmitting] = useState(false);
 
   useEffect(() => {
     if (Platform.OS === "ios") {
@@ -71,7 +85,7 @@ export function RegisterScreen() {
     }
   };
 
-  const APPLE_TIMEOUT_MS = 10_000;
+  const APPLE_TIMEOUT_MS = 30_000;
 
   const onAppleRegister = async () => {
     setAppleSubmitting(true);
@@ -90,6 +104,19 @@ export function RegisterScreen() {
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code;
       if (code === "auth/cancelled") return;
+      if (code === "auth/account-exists-with-different-credential") {
+        setLinkEmail(getPendingAppleLinkEmail() || "");
+        setLinkPassword("");
+        setShowAppleLinkModal(true);
+        return;
+      }
+      if (__DEV__) {
+        console.error("[APPLE_LOGIN_DEBUG]", (e as { code?: string })?.code, (e as { message?: string })?.message, (e as { stack?: string })?.stack);
+      }
+      const currentUser = getAuth()?.currentUser;
+      if (currentUser) {
+        return;
+      }
       const msg = code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("register.failed"));
       setError(msg);
       Alert.alert(
@@ -164,6 +191,90 @@ export function RegisterScreen() {
       <TouchableOpacity style={styles.link} onPress={() => (navigation as any).navigate("Login")}>
         <Text style={styles.linkText}>{t("register.haveAccount")}</Text>
       </TouchableOpacity>
+
+      <Modal visible={showAppleLinkModal} transparent animationType="fade">
+        <TouchableOpacity
+          style={styles.modalOverlay}
+          activeOpacity={1}
+          onPress={() => {
+            clearPendingAppleLink();
+            setShowAppleLinkModal(false);
+          }}
+        >
+          <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : "height"} keyboardVerticalOffset={0}>
+            <TouchableOpacity style={styles.modalContent} activeOpacity={1} onPress={(e) => e.stopPropagation()}>
+              <Text style={styles.modalTitle}>
+                {t("login.appleLinkTitle") || "Prepojiť s existujúcim účtom"}
+              </Text>
+              <Text style={styles.modalSubtitle}>
+                {t("login.appleLinkSubtitle") ||
+                  "Účet s týmto emailom už existuje. Zadajte heslo na prepojenie s Apple."}
+              </Text>
+              <TextInput
+                style={[styles.input, { marginBottom: spacing.sm }]}
+                value={linkEmail}
+                onChangeText={setLinkEmail}
+                placeholder={t("login.placeholderEmail")}
+                placeholderTextColor={colors.textMuted}
+                keyboardType="email-address"
+                autoCapitalize="none"
+                autoCorrect={false}
+              />
+              <TextInput
+                style={styles.input}
+                value={linkPassword}
+                onChangeText={setLinkPassword}
+                placeholder={t("register.placeholderPassword")}
+                placeholderTextColor={colors.textMuted}
+                secureTextEntry
+                autoCapitalize="none"
+              />
+              <View style={styles.modalButtons}>
+                <TouchableOpacity
+                  style={styles.modalCancel}
+                  onPress={() => {
+                    clearPendingAppleLink();
+                    setShowAppleLinkModal(false);
+                  }}
+                >
+                  <Text style={styles.modalCancelText}>{t("common.cancel")}</Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.modalSubmit, linkSubmitting && styles.modalSubmitDisabled]}
+                  onPress={async () => {
+                    if (!linkEmail.trim() || !linkPassword) {
+                      setError(t("register.failed"));
+                      return;
+                    }
+                    setLinkSubmitting(true);
+                    setError("");
+                    try {
+                      await linkAppleToExistingAccount(linkEmail.trim(), linkPassword);
+                      setShowAppleLinkModal(false);
+                      setLinkEmail("");
+                      setLinkPassword("");
+                    } catch (err: unknown) {
+                      const code = (err as { code?: string })?.code;
+                      setError(code ? getAuthErrorMessage(code) : (err instanceof Error ? err.message : t("register.failed")));
+                    } finally {
+                      setLinkSubmitting(false);
+                    }
+                  }}
+                  disabled={linkSubmitting}
+                >
+                  {linkSubmitting ? (
+                    <ActivityIndicator color="#fff" size="small" />
+                  ) : (
+                    <Text style={styles.modalSubmitText}>
+                      {t("login.appleLinkButton") || "Prepojiť"}
+                    </Text>
+                  )}
+                </TouchableOpacity>
+              </View>
+            </TouchableOpacity>
+          </KeyboardAvoidingView>
+        </TouchableOpacity>
+      </Modal>
     </KeyboardAvoidingView>
   );
 }
@@ -231,4 +342,51 @@ const styles = StyleSheet.create({
   appleBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   link: { marginTop: spacing.lg, alignItems: "center" },
   linkText: { color: colors.primary, fontSize: 14 },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.6)",
+    justifyContent: "center",
+    padding: spacing.lg,
+  },
+  modalContent: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    padding: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.xs,
+  },
+  modalSubtitle: {
+    fontSize: 14,
+    color: colors.textMuted,
+    marginBottom: spacing.md,
+  },
+  modalButtons: {
+    flexDirection: "row",
+    gap: spacing.md,
+    marginTop: spacing.md,
+  },
+  modalCancel: {
+    flex: 1,
+    paddingVertical: spacing.md,
+    borderRadius: radius,
+    alignItems: "center",
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  modalCancelText: { fontSize: 16, fontWeight: "600", color: colors.text },
+  modalSubmit: {
+    flex: 1,
+    backgroundColor: colors.primary,
+    paddingVertical: spacing.md,
+    borderRadius: radius,
+    alignItems: "center",
+  },
+  modalSubmitDisabled: { opacity: 0.6 },
+  modalSubmitText: { fontSize: 16, fontWeight: "600", color: "#fff" },
 });

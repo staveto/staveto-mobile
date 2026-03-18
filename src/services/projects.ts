@@ -7,7 +7,7 @@ import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 import type { WorkType, BusinessMode, CreationMode } from "../lib/projectEnums";
 
 const COLLECTION = "projects";
-const CACHE_TTL_MS = 30_000;
+const CACHE_TTL_MS = 300_000;
 let didLogProjectContext = false;
 let sessionCache: { projects: ProjectDoc[]; fetchedAt: number } | null = null;
 let inFlightPromise: Promise<ProjectDoc[]> | null = null;

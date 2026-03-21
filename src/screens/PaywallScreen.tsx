@@ -189,7 +189,9 @@ export function PaywallScreen() {
       {!hasOfferings && (
         <View style={styles.noProducts}>
           <Ionicons name="warning-outline" size={32} color="#FF5722" />
-          <Text style={styles.noProductsText}>{t("paywall.noProducts")}</Text>
+          <Text style={styles.noProductsText}>
+            {t("paywall.noProducts", { store: Platform.OS === "ios" ? "App Store Connect" : "Play Console" })}
+          </Text>
         </View>
       )}
 

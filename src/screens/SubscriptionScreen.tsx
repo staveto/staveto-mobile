@@ -16,6 +16,7 @@ import {
   Alert,
   RefreshControl,
   Linking,
+  Platform,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
 import { useNavigation } from "@react-navigation/native";
@@ -115,7 +116,10 @@ export function SubscriptionScreen() {
         showToast(t("paywall.purchaseSuccess"));
         await refreshUser();
       } else {
-        Alert.alert(t("paywall.purchaseFailed"), t("paywall.noProducts"));
+        Alert.alert(
+          t("paywall.purchaseFailed"),
+          t("paywall.noProducts", { store: Platform.OS === "ios" ? "App Store Connect" : "Play Console" })
+        );
       }
     } catch (e: unknown) {
       const err = e as { userCancelled?: boolean };

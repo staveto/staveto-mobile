@@ -96,13 +96,14 @@ export async function updateUserProfileFromOnboarding(
     updatedAt: serverTimestamp(),
     onboardingCompletedAt: serverTimestamp(),
   };
-  if (!hasField(existing, "firstName") || !existing.firstName) {
+  // Do not overwrite with empty – Apple Sign-In may have provided name; App Store forbids requiring re-entry
+  if (data.firstName && (!hasField(existing, "firstName") || !existing.firstName)) {
     update.firstName = data.firstName;
   }
-  if (!hasField(existing, "lastName") || !existing.lastName) {
+  if (data.lastName && (!hasField(existing, "lastName") || !existing.lastName)) {
     update.lastName = data.lastName;
   }
-  if (!hasField(existing, "displayName") || !existing.displayName) {
+  if (data.displayName && (!hasField(existing, "displayName") || !existing.displayName)) {
     update.displayName = data.displayName;
   }
   if (data.phoneE164 && (!hasField(existing, "phoneE164") || !existing.phoneE164)) {

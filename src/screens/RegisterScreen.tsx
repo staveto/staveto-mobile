@@ -130,8 +130,17 @@ export function RegisterScreen() {
     }
   };
 
+  const nav = navigation as { goBack: () => void; canGoBack?: () => boolean };
+  const showBack = nav.canGoBack?.() ?? true;
+
   return (
     <KeyboardAvoidingView style={styles.container} behavior={Platform.OS === "ios" ? "padding" : undefined}>
+      {showBack && (
+        <TouchableOpacity style={styles.backButton} onPress={() => nav.goBack()} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
+          <Ionicons name="chevron-back" size={22} color={colors.text} />
+          <Text style={styles.backText}>{t("common.back")}</Text>
+        </TouchableOpacity>
+      )}
       <Image source={require("../../assets/logo.png")} style={styles.logo} resizeMode="contain" accessibilityLabel="Staveto logo" />
       <Text style={styles.title}>{t("register.title")}</Text>
       <TextInput
@@ -285,6 +294,20 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
     justifyContent: "center",
     padding: spacing.lg,
+  },
+  backButton: {
+    position: "absolute",
+    top: Platform.OS === "ios" ? 56 : 24,
+    left: spacing.lg,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    zIndex: 10,
+  },
+  backText: {
+    color: colors.text,
+    fontSize: 14,
+    fontWeight: "600",
   },
   logo: {
     width: 160,

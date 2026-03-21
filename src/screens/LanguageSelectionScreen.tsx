@@ -1,9 +1,12 @@
 import React from "react";
 import { View, Text, TouchableOpacity, StyleSheet, Image } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import type { Locale } from "../i18n/translations";
+
+const LANGUAGE_SELECTION_DONE_KEY = "language_selection_done";
 
 const LANGUAGES: { code: Locale; label: string }[] = [
   { code: "en", label: "🇬🇧 English" },
@@ -15,13 +18,20 @@ const LANGUAGES: { code: Locale; label: string }[] = [
   { code: "pl", label: "🇵🇱 Polski" },
 ];
 
-export function LanguageSelectionScreen() {
+type Props = { onComplete?: () => void };
+
+export function LanguageSelectionScreen({ onComplete }: Props) {
   const navigation = useNavigation();
   const { t, setLocale } = useI18n();
 
   const onSelect = (code: Locale) => {
     setLocale(code);
-    (navigation as { navigate: (name: string) => void }).navigate("OnboardingIntro");
+    AsyncStorage.setItem(LANGUAGE_SELECTION_DONE_KEY, "1").catch(() => {});
+    if (onComplete) {
+      onComplete();
+    } else {
+      (navigation as { navigate: (name: string) => void }).navigate("OnboardingIntro");
+    }
   };
 
   return (
@@ -46,6 +56,14 @@ export function LanguageSelectionScreen() {
           </TouchableOpacity>
         ))}
       </View>
+      {!onComplete && (
+        <TouchableOpacity
+          style={styles.loginLink}
+          onPress={() => (navigation as { navigate: (name: string) => void }).navigate("Login")}
+        >
+          <Text style={styles.loginLinkText}>{t("register.haveAccount")}</Text>
+        </TouchableOpacity>
+      )}
     </View>
   );
 }
@@ -78,6 +96,15 @@ const styles = StyleSheet.create({
   list: {
     marginTop: spacing.xl,
     gap: spacing.md,
+  },
+  loginLink: {
+    marginTop: spacing.xl,
+    alignItems: "center",
+  },
+  loginLinkText: {
+    color: "rgba(255,255,255,0.9)",
+    fontSize: 14,
+    fontWeight: "600",
   },
   button: {
     backgroundColor: colors.primary,

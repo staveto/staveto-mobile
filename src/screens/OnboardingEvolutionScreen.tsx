@@ -195,9 +195,12 @@ export function OnboardingEvolutionScreen() {
   }, [activeIndex, finishOnboarding, goToStep, navigation]);
 
   const onBack = useCallback(() => {
-    if (activeIndex <= 0) return;
+    if (activeIndex === 0) {
+      (navigation as { goBack: () => void }).goBack();
+      return;
+    }
     goToStep(activeIndex - 1);
-  }, [activeIndex, goToStep]);
+  }, [activeIndex, goToStep, navigation]);
 
   const onSkip = useCallback(() => {
     if (activeIndex === STEPS.length - 1) return;
@@ -229,11 +232,7 @@ export function OnboardingEvolutionScreen() {
       <SafeAreaView style={styles.safe}>
         <View style={styles.content}>
           <View style={styles.topRow}>
-            <Pressable
-              style={[styles.backButton, activeIndex === 0 && styles.backButtonHidden]}
-              onPress={onBack}
-              disabled={activeIndex === 0}
-            >
+            <Pressable style={styles.backButton} onPress={onBack}>
               <Ionicons name="chevron-back" size={18} color={colors.text} />
               <Text style={styles.backText}>{t("common.back")}</Text>
             </Pressable>

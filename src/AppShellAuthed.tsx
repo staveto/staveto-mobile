@@ -25,6 +25,8 @@ function getActiveRouteName(state: NavigationState | undefined): string | null {
   return route?.name ?? null;
 }
 
+const NAV_READY_FALLBACK_MS = 3000;
+
 export default function AppShellAuthed() {
   const [navReady, setNavReady] = useState(false);
   const bootCtx = useBootContext();
@@ -39,6 +41,20 @@ export default function AppShellAuthed() {
     }, 1500);
     return () => clearTimeout(t);
   }, []);
+
+  useEffect(() => {
+    const fallback = setTimeout(() => {
+      setNavReady((prev) => {
+        if (!prev) {
+          bootStep("navigation_fallback_ready", "H6", {}).catch(() => {});
+          bootCtx?.onAppReady?.();
+          return true;
+        }
+        return prev;
+      });
+    }, NAV_READY_FALLBACK_MS);
+    return () => clearTimeout(fallback);
+  }, [bootCtx]);
 
   const linking = {
     prefixes: ["staveto://"],

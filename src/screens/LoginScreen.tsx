@@ -210,7 +210,7 @@ export function LoginScreen() {
       )}
       <TouchableOpacity
         style={styles.link}
-        onPress={() => (navigation as { navigate: (n: string) => void }).navigate("LanguageSelect")}
+        onPress={() => (navigation as { navigate: (n: string) => void }).navigate("Register")}
       >
         <Text style={styles.linkText}>{t("login.noAccount")}</Text>
       </TouchableOpacity>

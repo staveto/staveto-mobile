@@ -35,12 +35,29 @@ export function LazyAuthedApp({ enabled }: { enabled: boolean }) {
         import("../AppShellAuthed").then(loadShell).catch(onErr);
       }
     };
-    // Defer Firebase load on iOS until after first frame (prevents native crash)
+    // Defer Firebase load on iOS until after first frame (prevents native crash).
+    // Fallback: if runAfterInteractions doesn't fire within 500ms (e.g. iPad), load anyway.
     if (Platform.OS === "ios" && !IOS_SKIP_AUTH) {
-      const task = InteractionManager.runAfterInteractions(() => {
+      let cancelled = false;
+      let taskRef: { cancel: () => void } | null = null;
+      const fallback = setTimeout(() => {
+        if (!cancelled) {
+          cancelled = true;
+          taskRef?.cancel();
+          doLoad();
+        }
+      }, 500);
+      taskRef = InteractionManager.runAfterInteractions(() => {
+        if (cancelled) return;
+        cancelled = true;
+        clearTimeout(fallback);
         setTimeout(doLoad, 100);
       });
-      return () => task.cancel();
+      return () => {
+        cancelled = true;
+        clearTimeout(fallback);
+        taskRef?.cancel();
+      };
     }
     doLoad();
   }, [enabled]);

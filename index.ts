@@ -58,17 +58,17 @@ import { I18nProvider } from "./src/i18n/I18nContext";
   } catch {}
 })();
 
-// Failsafe: hide splash if BootLoader never completes (matches BOOT_TIMEOUT_MS so normal boot hides first)
+// Failsafe: hide splash if BootLoader never completes (1.5s + 4s)
 setTimeout(() => {
   try {
     require("expo-splash-screen").hideAsync?.().catch(() => {});
   } catch {}
-}, 8000);
+}, 1500);
 setTimeout(() => {
   try {
     require("expo-splash-screen").hideAsync?.().catch(() => {});
   } catch {}
-}, 10000);
+}, 4000);
 
 // Lazy import App – register IMMEDIATELY so first paint happens; heavy imports load after
 registerRootComponent(() => {
@@ -99,7 +99,12 @@ registerRootComponent(() => {
       // Splash is hidden by BootLoader when boot completes (not here – avoids "Booting..." flash)
     }, []);
 
-    if (!App) return null;
+    if (!App) {
+      const { View, ActivityIndicator, Text } = require("react-native");
+      return React.createElement(View, {
+        style: { flex: 1, backgroundColor: "#1D376A", justifyContent: "center", alignItems: "center" },
+      }, React.createElement(ActivityIndicator, { size: "large", color: "#fff" }), React.createElement(Text, { style: { color: "rgba(255,255,255,0.9)", marginTop: 12, fontSize: 14 } }, "Načítavam…"));
+    }
     return React.createElement(I18nProvider, null, React.createElement(App));
   }
 

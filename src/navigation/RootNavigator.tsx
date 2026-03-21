@@ -64,6 +64,7 @@ import { getExtraEnv } from "../lib/env";
 
 const FIRST_LOGIN_TRIAL_POPUP_KEY = "first_login_trial_popup_shown";
 const TRIAL_REMINDER_3D_LAST_SHOWN_KEY = "trial_reminder_3d_last_shown";
+const LANGUAGE_SELECTION_DONE_KEY = "language_selection_done";
 
 const Stack = createNativeStackNavigator();
 
@@ -91,7 +92,15 @@ export function RootNavigator() {
   const [gateLoading, setGateLoading] = useState(true);
   const [consentOk, setConsentOk] = useState(false);
   const [onboardingOk, setOnboardingOk] = useState(false);
+  const [languageSelectionDone, setLanguageSelectionDone] = useState<boolean | null>(null);
+  const [showConsentAgain, setShowConsentAgain] = useState(false);
   const hasShownTrialPopup = useRef(false);
+
+  useEffect(() => {
+    AsyncStorage.getItem(LANGUAGE_SELECTION_DONE_KEY).then((v) => {
+      setLanguageSelectionDone(v === "1");
+    });
+  }, []);
 
   const checkGate = useCallback(async () => {
     if (!token || !user?.id) return;
@@ -253,14 +262,41 @@ export function RootNavigator() {
       </Stack.Navigator>
     );
   }
-  if (gateLoading) {
+  if (gateLoading || languageSelectionDone === null) {
     return <LoadingScreen />;
   }
-  if (!consentOk) {
-    return <ConsentRequiredScreen onAccepted={checkGate} />;
+  if (!languageSelectionDone) {
+    return (
+      <LanguageSelectionScreen
+        onComplete={async () => {
+          await AsyncStorage.setItem(LANGUAGE_SELECTION_DONE_KEY, "1");
+          setLanguageSelectionDone(true);
+        }}
+      />
+    );
+  }
+  if (!consentOk || showConsentAgain) {
+    return (
+      <ConsentRequiredScreen
+        onAccepted={() => {
+          setShowConsentAgain(false);
+          checkGate();
+        }}
+        onBack={async () => {
+          setShowConsentAgain(false);
+          await AsyncStorage.setItem(LANGUAGE_SELECTION_DONE_KEY, "");
+          setLanguageSelectionDone(false);
+        }}
+      />
+    );
   }
   if (!onboardingOk) {
-    return <OnboardingMvpScreen onFinished={checkGate} />;
+    return (
+      <OnboardingMvpScreen
+        onFinished={checkGate}
+        onBack={() => setShowConsentAgain(true)}
+      />
+    );
   }
 
   return (

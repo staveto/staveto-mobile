@@ -13,9 +13,10 @@ import {
 
 type Props = {
   onAccepted: () => void;
+  onBack?: () => void;
 };
 
-export function ConsentRequiredScreen({ onAccepted }: Props) {
+export function ConsentRequiredScreen({ onAccepted, onBack }: Props) {
   const { locale, t } = useI18n();
   const [checked, setChecked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -92,13 +93,20 @@ export function ConsentRequiredScreen({ onAccepted }: Props) {
 
       {error ? <Text style={styles.error}>{error}</Text> : null}
 
-      <TouchableOpacity
-        style={[styles.button, (!checked || submitting) && styles.buttonDisabled]}
-        onPress={accept}
-        disabled={!checked || submitting}
-      >
-        {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("consent.continue") || "Pokračovať"}</Text>}
-      </TouchableOpacity>
+      <View style={styles.actions}>
+        {onBack ? (
+          <TouchableOpacity style={styles.secondaryBtn} onPress={onBack} disabled={submitting}>
+            <Text style={styles.secondaryText}>{t("common.back")}</Text>
+          </TouchableOpacity>
+        ) : null}
+        <TouchableOpacity
+          style={[styles.button, (!checked || submitting) && styles.buttonDisabled, onBack ? styles.buttonFlex : undefined]}
+          onPress={accept}
+          disabled={!checked || submitting}
+        >
+          {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("consent.continue") || "Pokračovať"}</Text>}
+        </TouchableOpacity>
+      </View>
     </View>
   );
 }
@@ -162,13 +170,30 @@ const styles = StyleSheet.create({
     color: colors.accent,
     marginBottom: spacing.sm,
   },
+  actions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+  },
+  secondaryBtn: {
+    backgroundColor: colors.card,
+    padding: spacing.md,
+    borderRadius: radius,
+    alignItems: "center",
+    justifyContent: "center",
+    minWidth: 80,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  secondaryText: { color: colors.text },
   button: {
     backgroundColor: colors.primary,
     padding: spacing.md,
     borderRadius: radius,
     alignItems: "center",
-    marginTop: spacing.sm,
+    flex: 1,
   },
+  buttonFlex: { flex: 1 },
   buttonDisabled: {
     opacity: 0.6,
   },

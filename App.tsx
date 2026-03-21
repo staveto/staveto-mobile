@@ -4,7 +4,7 @@ import { SafeAreaProvider } from "react-native-safe-area-context";
 import { bootStep, bootFail } from "./src/lib/bootLogger";
 import { DiagnosticScreen } from "./src/screens/DiagnosticScreen";
 import { LazyAppWithI18n } from "./src/components/LazyAppWithI18n";
-import { View, StyleSheet, Text, TouchableOpacity, Platform, Pressable } from "react-native";
+import { View, StyleSheet, Text, TouchableOpacity, Platform, Pressable, ActivityIndicator } from "react-native";
 import { colors } from "./src/theme";
 import * as SplashScreen from "expo-splash-screen";
 import Constants from "expo-constants";
@@ -27,7 +27,7 @@ function logBuildInfo(): void {
   console.log("[boot] BuildInfo:", info);
 }
 
-const SPLASH_FALLBACK_MS = 5_000;
+const SPLASH_FALLBACK_MS = 1_500;
 
 /** Required env keys per platform – must be set via EAS env vars/secrets for production builds. */
 const REQUIRED_ENV_KEYS: readonly string[] =
@@ -332,6 +332,8 @@ function BootLoader({ children }: { children: React.ReactNode }) {
           bootTimeoutRef.current = null;
         }
         bootStep("boot_ready", "H4", {}).catch(() => {});
+        await hideSplash();
+        if (cancelled) return;
         setState("ready");
       } catch (e) {
         if (cancelled) return;
@@ -380,6 +382,8 @@ function BootLoader({ children }: { children: React.ReactNode }) {
     const showLastStep = (showDebugOverlay && bootExceeded6s) && lastBootStep;
     return (
       <Pressable onPress={handleDebugTap} style={[styles.loading, styles.bootingScreen]}>
+        <ActivityIndicator size="large" color="#fff" />
+        <Text style={styles.bootingText}>Načítavam…</Text>
         {showLastStep && (
           <View style={[styles.debugOverlay, { position: "absolute", bottom: 24 }]}>
             <Text style={[styles.debugText, { color: "#ff9" }]}>
@@ -518,6 +522,11 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.8)",
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
-  /** Matches splash backgroundColor – seamless transition, no "Booting..." text */
+  /** Matches splash backgroundColor – seamless transition */
   bootingScreen: { backgroundColor: "#1D376A" },
+  bootingText: {
+    color: "rgba(255,255,255,0.9)",
+    fontSize: 14,
+    marginTop: 12,
+  },
 });

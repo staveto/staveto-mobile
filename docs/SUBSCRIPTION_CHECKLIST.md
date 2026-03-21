@@ -11,7 +11,17 @@
 - [ ] **Google Play credentials** – service account JSON nahratý v RevenueCat (Android)
 - [ ] **App Store Connect** credentials (iOS)
 
-## 2. Google Play Console (Android)
+## 2. App Store Connect (iOS)
+
+- [ ] **Produkty** vytvorené v App Store Connect → Subscriptions:
+  - `staveto_monthly_1499` (Staveto Pro – s trialom)
+  - `staveto_monthly_1499_notrial` (Staveto Pro – No Trial)
+- [ ] **Status** oboch produktov musí byť „Ready to Submit“ – nie „Developer Action Needed“
+- [ ] Ak je „Developer Action Needed“: otvor produkt → vyrieš chýbajúce údaje (metadata, cenová úroveň, súhlas atď.)
+- [ ] **RevenueCat** – produkty prepojené s App Store Connect product IDs
+- [ ] **Sandbox tester** – pre testovanie na iOS použiť Sandbox Apple ID v Nastaveniach
+
+## 3. Google Play Console (Android)
 
 - [ ] **Predplatné** vytvorené: mesačný plán 14,99 €
 - [ ] **Base plan** aktívny
@@ -19,7 +29,7 @@
 - [ ] **Produkt ID** v Play Console = `staveto_monthly_1499` (alebo presne to, čo je v RevenueCat)
 - [ ] **Internal testing** – overiť nákup na internom testovacom tracku
 
-## 3. RevenueCat Webhook
+## 4. RevenueCat Webhook
 
 - [ ] **Webhook URL** v RevenueCat Dashboard → Project Settings → Integrations:
   ```
@@ -28,20 +38,20 @@
 - [ ] **Authorization** – ak webhook vyžaduje secret, nastaviť v Cloud Function
 - [ ] Webhook aktualizuje `users/{uid}`: `isPro`, `currentPeriodEndAt`, `subscriptionStatus`
 
-## 4. Firebase
+## 5. Firebase
 
 - [ ] **Cloud Function** `getBillingStatus` nasadená
 - [ ] **Cloud Function** `revenuecatWebhook` nasadená
 - [ ] **checkEntitlement** – používa sa pre OCR limity
 
-## 5. Aplikácia (kód)
+## 6. Aplikácia (kód)
 
 - [ ] **configurePurchases(uid)** – volané v AuthContext po prihlásení
 - [ ] **PaywallScreen** – zobrazuje sa pri limite (paywallTrigger)
 - [ ] **SubscriptionScreen** – „Aktivovať Pro“ volá `purchaseMonthly()`
 - [ ] **Expo Go** – predplatné nefunguje, treba dev-client / EAS build
 
-## 6. Testovanie
+## 7. Testovanie
 
 1. **Internal testing track** – nainštalovať AAB z Play Console
 2. **Prihlásiť sa** – RevenueCat sa nakonfiguruje s `uid`
@@ -54,7 +64,8 @@
 
 | Problém | Riešenie |
 |---------|----------|
-| „No products available“ | Managed Publishing zapnuté – vypnúť alebo počkať. Overiť mapovanie produktu RevenueCat ↔ Play Console. |
+| „No products available“ (iOS) | App Store Connect: skontroluj „Developer Action Needed“. Produkty musia byť Ready. RevenueCat ↔ App Store Connect mapovanie. |
+| „No products available“ (Android) | Managed Publishing zapnuté – vypnúť alebo počkať. Overiť mapovanie produktu RevenueCat ↔ Play Console. |
 | Nákup prebehne, ale isPro zostane false | Skontrolovať webhook URL a logy v RevenueCat. Overiť, či `app_user_id` = Firebase uid. |
 | „Purchase failed“ pri zrušení | OK – používateľ zatvoril platobnú obrazovku. Aplikácia to teraz ignoruje (žiadny toast). |
 | V emulátore nefunguje | Platby vyžadujú skutočné zariadenie s Google účtom. Použiť Internal testing na reálnom zariadení. |

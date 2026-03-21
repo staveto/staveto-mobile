@@ -10,6 +10,7 @@ import { COUNTRY_CODES, getCountryCallingCode, getDeviceTimezone, getDeviceRegio
 
 type Props = {
   onFinished: () => void;
+  onBack?: () => void;
 };
 
 type Mode = "build" | "trade" | "maintenance";
@@ -33,7 +34,7 @@ function buildPhoneE164(countryCode: string, nationalNumber: string): string | n
 
 const DEFAULT_COUNTRY = "SK";
 
-export function OnboardingMvpScreen({ onFinished }: Props) {
+export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
   const { t, locale } = useI18n();
   const { user, finishOnboarding } = useAuth();
   const [step, setStep] = useState<1 | 2 | 3 | 4>(1);
@@ -52,6 +53,22 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
   const [showPhoneCountryModal, setShowPhoneCountryModal] = useState(false);
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
+
+  // Pre-fill name from Apple Sign-In (or other provider) – App Store: do not require re-entry
+  useEffect(() => {
+    if (!user) return;
+    setFirstName((prev) => prev || (user.firstName ?? ""));
+    setLastName((prev) => prev || (user.lastName ?? ""));
+    if (!user.firstName && !user.lastName && user.name?.trim()) {
+      const parts = user.name.trim().split(/\s+/);
+      if (parts.length >= 2) {
+        setFirstName((prev) => prev || (parts[0] ?? ""));
+        setLastName((prev) => prev || (parts.slice(1).join(" ") ?? ""));
+      } else {
+        setFirstName((prev) => prev || (parts[0] ?? ""));
+      }
+    }
+  }, [user?.id]);
 
   useEffect(() => {
     if (step === 4) setPhoneCountryCode(primaryCountry);
@@ -76,15 +93,24 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
     setStep(4);
   };
 
+  /** Skip name step – App Store: Apple provides name; must not require re-entry. */
+  const skipNameStep = () => {
+    setError("");
+    setStep(4);
+  };
+
   const savePhoneAndFinish = async (skipPhone: boolean) => {
-    if (!mode || !firstName.trim() || !lastName.trim() || !primaryCountry) {
+    if (!mode || !primaryCountry) {
       setError(t("onboardingMvp.errorSaveFailed"));
       return;
     }
     setSaving(true);
     setError("");
     try {
-      const displayName = `${firstName.trim()} ${lastName.trim()}`.trim();
+      const first = firstName.trim() || (user?.firstName ?? "");
+      const last = lastName.trim() || (user?.lastName ?? "");
+      const displayName =
+        first && last ? `${first} ${last}`.trim() : (user?.name ?? "").trim() || "";
       const phoneE164 = skipPhone ? null : buildPhoneE164(phoneCountryCode, phoneNational);
       if (!skipPhone && phoneNational.trim() && !phoneE164) {
         setError(t("onboardingMvp.errorPhoneInvalid"));
@@ -94,8 +120,8 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
 
       const payload = {
         mode,
-        firstName: firstName.trim(),
-        lastName: lastName.trim(),
+        firstName: first,
+        lastName: last,
         displayName,
         phoneE164: phoneE164 ?? undefined,
         completedAt: new Date().toISOString(),
@@ -110,8 +136,8 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
       // Sync to Firestore in background (non-blocking)
       if (user?.id) {
         updateUserProfileFromOnboarding(user.id, {
-          firstName: firstName.trim(),
-          lastName: lastName.trim(),
+          firstName: first,
+          lastName: last,
           displayName,
           phoneE164: phoneE164 ?? undefined,
           primaryCountry,
@@ -160,19 +186,26 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
             </TouchableOpacity>
           </View>
           {error ? <Text style={styles.error}>{error}</Text> : null}
-          <TouchableOpacity
-            style={styles.button}
-            onPress={() => {
-              if (!mode) {
-                setError(t("onboardingMvp.errorSelectOption"));
-                return;
-              }
-              setError("");
-              setStep(2);
-            }}
-          >
-            <Text style={styles.buttonText}>{t("onboardingMvp.next")}</Text>
-          </TouchableOpacity>
+          <View style={styles.actions}>
+            {onBack ? (
+              <TouchableOpacity style={styles.secondaryBtn} onPress={onBack}>
+                <Text style={styles.secondaryText}>{t("onboardingMvp.back")}</Text>
+              </TouchableOpacity>
+            ) : null}
+            <TouchableOpacity
+              style={[styles.button, onBack ? { flex: 1 } : undefined]}
+              onPress={() => {
+                if (!mode) {
+                  setError(t("onboardingMvp.errorSelectOption"));
+                  return;
+                }
+                setError("");
+                setStep(2);
+              }}
+            >
+              <Text style={styles.buttonText}>{t("onboardingMvp.next")}</Text>
+            </TouchableOpacity>
+          </View>
         </>
       ) : step === 2 ? (
         <>
@@ -222,6 +255,9 @@ export function OnboardingMvpScreen({ onFinished }: Props) {
           <View style={styles.actions}>
             <TouchableOpacity style={styles.secondaryBtn} onPress={() => { setError(""); setStep(2); }}>
               <Text style={styles.secondaryText}>{t("onboardingMvp.back")}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.secondaryBtn} onPress={skipNameStep}>
+              <Text style={styles.secondaryText}>{t("onboardingMvp.step3Skip")}</Text>
             </TouchableOpacity>
             <TouchableOpacity style={styles.button} onPress={saveNameStep}>
               <Text style={styles.buttonText}>{t("onboardingMvp.next")}</Text>

@@ -8,6 +8,7 @@ import {
   RefreshControl,
   TouchableOpacity,
   Alert,
+  Image,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -16,7 +17,7 @@ import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import * as quickNotesService from "../services/quickNotes";
-import type { QuickNote } from "../services/quickNotes";
+import type { QuickNote, QuickNoteAttachment } from "../services/quickNotes";
 import { QuickNoteModal } from "../components/QuickNoteModal";
 
 function formatTime(iso: string): string {
@@ -106,9 +107,9 @@ export function QuickNotesInboxScreen() {
   );
 
   const handleAddNote = useCallback(
-    async (text: string) => {
+    async (text: string, attachments?: QuickNoteAttachment[]) => {
       if (!user?.id) return;
-      await quickNotesService.addQuickNote(user.id, text);
+      await quickNotesService.addQuickNote(user.id, text, attachments);
       await loadNotes(true);
     },
     [user?.id, loadNotes]
@@ -118,7 +119,26 @@ export function QuickNotesInboxScreen() {
     ({ item }: { item: QuickNote }) => (
       <View style={styles.noteRow}>
         <View style={styles.noteContent}>
-          <Text style={styles.noteText}>{item.text}</Text>
+          {item.attachments && item.attachments.length > 0 && (
+            <View style={styles.noteThumbs}>
+              {item.attachments.map((a, i) =>
+                a.kind === "image" ? (
+                  <Image key={`${a.uri}-${i}`} source={{ uri: a.uri }} style={styles.noteThumb} />
+                ) : (
+                  <View key={`${a.uri}-${i}`} style={[styles.noteThumb, styles.noteThumbVideo]}>
+                    <Ionicons name="videocam" size={22} color="#fff" />
+                  </View>
+                )
+              )}
+            </View>
+          )}
+          <Text style={styles.noteText}>
+            {item.text.trim()
+              ? item.text
+              : item.attachments?.length
+                ? t("quickNotes.mediaOnly") || "Príloha"
+                : ""}
+          </Text>
           <Text style={styles.noteMeta}>
             {formatDateYmd(item.dateYmd)} • {formatTime(item.createdAt)}
           </Text>
@@ -132,7 +152,7 @@ export function QuickNotesInboxScreen() {
         </TouchableOpacity>
       </View>
     ),
-    [handleDelete]
+    [handleDelete, t]
   );
 
   const ListHeader = (
@@ -289,6 +309,24 @@ const styles = StyleSheet.create({
   },
   noteContent: {
     flex: 1,
+  },
+  noteThumbs: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    marginBottom: spacing.sm,
+  },
+  noteThumb: {
+    width: 56,
+    height: 56,
+    borderRadius: radius,
+    backgroundColor: colors.border,
+    marginRight: spacing.xs,
+    marginBottom: spacing.xs,
+  },
+  noteThumbVideo: {
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(0,0,0,0.55)",
   },
   noteText: {
     fontSize: 16,

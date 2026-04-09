@@ -2183,9 +2183,9 @@ export function HomeScreen() {
         onSaved={() => {
           if (user?.id) quickNotesService.getTodayNotesCount(user.id).then(setTodayNotesCount);
         }}
-        onSubmit={async (text) => {
+        onSubmit={async (text, attachments) => {
           if (!user?.id) return;
-          await quickNotesService.addQuickNote(user.id, text);
+          await quickNotesService.addQuickNote(user.id, text, attachments);
         }}
         placeholder={t("quickNotes.placeholder") || "Čo si chcete zapamätať?"}
         saveLabel={t("quickNotes.save") || "Uložiť"}

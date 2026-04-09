@@ -60,5 +60,46 @@ export function normalizeDueDateToYmd(
     if (isNaN(d.getTime())) return null;
     return toYmd(d);
   }
+  // Plain { seconds, nanoseconds } (serialized Timestamp) — avoid relying on instanceof
+  if (typeof due === "object" && due !== null) {
+    const o = due as { seconds?: unknown; nanoseconds?: unknown };
+    if (typeof o.seconds === "number") {
+      const nanos = typeof o.nanoseconds === "number" ? o.nanoseconds : 0;
+      const d = new Date(o.seconds * 1000 + nanos / 1e6);
+      if (isNaN(d.getTime())) return null;
+      return toYmd(d);
+    }
+  }
   return null;
+}
+
+/**
+ * Convert Firestore Timestamp-like values to ISO strings without `instanceof Timestamp`.
+ * RN Firebase re-exports Timestamp as a Proxy; using `instanceof` with it can throw on Hermes
+ * ("Cannot convert undefined value to object").
+ */
+export function firestoreValueToIsoString(ts: unknown): string | undefined {
+  if (ts == null || ts === "") return undefined;
+  try {
+    if (typeof ts === "string") return ts;
+    if (ts instanceof Date) {
+      return isNaN(ts.getTime()) ? undefined : ts.toISOString();
+    }
+    if (typeof ts === "object" && ts !== null) {
+      const o = ts as Record<string, unknown>;
+      if (typeof o.toDate === "function") {
+        const d = (o.toDate as () => Date)();
+        if (d instanceof Date && !isNaN(d.getTime())) return d.toISOString();
+      }
+      const sec = o.seconds;
+      if (typeof sec === "number") {
+        const nanos = typeof o.nanoseconds === "number" ? o.nanoseconds : 0;
+        const d = new Date(sec * 1000 + nanos / 1e6);
+        return isNaN(d.getTime()) ? undefined : d.toISOString();
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
 }

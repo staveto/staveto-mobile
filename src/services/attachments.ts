@@ -6,40 +6,55 @@ import { addProjectEvent } from "./projectEvents";
 
 export type AttachmentDoc = AttachmentMetadata;
 
-function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): AttachmentDoc {
-  const d = docSnap.data();
-  
+function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): AttachmentDoc | null {
+  let d: Record<string, unknown>;
+  try {
+    const raw = docSnap.data();
+    if (raw == null || typeof raw !== "object") {
+      if (__DEV__) console.warn(`[attachments] toDoc: missing or invalid data for doc ${docSnap.id}`);
+      return null;
+    }
+    d = raw as Record<string, unknown>;
+  } catch (e) {
+    if (__DEV__) console.warn(`[attachments] toDoc: data() failed for ${docSnap.id}`, e);
+    return null;
+  }
+
   const convertTimestamp = (ts: unknown): string | undefined => {
-    if (!ts) return undefined;
-    if (ts instanceof Timestamp) {
-      return ts.toDate().toISOString();
-    }
-    if (typeof ts === 'string') {
-      return ts;
-    }
-    if (typeof ts === 'object' && ts !== null && 'toDate' in ts) {
-      return (ts as { toDate: () => Date }).toDate().toISOString();
+    try {
+      if (ts == null) return undefined;
+      if (ts instanceof Timestamp) return ts.toDate().toISOString();
+      if (typeof ts === "string") return ts;
+      if (typeof ts === "object" && "toDate" in ts && typeof (ts as { toDate?: unknown }).toDate === "function") {
+        return (ts as { toDate: () => Date }).toDate().toISOString();
+      }
+    } catch {
+      return undefined;
     }
     return undefined;
   };
-  
-  return {
-    id: docSnap.id,
-    projectId: (d.projectId as string) ?? "",
-    taskId: (d.taskId as string | null) ?? undefined,
-    phaseId: (d.phaseId as string | null) ?? undefined,
-    expenseId: (d.expenseId as string | null) ?? undefined,
-    fileName: (d.fileName as string) ?? "",
-    fileType: (d.fileType as AttachmentKind) ?? "other",
-    contentType: (d.contentType as string) ?? undefined,
-    size: (d.size as number) ?? undefined,
-    storagePath: (d.storagePath as string) ?? "",
-    uploadedBy: (d.uploadedBy as string) ?? "",
-    createdAt: convertTimestamp(d.createdAt) ?? new Date().toISOString(),
-    updatedAt: convertTimestamp(d.updatedAt),
-    // Include downloadURL if stored in metadata (for quick access)
-    downloadURL: (d.downloadURL as string) ?? undefined,
-  } as AttachmentDoc & { downloadURL?: string };
+
+  try {
+    return {
+      id: docSnap.id,
+      projectId: (d.projectId as string) ?? "",
+      taskId: (d.taskId as string | null) ?? undefined,
+      phaseId: (d.phaseId as string | null) ?? undefined,
+      expenseId: (d.expenseId as string | null) ?? undefined,
+      fileName: (d.fileName as string) ?? "",
+      fileType: (d.fileType as AttachmentKind) ?? "other",
+      contentType: (d.contentType as string) ?? undefined,
+      size: typeof d.size === "number" ? d.size : undefined,
+      storagePath: (d.storagePath as string) ?? "",
+      uploadedBy: (d.uploadedBy as string) ?? "",
+      createdAt: convertTimestamp(d.createdAt) ?? new Date().toISOString(),
+      updatedAt: convertTimestamp(d.updatedAt),
+      downloadURL: (d.downloadURL as string) ?? undefined,
+    } as AttachmentDoc & { downloadURL?: string };
+  } catch (e) {
+    if (__DEV__) console.warn(`[attachments] toDoc: serialize failed for ${docSnap.id}`, e);
+    return null;
+  }
 }
 
 /**
@@ -180,7 +195,8 @@ export async function getAttachment(
   const refDoc = doc(db, paths.projectAttachment(projectId, attachmentId));
   const snap = await getDoc(refDoc);
   if (!snap.exists()) return null;
-  return toDoc({ id: snap.id, data: snap.data.bind(snap) });
+  const parsed = toDoc({ id: snap.id, data: snap.data.bind(snap) });
+  return parsed;
 }
 
 /**
@@ -212,7 +228,16 @@ export async function listAttachments(
   }
 
   const snap = await getDocs(q);
-  const attachments = snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) }));
+  const attachments = snap.docs
+    .map((d) => {
+      try {
+        return toDoc({ id: d.id, data: d.data.bind(d) });
+      } catch (e) {
+        if (__DEV__) console.warn(`[attachments] listAttachments: skip doc ${d.id}`, e);
+        return null;
+      }
+    })
+    .filter((x): x is AttachmentDoc => x != null);
   
   // Sort by createdAt descending if we used filters (to avoid composite index)
   if (filters?.taskId || filters?.expenseId || filters?.phaseId) {

@@ -12,13 +12,12 @@ import {
   orderBy,
   limit,
   serverTimestamp,
-  Timestamp,
   writeBatch,
 } from "../lib/rnFirestore";
 import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
-import { normalizeDueDateToYmd } from "../utils/date";
+import { firestoreValueToIsoString, normalizeDueDateToYmd } from "../utils/date";
 import { upsertTaskDueNotification, markTaskNotificationsRead, recordSyncIssue } from "./notifications";
 import { runServiceAutoNextOnDone } from "./serviceAutoNext";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
@@ -59,27 +58,12 @@ function toDoc(
   projectId: string
 ): TaskDoc | null {
   const d = docSnap.data();
-  if (!d || typeof d !== "object") {
+  if (!d || typeof d !== "object" || Array.isArray(d)) {
     if (__DEV__) console.warn(`[tasks] toDoc: document ${docSnap.id} has no/invalid data, skipping`);
     return null;
   }
 
-  // Convert Firestore Timestamp to ISO string
-  const convertTimestamp = (ts: unknown): string | undefined => {
-    if (!ts) return undefined;
-    if (ts instanceof Timestamp) {
-      return ts.toDate().toISOString();
-    }
-    if (typeof ts === 'string') {
-      return ts;
-    }
-    // Try to convert if it has toDate method
-    if (typeof ts === 'object' && ts !== null && 'toDate' in ts) {
-      return (ts as { toDate: () => Date }).toDate().toISOString();
-    }
-    return undefined;
-  };
-  
+  try {
   return {
     id: docSnap.id,
     projectId,
@@ -95,8 +79,8 @@ function toDoc(
     assigneeName: (d.assigneeName as string | null) ?? undefined, // Use assigneeName (consistent with types)
     assignedTo: (d.assignedTo as string | null) ?? undefined,
     assignedToEmail: (d.assignedToEmail as string | null) ?? undefined,
-    createdAt: convertTimestamp(d.createdAt),
-    updatedAt: convertTimestamp(d.updatedAt),
+    createdAt: firestoreValueToIsoString(d.createdAt),
+    updatedAt: firestoreValueToIsoString(d.updatedAt),
     // MVP additions
     origin: (d.origin as 'TEMPLATE' | 'CUSTOM') ?? undefined,
     templateTaskId: (d.templateTaskId as string | null) ?? undefined,
@@ -126,6 +110,10 @@ function toDoc(
     })(),
     timeSpentMinutes: (d.timeSpentMinutes as number | null) ?? undefined,
   };
+  } catch (err) {
+    if (__DEV__) console.warn(`[tasks] toDoc failed for doc ${docSnap.id}:`, err);
+    return null;
+  }
 }
 
 /**

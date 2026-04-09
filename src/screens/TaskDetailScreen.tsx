@@ -67,6 +67,7 @@ export function TaskDetailScreen() {
   const [showDatePicker, setShowDatePicker] = useState(false);
   const [dueDate, setDueDate] = useState<string | null>(task?.dueDate ?? null);
   const [savingDate, setSavingDate] = useState(false);
+  const [deleting, setDeleting] = useState(false);
   const statusMappings = getStatusMappingsForUI();
 
   const todayYmd = toYmd(new Date());
@@ -262,6 +263,43 @@ export function TaskDetailScreen() {
     tasksService.updateTaskSubtasks(orgId!, task.projectId, task.id, next);
   };
 
+  const handleDeleteTask = () => {
+    if (!orgId || !task.projectId) {
+      Alert.alert(t("common.error") || "Chyba", t("projectOverview.noPermission") || "Nemáte oprávnenie.");
+      return;
+    }
+    Alert.alert(
+      t("projectOverview.deleteTask"),
+      t("projectOverview.deleteTaskConfirm", { title: task.title || "" }),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("common.delete"),
+          style: "destructive",
+          onPress: async () => {
+            setDeleting(true);
+            try {
+              await tasksService.deleteTask(orgId, task.projectId, task.id);
+              onSaveComplete?.();
+              navigation.goBack();
+            } catch (err: unknown) {
+              const c = (err as { code?: string })?.code;
+              const msg =
+                c === "permission-denied"
+                  ? t("projectOverview.noPermission")
+                  : err instanceof Error
+                    ? err.message
+                    : t("common.error");
+              Alert.alert(t("common.error"), msg);
+            } finally {
+              setDeleting(false);
+            }
+          },
+        },
+      ]
+    );
+  };
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.contentContainer}>
       <View style={[styles.card, isOverdue && styles.cardOverdue]}>
@@ -453,6 +491,22 @@ export function TaskDetailScreen() {
       </View>
 
       <TouchableOpacity
+        style={[styles.deleteTaskButton, deleting && styles.deleteTaskButtonDisabled]}
+        onPress={handleDeleteTask}
+        disabled={deleting || savingStatus}
+        activeOpacity={0.7}
+      >
+        {deleting ? (
+          <ActivityIndicator size="small" color="#ef4444" />
+        ) : (
+          <>
+            <Ionicons name="trash-outline" size={20} color="#ef4444" />
+            <Text style={styles.deleteTaskText}>{t("projectOverview.deleteTask")}</Text>
+          </>
+        )}
+      </TouchableOpacity>
+
+      <TouchableOpacity
         style={styles.confirmButton}
         onPress={async () => {
           const hasUnsavedDate = dueDate !== (task.dueDate ?? null);
@@ -557,6 +611,21 @@ const styles = StyleSheet.create({
     alignItems: "center",
   },
   datePickerSaveText: { fontSize: 16, fontWeight: "600", color: "#fff" },
+  deleteTaskButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.lg,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(239, 68, 68, 0.45)",
+    backgroundColor: "rgba(239, 68, 68, 0.08)",
+    marginTop: spacing.lg,
+  },
+  deleteTaskButtonDisabled: { opacity: 0.6 },
+  deleteTaskText: { fontSize: 16, fontWeight: "600", color: "#ef4444" },
   confirmButton: {
     backgroundColor: colors.primary,
     paddingVertical: spacing.md,

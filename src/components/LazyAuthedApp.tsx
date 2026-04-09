@@ -3,6 +3,12 @@ import { View, Text, ActivityIndicator, InteractionManager, Platform } from "rea
 import { colors } from "../theme";
 import { IOS_SKIP_AUTH } from "../lib/iosDiagnostic";
 import { isFirebaseAvailable } from "../lib/firebaseAvailable";
+import AppShellMinimal from "../AppShellMinimal";
+import AppShellAuthed from "../AppShellAuthed";
+
+function pickShell(): React.ComponentType {
+  return IOS_SKIP_AUTH || !isFirebaseAvailable() ? AppShellMinimal : AppShellAuthed;
+}
 
 export function LazyAuthedApp({ enabled }: { enabled: boolean }) {
   const [Mod, setMod] = useState<React.ComponentType | null>(null);
@@ -11,32 +17,25 @@ export function LazyAuthedApp({ enabled }: { enabled: boolean }) {
   useEffect(() => {
     if (!enabled) return;
 
-    // #region agent log
     try {
       require("../lib/bootLogger").bootStep("lazy_authed_loading", "H6" as any, {}).catch(() => {});
     } catch {}
-    // #endregion
-    const loadShell = (m: { default: React.ComponentType }) => {
+
+    const applyShell = () => {
       try {
-        require("../lib/bootLogger").bootStep("lazy_authed_loaded", "H6", {}).catch(() => {});
-      } catch {}
-      setMod(() => m.default);
-    };
-    const onErr = (e: unknown) => {
-      try {
-        require("../lib/bootLogger").bootFail(e).catch(() => {});
-      } catch {}
-      setErr(String((e as Error)?.message ?? e));
-    };
-    const doLoad = () => {
-      if (IOS_SKIP_AUTH || !isFirebaseAvailable()) {
-        import("../AppShellMinimal").then(loadShell).catch(onErr);
-      } else {
-        import("../AppShellAuthed").then(loadShell).catch(onErr);
+        try {
+          require("../lib/bootLogger").bootStep("lazy_authed_loaded", "H6", {}).catch(() => {});
+        } catch {}
+        setMod(() => pickShell());
+      } catch (e: unknown) {
+        try {
+          require("../lib/bootLogger").bootFail(e).catch(() => {});
+        } catch {}
+        setErr(String((e as Error)?.message ?? e));
       }
     };
-    // Defer Firebase load on iOS until after first frame (prevents native crash).
-    // Fallback: if runAfterInteractions doesn't fire within 500ms (e.g. iPad), load anyway.
+
+    // Defer on iOS until after first frame (prevents native crash). Android: load immediately.
     if (Platform.OS === "ios" && !IOS_SKIP_AUTH) {
       let cancelled = false;
       let taskRef: { cancel: () => void } | null = null;
@@ -44,14 +43,14 @@ export function LazyAuthedApp({ enabled }: { enabled: boolean }) {
         if (!cancelled) {
           cancelled = true;
           taskRef?.cancel();
-          doLoad();
+          applyShell();
         }
       }, 500);
       taskRef = InteractionManager.runAfterInteractions(() => {
         if (cancelled) return;
         cancelled = true;
         clearTimeout(fallback);
-        setTimeout(doLoad, 100);
+        setTimeout(applyShell, 100);
       });
       return () => {
         cancelled = true;
@@ -59,7 +58,8 @@ export function LazyAuthedApp({ enabled }: { enabled: boolean }) {
         taskRef?.cancel();
       };
     }
-    doLoad();
+
+    applyShell();
   }, [enabled]);
 
   if (!enabled) return null;

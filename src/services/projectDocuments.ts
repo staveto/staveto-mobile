@@ -30,9 +30,20 @@ export type ProjectDocumentDoc = {
   updatedAt?: string;
 };
 
-function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ProjectDocumentDoc {
-  const d = docSnap.data();
-  
+function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ProjectDocumentDoc | null {
+  let d: Record<string, unknown>;
+  try {
+    const raw = docSnap.data();
+    if (raw == null || typeof raw !== "object") {
+      if (__DEV__) console.warn(`[projectDocuments] toDoc: missing or invalid data for doc ${docSnap.id}`);
+      return null;
+    }
+    d = raw as Record<string, unknown>;
+  } catch (e) {
+    if (__DEV__) console.warn(`[projectDocuments] toDoc: data() failed for ${docSnap.id}`, e);
+    return null;
+  }
+
   const convertTimestamp = (ts: unknown): string | undefined => {
     if (!ts) return undefined;
     if (ts instanceof Timestamp) {
@@ -131,8 +142,17 @@ export async function listProjectDocuments(projectId: string): Promise<ProjectDo
   const c = collection(db, paths.projectDocuments(projectId));
   const q = query(c, orderBy("createdAt", "desc"));
   const snap = await getDocs(q);
-  
-  return snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) }));
+
+  return snap.docs
+    .map((d) => {
+      try {
+        return toDoc({ id: d.id, data: d.data.bind(d) });
+      } catch (e) {
+        if (__DEV__) console.warn(`[projectDocuments] listProjectDocuments: skip doc ${d.id}`, e);
+        return null;
+      }
+    })
+    .filter((x): x is ProjectDocumentDoc => x != null);
 }
 
 export async function updateProjectDocument(

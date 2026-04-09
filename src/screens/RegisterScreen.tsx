@@ -19,6 +19,7 @@ import { useI18n } from "../i18n/I18nContext";
 import { getAuth } from "../firebase";
 import {
   clearPendingAppleLink,
+  getAuthErrorCodeFromUnknown,
   getAuthErrorMessage,
   getPendingAppleLinkEmail,
   isAppleSignInAvailable,
@@ -78,7 +79,7 @@ export function RegisterScreen() {
     try {
       await loginWithGoogle();
     } catch (e: unknown) {
-      const code = (e as { code?: string })?.code;
+      const code = getAuthErrorCodeFromUnknown(e);
       setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("register.failed")));
     } finally {
       setSubmitting(false);

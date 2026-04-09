@@ -19,6 +19,7 @@ import { useI18n } from "../i18n/I18nContext";
 import { getAuth } from "../firebase";
 import {
   clearPendingAppleLink,
+  getAuthErrorCodeFromUnknown,
   getAuthErrorMessage,
   getPendingAppleLinkEmail,
   isAppleSignInAvailable,
@@ -104,7 +105,7 @@ export function LoginScreen() {
     try {
       await loginWithGoogle();
     } catch (e: unknown) {
-      const code = (e as { code?: string })?.code;
+      const code = getAuthErrorCodeFromUnknown(e);
       setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("login.failed")));
     } finally {
       setSubmitting(false);
@@ -194,7 +195,7 @@ export function LoginScreen() {
       </TouchableOpacity>
       <TouchableOpacity style={styles.googleBtn} onPress={onGoogleLogin} disabled={submitting || appleSubmitting}>
         <Ionicons name="logo-google" size={20} color="#fff" />
-        <Text style={styles.googleBtnText}>{t("register.google")}</Text>
+        <Text style={styles.googleBtnText}>{t("login.google")}</Text>
       </TouchableOpacity>
       {Platform.OS === "ios" && appleSignInAvailable && (
         <TouchableOpacity style={styles.appleBtn} onPress={onAppleLogin} disabled={submitting || appleSubmitting}>

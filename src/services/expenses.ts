@@ -3,7 +3,6 @@ import {
   addDoc,
   query,
   where,
-  getDocs,
   updateDoc,
   deleteDoc,
   doc,
@@ -11,8 +10,10 @@ import {
   serverTimestamp,
   Timestamp,
 } from "../lib/rnFirestore";
+import { getDocsSmart } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
+import { firestoreValueToIsoString } from "../utils/date";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 import { createExpenseAddedNotification } from "./notifications";
 import type { ProjectExpense } from "../lib/types";
@@ -69,32 +70,19 @@ export type ExpenseDoc = {
 
 function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ExpenseDoc | null {
   const d = docSnap.data();
-  if (!d || typeof d !== "object") {
+  if (!d || typeof d !== "object" || Array.isArray(d)) {
     if (__DEV__) console.warn(`[expenses] toDoc: document ${docSnap.id} has no/invalid data, skipping`);
     return null;
   }
 
-  const convertTimestamp = (ts: unknown): string | undefined => {
-    if (!ts) return undefined;
-    if (ts instanceof Timestamp) {
-      return ts.toDate().toISOString();
-    }
-    if (typeof ts === 'string') {
-      return ts;
-    }
-    if (typeof ts === 'object' && ts !== null && 'toDate' in ts) {
-      return (ts as { toDate: () => Date }).toDate().toISOString();
-    }
-    return undefined;
-  };
-  
+  try {
   return {
     id: docSnap.id,
     projectId: (d.projectId as string) ?? "",
     title: (d.title as string) ?? "",
     amount: (d.amount as number | null) ?? null,
     currency: (d.currency as string) ?? "EUR",
-    date: convertTimestamp(d.date) ?? new Date().toISOString(),
+    date: firestoreValueToIsoString(d.date) ?? new Date().toISOString(),
     note: (d.note as string) ?? undefined,
     taskId: (d.taskId as string | null) ?? undefined,
     phaseId: (d.phaseId as string | null) ?? undefined,
@@ -108,21 +96,25 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Ex
     filePath: (d.filePath as string) ?? undefined,
     mimeType: (d.mimeType as string) ?? undefined,
     ocrStatus: (d.ocrStatus as OcrStatus) ?? undefined,
-    ocrParsedAt: convertTimestamp(d.ocrParsedAt),
+    ocrParsedAt: firestoreValueToIsoString(d.ocrParsedAt),
     ocrSupplierName: (d.ocrSupplierName as string) ?? undefined,
     ocrInvoiceNumber: (d.ocrInvoiceNumber as string) ?? undefined,
     ocrIssueDate: (d.ocrIssueDate as string) ?? undefined,
     ocrTotalAmount: (d.ocrTotalAmount as number | null) ?? undefined,
     ocrVatAmount: (d.ocrVatAmount as number | null) ?? undefined,
     ocrCurrency: (d.ocrCurrency as string) ?? undefined,
-    createdAt: convertTimestamp(d.createdAt),
-    updatedAt: convertTimestamp(d.updatedAt),
+    createdAt: firestoreValueToIsoString(d.createdAt),
+    updatedAt: firestoreValueToIsoString(d.updatedAt),
     travel: parseTravel(d.travel),
   };
+  } catch (err) {
+    if (__DEV__) console.warn(`[expenses] toDoc failed for doc ${docSnap.id}:`, err);
+    return null;
+  }
 }
 
 function parseTravel(t: unknown): TravelExpenseData | undefined {
-  if (!t || typeof t !== "object") return undefined;
+  if (!t || typeof t !== "object" || Array.isArray(t)) return undefined;
   const o = t as Record<string, unknown>;
   const from = o.fromAddress as string;
   const to = o.toAddress as string;
@@ -319,11 +311,19 @@ export async function createExpense(
 export async function listExpensesByProject(projectId: string): Promise<ExpenseDoc[]> {
   const c = collection(db, paths.projectExpenses(projectId));
   const q = query(c, orderBy("date", "desc"));
-  const snap = await getDocs(q);
-  const list = snap.docs
-    .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }))
-    .filter((e): e is ExpenseDoc => e != null);
-  return list;
+  try {
+    const snap = await getDocsSmart(q);
+    const list = snap.docs
+      .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }))
+      .filter((e): e is ExpenseDoc => e != null);
+    return list;
+  } catch (error: any) {
+    const code = String(error?.code ?? "");
+    if (code === "permission-denied" || code.includes("permission-denied")) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 /**

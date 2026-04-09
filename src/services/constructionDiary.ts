@@ -34,9 +34,20 @@ export type DiaryEntryDoc = {
   updatedAt?: string;
 };
 
-function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): DiaryEntryDoc {
-  const d = docSnap.data();
-  
+function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): DiaryEntryDoc | null {
+  let d: Record<string, unknown>;
+  try {
+    const raw = docSnap.data();
+    if (raw == null || typeof raw !== "object") {
+      if (__DEV__) console.warn(`[constructionDiary] toDoc: missing or invalid data for doc ${docSnap.id}`);
+      return null;
+    }
+    d = raw as Record<string, unknown>;
+  } catch (e) {
+    if (__DEV__) console.warn(`[constructionDiary] toDoc: data() failed for ${docSnap.id}`, e);
+    return null;
+  }
+
   const convertTimestamp = (ts: unknown): string | undefined => {
     if (!ts) return undefined;
     if (ts instanceof Timestamp) {
@@ -61,7 +72,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Di
     materials: (d.materials as string) ?? undefined,
     notes: (d.notes as string) ?? undefined,
     phaseId: (d.phaseId as string | null) ?? undefined,
-    attachments: (d.attachments as string[]) ?? undefined,
+    attachments: Array.isArray(d.attachments) ? (d.attachments as string[]) : undefined,
     createdBy: (d.createdBy as string) ?? "",
     createdAt: convertTimestamp(d.createdAt) ?? new Date().toISOString(),
     updatedAt: convertTimestamp(d.updatedAt),
@@ -166,8 +177,17 @@ export async function listDiaryEntries(projectId: string): Promise<DiaryEntryDoc
   const c = collection(db, paths.constructionDiary(projectId));
   const q = query(c, orderBy("date", "desc"));
   const snap = await getDocs(q);
-  
-  return snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) }));
+
+  return snap.docs
+    .map((d) => {
+      try {
+        return toDoc({ id: d.id, data: d.data.bind(d) });
+      } catch (e) {
+        if (__DEV__) console.warn(`[constructionDiary] listDiaryEntries: skip doc ${d.id}`, e);
+        return null;
+      }
+    })
+    .filter((x): x is DiaryEntryDoc => x != null);
 }
 
 export async function updateDiaryEntry(

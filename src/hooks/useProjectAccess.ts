@@ -1,5 +1,5 @@
 import { useState, useEffect, useCallback } from "react";
-import { doc, getDoc } from "../lib/rnFirestore";
+import { doc } from "../lib/rnFirestore";
 import { getDocSmart } from "../services/firestoreSmartRead";
 import { db } from "../firebase";
 import { useAuth } from "../context/AuthContext";

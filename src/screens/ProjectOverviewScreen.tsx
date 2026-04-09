@@ -470,14 +470,20 @@ export function ProjectOverviewScreen() {
       const projectTypeForLoad = project?.projectType || projectType;
       const isBuildProject = projectTypeForLoad === 'BUILD' || projectTypeForLoad === 'MANAGEMENT';
       
-      // Permission gating: only load what user can read (access from closure)
-      const canReadPhases = access.canReadPhases;
-      const canReadTasks = access.canReadTasks;
-      const canReadExpenses = access.canReadExpenses;
-      const canReadDiary = access.canReadDiary;
-      const canReadDocuments = access.canReadDocuments;
+      // If useProjectAccess failed (e.g. first getDoc timed out) but getProject succeeded,
+      // still load subcollections when the loaded project shows this user is the owner.
+      const isProjectOwner = !!(
+        project?.ownerId &&
+        currentUserUid &&
+        project.ownerId === currentUserUid
+      );
+      const canReadPhases = isProjectOwner || access.canReadPhases;
+      const canReadTasks = isProjectOwner || access.canReadTasks;
+      const canReadExpenses = isProjectOwner || access.canReadExpenses;
+      const canReadDiary = isProjectOwner || access.canReadDiary;
+      const canReadDocuments = isProjectOwner || access.canReadDocuments;
       
-      console.log(`[ProjectOverview] Loading data for projectType="${projectTypeForLoad}", canRead: phases=${canReadPhases}, tasks=${canReadTasks}, expenses=${canReadExpenses}, diary=${canReadDiary}, documents=${canReadDocuments}...`);
+      console.log(`[ProjectOverview] Loading data for projectType="${projectTypeForLoad}", isProjectOwner=${isProjectOwner}, canRead: phases=${canReadPhases}, tasks=${canReadTasks}, expenses=${canReadExpenses}, diary=${canReadDiary}, documents=${canReadDocuments}...`);
       const loadPromises: Promise<any>[] = [];
       
       // Only load phases for BUILD projects when canReadPhases
@@ -618,13 +624,15 @@ export function ProjectOverviewScreen() {
       // Load all attachments for the project to build attachment count maps
       try {
         const allAttachments = await attachmentsService.listAttachments(projectId);
-        console.log(`[ProjectOverview] Loaded ${allAttachments.length} total attachments`);
+        const safeAttachments = Array.isArray(allAttachments) ? allAttachments : [];
+        console.log(`[ProjectOverview] Loaded ${safeAttachments.length} total attachments`);
         
         // Build task attachments map
         const taskMap = new Map<string, number>();
         const expenseMap = new Map<string, number>();
         
-        allAttachments.forEach(att => {
+        safeAttachments.forEach((att) => {
+          if (!att || typeof att !== "object") return;
           if (att.taskId) {
             const count = taskMap.get(att.taskId) || 0;
             taskMap.set(att.taskId, count + 1);

@@ -19,8 +19,11 @@ export type SmartReadOptions = {
   preferCacheWhenPoor?: boolean;
 };
 
-const DEFAULT_POOR_TYPES: NetInfoStateType[] = ["cellular", "unknown"];
+/** Only "unknown" is treated as poor — cellular uses server-first like WiFi so first load is not stuck on empty Firestore cache. */
+const DEFAULT_POOR_TYPES: NetInfoStateType[] = ["unknown"];
 const FORCE_SERVER_TIMEOUT_MS = 8000;
+/** Cap server round-trips so UI never hangs forever (emulator / bad network). */
+const SERVER_READ_TIMEOUT_MS = 15000;
 
 let NetInfoModule: {
   fetch: () => Promise<{
@@ -105,7 +108,11 @@ export async function getDocSmart(
       }
       if (__DEV__) console.log("[firestoreSmartRead] getDoc cache miss, fallback server:", ref.path);
       try {
-        return await ref.get({ source: "server" });
+        return await withTimeout(
+          ref.get({ source: "server" }),
+          SERVER_READ_TIMEOUT_MS,
+          `getDocSmart:server:${ref.path}`
+        );
       } catch (serverErr) {
         try {
           return await ref.get({ source: "cache" });
@@ -118,11 +125,15 @@ export async function getDocSmart(
 
   if (__DEV__) console.log("[firestoreSmartRead] getDoc server-first (online):", ref.path);
   try {
-    return await ref.get({ source: "server" });
+    return await withTimeout(
+      ref.get({ source: "server" }),
+      SERVER_READ_TIMEOUT_MS,
+      `getDocSmart:server:${ref.path}`
+    );
   } catch (err) {
     try {
       const cached = await ref.get({ source: "cache" });
-      if (__DEV__) console.log("[firestoreSmartRead] getDoc server failed, used cache:", ref.path);
+      if (__DEV__) console.log("[firestoreSmartRead] getDoc server failed or timeout, used cache:", ref.path);
       return cached;
     } catch {
       throw addContext(err, "getDocSmart", ref.path);
@@ -170,7 +181,11 @@ export async function getDocsSmart(
       }
       if (__DEV__) console.log("[firestoreSmartRead] getDocs cache miss, fallback server");
       try {
-        return await queryRef.get({ source: "server" });
+        return await withTimeout(
+          queryRef.get({ source: "server" }),
+          SERVER_READ_TIMEOUT_MS,
+          "getDocsSmart:server"
+        );
       } catch (serverErr) {
         try {
           return await queryRef.get({ source: "cache" });
@@ -183,11 +198,15 @@ export async function getDocsSmart(
 
   if (__DEV__) console.log("[firestoreSmartRead] getDocs server-first (online)");
   try {
-    return await queryRef.get({ source: "server" });
+    return await withTimeout(
+      queryRef.get({ source: "server" }),
+      SERVER_READ_TIMEOUT_MS,
+      "getDocsSmart:server"
+    );
   } catch (err) {
     try {
       const cached = await queryRef.get({ source: "cache" });
-      if (__DEV__) console.log("[firestoreSmartRead] getDocs server failed, used cache");
+      if (__DEV__) console.log("[firestoreSmartRead] getDocs server failed or timeout, used cache");
       return cached;
     } catch {
       throw addContext(err, "getDocsSmart", "(query)");

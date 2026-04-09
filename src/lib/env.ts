@@ -1,7 +1,7 @@
 /**
  * Single source of truth for env vars.
- * EAS env vars are injected in app.config.js and read via Constants.expoConfig.extra.
- * Do not use process.env.EXPO_PUBLIC_* at runtime – it is undefined in production builds.
+ * Primary: Constants.expoConfig.extra (from app.config.js at build / Metro manifest).
+ * Fallback for EXPO_PUBLIC_*: process.env when extra is empty (e.g. after .env edit without full native rebuild).
  */
 
 import Constants from "expo-constants";
@@ -13,9 +13,16 @@ function getExtra(): Record<string, unknown> {
 /** Returns the value for key from extra, or undefined if missing/empty. Empty string counts as missing. */
 export function getExtraEnv(key: string): string | undefined {
   const val = getExtra()[key];
-  if (typeof val !== "string") return undefined;
-  const trimmed = val.trim();
-  return trimmed.length > 0 ? trimmed : undefined;
+  if (typeof val === "string") {
+    const trimmed = val.trim();
+    if (trimmed.length > 0) return trimmed;
+  }
+  // Fallback: Metro / Expo may expose EXPO_PUBLIC_* at runtime while extra is stale after .env changes without rebuild.
+  if (key.startsWith("EXPO_PUBLIC_") && typeof process !== "undefined" && process.env?.[key]) {
+    const p = String(process.env[key]).trim();
+    if (p.length > 0) return p;
+  }
+  return undefined;
 }
 
 /** Returns true if key exists in extra and has non-empty value. */

@@ -14,6 +14,22 @@
       },
       "oauth_client": [
         {
+          "client_id": "255961550157-b06g7j154t6qpjk8h9n5qkhuftmdod2k.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.staveto.app",
+            "certificate_hash": "fe7f1fd0a49aab562c5a0632efb814fcc42b5653"
+          }
+        },
+        {
+          "client_id": "255961550157-ugu96c9g25uopt85pvj68pd6ie0sh7ou.apps.googleusercontent.com",
+          "client_type": 1,
+          "android_info": {
+            "package_name": "com.staveto.app",
+            "certificate_hash": "7b3afc0abc457622bebbb02cfefa1c830ad64f82"
+          }
+        },
+        {
           "client_id": "255961550157-gaueraial600f02qa3qadki41fhvabit.apps.googleusercontent.com",
           "client_type": 3
         }
@@ -29,6 +45,14 @@
             {
               "client_id": "255961550157-gaueraial600f02qa3qadki41fhvabit.apps.googleusercontent.com",
               "client_type": 3
+            },
+            {
+              "client_id": "255961550157-0f45lvpm2ovbj21p2crsh79fl7ukgsei.apps.googleusercontent.com",
+              "client_type": 2,
+              "ios_info": {
+                "bundle_id": "com.staveto.app",
+                "app_store_id": "6759470377"
+              }
             }
           ]
         }

@@ -1,11 +1,52 @@
 import { Platform } from "react-native";
+import Constants, { ExecutionEnvironment } from "expo-constants";
 import { GoogleSignin } from "@react-native-google-signin/google-signin";
 import * as AppleAuthentication from "expo-apple-authentication";
 import * as Crypto from "expo-crypto";
-import auth from "@react-native-firebase/auth";
+import firebaseAuth from "@react-native-firebase/auth";
 import { doc, setDoc, getDoc, serverTimestamp } from "../lib/rnFirestore";
 import { db, getAuth } from "../firebase";
+import { getExtraEnv } from "../lib/env";
 import { getDeviceRegionCode } from "../utils/countries";
+
+/**
+ * Web OAuth client ID (client_type 3) from project google-services.json — same as Google Cloud "Web client".
+ * Public value; used when EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID is missing or mistakenly set to a Firebase App ID (1:…:android:…),
+ * which causes Android DEVELOPER_ERROR / code 10.
+ */
+const GOOGLE_WEB_CLIENT_ID_FALLBACK =
+  "255961550157-gaueraial600f02qa3qadki41fhvabit.apps.googleusercontent.com";
+
+function isLikelyFirebaseAppId(value: string): boolean {
+  return /^1:\d+:(android|ios|web):/i.test(value.trim());
+}
+
+function isValidGoogleWebClientId(value: string): boolean {
+  const v = value.trim();
+  if (!v) return false;
+  if (isLikelyFirebaseAppId(v)) return false;
+  return v.includes(".apps.googleusercontent.com");
+}
+
+function resolveGoogleWebClientId(): string {
+  const fromExtra = getExtraEnv("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID");
+  if (fromExtra && isValidGoogleWebClientId(fromExtra)) {
+    return fromExtra.trim();
+  }
+  if (fromExtra && __DEV__) {
+    console.warn(
+      "[auth] EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID is not a valid Web client ID. Use *.apps.googleusercontent.com (not 1:…:android:…). Using fallback."
+    );
+  }
+  if (typeof process !== "undefined" && process.env?.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID) {
+    const p = String(process.env.EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID).trim();
+    if (isValidGoogleWebClientId(p)) return p;
+  }
+  if (__DEV__) {
+    console.warn("[auth] Using GOOGLE_WEB_CLIENT_ID_FALLBACK (matches google-services.json Web client).");
+  }
+  return GOOGLE_WEB_CLIENT_ID_FALLBACK;
+}
 
 export type AuthUser = { id: string; email: string; name?: string; firstName?: string; lastName?: string; phoneE164?: string };
 
@@ -156,26 +197,236 @@ export async function login(email: string, password: string): Promise<{ user: Au
   return { user, token };
 }
 
+/** Extract Firebase / native error code for UI (handles numeric Android codes like 10). */
+export function getAuthErrorCodeFromUnknown(e: unknown): string {
+  if (e && typeof e === "object" && "code" in e) {
+    const c = (e as { code?: string | number }).code;
+    if (c !== undefined && c !== null && String(c) !== "") return String(c);
+  }
+  return "";
+}
+
+// #region agent log
+/** Android emulator: 127.0.0.1 is the device; host machine is 10.0.2.2 */
+function agentIngestUrl(): string {
+  const host = Platform.OS === "android" ? "10.0.2.2" : "127.0.0.1";
+  return `http://${host}:7281/ingest/2418b79b-8c5b-4006-a07d-878605a09a96`;
+}
+
+function agentDebugLog(payload: {
+  hypothesisId: string;
+  location: string;
+  message: string;
+  data?: Record<string, unknown>;
+}): void {
+  fetch(agentIngestUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "1d16b2" },
+    body: JSON.stringify({
+      sessionId: "1d16b2",
+      timestamp: Date.now(),
+      runId: "pre-fix",
+      hypothesisId: payload.hypothesisId,
+      location: payload.location,
+      message: payload.message,
+      data: payload.data ?? {},
+    }),
+  }).catch(() => {});
+}
+// #endregion
+
+function configureGoogleSignInSdk(): void {
+  const webClientId = resolveGoogleWebClientId();
+  const extraRaw = getExtraEnv("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID");
+  const extraValid = !!(extraRaw && isValidGoogleWebClientId(String(extraRaw)));
+  // #region agent log
+  agentDebugLog({
+    hypothesisId: "H1",
+    location: "auth.ts:configureGoogleSignInSdk",
+    message: "google_signin_configure",
+    data: {
+      webClientIdLen: webClientId.length,
+      webClientIdPrefix: webClientId.slice(0, 24),
+      extraEnvPresent: !!String(extraRaw ?? "").trim(),
+      extraEnvValidWebShape: extraValid,
+    },
+  });
+  // #endregion
+  GoogleSignin.configure({ webClientId, offlineAccess: false });
+}
+
+/** Call once at app startup so Web client ID is never a stale/wrong value from .env alone. */
+export function configureGoogleSignInAtStartup(): void {
+  try {
+    configureGoogleSignInSdk();
+  } catch (e) {
+    if (__DEV__) console.warn("[auth] configureGoogleSignInAtStartup:", e);
+  }
+}
+
+function getFirebaseAuthOrThrow() {
+  const fbAuth = getAuth();
+  if (!fbAuth) {
+    const err = new Error("FIREBASE_DISABLED") as Error & { code?: string };
+    err.code = "auth/firebase-disabled";
+    throw err;
+  }
+  return fbAuth;
+}
+
 export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string }> {
-  if (Platform.OS === "android") {
-    const hasPlayServices = await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
-    if (!hasPlayServices) {
-      throw new Error("Google Play Services nie sú dostupné. Aktualizujte ich v Obchode Play.");
+  configureGoogleSignInSdk();
+
+  // #region agent log
+  agentDebugLog({
+    hypothesisId: "H5",
+    location: "auth.ts:loginWithGoogle",
+    message: "after_configure",
+    data: {
+      platform: Platform.OS,
+      executionEnvironment: String(Constants.executionEnvironment),
+      isStoreClient: Constants.executionEnvironment === ExecutionEnvironment.StoreClient,
+    },
+  });
+  // #endregion
+
+  // Expo Go uses host.exp.exponent — Firebase/Google OAuth is registered for com.staveto.app only → DEVELOPER_ERROR (10).
+  if (Platform.OS === "android" && Constants.executionEnvironment === ExecutionEnvironment.StoreClient) {
+    const err = new Error("Google Sign-In requires a development build, not Expo Go.") as Error & { code?: string };
+    err.code = "auth/google-requires-dev-client";
+    throw err;
+  }
+
+  try {
+    if (Platform.OS === "android") {
+      const hasPlayServices = await GoogleSignin.hasPlayServices({ showPlayServicesUpdateDialog: true });
+      if (!hasPlayServices) {
+        throw new Error("Google Play Services nie sú dostupné. Aktualizujte ich v Obchode Play.");
+      }
     }
-  }
 
-  const response = await GoogleSignin.signIn();
-  if (response.type === "cancelled" || !response.data?.idToken) {
-    throw new Error("Používateľ zrušil prihlásenie.");
-  }
+    // #region agent log
+    agentDebugLog({
+      hypothesisId: "H3",
+      location: "auth.ts:loginWithGoogle",
+      message: "before_native_signIn",
+      data: { platform: Platform.OS },
+    });
+    // #endregion
 
-  const idToken = response.data.idToken;
-  const googleCredential = auth.GoogleAuthProvider.credential(idToken);
-  const cred = await auth().signInWithCredential(googleCredential);
-  const user = toAuthUser(cred.user);
-  await ensureUserProfile(user);
-  const token = await cred.user.getIdToken();
-  return { user, token };
+    const response = await GoogleSignin.signIn();
+
+    if (response.type === "cancelled") {
+      const err = new Error("Používateľ zrušil prihlásenie.") as Error & { code?: string };
+      err.code = "auth/cancelled";
+      throw err;
+    }
+
+    if (response.type !== "success") {
+      const err = new Error("Používateľ zrušil prihlásenie.") as Error & { code?: string };
+      err.code = "auth/cancelled";
+      throw err;
+    }
+
+    // Prefer getTokens() so Firebase gets both idToken and accessToken (recommended for Google provider).
+    let idToken: string | null = null;
+    let accessToken: string | undefined;
+    try {
+      const tokens = await GoogleSignin.getTokens();
+      idToken = tokens.idToken ?? null;
+      accessToken = tokens.accessToken;
+    } catch (tokErr) {
+      if (__DEV__) console.warn("[auth] loginWithGoogle getTokens failed, falling back to signIn payload:", tokErr);
+      idToken = response.data?.idToken ?? null;
+    }
+
+    if (!idToken) {
+      const err = new Error("auth/google-missing-id-token") as Error & { code?: string };
+      err.code = "auth/google-missing-id-token";
+      throw err;
+    }
+
+    const googleCredential = firebaseAuth.GoogleAuthProvider.credential(idToken, accessToken);
+    const fbAuth = getFirebaseAuthOrThrow();
+    const cred = await fbAuth.signInWithCredential(googleCredential);
+    const user = toAuthUser(cred.user);
+    await ensureUserProfile(user);
+    const token = await cred.user.getIdToken();
+    // #region agent log
+    agentDebugLog({
+      hypothesisId: "H4",
+      location: "auth.ts:loginWithGoogle",
+      message: "firebase_signin_ok",
+      data: { uidLen: cred.user.uid?.length ?? 0 },
+    });
+    // #endregion
+    return { user, token };
+  } catch (e: unknown) {
+    // #region agent log
+    {
+      const c = getAuthErrorCodeFromUnknown(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      const errObj = e && typeof e === "object" ? (e as Record<string, unknown>) : {};
+      agentDebugLog({
+        hypothesisId: "H4",
+        location: "auth.ts:loginWithGoogle",
+        message: "catch",
+        data: {
+          code: c || String(errObj.code ?? ""),
+          msgSnippet: msg.slice(0, 180),
+          errName: e instanceof Error ? e.name : typeof e,
+        },
+      });
+    }
+    // #endregion
+    if (__DEV__) {
+      const c = getAuthErrorCodeFromUnknown(e);
+      const msg = e instanceof Error ? e.message : String(e);
+      console.warn("[auth] loginWithGoogle failed:", c || "(no code)", msg);
+      if (Platform.OS === "android") {
+        const looksDev =
+          c === "10" ||
+          c === "DEVELOPER_ERROR" ||
+          msg.includes("DEVELOPER_ERROR") ||
+          msg.includes("12500");
+        if (looksDev) {
+          console.warn(
+            "[auth] If Expo Go: use dev build. Else DEVELOPER_ERROR: add SHA-1 of the keystore that signs this APK — often android/app/debug.keystore (npm run android:debug-sha), not only ~/.android. Firebase Android app + Web client ID."
+          );
+        }
+      }
+    }
+    const authCode = getAuthErrorCodeFromUnknown(e);
+    if (authCode.startsWith("auth/")) {
+      throw e;
+    }
+
+    const raw = e as { code?: string | number; message?: string };
+    const code = String(raw?.code ?? "");
+    const msg = String(raw?.message ?? e ?? "");
+    const looksDevError =
+      code === "10" ||
+      code === "DEVELOPER_ERROR" ||
+      msg.includes("DEVELOPER_ERROR") ||
+      msg.includes("12500");
+    if (looksDevError) {
+      const err = new Error("DEVELOPER_ERROR") as Error & { code?: string };
+      err.code = "DEVELOPER_ERROR";
+      throw err;
+    }
+
+    const cancelled =
+      msg.toLowerCase().includes("cancel") ||
+      code === "SIGN_IN_CANCELLED" ||
+      code === "12501";
+    if (cancelled) {
+      const err = new Error("Používateľ zrušil prihlásenie.") as Error & { code?: string };
+      err.code = "auth/cancelled";
+      throw err;
+    }
+
+    throw e;
+  }
 }
 
 /** Stored when account-exists-with-different-credential – used for linkAppleToExistingAccount */
@@ -207,7 +458,7 @@ export async function linkAppleToExistingAccount(
   const fbAuth = getAuth();
   if (!fbAuth) throw new Error("FIREBASE_DISABLED");
   const cred = await fbAuth.signInWithEmailAndPassword(trimEmail, password);
-  const appleCredential = auth.AppleAuthProvider.credential(data.identityToken, data.rawNonce);
+  const appleCredential = firebaseAuth.AppleAuthProvider.credential(data.identityToken, data.rawNonce);
   await cred.user.linkWithCredential(appleCredential);
   pendingAppleLink = null;
   const user = toAuthUser(cred.user);
@@ -270,7 +521,7 @@ export async function loginWithApple(): Promise<{ user: AuthUser; token: string 
     const fbAuth = getAuth();
     if (!fbAuth) throw new Error("FIREBASE_DISABLED");
 
-    const appleCredential = auth.AppleAuthProvider.credential(credential.identityToken, rawNonce);
+    const appleCredential = firebaseAuth.AppleAuthProvider.credential(credential.identityToken, rawNonce);
     if (__DEV__) console.log("[APPLE_LOGIN_DEBUG] apple_step_firebase_credential_ok");
 
     let cred: Awaited<ReturnType<typeof fbAuth.signInWithCredential>>;
@@ -384,7 +635,17 @@ export function getAuthErrorMessage(code: string): string {
     "auth/apple-timeout": "Apple sign-in timed out. Please try again.",
     "auth/apple-link-expired": "Apple prepojenie vypršalo. Skúste prihlásenie cez Apple znova.",
     "auth/cancelled": "Používateľ zrušil prihlásenie.",
-    "DEVELOPER_ERROR": "Chyba konfigurácie. Skontrolujte SHA-1 v Firebase a Web Client ID.",
+    "auth/google-missing-web-client-id":
+      "Chýba EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID (Web client ID z Google Cloud → Credentials → OAuth 2.0 Client IDs → typ Web application). Pridajte do .env a znova zostavte aplikáciu.",
+    "auth/google-missing-id-token":
+      "Google nevrátil ID token. Skontrolujte, že EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID je Web client ID (nie Android), a že v Firebase Authentication je zapnuté prihlásenie cez Google.",
+    "auth/google-requires-dev-client":
+      "Google prihlásenie nefunguje v Expo Go. Nainštalujte vývojovú aplikáciu (napr. run-android.bat alebo npx expo run:android), a spustite Metro s --dev-client.",
+    "auth/firebase-disabled": "Firebase Auth nie je k dispozícii. Reštartujte aplikáciu.",
+    "DEVELOPER_ERROR":
+      "Google Sign-In: v Firebase musí byť SHA-1 kľúča, ktorý naozaj podpisuje APK (Expo často používa android/app/debug.keystore, nie len ~/.android). npm run android:debug-sha. Potom nový google-services.json a rebuild.",
+    /** Android Google Sign-In numeric code for misconfigured SHA-1 / OAuth client */
+    "10": "Kód 10: pridajte SHA-1 z projektového android/app/debug.keystore do Firebase (nie len z ~/.android). npm run android:debug-sha.",
     "SIGN_IN_REQUIRED": "Používateľ zrušil prihlásenie.",
     "ERR_REQUEST_CANCELED": "Používateľ zrušil prihlásenie.",
   };

@@ -1,5 +1,7 @@
+import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
 import { collection, collectionGroup, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, setDoc, serverTimestamp, limit } from "../lib/rnFirestore";
 import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
+import { withTimeout } from "../utils/withTimeout";
 import { db, auth } from "../firebase";
 import { getApp } from "@react-native-firebase/app";
 import { paths } from "../lib/firestorePaths";
@@ -8,6 +10,26 @@ import type { WorkType, BusinessMode, CreationMode } from "../lib/projectEnums";
 
 const COLLECTION = "projects";
 const CACHE_TTL_MS = 300_000;
+/** Longer than firestoreSmartRead SERVER_READ_TIMEOUT_MS — second pass when cache returned empty. */
+const OWNER_QUERY_SERVER_RETRY_MS = 28_000;
+
+/** Unwrap Firebase / firestoreSmartRead wrapped errors so permission-denied is detected. */
+function getFirestoreErrorCode(error: unknown): string {
+  let e: unknown = error;
+  for (let depth = 0; depth < 4 && e; depth++) {
+    if (typeof e === "object" && e !== null && "code" in e) {
+      const c = (e as { code?: string }).code;
+      if (typeof c === "string" && c.length > 0) return c;
+    }
+    e =
+      typeof e === "object" && e !== null && "cause" in e
+        ? (e as { cause: unknown }).cause
+        : null;
+  }
+  const msg = error instanceof Error ? error.message : String(error);
+  if (msg.includes("permission-denied")) return "permission-denied";
+  return "";
+}
 let didLogProjectContext = false;
 let sessionCache: { projects: ProjectDoc[]; fetchedAt: number } | null = null;
 let inFlightPromise: Promise<ProjectDoc[]> | null = null;
@@ -20,6 +42,11 @@ function getCachedProjects(): ProjectDoc[] | null {
 }
 
 function setCachedProjects(projects: ProjectDoc[]): void {
+  // Never cache an empty list: a failed/partial first load would hide real projects for CACHE_TTL_MS.
+  if (!projects.length) {
+    sessionCache = null;
+    return;
+  }
   sessionCache = { projects, fetchedAt: Date.now() };
 }
 
@@ -300,7 +327,35 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
       collection(db, COLLECTION),
       where("ownerId", "==", actualOwnerId)
     );
-    const ownerSnap = await getDocsSmart(ownerQuery, smartOpts);
+    let ownerSnap = await getDocsSmart(ownerQuery, smartOpts);
+    // Empty + fromCache: first read may be stale (server timeout in smart read → empty cache). Re-fetch from server once.
+    const ownerMeta = (ownerSnap as { metadata?: { fromCache?: boolean } }).metadata;
+    if (
+      ownerSnap.docs.length === 0 &&
+      !forceServerRead &&
+      ownerMeta?.fromCache === true
+    ) {
+      try {
+        const serverPromise = getDocs(ownerQuery, { source: "server" }) as Promise<
+          FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>
+        >;
+        const serverSnap = await withTimeout(
+          serverPromise,
+          OWNER_QUERY_SERVER_RETRY_MS,
+          "projects:ownerQuery:serverRetry"
+        );
+        if (serverSnap.docs.length > 0) {
+          ownerSnap = serverSnap;
+          if (__DEV__) {
+            console.warn(
+              "[projects] Owner query: recovered projects after server-only retry (empty result was cache-only)."
+            );
+          }
+        }
+      } catch (retryErr) {
+        if (__DEV__) console.warn("[projects] Owner query server retry failed:", retryErr);
+      }
+    }
     console.log(`[projects] listAllMyProjectsInternal: found ${ownerSnap.docs.length} owner projects`);
     
     // Debug: Check ownerId in each project
@@ -390,10 +445,9 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
     return merged;
   } catch (error: any) {
     console.error(`[projects] listAllMyProjectsInternal error:`, error);
-    const errorCode = error.code || '';
-    const errorMessage = error.message || 'Unknown error';
-    
-    if (errorCode === 'permission-denied') {
+    const errorCode = getFirestoreErrorCode(error) || error.code || "";
+
+    if (errorCode === "permission-denied" || errorCode === "firestore/permission-denied") {
       console.error(`[projects] PERMISSION DENIED:`);
       console.error(`  - auth.currentUser.uid="${actualOwnerId}"`);
       console.error(`  - Query: where('ownerId', '==', '${actualOwnerId}')`);
@@ -454,7 +508,7 @@ export async function listAllMyProjects(ownerId: string, options?: { forceServer
   const force = options?.forceServerRead === true;
   if (!force) {
     const cached = getCachedProjects();
-    if (cached) {
+    if (cached && cached.length > 0) {
       if (__DEV__) console.log(`[projects] listAllMyProjects: cache hit, ${cached.length} projects`);
       return cached;
     }

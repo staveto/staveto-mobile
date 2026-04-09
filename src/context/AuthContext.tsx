@@ -3,6 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { doc, getDoc } from "../lib/rnFirestore";
 import { getAuth, db, getCallable } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
+import { configureGoogleSignInAtStartup } from "../services/auth";
 import { configurePurchases } from "../services/billing";
 import { getExtraEnv } from "../lib/env";
 import { IOS_SKIP_GOOGLE_SIGNIN } from "../lib/iosDiagnostic";
@@ -98,10 +99,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     if (IOS_SKIP_GOOGLE_SIGNIN) return;
-    import("@react-native-google-signin/google-signin").then(({ GoogleSignin }) => {
-      const webClientId = getExtraEnv("EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID");
-      if (webClientId) GoogleSignin.configure({ webClientId });
-    }).catch(() => {});
+    configureGoogleSignInAtStartup();
   }, []);
 
   useEffect(() => {

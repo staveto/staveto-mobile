@@ -146,7 +146,7 @@ export async function uploadAttachment(
     storagePath: finalFilePath,
     filePath: finalFilePath,
     uploadStatus: "uploaded",
-    ocrStatus: options.kind === "image" ? "pending" : null,
+    ocrStatus: options.kind === "image" || options.kind === "pdf" ? "pending" : null,
     downloadURL, // Store URL for quick access
     uploadedBy: currentUser.uid,
     createdAt: serverTimestamp(),

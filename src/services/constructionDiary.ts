@@ -14,6 +14,7 @@ import {
 } from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
+import { isPlainObject } from "../utils/isPlainObject";
 import type { ConstructionDiaryEntry } from "../lib/types";
 import { addProjectEvent } from "./projectEvents";
 import { createDiaryAddedNotification } from "./notifications";
@@ -38,11 +39,11 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Di
   let d: Record<string, unknown>;
   try {
     const raw = docSnap.data();
-    if (raw == null || typeof raw !== "object") {
+    if (!isPlainObject(raw)) {
       if (__DEV__) console.warn(`[constructionDiary] toDoc: missing or invalid data for doc ${docSnap.id}`);
       return null;
     }
-    d = raw as Record<string, unknown>;
+    d = raw;
   } catch (e) {
     if (__DEV__) console.warn(`[constructionDiary] toDoc: data() failed for ${docSnap.id}`, e);
     return null;

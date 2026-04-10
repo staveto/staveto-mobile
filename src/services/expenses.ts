@@ -69,9 +69,16 @@ export type ExpenseDoc = {
 };
 
 function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): ExpenseDoc | null {
-  const d = docSnap.data();
-  if (!d || typeof d !== "object" || Array.isArray(d)) {
-    if (__DEV__) console.warn(`[expenses] toDoc: document ${docSnap.id} has no/invalid data, skipping`);
+  let d: Record<string, unknown>;
+  try {
+    const raw = docSnap.data();
+    if (!raw || typeof raw !== "object" || Array.isArray(raw)) {
+      if (__DEV__) console.warn(`[expenses] toDoc: document ${docSnap.id} has no/invalid data, skipping`);
+      return null;
+    }
+    d = raw as Record<string, unknown>;
+  } catch (e) {
+    if (__DEV__) console.warn(`[expenses] toDoc: data() failed for ${docSnap.id}`, e);
     return null;
   }
 
@@ -131,6 +138,62 @@ function parseTravel(t: unknown): TravelExpenseData | undefined {
   };
 }
 
+/** Form / API may pass JS Date or Firestore Timestamp-like; avoid calling .getTime() on wrong shape. */
+function coerceExpenseDate(value: unknown): Date | null {
+  if (value == null) return null;
+  if (typeof value === "string") {
+    const d = new Date(value.trim());
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof value !== "object") return null;
+  const o = value as {
+    getTime?: () => number;
+    toDate?: () => Date;
+    seconds?: unknown;
+    nanoseconds?: unknown;
+  };
+  if (typeof o.seconds === "number") {
+    const nanos = typeof o.nanoseconds === "number" ? o.nanoseconds : 0;
+    const d = new Date(o.seconds * 1000 + nanos / 1e6);
+    return Number.isNaN(d.getTime()) ? null : d;
+  }
+  if (typeof o.toDate === "function") {
+    try {
+      const d = o.toDate();
+      if (d != null && typeof (d as Date).getTime === "function") {
+        const ms = (d as Date).getTime();
+        if (typeof ms === "number" && !Number.isNaN(ms)) return new Date(ms);
+      }
+    } catch {
+      return null;
+    }
+  }
+  if (typeof o.getTime === "function") {
+    try {
+      const ms = o.getTime();
+      if (typeof ms === "number" && !Number.isNaN(ms)) return value as Date;
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
+/** Plain map for Firestore (no JSON.stringify — avoids Hermes/bridge edge cases). */
+function travelToFirestoreMap(t: TravelExpenseData): Record<string, unknown> {
+  const o: Record<string, unknown> = {
+    fromAddress: t.fromAddress,
+    toAddress: t.toAddress,
+    distanceKm: t.distanceKm,
+    ratePerKm: t.ratePerKm,
+    roundTrip: !!t.roundTrip,
+  };
+  if (typeof t.billableToClient === "boolean") {
+    o.billableToClient = t.billableToClient;
+  }
+  return o;
+}
+
 /**
  * Create a new expense
  */
@@ -163,8 +226,28 @@ export async function createExpense(
     ocrVatAmount?: number | null;
     ocrCurrency?: string | null;
     travel?: TravelExpenseData;
+    /** Optional metadata (debug / future); not written to Firestore unless mapped */
+    attachments?: unknown;
+    receipt?: unknown;
   }
 ): Promise<ExpenseDoc> {
+  try {
+    console.log("[createExpense] input", JSON.stringify(data, null, 2));
+    console.log(
+      "[createExpense] attachments type",
+      typeof (data as { attachments?: unknown }).attachments,
+      Array.isArray((data as { attachments?: unknown }).attachments)
+    );
+    console.log(
+      "[createExpense] receipt type",
+      typeof (data as { receipt?: unknown }).receipt,
+      Array.isArray((data as { receipt?: unknown }).receipt)
+    );
+    console.log("[createExpense] travel type", typeof data.travel, Array.isArray(data.travel));
+  } catch (e) {
+    console.warn("[createExpense] debug log failed:", e);
+  }
+
   const currentUser = auth.currentUser;
   // Check subscription limit before creating expense
   if (currentUser?.uid) {
@@ -179,8 +262,13 @@ export async function createExpense(
       
       let monthlyExpenseCount = 0;
       for (const project of projects) {
+        const pid = project?.id?.trim();
+        if (!pid) {
+          if (__DEV__) console.warn("[expenses] createExpense: skip project with missing id in limit count", project);
+          continue;
+        }
         try {
-          const expenses = await listExpensesByProject(project.id);
+          const expenses = await listExpensesByProject(pid);
           const monthlyExpenses = expenses.filter((exp) => {
             if (!exp.date || exp.status !== "READY") return false;
             const expenseDate = new Date(exp.date);
@@ -206,21 +294,28 @@ export async function createExpense(
       console.warn("[expenses] Subscription limit check failed, allowing creation (server will enforce):", error);
     }
   }
-  
+
+  const jsDate = coerceExpenseDate(data.date);
+  const safeDate = jsDate != null ? Timestamp.fromDate(jsDate) : serverTimestamp();
+  const travelPayload =
+    data.travel == null ? null : travelToFirestoreMap(data.travel);
+
   const c = collection(db, paths.projectExpenses(projectId));
+  // Do not run Object.entries-based sanitizers on this payload: FieldValue (serverTimestamp)
+  // is often non-enumerable and would be dropped, breaking the native RN Firebase bridge.
   const ref = await addDoc(c, {
     ownerId,
     projectId,
     title: data.title.trim(),
     amount: data.amount,
     currency: data.currency ?? "EUR",
-    date: data.date ? Timestamp.fromDate(data.date) : serverTimestamp(),
+    date: safeDate,
     note: data.note?.trim() ?? null,
     taskId: data.taskId ?? null,
     phaseId: data.phaseId ?? null,
     attachmentId: data.attachmentId ?? null,
-    source: data.source ?? 'MANUAL',
-    status: data.status ?? 'READY',
+    source: data.source ?? "MANUAL",
+    status: data.status ?? "READY",
     category: data.category ?? null,
     supplierName: data.supplierName?.trim() ?? null,
     supplierIco: data.supplierIco?.trim() ?? null,
@@ -235,7 +330,7 @@ export async function createExpense(
     ocrTotalAmount: data.ocrTotalAmount ?? null,
     ocrVatAmount: data.ocrVatAmount ?? null,
     ocrCurrency: data.ocrCurrency ?? null,
-    travel: data.travel ?? null,
+    travel: travelPayload,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   });
@@ -262,7 +357,7 @@ export async function createExpense(
       projectId,
       "expense_added",
       {
-        amount: data.amount ?? undefined,
+        ...(data.amount != null ? { amount: data.amount } : {}),
         currency: data.currency ?? "EUR",
       },
       { kind: "expense", id: ref.id }
@@ -270,16 +365,22 @@ export async function createExpense(
   } catch (error) {
     console.warn("[expenses] Failed to create project event:", error);
   }
-  
+
   console.log(`[expenses] Created expense ${ref.id} in project ${projectId}`);
-  
+
+  const returnDate = coerceExpenseDate(data.date);
+  const dateIso =
+    returnDate != null && !Number.isNaN(returnDate.getTime())
+      ? returnDate.toISOString()
+      : new Date().toISOString();
+
   return {
     id: ref.id,
     projectId,
     title: data.title.trim(),
     amount: data.amount,
     currency: data.currency ?? "EUR",
-    date: data.date ? data.date.toISOString() : new Date().toISOString(),
+    date: dateIso,
     note: data.note,
     taskId: data.taskId,
     phaseId: data.phaseId,
@@ -309,7 +410,12 @@ export async function createExpense(
  * List all expenses for a project
  */
 export async function listExpensesByProject(projectId: string): Promise<ExpenseDoc[]> {
-  const c = collection(db, paths.projectExpenses(projectId));
+  const pid = typeof projectId === "string" ? projectId.trim() : "";
+  if (!pid) {
+    if (__DEV__) console.warn("[expenses] listExpensesByProject: empty projectId, returning []");
+    return [];
+  }
+  const c = collection(db, paths.projectExpenses(pid));
   const q = query(c, orderBy("date", "desc"));
   try {
     const snap = await getDocsSmart(q);
@@ -367,7 +473,10 @@ export async function updateExpense(
   if (data.title !== undefined) updateData.title = data.title.trim();
   if (data.amount !== undefined) updateData.amount = data.amount;
   if (data.currency !== undefined) updateData.currency = data.currency;
-  if (data.date !== undefined) updateData.date = Timestamp.fromDate(data.date);
+  if (data.date !== undefined) {
+    updateData.date =
+      data.date && !Number.isNaN(data.date.getTime()) ? Timestamp.fromDate(data.date) : null;
+  }
   if (data.note !== undefined) updateData.note = data.note?.trim() ?? null;
   if (data.taskId !== undefined) updateData.taskId = data.taskId ?? null;
   if (data.phaseId !== undefined) updateData.phaseId = data.phaseId ?? null;
@@ -389,8 +498,14 @@ export async function updateExpense(
   if (data.ocrTotalAmount !== undefined) updateData.ocrTotalAmount = data.ocrTotalAmount ?? null;
   if (data.ocrVatAmount !== undefined) updateData.ocrVatAmount = data.ocrVatAmount ?? null;
   if (data.ocrCurrency !== undefined) updateData.ocrCurrency = data.ocrCurrency ?? null;
-  if (data.travel !== undefined) updateData.travel = data.travel ?? null;
-  
+  if (data.travel !== undefined) {
+    updateData.travel = data.travel == null ? null : travelToFirestoreMap(data.travel);
+  }
+
+  for (const k of Object.keys(updateData)) {
+    if (updateData[k] === undefined) delete updateData[k];
+  }
+
   await updateDoc(ref, updateData);
   console.log(`[expenses] Updated expense ${expenseId} in project ${projectId}`);
 }

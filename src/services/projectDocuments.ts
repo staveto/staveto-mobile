@@ -14,6 +14,7 @@ import {
 } from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
+import { isPlainObject } from "../utils/isPlainObject";
 import type { ProjectDocument } from "../lib/types";
 import * as attachmentsService from "./attachments";
 
@@ -34,11 +35,11 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
   let d: Record<string, unknown>;
   try {
     const raw = docSnap.data();
-    if (raw == null || typeof raw !== "object") {
+    if (!isPlainObject(raw)) {
       if (__DEV__) console.warn(`[projectDocuments] toDoc: missing or invalid data for doc ${docSnap.id}`);
       return null;
     }
-    d = raw as Record<string, unknown>;
+    d = raw;
   } catch (e) {
     if (__DEV__) console.warn(`[projectDocuments] toDoc: data() failed for ${docSnap.id}`, e);
     return null;
@@ -197,24 +198,27 @@ export async function deleteProjectDocument(projectId: string, documentId: strin
   
   if (docSnap.exists()) {
     const data = docSnap.data();
-    const attachmentId = data.attachmentId;
-    
-    // Delete attachment from Storage and Firestore
-    if (attachmentId) {
-      try {
-        const attachmentRef = doc(db, paths.projectAttachment(projectId, attachmentId));
-        const attachmentSnap = await getDoc(attachmentRef);
-        if (attachmentSnap.exists()) {
-          const attachmentData = attachmentSnap.data();
-          await attachmentsService.deleteAttachment(
-            projectId,
-            attachmentId,
-            attachmentData.storagePath
-          );
+    if (!isPlainObject(data)) {
+      console.warn(`[projectDocuments] deleteProjectDocument: invalid doc data for ${documentId}, skipping attachment cleanup`);
+    } else {
+      const attachmentId = typeof data.attachmentId === "string" ? data.attachmentId : "";
+
+      if (attachmentId) {
+        try {
+          const attachmentRef = doc(db, paths.projectAttachment(projectId, attachmentId));
+          const attachmentSnap = await getDoc(attachmentRef);
+          if (attachmentSnap.exists()) {
+            const attachmentRaw = attachmentSnap.data();
+            const attachmentData = isPlainObject(attachmentRaw) ? attachmentRaw : {};
+            const storagePath =
+              typeof attachmentData.storagePath === "string" ? attachmentData.storagePath : "";
+            if (storagePath) {
+              await attachmentsService.deleteAttachment(projectId, attachmentId, storagePath);
+            }
+          }
+        } catch (error: any) {
+          console.error(`[projectDocuments] Error deleting attachment:`, error);
         }
-      } catch (error: any) {
-        console.error(`[projectDocuments] Error deleting attachment:`, error);
-        // Continue with document deletion even if attachment deletion fails
       }
     }
   }

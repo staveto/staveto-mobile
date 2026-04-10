@@ -14,6 +14,7 @@ import {
 import { auth, db } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { ProjectEvent, ProjectEventType } from "../lib/types";
+import { isPlainObject } from "../utils/isPlainObject";
 
 type ProjectEventPayload = {
   actorName?: string;
@@ -37,6 +38,16 @@ type ProjectEventRef = {
   [key: string]: unknown;
 };
 
+/** Firestore rejects `undefined` anywhere in document data (RN Firebase throws). */
+export function omitUndefinedFields(obj: unknown): Record<string, unknown> {
+  const plain = isPlainObject(obj) ? obj : {};
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(plain)) {
+    if (v !== undefined) out[k] = v;
+  }
+  return out;
+}
+
 function toProjectEvent(docSnap: { id: string; data: () => Record<string, unknown> }): ProjectEvent {
   const data = docSnap.data();
   return {
@@ -56,18 +67,30 @@ export async function addProjectEvent(
   payload?: ProjectEventPayload,
   ref?: ProjectEventRef
 ): Promise<void> {
+  try {
+    console.log("[addProjectEvent] payload", JSON.stringify(payload, null, 2));
+    console.log("[addProjectEvent] ref", ref, typeof ref, Array.isArray(ref));
+  } catch (e) {
+    console.warn("[addProjectEvent] debug log failed:", e);
+  }
+
   const currentUser = auth.currentUser;
   const actorId = currentUser?.uid ?? "system";
   const actorName = payload?.actorName ?? currentUser?.displayName ?? currentUser?.email ?? null;
 
   const eventsRef = collection(db, paths.projectEvents(projectId));
+  const safePayload = omitUndefinedFields(payload) as ProjectEventPayload;
+  const safeRef =
+    ref != null && typeof ref === "object" && !Array.isArray(ref)
+      ? (omitUndefinedFields(ref) as ProjectEventRef)
+      : null;
   await addDoc(eventsRef, {
     type,
     createdAt: serverTimestamp(),
     actorId,
     actorName,
-    payload: payload ?? {},
-    ref: ref ?? null,
+    payload: safePayload,
+    ref: safeRef,
   });
 }
 

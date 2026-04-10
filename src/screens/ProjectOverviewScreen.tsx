@@ -18,6 +18,7 @@ import {
   KeyboardAvoidingView,
   Dimensions,
 } from "react-native";
+
 // Conditional imports - only load if packages are installed
 let ImagePicker: typeof import('expo-image-picker') | null = null;
 let DocumentPicker: typeof import('expo-document-picker') | null = null;
@@ -55,7 +56,13 @@ import * as projectCoverService from "../services/projectCover";
 import * as equipmentService from "../services/equipment";
 import * as serviceRulesService from "../services/serviceRules";
 import * as weatherService from "../services/weather";
-import { extractInvoiceData, type OcrParsed, type OcrStatus } from "../services/invoiceOCR";
+import {
+  processInvoiceAttachment,
+  type OcrParsed,
+  type OcrResult,
+  type OcrStatus,
+} from "../services/invoiceProcessing";
+import type { InvoiceExtractionSource } from "../lib/invoiceTypes";
 import { calculateRouteDistanceKm } from "../services/mapsDistance";
 import { EUROPEAN_COUNTRIES, buildAddressWithCountry, parseCountryFromAddress } from "../utils/europeanCountries";
 import { COUNTRY_CODES, getDeviceRegionCode, getLocalizedCountryName } from "../utils/countries";
@@ -87,6 +94,13 @@ import { CurrencyDropdown } from "../components/CurrencyDropdown";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
 
 const DONE_COLOR = "#2e7d32";
+
+/** Foto faktúry alebo PDF – po výbere sa spustí automatické OCR */
+function isExpenseOcrAttachmentKind(
+  kind: "image" | "pdf" | "document" | undefined | null
+): boolean {
+  return kind === "image" || kind === "pdf";
+}
 
 export function ProjectOverviewScreen() {
   const route = useRoute();
@@ -209,6 +223,7 @@ export function ProjectOverviewScreen() {
     linkedExpenseId?: string;
   } | null>(null);
   const [expenseOcrStatus, setExpenseOcrStatus] = useState<OcrStatus | null>(null);
+  const [expenseOcrExtractionSource, setExpenseOcrExtractionSource] = useState<InvoiceExtractionSource | null>(null);
   const [uploadingExpenseAttachment, setUploadingExpenseAttachment] = useState(false);
   const [showAttachmentModal, setShowAttachmentModal] = useState(false);
   const [attachmentContext, setAttachmentContext] = useState<{ type: 'task' | 'expense'; id: string } | null>(null);
@@ -328,6 +343,12 @@ export function ProjectOverviewScreen() {
       }
       if (codeLower.includes("unauthenticated") || codeLower.includes("permission-denied")) {
         return t("ocr.noPermission");
+      }
+      if (code === "PDF_NO_TEXT") {
+        return t("ocr.pdfNoText");
+      }
+      if (code === "CLOUD_OCR_NOT_FOUND" || code === "CLOUD_OCR_FAILED") {
+        return t("ocr.pdfMobileAndCloudUnavailable");
       }
       return t("ocr.manualFallback");
     },
@@ -1610,6 +1631,7 @@ export function ProjectOverviewScreen() {
       setExpenseAttachment(null);
       setExpensePreuploadedAttachment(null);
       setExpenseOcrStatus(null);
+      setExpenseOcrExtractionSource(null);
       const t = expense.travel;
       setExpenseTravelFromAddress(t?.fromAddress ?? "");
       setExpenseTravelToAddress(t?.toAddress ?? "");
@@ -1636,6 +1658,7 @@ export function ProjectOverviewScreen() {
       setExpenseAttachment(null);
       setExpensePreuploadedAttachment(null);
       setExpenseOcrStatus(null);
+      setExpenseOcrExtractionSource(null);
       setExpenseTravelFromAddress("");
       setExpenseTravelToAddress("");
       setExpenseTravelDistanceKm("");
@@ -1647,7 +1670,20 @@ export function ProjectOverviewScreen() {
     setShowExpenseModal(true);
   };
 
-  const applyOcrPrefill = (parsed: OcrParsed | null) => {
+  const getExtractionSourceLabel = useCallback(
+    (src: InvoiceExtractionSource | null | undefined) => {
+      if (!src || src === "none") return null;
+      if (src === "pdf-text") return t("expense.ocrSourcePdfText");
+      if (src === "cloud-ocr") return t("expense.ocrSourceCloud");
+      if (src === "image-ocr") return t("expense.ocrSourceImageOcr");
+      if (src === "pdf-render-ocr") return t("expense.ocrSourcePdfRender");
+      return null;
+    },
+    [t]
+  );
+
+  const applyOcrPrefill = (ocrResult: OcrResult | null) => {
+    const parsed = ocrResult?.parsed;
     if (!parsed) return;
     const amount = parsed.totalAmount;
     if (amount != null && amount > 0 && amount <= 999_999.99) {
@@ -1669,6 +1705,22 @@ export function ProjectOverviewScreen() {
     }
     if (parsed.supplierTaxId) {
       setExpenseSupplierIco(parsed.supplierTaxId);
+    }
+    const inv = parsed.invoiceNumber?.trim();
+    if (inv) {
+      setExpenseNote((prev) => {
+        if (prev.includes(inv)) return prev;
+        const line = `Faktúra č.: ${inv}`;
+        return prev.trim() ? `${prev.trim()}\n${line}` : line;
+      });
+    }
+    const due = parsed.dueDate?.trim();
+    if (due) {
+      setExpenseNote((prev) => {
+        if (prev.includes(due) && /Splatnosť/i.test(prev)) return prev;
+        const line = `Splatnosť: ${due}`;
+        return prev.trim() ? `${prev.trim()}\n${line}` : line;
+      });
     }
   };
 
@@ -1711,7 +1763,8 @@ export function ProjectOverviewScreen() {
     await cleanupPreuploadedExpenseAttachment(picked);
     setExpenseAttachment(picked);
     setExpenseOcrStatus(null);
-    if (editingExpense || picked.kind !== "image" || !projectId) {
+    setExpenseOcrExtractionSource(null);
+    if (editingExpense || !isExpenseOcrAttachmentKind(picked.kind) || !projectId) {
       return;
     }
     if (uploadingExpenseAttachment || ocrLoading) {
@@ -1727,7 +1780,7 @@ export function ProjectOverviewScreen() {
         localUri: picked.uri,
         fileName: picked.fileName,
         mimeType: picked.mimeType,
-        kind: "image",
+        kind: picked.kind === "pdf" ? "pdf" : "image",
       });
       const uploadedFilePath = attachment.storagePath?.trim();
       if (!uploadedFilePath) {
@@ -1745,15 +1798,17 @@ export function ProjectOverviewScreen() {
       });
       setUploadingExpenseAttachment(false);
       setOcrLoading(true);
-      const result = await extractInvoiceData({
+      const result = await processInvoiceAttachment({
         filePath: uploadedFilePath,
         mimeType: picked.mimeType,
         attachmentId: attachment.id,
         projectId,
+        localPdfUri: picked.kind === "pdf" ? picked.uri : undefined,
       });
       setExpenseOcrStatus(result.status);
+      setExpenseOcrExtractionSource(result.extractionSource ?? null);
       if (result.status === "success") {
-        applyOcrPrefill(result.parsed);
+        applyOcrPrefill(result);
       } else {
         console.log("[OCR UI] error.code =", result.errorCode, "message=", result.errorCode);
         Alert.alert(t("common.warning"), getOcrFallbackMessage(result.errorCode, result.cooldownSeconds));
@@ -1762,6 +1817,7 @@ export function ProjectOverviewScreen() {
       console.error("[ProjectOverview] Auto OCR after pick failed:", error);
       console.log("[OCR UI] error.code =", error?.code, "message=", error?.message);
       setExpenseOcrStatus("failed");
+      setExpenseOcrExtractionSource(null);
       Alert.alert(t("common.warning"), getOcrFallbackMessage(error?.code || error?.message));
     } finally {
       setUploadingExpenseAttachment(false);
@@ -2079,7 +2135,7 @@ export function ProjectOverviewScreen() {
     setOcrPendingReview(input);
     setOcrLoading(true);
     try {
-      const result = await extractInvoiceData({
+      const result = await processInvoiceAttachment({
         filePath: normalizedPath,
         mimeType: input.mimeType,
         attachmentId: input.attachmentId,
@@ -2124,7 +2180,7 @@ export function ProjectOverviewScreen() {
       return;
     }
     if (!projectId || !orgId) return;
-    const canUseOcrDraft = !editingExpense && expenseAttachment?.kind === "image";
+    const canUseOcrDraft = !editingExpense && isExpenseOcrAttachmentKind(expenseAttachment?.kind);
     const isTravel = expenseCategory === "TRAVEL";
 
     let titleValue: string;
@@ -2168,10 +2224,63 @@ export function ProjectOverviewScreen() {
       return;
     }
     
+    const expenseDateObj = new Date(expenseDate);
+    if (Number.isNaN(expenseDateObj.getTime())) {
+      Alert.alert(t("common.error"), t("projectOverview.expenseDatePlaceholder"));
+      return;
+    }
+
     setSubmitting(true);
     let openedOcrReview = false;
     try {
-      const expenseDateObj = new Date(expenseDate);
+      const form = {
+        editing: !!editingExpense,
+        title: titleValue,
+        amount,
+        category: expenseCategory,
+        expenseDate,
+        currency: expenseCurrency,
+        phaseId: expensePhaseId,
+        note: expenseNote,
+        supplierName: expenseSupplierName,
+        supplierIco: expenseSupplierIco,
+        ocrStatus: expenseOcrStatus,
+        attachments: expensePreuploadedAttachment
+          ? {
+              mode: "preuploaded" as const,
+              attachmentId: expensePreuploadedAttachment.attachmentId,
+              storagePath: expensePreuploadedAttachment.storagePath,
+              mimeType: expensePreuploadedAttachment.mimeType,
+              kind: expensePreuploadedAttachment.kind,
+              fileName: expensePreuploadedAttachment.fileName,
+              isLinkedToExpense: expensePreuploadedAttachment.isLinkedToExpense,
+              linkedExpenseId: expensePreuploadedAttachment.linkedExpenseId,
+              localUriLen: expensePreuploadedAttachment.localUri?.length,
+            }
+          : expenseAttachment
+            ? {
+                mode: "local" as const,
+                kind: expenseAttachment.kind,
+                fileName: expenseAttachment.fileName,
+                mimeType: expenseAttachment.mimeType,
+                uriLen: expenseAttachment.uri?.length,
+              }
+            : null,
+        receipt: {
+          ocrStatus: expenseOcrStatus,
+          supplierDraft: expenseSupplierName.trim() || null,
+        },
+        travel: travelData ?? null,
+      };
+      try {
+        console.log("[saveExpense] form", JSON.stringify(form, null, 2));
+        console.log("[saveExpense] attachments", JSON.stringify(form?.attachments ?? null, null, 2));
+        console.log("[saveExpense] receipt", JSON.stringify(form?.receipt ?? null, null, 2));
+        console.log("[saveExpense] travel", JSON.stringify(form?.travel ?? null, null, 2));
+      } catch (logErr) {
+        console.warn("[saveExpense] debug log failed:", logErr);
+      }
+
       let attachmentId: string | null = null;
       
       if (editingExpense) {
@@ -2225,7 +2334,7 @@ export function ProjectOverviewScreen() {
           source: (expenseAttachment || expensePreuploadedAttachment) ? "DOCUMENT" : "MANUAL",
           status: "READY",
           uploadStatus: expensePreuploadedAttachment ? "uploaded" : (expenseAttachment ? "pending" : undefined),
-          ocrStatus: expenseAttachment?.kind === "image"
+          ocrStatus: isExpenseOcrAttachmentKind(expenseAttachment?.kind)
             ? (expenseOcrStatus === "success" ? "done" : (expenseOcrStatus ? "failed" : "pending"))
             : undefined,
           filePath: expensePreuploadedAttachment?.storagePath ?? null,
@@ -2247,7 +2356,7 @@ export function ProjectOverviewScreen() {
             uploadStatus: "uploaded",
             filePath: expensePreuploadedAttachment.storagePath,
             mimeType: expensePreuploadedAttachment.mimeType,
-            ocrStatus: expenseAttachment?.kind === "image"
+            ocrStatus: isExpenseOcrAttachmentKind(expenseAttachment?.kind)
               ? (expenseOcrStatus === "success" ? "done" : (expenseOcrStatus ? "failed" : "pending"))
               : undefined,
             ocrSupplierName: expenseSupplierName.trim() || null,
@@ -2284,14 +2393,14 @@ export function ProjectOverviewScreen() {
               uploadStatus: "uploaded",
               filePath: attachmentStoragePath ?? null,
               mimeType: expenseAttachment.mimeType,
-              ocrStatus: expenseAttachment.kind === "image" ? "pending" : undefined,
+              ocrStatus: isExpenseOcrAttachmentKind(expenseAttachment.kind) ? "pending" : undefined,
               ocrSupplierName: expenseSupplierName.trim() || null,
               ocrIssueDate: expenseDate || null,
               ocrTotalAmount: amount ?? null,
             });
             console.log(`[ProjectOverview] Uploaded expense attachment: ${attachmentId}`);
 
-            if (expenseAttachment.kind === "image" && attachmentStoragePath) {
+            if (isExpenseOcrAttachmentKind(expenseAttachment.kind) && attachmentStoragePath) {
               setShowExpenseModal(false);
               openedOcrReview = true;
               await startOcrReview({
@@ -2313,10 +2422,10 @@ export function ProjectOverviewScreen() {
               uploadStatus: "failed",
               status: "READY",
               filePath: null,
-              ocrStatus: expenseAttachment.kind === "image" ? "failed" : undefined,
+              ocrStatus: isExpenseOcrAttachmentKind(expenseAttachment.kind) ? "failed" : undefined,
               mimeType: expenseAttachment.mimeType,
             });
-            if (expenseAttachment.kind === "image") {
+            if (isExpenseOcrAttachmentKind(expenseAttachment.kind)) {
               setShowExpenseModal(false);
               openedOcrReview = true;
               Alert.alert(t("common.warning"), getOcrFallbackMessage("OCR_SAVE_FALLBACK"));
@@ -4752,6 +4861,7 @@ export function ProjectOverviewScreen() {
                       setExpenseAttachment(null);
                       setExpensePreuploadedAttachment(null);
                       setExpenseOcrStatus(null);
+                      setExpenseOcrExtractionSource(null);
                     }}
                     style={styles.expenseAttachmentRemove}
                   >
@@ -4759,6 +4869,14 @@ export function ProjectOverviewScreen() {
                   </TouchableOpacity>
                 </View>
               )}
+              {expenseOcrStatus === "success" &&
+                expenseOcrExtractionSource &&
+                expenseOcrExtractionSource !== "none" &&
+                getExtractionSourceLabel(expenseOcrExtractionSource) ? (
+                <Text style={styles.expenseOcrSourceHint}>
+                  {getExtractionSourceLabel(expenseOcrExtractionSource)}
+                </Text>
+              ) : null}
               {uploadingExpenseAttachment && (
                 <View style={styles.expenseAttachmentUploading}>
                   <ActivityIndicator size="small" color={colors.primary} />
@@ -4980,11 +5098,27 @@ export function ProjectOverviewScreen() {
                   <View style={styles.expenseAttachmentPreview}>
                     <Ionicons name={expenseAttachment.kind === 'image' ? 'image-outline' : 'document-outline'} size={20} color={colors.primary} style={{ marginRight: spacing.sm }} />
                     <Text style={styles.expenseAttachmentPreviewText} numberOfLines={1}>{expenseAttachment.fileName}</Text>
-                    <TouchableOpacity onPress={() => { setExpenseAttachment(null); setExpensePreuploadedAttachment(null); setExpenseOcrStatus(null); }} style={styles.expenseAttachmentRemove}>
+                    <TouchableOpacity
+                      onPress={() => {
+                        setExpenseAttachment(null);
+                        setExpensePreuploadedAttachment(null);
+                        setExpenseOcrStatus(null);
+                        setExpenseOcrExtractionSource(null);
+                      }}
+                      style={styles.expenseAttachmentRemove}
+                    >
                       <Ionicons name="close-circle" size={20} color={colors.textMuted} />
                     </TouchableOpacity>
                   </View>
                 )}
+                {expenseOcrStatus === "success" &&
+                  expenseOcrExtractionSource &&
+                  expenseOcrExtractionSource !== "none" &&
+                  getExtractionSourceLabel(expenseOcrExtractionSource) ? (
+                  <Text style={styles.expenseOcrSourceHint}>
+                    {getExtractionSourceLabel(expenseOcrExtractionSource)}
+                  </Text>
+                ) : null}
                 {uploadingExpenseAttachment && (
                   <View style={styles.expenseAttachmentUploading}>
                     <ActivityIndicator size="small" color={colors.primary} />
@@ -5071,6 +5205,8 @@ export function ProjectOverviewScreen() {
                   setExpenseSupplierName("");
                   setExpenseAttachment(null);
                   setExpensePreuploadedAttachment(null);
+                  setExpenseOcrStatus(null);
+                  setExpenseOcrExtractionSource(null);
                   setExpenseTravelFromAddress("");
                   setExpenseTravelToAddress("");
                   setExpenseTravelDistanceKm("");
@@ -5089,7 +5225,7 @@ export function ProjectOverviewScreen() {
                   (!expenseCategory
                     || (expenseCategory === "TRAVEL"
                       ? (!expenseTravelFromAddress.trim() || !expenseTravelToAddress.trim() || !expenseTravelDistanceKm.trim() || !Number.isFinite(parseFloat(expenseTravelDistanceKm.replace(",", "."))) || parseFloat(expenseTravelDistanceKm.replace(",", ".")) <= 0)
-                      : (!expenseTitle.trim() && !(expenseAttachment?.kind === "image" && !editingExpense)))
+                      : (!expenseTitle.trim() && !(isExpenseOcrAttachmentKind(expenseAttachment?.kind) && !editingExpense)))
                     || submitting
                     || uploadingExpenseAttachment
                     || ocrLoading
@@ -5100,7 +5236,7 @@ export function ProjectOverviewScreen() {
                   !expenseCategory
                   || (expenseCategory === "TRAVEL"
                     ? !expenseTravelFromAddress.trim() || !expenseTravelToAddress.trim() || !expenseTravelDistanceKm.trim() || !Number.isFinite(parseFloat(expenseTravelDistanceKm.replace(",", "."))) || parseFloat(expenseTravelDistanceKm.replace(",", ".")) <= 0
-                    : (!expenseTitle.trim() && !(expenseAttachment?.kind === "image" && !editingExpense)))
+                    : (!expenseTitle.trim() && !(isExpenseOcrAttachmentKind(expenseAttachment?.kind) && !editingExpense)))
                   || submitting
                   || uploadingExpenseAttachment
                   || ocrLoading
@@ -5163,7 +5299,7 @@ export function ProjectOverviewScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.ocrModal}>
             <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={styles.ocrText}>{t("expense.ocrProcessing")}</Text>
+            <Text style={styles.ocrText}>{t("expense.ocrAnalyzing")}</Text>
             <TouchableOpacity style={styles.ocrCancelButton} onPress={handleOcrCancel}>
               <Text style={styles.ocrCancelText}>{t("expense.proceedManually")}</Text>
             </TouchableOpacity>
@@ -7231,6 +7367,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: colors.text,
   },
+  expenseOcrSourceHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
+    marginLeft: spacing.xs,
+  },
   expenseAttachmentRemove: {
     padding: spacing.xs,
   },
@@ -7266,10 +7408,6 @@ const styles = StyleSheet.create({
     marginLeft: spacing.xs,
   },
   taskActionButton: {
-    padding: spacing.xs,
-    marginLeft: spacing.xs,
-  },
-  taskMenuButton: {
     padding: spacing.xs,
     marginLeft: spacing.xs,
   },

@@ -53,6 +53,8 @@ export function getFunctionsInstance() {
   if (_functions) return _functions;
   try {
     const app = require("@react-native-firebase/app").getApp();
+    const projectId = (app?.options as { projectId?: string } | undefined)?.projectId ?? "(unknown)";
+    console.log("[firebase] getFunctionsInstance init", { region: REGION, projectId });
     _functions = require("@react-native-firebase/functions").getFunctions(app, REGION);
     return _functions;
   } catch (e) {
@@ -63,19 +65,20 @@ export function getFunctionsInstance() {
 
 const FUNCTIONS_TIMEOUT_MS = 6000;
 
-/** Keep call style: getCallable("name")(data). Wrapped with 6s timeout for fast fail on weak network. */
-export const getCallable = <T = unknown, R = unknown>(name: string) => {
+/** Keep call style: getCallable("name")(data). Optional longer timeout (e.g. OCR). */
+export const getCallable = <T = unknown, R = unknown>(
+  name: string,
+  opts?: { timeoutMs?: number }
+) => {
+  const timeoutMs = opts?.timeoutMs ?? FUNCTIONS_TIMEOUT_MS;
   return async (data: T) => {
     if (IOS_SKIP_AUTH || !isFirebaseAvailable()) throw new Error("FIREBASE_DISABLED");
     const fns = getFunctionsInstance();
     if (!fns) throw new Error("FIREBASE_FUNCTIONS_NOT_READY");
     try {
       const { httpsCallable } = require("@react-native-firebase/functions");
-      return await withTimeout(
-        httpsCallable<T, R>(fns, name)(data),
-        FUNCTIONS_TIMEOUT_MS,
-        name
-      );
+      const call = httpsCallable(fns, name) as (d: T) => Promise<R>;
+      return await withTimeout(call(data), timeoutMs, name);
     } catch (err) {
       if (isTimeoutOrOfflineError(err)) {
         const friendly = new Error(

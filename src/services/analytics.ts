@@ -5,6 +5,7 @@
  */
 
 import { isFirebaseAvailable } from "../lib/firebaseAvailable";
+import { isPlainObject } from "../utils/isPlainObject";
 
 function getAnalytics(): ReturnType<typeof import("@react-native-firebase/analytics")["default"]> | null {
   if (!isFirebaseAvailable()) return null;
@@ -42,7 +43,7 @@ function sanitizeValue(value: unknown): unknown {
     return value.slice(0, 5).map(sanitizeValue); // limit array size
   }
   if (typeof value === "object") {
-    const obj = value as Record<string, unknown>;
+    const obj = isPlainObject(value) ? value : {};
     const out: Record<string, unknown> = {};
     let count = 0;
     for (const [k, v] of Object.entries(obj)) {
@@ -61,7 +62,7 @@ function sanitizeParams(params?: Record<string, unknown>): Record<string, unknow
   if (!params || typeof params !== "object") return undefined;
   const out: Record<string, unknown> = {};
   let count = 0;
-  for (const [k, v] of Object.entries(params)) {
+  for (const [k, v] of Object.entries(isPlainObject(params) ? params : {})) {
     if (count >= MAX_PARAMS) break;
     if (isPiiKey(k)) continue;
     out[k] = sanitizeValue(v);

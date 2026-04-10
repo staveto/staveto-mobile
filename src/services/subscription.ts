@@ -96,14 +96,18 @@ export async function getUserTier(userId: string): Promise<SubscriptionTier> {
     const endMs = toMillis(subscription.currentPeriodEnd);
     if (endMs > 0 && endMs <= Date.now()) return "FREE";
   }
-  return subscription.tier;
+  const t = subscription.tier;
+  if (typeof t === "string" && t in TIER_LIMITS) {
+    return t as SubscriptionTier;
+  }
+  return "FREE";
 }
 
 /**
  * Get subscription limits for a tier
  */
 export function getSubscriptionLimits(tier: SubscriptionTier): SubscriptionLimits {
-  return TIER_LIMITS[tier];
+  return TIER_LIMITS[tier] ?? TIER_LIMITS.FREE;
 }
 
 /**

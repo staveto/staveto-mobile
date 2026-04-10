@@ -27,7 +27,7 @@ import * as projectsService from "../services/projects";
 import * as tasksService from "../services/tasks";
 import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
-import { extractInvoiceData } from "../services/invoiceOCR";
+import { processInvoiceAttachment } from "../services/invoiceProcessing";
 import * as dashboardService from "../services/dashboard";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectCoverService from "../services/projectCover";
@@ -1030,7 +1030,7 @@ export function HomeScreen() {
         });
         const storagePath = attachment.storagePath?.trim();
         if (!storagePath) throw new Error("Upload returned empty path.");
-        const result = await extractInvoiceData({
+        const result = await processInvoiceAttachment({
           filePath: storagePath,
           mimeType: "image/jpeg",
           attachmentId: attachment.id,

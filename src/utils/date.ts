@@ -82,14 +82,19 @@ export function firestoreValueToIsoString(ts: unknown): string | undefined {
   if (ts == null || ts === "") return undefined;
   try {
     if (typeof ts === "string") return ts;
-    if (ts instanceof Date) {
-      return isNaN(ts.getTime()) ? undefined : ts.toISOString();
-    }
     if (typeof ts === "object" && ts !== null) {
       const o = ts as Record<string, unknown>;
       if (typeof o.toDate === "function") {
         const d = (o.toDate as () => Date)();
-        if (d instanceof Date && !isNaN(d.getTime())) return d.toISOString();
+        if (d != null && typeof (d as Date).getTime === "function") {
+          const ms = (d as Date).getTime();
+          if (typeof ms === "number" && !Number.isNaN(ms)) return new Date(ms).toISOString();
+        }
+      }
+      const gt = (o as { getTime?: () => number }).getTime;
+      if (typeof gt === "function") {
+        const ms = (gt as () => number).call(ts);
+        if (typeof ms === "number" && !Number.isNaN(ms)) return new Date(ms).toISOString();
       }
       const sec = o.seconds;
       if (typeof sec === "number") {

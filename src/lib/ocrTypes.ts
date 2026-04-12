@@ -1,5 +1,6 @@
 import type { CurrencyCode } from "../utils/invoiceUniversal";
 import type { InvoiceExtractionSource, ParsedInvoiceData } from "./invoiceTypes";
+import type { ParsedDocumentData } from "./parsedDocumentTypes";
 
 export type OcrStatus = "success" | "failed" | "limit";
 
@@ -25,4 +26,6 @@ export type OcrResult = {
   cooldownSeconds?: number;
   extractionSource?: InvoiceExtractionSource;
   parsedInvoice?: ParsedInvoiceData;
+  /** Universal document model (candidates, document type, multilingual fields). */
+  parsedDocument?: ParsedDocumentData;
 };

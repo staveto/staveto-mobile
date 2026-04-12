@@ -62,6 +62,11 @@ import {
   type OcrResult,
   type OcrStatus,
 } from "../services/invoiceProcessing";
+import {
+  buildExpenseDocumentPrefill,
+  getConfidenceAwareExpensePrefill,
+  prefillDebugPayload,
+} from "../services/documentPrefill";
 import type { InvoiceExtractionSource } from "../lib/invoiceTypes";
 import { calculateRouteDistanceKm } from "../services/mapsDistance";
 import { EUROPEAN_COUNTRIES, buildAddressWithCountry, parseCountryFromAddress } from "../utils/europeanCountries";
@@ -206,6 +211,22 @@ export function ProjectOverviewScreen() {
   const { isOnline } = useOnlineStatus();
   const [isLoadingDistance, setIsLoadingDistance] = useState(false);
   const [kmError, setKmError] = useState<string | undefined>(undefined);
+  /** Wider km field when the value has more digits (longer routes / precise decimals). */
+  const travelDistanceInputMinWidth = useMemo(() => {
+    const { width } = Dimensions.get("window");
+    const len = Math.max(expenseTravelDistanceKm.replace(/\s/g, "").length || 1, 3);
+    return Math.max(96, Math.min(width * 0.72, 13 * len + 52));
+  }, [expenseTravelDistanceKm]);
+
+  /** Travel form is long; avoid staying scrolled to bottom (e.g. after autoFocus on title) when switching to TRAVEL. */
+  useEffect(() => {
+    if (!showExpenseModal || expenseCategory !== "TRAVEL") return;
+    const t = setTimeout(() => {
+      expenseModalScrollRef.current?.scrollTo({ y: 0, animated: false });
+    }, 32);
+    return () => clearTimeout(t);
+  }, [showExpenseModal, expenseCategory]);
+
   const [expenseSupplierName, setExpenseSupplierName] = useState("");
   const [expenseSupplierIco, setExpenseSupplierIco] = useState("");
   const [expenseCurrency, setExpenseCurrency] = useState<string>("EUR");
@@ -1683,45 +1704,58 @@ export function ProjectOverviewScreen() {
   );
 
   const applyOcrPrefill = (ocrResult: OcrResult | null) => {
-    const parsed = ocrResult?.parsed;
-    if (!parsed) return;
-    const amount = parsed.totalAmount;
-    if (amount != null && amount > 0 && amount <= 999_999.99) {
-      setExpenseAmount(String(amount));
+    if (!ocrResult?.parsed) {
+      // #region agent log
+      fetch(`${Platform.OS === "android" ? "http://10.0.2.2" : "http://127.0.0.1"}:7281/ingest/2418b79b-8c5b-4006-a07d-878605a09a96`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b82e16" },
+        body: JSON.stringify({
+          sessionId: "b82e16",
+          hypothesisId: "H3",
+          location: "ProjectOverviewScreen.tsx:applyOcrPrefill",
+          message: "skip_no_parsed",
+          data: { status: ocrResult?.status ?? null, hasParsed: !!ocrResult?.parsed },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
+      return;
     }
-    if (parsed.issueDate) {
-      setExpenseDate(parsed.issueDate);
+    const prefill = getConfidenceAwareExpensePrefill(ocrResult);
+    // #region agent log
+    fetch(`${Platform.OS === "android" ? "http://10.0.2.2" : "http://127.0.0.1"}:7281/ingest/2418b79b-8c5b-4006-a07d-878605a09a96`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b82e16" },
+      body: JSON.stringify({
+        sessionId: "b82e16",
+        hypothesisId: "H3",
+        location: "ProjectOverviewScreen.tsx:applyOcrPrefill",
+        message: "prefill_values",
+        data: {
+          amount: prefill.amount ?? null,
+          hasSupplier: !!prefill.supplierName,
+          hasDate: !!prefill.issueDate,
+          hasCurrency: !!prefill.currency,
+          parsedTotal: ocrResult.parsed?.totalAmount ?? null,
+          rawTextLen: ocrResult.rawText?.length ?? 0,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
+    if (__DEV__) {
+      console.log(
+        "[ProjectOverview] OCR prefill",
+        prefillDebugPayload(ocrResult, buildExpenseDocumentPrefill(ocrResult))
+      );
     }
-    if (parsed.currency && parsed.currency !== "UNKNOWN") {
-      setExpenseCurrency(parsed.currency);
-    }
-    const supplier = parsed.supplierName?.trim();
-    const isNoise = supplier && /^[\u0600-\u06FF\s]+$/.test(supplier) && supplier.length < 10;
-    if (supplier && !isNoise) {
-      setExpenseSupplierName(supplier);
-      if (!expenseTitle.trim()) {
-        setExpenseTitle(supplier);
-      }
-    }
-    if (parsed.supplierTaxId) {
-      setExpenseSupplierIco(parsed.supplierTaxId);
-    }
-    const inv = parsed.invoiceNumber?.trim();
-    if (inv) {
-      setExpenseNote((prev) => {
-        if (prev.includes(inv)) return prev;
-        const line = `Faktúra č.: ${inv}`;
-        return prev.trim() ? `${prev.trim()}\n${line}` : line;
-      });
-    }
-    const due = parsed.dueDate?.trim();
-    if (due) {
-      setExpenseNote((prev) => {
-        if (prev.includes(due) && /Splatnosť/i.test(prev)) return prev;
-        const line = `Splatnosť: ${due}`;
-        return prev.trim() ? `${prev.trim()}\n${line}` : line;
-      });
-    }
+    setExpenseTitle("");
+    setExpenseNote("");
+    if (prefill.amount) setExpenseAmount(prefill.amount);
+    if (prefill.issueDate) setExpenseDate(prefill.issueDate);
+    if (prefill.currency) setExpenseCurrency(prefill.currency);
+    if (prefill.supplierName) setExpenseSupplierName(prefill.supplierName);
+    if (prefill.supplierIco) setExpenseSupplierIco(prefill.supplierIco);
   };
 
   const cleanupPreuploadedExpenseAttachment = async (
@@ -1765,6 +1799,25 @@ export function ProjectOverviewScreen() {
     setExpenseOcrStatus(null);
     setExpenseOcrExtractionSource(null);
     if (editingExpense || !isExpenseOcrAttachmentKind(picked.kind) || !projectId) {
+      // #region agent log
+      fetch(`${Platform.OS === "android" ? "http://10.0.2.2" : "http://127.0.0.1"}:7281/ingest/2418b79b-8c5b-4006-a07d-878605a09a96`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b82e16" },
+        body: JSON.stringify({
+          sessionId: "b82e16",
+          hypothesisId: "H1",
+          location: "ProjectOverviewScreen.tsx:handlePickedExpenseAttachment",
+          message: "early_exit_before_ocr",
+          data: {
+            editingExpense: !!editingExpense,
+            ocrKindOk: isExpenseOcrAttachmentKind(picked.kind),
+            hasProjectId: !!projectId,
+            pickedKind: picked.kind,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
       return;
     }
     if (uploadingExpenseAttachment || ocrLoading) {
@@ -1805,6 +1858,28 @@ export function ProjectOverviewScreen() {
         projectId,
         localPdfUri: picked.kind === "pdf" ? picked.uri : undefined,
       });
+      // #region agent log
+      fetch(`${Platform.OS === "android" ? "http://10.0.2.2" : "http://127.0.0.1"}:7281/ingest/2418b79b-8c5b-4006-a07d-878605a09a96`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b82e16" },
+        body: JSON.stringify({
+          sessionId: "b82e16",
+          hypothesisId: "H2",
+          location: "ProjectOverviewScreen.tsx:handlePickedExpenseAttachment",
+          message: "processInvoiceAttachment_done",
+          data: {
+            status: result.status,
+            errorCode: result.errorCode ?? null,
+            extractionSource: result.extractionSource ?? null,
+            totalAmount: result.parsed?.totalAmount ?? null,
+            supplierLen: result.parsed?.supplierName?.length ?? 0,
+            rawTextLen: result.rawText?.length ?? 0,
+            docType: result.parsedDocument?.documentType ?? null,
+          },
+          timestamp: Date.now(),
+        }),
+      }).catch(() => {});
+      // #endregion
       setExpenseOcrStatus(result.status);
       setExpenseOcrExtractionSource(result.extractionSource ?? null);
       if (result.status === "success") {
@@ -2203,10 +2278,15 @@ export function ProjectOverviewScreen() {
       const effectiveKm = expenseTravelRoundTrip ? km * 2 : km;
       amount = Math.round(effectiveKm * rate * 100) / 100;
       titleValue = t("expense.travelDisplay", { from, to });
+      setExpenseTitle(titleValue);
       travelData = { fromAddress: from, toAddress: to, distanceKm: km, ratePerKm: rate, roundTrip: expenseTravelRoundTrip };
     } else {
-      titleValue = expenseTitle.trim() || (canUseOcrDraft ? "Invoice" : "");
-      if (!titleValue) return;
+      const trimmedTitle = expenseTitle.trim();
+      if (!trimmedTitle) {
+        Alert.alert(t("common.error"), t("projectOverview.expenseTitleRequired"));
+        return;
+      }
+      titleValue = trimmedTitle;
       if (expenseAmount.trim()) {
         amount = parseFloat(expenseAmount);
         if (isNaN(amount) || amount <= 0) {
@@ -2281,6 +2361,21 @@ export function ProjectOverviewScreen() {
         console.warn("[saveExpense] debug log failed:", logErr);
       }
 
+      if (__DEV__) {
+        console.log("[saveExpense] pre-persist", {
+          editing: !!editingExpense,
+          travelData: travelData ?? null,
+          selectedAttachment: expensePreuploadedAttachment
+            ? { mode: "preuploaded" as const, attachmentId: expensePreuploadedAttachment.attachmentId }
+            : expenseAttachment
+              ? { mode: "local" as const, kind: expenseAttachment.kind, fileName: expenseAttachment.fileName }
+              : null,
+          ocr: { expenseOcrStatus, canUseOcrDraft },
+          amount,
+          currency: expenseCurrency,
+        });
+      }
+
       let attachmentId: string | null = null;
       
       if (editingExpense) {
@@ -2316,7 +2411,7 @@ export function ProjectOverviewScreen() {
           supplierName: expenseSupplierName.trim() || undefined,
           supplierIco: expenseSupplierIco.trim() || undefined,
           attachmentId: attachmentId || editingExpense.attachmentId || undefined,
-          ...(travelData && { travel: travelData }),
+          ...(travelData != null ? { travel: travelData } : {}),
         });
         Alert.alert(t("common.success"), t("projectOverview.expenseUpdated"));
       } else {
@@ -2340,7 +2435,14 @@ export function ProjectOverviewScreen() {
           filePath: expensePreuploadedAttachment?.storagePath ?? null,
           mimeType: expensePreuploadedAttachment?.mimeType ?? expenseAttachment?.mimeType ?? null,
           ocrCurrency: expenseCurrency || "EUR",
-          ...(travelData && { travel: travelData }),
+          attachments:
+            form.attachments == null
+              ? []
+              : Array.isArray(form.attachments)
+                ? form.attachments
+                : [form.attachments],
+          receipt: form.receipt,
+          travel: travelData ?? null,
         });
 
         if (expensePreuploadedAttachment) {
@@ -4990,7 +5092,11 @@ export function ProjectOverviewScreen() {
                 <Text style={styles.travelFormLabel}>{t("expense.distanceKm")}</Text>
                 <View style={styles.travelDistanceRow}>
                   <TextInput
-                    style={[styles.input, styles.travelDistanceInput]}
+                    style={[
+                      styles.input,
+                      styles.travelDistanceInput,
+                      { minWidth: travelDistanceInputMinWidth },
+                    ]}
                     value={expenseTravelDistanceKm}
                     onChangeText={(t) => {
                       setExpenseTravelDistanceKm(t.replace(/[^\d.,]/g, '').replace(',', '.'));
@@ -5155,7 +5261,7 @@ export function ProjectOverviewScreen() {
               onChangeText={setExpenseTitle}
               placeholder={t("projectOverview.expenseTitlePlaceholder") || "Názov výdavku *"}
               placeholderTextColor={colors.textMuted}
-              autoFocus
+              autoFocus={expenseCategory !== "TRAVEL"}
             />
             {expenseCategory !== 'TRAVEL' && (
             <TouchableOpacity
@@ -5225,7 +5331,7 @@ export function ProjectOverviewScreen() {
                   (!expenseCategory
                     || (expenseCategory === "TRAVEL"
                       ? (!expenseTravelFromAddress.trim() || !expenseTravelToAddress.trim() || !expenseTravelDistanceKm.trim() || !Number.isFinite(parseFloat(expenseTravelDistanceKm.replace(",", "."))) || parseFloat(expenseTravelDistanceKm.replace(",", ".")) <= 0)
-                      : (!expenseTitle.trim() && !(isExpenseOcrAttachmentKind(expenseAttachment?.kind) && !editingExpense)))
+                      : !expenseTitle.trim())
                     || submitting
                     || uploadingExpenseAttachment
                     || ocrLoading
@@ -5236,7 +5342,7 @@ export function ProjectOverviewScreen() {
                   !expenseCategory
                   || (expenseCategory === "TRAVEL"
                     ? !expenseTravelFromAddress.trim() || !expenseTravelToAddress.trim() || !expenseTravelDistanceKm.trim() || !Number.isFinite(parseFloat(expenseTravelDistanceKm.replace(",", "."))) || parseFloat(expenseTravelDistanceKm.replace(",", ".")) <= 0
-                    : (!expenseTitle.trim() && !(isExpenseOcrAttachmentKind(expenseAttachment?.kind) && !editingExpense)))
+                    : !expenseTitle.trim())
                   || submitting
                   || uploadingExpenseAttachment
                   || ocrLoading
@@ -7757,13 +7863,16 @@ const styles = StyleSheet.create({
   },
   travelDistanceRow: {
     flexDirection: "row",
-    alignItems: "center",
+    flexWrap: "wrap",
+    alignItems: "stretch",
     gap: spacing.md,
     marginBottom: spacing.sm,
   },
   travelDistanceInput: {
-    flex: 1,
+    flexGrow: 2,
+    flexShrink: 0,
     minWidth: 0,
+    marginBottom: 0,
   },
   travelRateRow: {
     marginBottom: spacing.sm,
@@ -7813,9 +7922,11 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     backgroundColor: colors.primary,
     paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
+    paddingHorizontal: spacing.md,
     borderRadius: radius,
     minHeight: 48,
+    flexShrink: 1,
+    minWidth: 108,
   },
   calculateKmButtonDisabled: {
     backgroundColor: colors.textMuted,

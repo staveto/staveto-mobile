@@ -8,7 +8,7 @@ import {
   doc,
   orderBy,
   serverTimestamp,
-  Timestamp,
+  firestoreTimestampFromDate,
 } from "../lib/rnFirestore";
 import { getDocsSmart } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
@@ -17,7 +17,8 @@ import { firestoreValueToIsoString } from "../utils/date";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 import { createExpenseAddedNotification } from "./notifications";
 import type { ProjectExpense } from "../lib/types";
-import { addProjectEvent } from "./projectEvents";
+import { addProjectEvent, omitUndefinedFields } from "./projectEvents";
+import { isPlainObject } from "../utils/isPlainObject";
 
 export type ExpenseSource = 'MANUAL' | 'DOCUMENT';
 export type ExpenseStatus = 'PROCESSING' | 'READY' | 'FAILED';
@@ -179,6 +180,45 @@ function coerceExpenseDate(value: unknown): Date | null {
   return null;
 }
 
+/** Safe for Firestore payload: never uses `unknown?.trim()` (non-strings can expose `trim` as non-callable). */
+function nullableTrimmedString(value: unknown): string | null {
+  if (value === undefined || value === null) return null;
+  const s = typeof value === "string" ? value : String(value);
+  const t = s.trim();
+  return t.length === 0 ? null : t;
+}
+
+/** Only pass real finite Dates into Timestamp.fromDate (RN Firebase can throw TypeError otherwise). */
+function safeExpenseDocumentDate(value: unknown) {
+  const jsDate = coerceExpenseDate(value);
+  if (jsDate != null && !Number.isNaN(jsDate.getTime())) {
+    return firestoreTimestampFromDate(jsDate);
+  }
+  return serverTimestamp();
+}
+
+/** OCR may pass ISO strings, Firestore Timestamp, or invalid objects — never forward blindly to Timestamp.fromDate. */
+function coerceOcrParsedAtForFirestore(value: unknown) {
+  if (value == null) return null;
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isNaN(ms) ? null : firestoreTimestampFromDate(value);
+  }
+  if (typeof value === "string") {
+    const d = new Date(value.trim());
+    return Number.isNaN(d.getTime()) ? null : firestoreTimestampFromDate(d);
+  }
+  if (typeof value === "object" && typeof (value as { toDate?: unknown }).toDate === "function") {
+    try {
+      const d = (value as { toDate: () => unknown }).toDate();
+      if (d instanceof Date && !Number.isNaN(d.getTime())) return firestoreTimestampFromDate(d);
+    } catch {
+      return null;
+    }
+  }
+  return null;
+}
+
 /** Plain map for Firestore (no JSON.stringify — avoids Hermes/bridge edge cases). */
 function travelToFirestoreMap(t: TravelExpenseData): Record<string, unknown> {
   const o: Record<string, unknown> = {
@@ -191,7 +231,324 @@ function travelToFirestoreMap(t: TravelExpenseData): Record<string, unknown> {
   if (typeof t.billableToClient === "boolean") {
     o.billableToClient = t.billableToClient;
   }
-  return o;
+  /** RN Firebase rejects `undefined` in nested maps (native Object.assign / encode path). */
+  return omitUndefinedFields(o) as Record<string, unknown>;
+}
+
+/** Only persist travel when the map is complete after stripping undefined. */
+function normalizedTravelForFirestore(travel: unknown): Record<string, unknown> | null {
+  if (travel == null || typeof travel !== "object" || Array.isArray(travel)) return null;
+  const cleaned = travelToFirestoreMap(travel as TravelExpenseData);
+  if (typeof cleaned.fromAddress !== "string" || !cleaned.fromAddress.trim()) return null;
+  if (typeof cleaned.toAddress !== "string" || !cleaned.toAddress.trim()) return null;
+  if (typeof cleaned.distanceKm !== "number" || !Number.isFinite(cleaned.distanceKm)) return null;
+  return cleaned;
+}
+
+/** Firestore / RN bridge: finite numbers only; NaN/Infinity must not reach native write. */
+function finiteNumberOrNull(n: unknown): number | null {
+  return typeof n === "number" && Number.isFinite(n) ? n : null;
+}
+
+function isNativeFirestoreDocumentReference(v: unknown): boolean {
+  try {
+    const { firebase } = require("@react-native-firebase/app");
+    return v instanceof firebase.firestore.DocumentReference;
+  } catch {
+    return false;
+  }
+}
+
+function isNativeFirestoreFieldValue(v: unknown): boolean {
+  try {
+    const { firebase } = require("@react-native-firebase/app");
+    return v instanceof firebase.firestore.FieldValue;
+  } catch {
+    return false;
+  }
+}
+
+/** Do not descend into Timestamp / FieldValue when scanning for `undefined` (avoids false paths + native internals). */
+function skipFirestoreSentinelsInUndefinedScan(v: unknown): boolean {
+  return isFirestoreTimeOrSentinel(v) || isNativeFirestoreFieldValue(v);
+}
+
+/**
+ * Every enumerable path where a value is strictly `undefined` (Firestore RN bridge rejects these).
+ * Detects cycles as `path:<<cycle>>`.
+ */
+function findUndefinedPaths(value: unknown, path = "root", seen: WeakSet<object> = new WeakSet()): string[] {
+  if (value === undefined) return [path];
+  if (value === null) return [];
+  if (typeof value !== "object") return [];
+  if (seen.has(value as object)) return [`${path}:<<cycle>>`];
+  seen.add(value as object);
+  if (Array.isArray(value)) {
+    return value.flatMap((item, i) => findUndefinedPaths(item, `${path}[${i}]`, seen));
+  }
+  return Object.entries(value as Record<string, unknown>).flatMap(([k, v]) =>
+    findUndefinedPaths(v, `${path}.${k}`, seen)
+  );
+}
+
+/** Same as findUndefinedPaths but skips Timestamp / FieldValue subtrees (for full firestorePayload). */
+function findUndefinedPathsFirestorePayload(value: unknown, path = "root", seen: WeakSet<object> = new WeakSet()): string[] {
+  if (skipFirestoreSentinelsInUndefinedScan(value)) return [];
+  if (value === undefined) return [path];
+  if (value === null) return [];
+  if (typeof value !== "object") return [];
+  if (seen.has(value as object)) return [`${path}:<<cycle>>`];
+  seen.add(value as object);
+  if (Array.isArray(value)) {
+    return value.flatMap((item, i) => findUndefinedPathsFirestorePayload(item, `${path}[${i}]`, seen));
+  }
+  return Object.entries(value as Record<string, unknown>).flatMap(([k, v]) =>
+    findUndefinedPathsFirestorePayload(v, `${path}.${k}`, seen)
+  );
+}
+
+/** Values that often break RN Firebase serialization even when not `undefined`. */
+function findSerializationRiskPaths(
+  value: unknown,
+  path = "root",
+  seen: WeakSet<object> = new WeakSet()
+): string[] {
+  if (value === null || value === undefined) return [];
+  const t = typeof value;
+  if (t === "function") return [`${path}:function`];
+  if (t === "symbol") return [`${path}:symbol`];
+  if (t === "bigint") return [`${path}:bigint`];
+  if (t !== "object") return [];
+  if (skipFirestoreSentinelsInUndefinedScan(value)) return [];
+  if (isNativeFirestoreDocumentReference(value)) return [`${path}:DocumentReference`];
+  if (seen.has(value as object)) return [`${path}:<<cycle>>`];
+  seen.add(value as object);
+  if (value instanceof Date) return [`${path}:Date`];
+  if (Array.isArray(value)) {
+    return value.flatMap((item, i) => findSerializationRiskPaths(item, `${path}[${i}]`, seen));
+  }
+  if (isPlainObject(value)) {
+    return Object.entries(value as Record<string, unknown>).flatMap(([k, v]) =>
+      findSerializationRiskPaths(v, `${path}.${k}`, seen)
+    );
+  }
+  const ctor = (value as { constructor?: { name?: string } }).constructor?.name ?? "?";
+  return [`${path}:nonPlainObject(${ctor})`];
+}
+
+/** RN Firebase rejects `undefined` at any depth in maps/arrays — shallow omit is not enough. */
+function deepFirestoreSanitize(value: unknown): unknown {
+  if (value === undefined) return undefined;
+  if (value === null) return null;
+  if (isNativeFirestoreDocumentReference(value)) return undefined;
+  if (typeof value === "number") {
+    return Number.isFinite(value) ? value : null;
+  }
+  if (typeof value === "bigint") {
+    return value.toString();
+  }
+  if (typeof value === "string" || typeof value === "boolean") {
+    return value;
+  }
+  if (typeof value === "function" || typeof value === "symbol") {
+    return undefined;
+  }
+  if (value instanceof Date) {
+    const ms = value.getTime();
+    return Number.isNaN(ms) ? null : value.toISOString();
+  }
+  if (Array.isArray(value)) {
+    return value.map(deepFirestoreSanitize).filter((v) => v !== undefined);
+  }
+  if (isPlainObject(value)) {
+    const out: Record<string, unknown> = {};
+    for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+      if (v === undefined) continue;
+      const nv = deepFirestoreSanitize(v);
+      if (nv !== undefined) out[k] = nv;
+    }
+    return out;
+  }
+  // Class instances (e.g. accidental DocumentReference) — drop instead of passing to native encoder.
+  return undefined;
+}
+
+/** Detect Timestamp / FieldValue-like objects — do not descend (avoids false undefined reports). */
+function isFirestoreTimeOrSentinel(v: unknown): boolean {
+  if (v === null || typeof v !== "object") return false;
+  const o = v as Record<string, unknown>;
+  return typeof o.toMillis === "function" || typeof o.toDate === "function" || typeof o.seconds === "number";
+}
+
+/** List dot-paths to `undefined` in JSON-like trees (skips sentinels when `skip` returns true). */
+function listUndefinedPaths(value: unknown, basePath: string, skip: (v: unknown) => boolean): string[] {
+  if (skip(value)) return [];
+  if (value === undefined) return [basePath];
+  if (value === null || typeof value !== "object") return [];
+  if (Array.isArray(value)) {
+    return value.flatMap((item, i) => listUndefinedPaths(item, `${basePath}[${i}]`, skip));
+  }
+  const acc: string[] = [];
+  for (const [k, v] of Object.entries(value as Record<string, unknown>)) {
+    const p = `${basePath}.${k}`;
+    if (v === undefined) acc.push(p);
+    acc.push(...listUndefinedPaths(v, p, skip));
+  }
+  return acc;
+}
+
+/** Log-safe view of payload (no FieldValue/Timestamp serialization). */
+function summarizeFirestorePayloadForLog(payload: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const [k, v] of Object.entries(payload)) {
+    if (k === "date" || k === "createdAt" || k === "updatedAt") {
+      out[k] = isFirestoreTimeOrSentinel(v) ? `[${k}:Firestore sentinel]` : String(v);
+      continue;
+    }
+    if (k === "attachments" && Array.isArray(v)) {
+      out[k] = {
+        count: v.length,
+        undefinedPaths: listUndefinedPaths(v, "attachments", () => false),
+        firstKeys: v[0] && isPlainObject(v[0]) ? Object.keys(v[0] as object) : [],
+      };
+      continue;
+    }
+    if (k === "receipt") {
+      out[k] =
+        v === null
+          ? { kind: "null", undefinedPaths: [] }
+          : {
+              kind: "object",
+              keys: isPlainObject(v) ? Object.keys(v as object) : [],
+              undefinedPaths: listUndefinedPaths(v, "receipt", () => false),
+            };
+      continue;
+    }
+    if (k === "travel") {
+      out[k] =
+        v === null
+          ? { kind: "null" }
+          : { kind: "object", undefinedPaths: listUndefinedPaths(v, "travel", () => false) };
+      continue;
+    }
+    out[k] = v;
+  }
+  return out;
+}
+
+/** Only keys written from ProjectOverview expense form — drops unknown/host fields before Firestore. */
+const EXPENSE_ATTACHMENT_ALLOWED_KEYS = new Set([
+  "mode",
+  "attachmentId",
+  "storagePath",
+  "mimeType",
+  "kind",
+  "fileName",
+  "isLinkedToExpense",
+  "linkedExpenseId",
+  "localUriLen",
+  "uriLen",
+]);
+
+function pickAllowedExpenseAttachmentFields(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of EXPENSE_ATTACHMENT_ALLOWED_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(raw, k) && raw[k] !== undefined) {
+      out[k] = raw[k];
+    }
+  }
+  return out;
+}
+
+const EXPENSE_RECEIPT_ALLOWED_KEYS = new Set(["ocrStatus", "supplierDraft"]);
+
+function pickAllowedExpenseReceiptFields(raw: Record<string, unknown>): Record<string, unknown> {
+  const out: Record<string, unknown> = {};
+  for (const k of EXPENSE_RECEIPT_ALLOWED_KEYS) {
+    if (Object.prototype.hasOwnProperty.call(raw, k) && raw[k] !== undefined) {
+      out[k] = raw[k];
+    }
+  }
+  return out;
+}
+
+/**
+ * Firestore-safe: always an array of plain maps (single object input → one element).
+ * Matches: Array.isArray(x) ? x : x ? [x] : []
+ */
+function normalizeAttachmentsForWrite(raw: unknown): Record<string, unknown>[] {
+  const list: unknown[] = Array.isArray(raw) ? raw : raw != null ? [raw] : [];
+  return list
+    .filter((x) => x != null)
+    .map((x) =>
+      isPlainObject(x)
+        ? (deepFirestoreSanitize(
+            omitUndefinedFields(pickAllowedExpenseAttachmentFields(x as Record<string, unknown>))
+          ) as Record<string, unknown>)
+        : ({} as Record<string, unknown>)
+    )
+    .filter((o) => Object.keys(o).length > 0);
+}
+
+/** Firestore-safe: plain map or null (omit empty); deep-strips undefined. */
+function normalizeReceiptForWrite(raw: unknown): Record<string, unknown> | null {
+  if (raw == null) return null;
+  if (!isPlainObject(raw)) return null;
+  const o = deepFirestoreSanitize(
+    omitUndefinedFields(pickAllowedExpenseReceiptFields(raw as Record<string, unknown>))
+  ) as Record<string, unknown>;
+  return Object.keys(o).length ? o : null;
+}
+
+/** TEMP: classify addDoc failures for clearer Metro logs (remove when stable). */
+function classifyCreateExpenseWriteError(err: unknown): {
+  bucket: "js_payload" | "firestore_permission" | "firestore_invalid_data" | "firestore_other";
+  code: string;
+  message: string;
+} {
+  const message = err instanceof Error ? err.message : String(err);
+  const name = err instanceof Error ? err.name : "";
+  const msgLower = message.toLowerCase();
+  if (
+    name === "TypeError" ||
+    name === "ReferenceError" ||
+    msgLower.includes("cannot convert undefined") ||
+    msgLower.includes("cannot read property")
+  ) {
+    return { bucket: "js_payload", code: name || "Error", message };
+  }
+  let code = "";
+  let e: unknown = err;
+  for (let depth = 0; depth < 5 && e && typeof e === "object"; depth++) {
+    const c = (e as { code?: string }).code;
+    if (typeof c === "string" && c.length > 0) {
+      code = c;
+      break;
+    }
+    e = (e as { cause?: unknown }).cause ?? null;
+  }
+  const cLower = code.toLowerCase();
+  if (
+    cLower.includes("permission") ||
+    msgLower.includes("permission-denied") ||
+    msgLower.includes("missing or insufficient permissions")
+  ) {
+    return { bucket: "firestore_permission", code: code || "permission-denied", message };
+  }
+  if (
+    cLower.includes("invalid-argument") ||
+    cLower.includes("failed-precondition") ||
+    cLower.includes("out-of-range") ||
+    cLower.includes("already-exists") ||
+    msgLower.includes("invalid data") ||
+    msgLower.includes("property") && msgLower.includes("invalid")
+  ) {
+    return { bucket: "firestore_invalid_data", code: code || "invalid-argument", message };
+  }
+  if (code.length > 0) {
+    return { bucket: "firestore_other", code, message };
+  }
+  return { bucket: "js_payload", code: name || "unknown", message };
 }
 
 /**
@@ -225,9 +582,10 @@ export async function createExpense(
     ocrTotalAmount?: number | null;
     ocrVatAmount?: number | null;
     ocrCurrency?: string | null;
-    travel?: TravelExpenseData;
-    /** Optional metadata (debug / future); not written to Firestore unless mapped */
+    travel?: TravelExpenseData | null;
+    /** Client attachment summary (preupload/local); stored as sanitized array of maps. */
     attachments?: unknown;
+    /** Optional receipt/OCR summary map; stored as null or plain object without undefined. */
     receipt?: unknown;
   }
 ): Promise<ExpenseDoc> {
@@ -243,7 +601,12 @@ export async function createExpense(
       typeof (data as { receipt?: unknown }).receipt,
       Array.isArray((data as { receipt?: unknown }).receipt)
     );
-    console.log("[createExpense] travel type", typeof data.travel, Array.isArray(data.travel));
+    const tr = data.travel;
+    console.log(
+      "[createExpense] travel",
+      tr === null ? "null" : tr === undefined ? "undefined" : typeof tr,
+      Array.isArray(tr)
+    );
   } catch (e) {
     console.warn("[createExpense] debug log failed:", e);
   }
@@ -295,44 +658,240 @@ export async function createExpense(
     }
   }
 
-  const jsDate = coerceExpenseDate(data.date);
-  const safeDate = jsDate != null ? Timestamp.fromDate(jsDate) : serverTimestamp();
-  const travelPayload =
-    data.travel == null ? null : travelToFirestoreMap(data.travel);
+  console.log(
+    "[createExpense][TEMP] undefined paths in input",
+    findUndefinedPaths(data as unknown as Record<string, unknown>, "input")
+  );
+  const inputSerializationRisks = findSerializationRiskPaths(data as unknown as Record<string, unknown>, "input");
+  if (inputSerializationRisks.length > 0) {
+    console.log("[createExpense][TEMP] serialization risks in input", inputSerializationRisks);
+  }
+
+  let travelPayload: Record<string, unknown> | null = null;
+  try {
+    console.log("[createExpense][TEMP] stage: normalize travel — start");
+    travelPayload = normalizedTravelForFirestore(data.travel);
+    console.log("[createExpense][TEMP] stage: normalize travel — ok", {
+      travelKind: travelPayload === null ? "null" : "object",
+    });
+  } catch (e) {
+    console.error("[createExpense][TEMP] stage: normalize travel — threw", e);
+    throw e;
+  }
+  console.log(
+    "[createExpense][TEMP] undefined paths in travelPayload",
+    travelPayload === null ? [] : findUndefinedPaths(travelPayload, "travelPayload")
+  );
+
+  let attachmentsForWrite: Record<string, unknown>[] = [];
+  try {
+    console.log("[createExpense][TEMP] stage: normalize attachments — start");
+    attachmentsForWrite = normalizeAttachmentsForWrite(
+      (data as { attachments?: unknown }).attachments
+    );
+    console.log("[createExpense][TEMP] stage: normalize attachments — ok", {
+      attachmentsCount: attachmentsForWrite.length,
+    });
+  } catch (e) {
+    console.error("[createExpense][TEMP] stage: normalize attachments — threw", e);
+    throw e;
+  }
+  console.log(
+    "[createExpense][TEMP] undefined paths in attachmentsForWrite",
+    findUndefinedPaths(attachmentsForWrite, "attachmentsForWrite")
+  );
+  const attSerializationRisks = findSerializationRiskPaths(attachmentsForWrite, "attachmentsForWrite");
+  if (attSerializationRisks.length > 0) {
+    console.log("[createExpense][TEMP] serialization risks in attachmentsForWrite", attSerializationRisks);
+  }
+
+  let receiptForWrite: Record<string, unknown> | null = null;
+  try {
+    console.log("[createExpense][TEMP] stage: normalize receipt — start");
+    receiptForWrite = normalizeReceiptForWrite((data as { receipt?: unknown }).receipt);
+    console.log("[createExpense][TEMP] stage: normalize receipt — ok", {
+      receiptKind: receiptForWrite === null ? "null" : "object",
+    });
+  } catch (e) {
+    console.error("[createExpense][TEMP] stage: normalize receipt — threw", e);
+    throw e;
+  }
+  console.log(
+    "[createExpense][TEMP] undefined paths in receiptForWrite",
+    receiptForWrite === null ? [] : findUndefinedPaths(receiptForWrite, "receiptForWrite")
+  );
+  const receiptSerializationRisks =
+    receiptForWrite === null ? [] : findSerializationRiskPaths(receiptForWrite, "receiptForWrite");
+  if (receiptSerializationRisks.length > 0) {
+    console.log("[createExpense][TEMP] serialization risks in receiptForWrite", receiptSerializationRisks);
+  }
 
   const c = collection(db, paths.projectExpenses(projectId));
   // Do not run Object.entries-based sanitizers on this payload: FieldValue (serverTimestamp)
   // is often non-enumerable and would be dropped, breaking the native RN Firebase bridge.
-  const ref = await addDoc(c, {
-    ownerId,
+  let firestorePayload: Record<string, unknown>;
+  try {
+    console.log("[createExpense][TEMP] stage: build firestore payload — start");
+    if (__DEV__) {
+      console.log("[createExpense][TEMP] payload build: before base (ids, title, amount, currency, date)");
+      // firestorePayload is one object literal — no ...spread of helper blocks. Failure here is almost always date/timestamp.
+      console.log("[createExpense][TEMP] payload build: baseRefs", {
+        ownerId,
+        projectId,
+        dataDate: data.date,
+        dataDateType: data.date == null ? String(data.date) : typeof data.date,
+      });
+    }
+    const safeDate = safeExpenseDocumentDate(data.date);
+    const titleForWrite = (typeof data.title === "string" ? data.title : String(data.title ?? "")).trim();
+    if (__DEV__) {
+      console.log("[createExpense][TEMP] payload build: before file/upload block");
+    }
+    const uploadStatusForWrite = data.uploadStatus !== undefined && data.uploadStatus !== null ? data.uploadStatus : null;
+    const filePathForWrite = data.filePath ?? null;
+    const mimeTypeForWrite = data.mimeType ?? null;
+    if (__DEV__) {
+      console.log("[createExpense][TEMP] payload build: before OCR block");
+    }
+    const ocrStatusForWrite = data.ocrStatus !== undefined && data.ocrStatus !== null ? data.ocrStatus : null;
+    const ocrParsedAtForWrite = coerceOcrParsedAtForFirestore(data.ocrParsedAt);
+    if (__DEV__) {
+      console.log("[createExpense][TEMP] payload build: before supplier block");
+    }
+    const supplierNameForWrite = nullableTrimmedString(data.supplierName);
+    const supplierIcoForWrite = nullableTrimmedString(data.supplierIco);
+    if (__DEV__) {
+      console.log("[createExpense][TEMP] payload build: before phase block");
+    }
+    const phaseIdForWrite = data.phaseId !== undefined && data.phaseId !== null ? data.phaseId : null;
+    const taskIdForWrite = data.taskId !== undefined && data.taskId !== null ? data.taskId : null;
+    if (__DEV__) {
+      console.log("[createExpense][TEMP] payload build: before receipt/attachments + timestamps");
+    }
+    const noteForWrite = nullableTrimmedString(data.note);
+    firestorePayload = {
+      ownerId,
+      projectId,
+      title: titleForWrite,
+      amount: finiteNumberOrNull(data.amount),
+      currency: data.currency ?? "EUR",
+      date: safeDate,
+      note: noteForWrite,
+      taskId: taskIdForWrite,
+      phaseId: phaseIdForWrite,
+      attachmentId: data.attachmentId ?? null,
+      source: data.source ?? "MANUAL",
+      status: data.status ?? "READY",
+      category: data.category !== undefined && data.category !== null ? data.category : null,
+      supplierName: supplierNameForWrite,
+      supplierIco: supplierIcoForWrite,
+      uploadStatus: uploadStatusForWrite,
+      filePath: filePathForWrite,
+      mimeType: mimeTypeForWrite,
+      ocrStatus: ocrStatusForWrite,
+      ocrParsedAt: ocrParsedAtForWrite,
+      ocrSupplierName: data.ocrSupplierName ?? null,
+      ocrInvoiceNumber: data.ocrInvoiceNumber ?? null,
+      ocrIssueDate: data.ocrIssueDate ?? null,
+      ocrTotalAmount: finiteNumberOrNull(data.ocrTotalAmount),
+      ocrVatAmount: finiteNumberOrNull(data.ocrVatAmount),
+      ocrCurrency: data.ocrCurrency ?? null,
+      travel: travelPayload,
+      attachments: attachmentsForWrite,
+      receipt: receiptForWrite,
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+    };
+    console.log("[createExpense][TEMP] stage: build firestore payload — ok");
+  } catch (e) {
+    console.error("[createExpense][TEMP] stage: build firestore payload — threw", e);
+    throw e;
+  }
+
+  const payloadShapeLog = {
+    attachmentsCount: attachmentsForWrite.length,
+    receiptKind: receiptForWrite === null ? "null" : "object",
+    travelKind: travelPayload === null ? "null" : "object",
+  };
+  const topUndefinedPaths = findUndefinedPathsFirestorePayload(firestorePayload, "firestorePayload");
+  console.log("[createExpense][TEMP] undefined paths in firestorePayload", topUndefinedPaths);
+  const firestoreSerializationRisks = findSerializationRiskPaths(firestorePayload, "firestorePayload");
+  if (firestoreSerializationRisks.length > 0) {
+    console.log("[createExpense][TEMP] serialization risks in firestorePayload", firestoreSerializationRisks);
+  }
+  console.log("[createExpense][TEMP] addDoc_before", {
+    outcome: "attempt",
     projectId,
-    title: data.title.trim(),
-    amount: data.amount,
-    currency: data.currency ?? "EUR",
-    date: safeDate,
-    note: data.note?.trim() ?? null,
-    taskId: data.taskId ?? null,
-    phaseId: data.phaseId ?? null,
-    attachmentId: data.attachmentId ?? null,
-    source: data.source ?? "MANUAL",
-    status: data.status ?? "READY",
-    category: data.category ?? null,
-    supplierName: data.supplierName?.trim() ?? null,
-    supplierIco: data.supplierIco?.trim() ?? null,
-    uploadStatus: data.uploadStatus ?? null,
-    filePath: data.filePath ?? null,
-    mimeType: data.mimeType ?? null,
-    ocrStatus: data.ocrStatus ?? null,
-    ocrParsedAt: data.ocrParsedAt ? Timestamp.fromDate(data.ocrParsedAt) : null,
-    ocrSupplierName: data.ocrSupplierName ?? null,
-    ocrInvoiceNumber: data.ocrInvoiceNumber ?? null,
-    ocrIssueDate: data.ocrIssueDate ?? null,
-    ocrTotalAmount: data.ocrTotalAmount ?? null,
-    ocrVatAmount: data.ocrVatAmount ?? null,
-    ocrCurrency: data.ocrCurrency ?? null,
-    travel: travelPayload,
-    createdAt: serverTimestamp(),
-    updatedAt: serverTimestamp(),
+    ...payloadShapeLog,
+    topUndefinedPaths,
+    payloadSummary: summarizeFirestorePayloadForLog(firestorePayload as unknown as Record<string, unknown>),
+  });
+
+  let ref: { id: string };
+  try {
+    console.log("[createExpense][TEMP] stage: addDoc — start");
+    ref = await addDoc(c, firestorePayload as FirebaseFirestore.DocumentData);
+    console.log("[createExpense][TEMP] stage: addDoc — ok", { expenseId: ref.id });
+  } catch (addErr) {
+    console.error("[createExpense][TEMP] stage: addDoc — threw", addErr);
+    console.error(
+      "[createExpense][TEMP] undefined paths in firestorePayload (at failure)",
+      findUndefinedPathsFirestorePayload(firestorePayload, "firestorePayload")
+    );
+    const classified = classifyCreateExpenseWriteError(addErr);
+    const msg = addErr instanceof Error ? addErr.message : String(addErr);
+    const isLikelyJsPayload =
+      classified.bucket === "js_payload" ||
+      msg.toLowerCase().includes("cannot convert undefined");
+    if (isLikelyJsPayload) {
+      console.warn("[createExpense][TEMP] isolation_probe: addDoc with receipt=null, attachments=[]", { projectId });
+      try {
+        const probePayload = {
+          ...(firestorePayload as unknown as Record<string, unknown>),
+          receipt: null,
+          attachments: [],
+        };
+        const probeRef = await addDoc(c, probePayload as typeof firestorePayload);
+        try {
+          await deleteDoc(probeRef as Parameters<typeof deleteDoc>[0]);
+        } catch (delErr) {
+          console.warn("[createExpense][TEMP] isolation_probe: failed to delete probe doc", {
+            probeExpenseId: probeRef.id,
+            msg: delErr instanceof Error ? delErr.message : String(delErr),
+          });
+        }
+        console.warn(
+          "[createExpense][TEMP] isolation_probe SUCCEEDED then deleted probe — original failure likely receipt and/or attachments[] (or fields correlated with them)"
+        );
+      } catch (probeErr) {
+        console.warn("[createExpense][TEMP] isolation_probe FAILED — cause is not receipt/attachments alone", {
+          probeMsg: probeErr instanceof Error ? probeErr.message : String(probeErr),
+        });
+      }
+    }
+    console.error("[createExpense][TEMP] addDoc_failed", {
+      outcome: "failure",
+      failureBucket: classified.bucket,
+      failureCode: classified.code,
+      failureMessage: classified.message,
+      ...payloadShapeLog,
+      topUndefinedPaths,
+      hint:
+        classified.bucket === "js_payload"
+          ? "Likely undefined/non-serializable value in JS payload before native write."
+          : classified.bucket === "firestore_permission"
+            ? "Firestore security rules rejected this write."
+            : classified.bucket === "firestore_invalid_data"
+              ? "Firestore rejected document shape or field types."
+              : "Other Firestore error; see failureCode.",
+    });
+    throw addErr;
+  }
+
+  console.log("[createExpense][TEMP] addDoc_after", {
+    outcome: "success",
+    expenseId: ref.id,
+    ...payloadShapeLog,
   });
 
   if (currentUser?.uid) {
@@ -378,7 +937,7 @@ export async function createExpense(
     id: ref.id,
     projectId,
     title: data.title.trim(),
-    amount: data.amount,
+    amount: data.amount ?? null,
     currency: data.currency ?? "EUR",
     date: dateIso,
     note: data.note,
@@ -475,7 +1034,7 @@ export async function updateExpense(
   if (data.currency !== undefined) updateData.currency = data.currency;
   if (data.date !== undefined) {
     updateData.date =
-      data.date && !Number.isNaN(data.date.getTime()) ? Timestamp.fromDate(data.date) : null;
+      data.date && !Number.isNaN(data.date.getTime()) ? firestoreTimestampFromDate(data.date) : null;
   }
   if (data.note !== undefined) updateData.note = data.note?.trim() ?? null;
   if (data.taskId !== undefined) updateData.taskId = data.taskId ?? null;
@@ -490,7 +1049,7 @@ export async function updateExpense(
   if (data.mimeType !== undefined) updateData.mimeType = data.mimeType ?? null;
   if (data.ocrStatus !== undefined) updateData.ocrStatus = data.ocrStatus ?? null;
   if (data.ocrParsedAt !== undefined) {
-    updateData.ocrParsedAt = data.ocrParsedAt ? Timestamp.fromDate(data.ocrParsedAt) : null;
+    updateData.ocrParsedAt = coerceOcrParsedAtForFirestore(data.ocrParsedAt);
   }
   if (data.ocrSupplierName !== undefined) updateData.ocrSupplierName = data.ocrSupplierName ?? null;
   if (data.ocrInvoiceNumber !== undefined) updateData.ocrInvoiceNumber = data.ocrInvoiceNumber ?? null;
@@ -499,7 +1058,8 @@ export async function updateExpense(
   if (data.ocrVatAmount !== undefined) updateData.ocrVatAmount = data.ocrVatAmount ?? null;
   if (data.ocrCurrency !== undefined) updateData.ocrCurrency = data.ocrCurrency ?? null;
   if (data.travel !== undefined) {
-    updateData.travel = data.travel == null ? null : travelToFirestoreMap(data.travel);
+    updateData.travel =
+      data.travel == null ? null : normalizedTravelForFirestore(data.travel);
   }
 
   for (const k of Object.keys(updateData)) {

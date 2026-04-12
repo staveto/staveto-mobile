@@ -11,6 +11,8 @@ export type ExtractInvoiceDataFromStorageResponse = {
   success?: boolean;
   /** Legacy alias still accepted by client */
   ok?: boolean;
+  /** When `success` / `ok` is false — real extraction failed (no stub text). */
+  errorCode?: string;
   source?: string;
   rawText?: string | null;
   confidence?: number;
@@ -18,8 +20,9 @@ export type ExtractInvoiceDataFromStorageResponse = {
   vendorName?: string | null;
   invoiceNumber?: string | null;
   total?: number | null;
+  /** Server-side extraction diagnostics (Firebase logs mirror this). */
+  extractionLog?: Record<string, unknown>;
   /** Only when using full OcrResult-style responses */
   status?: "success" | "failed" | "limit";
-  errorCode?: string;
   cooldownSeconds?: number;
 };

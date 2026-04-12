@@ -1,49 +1,46 @@
+import { Platform } from "react-native";
 import { auth } from "../firebase";
 import { getCallable } from "../firebase";
 import { parseMoneyToNumber } from "../helpers/parseMoney";
 import { TimeoutError, TIMEOUT_ERROR_CODE } from "../utils/withTimeout";
-import {
-  detectCurrencyCandidates,
-  pickBestTotalFromText,
-  type CurrencyCode,
-} from "../utils/invoiceUniversal";
+import { detectCurrencyCandidates, type CurrencyCode } from "../utils/invoiceUniversal";
 import { addProjectEvent } from "./projectEvents";
 import type { InvoiceExtractionSource } from "../lib/invoiceTypes";
 import type { ExtractInvoiceDataFromStorageResponse } from "../lib/extractInvoiceDataFromStorageContract";
+import type { ParsedDocumentData } from "../lib/parsedDocumentTypes";
 import type { OcrParsed, OcrResult, OcrStatus } from "../lib/ocrTypes";
 import { isPlainObject } from "../utils/isPlainObject";
-import { buildParsedInvoiceEnvelope, enrichOcrParsedWithInvoiceText } from "./invoiceParser";
+import { buildParsedInvoiceEnvelope } from "./invoiceParser";
+import { mapExtractionToStructured } from "./documentSemanticMapper";
 import { callExtractInvoiceDataFromStorage } from "./ocr";
 import { tryExtractPdfTextCombined, tryRenderPdfFirstPageToImage } from "./pdfExtraction";
+import { isPlaceholderOrMockOcrText } from "../utils/ocrPlaceholderGuards";
 
 export type { OcrParsed, OcrStatus, OcrResult } from "../lib/ocrTypes";
 
-/** Normalize backend parsed object: map various amount field names and parse string values. */
-function normalizeToOcrParsed(
+/** When OCR text is too short for semantic mapping, keep conservative backend-only hints. */
+function legacyBackendOnlyParsed(
   raw: Record<string, unknown> | null | undefined,
-  rawText?: string | null
+  rawText: string | null | undefined
 ): OcrParsed {
   const fallbackCurrency: CurrencyCode = "UNKNOWN";
-  const emptyParsed: OcrParsed = {
+  const empty: OcrParsed = {
     supplierName: null,
     invoiceNumber: null,
     issueDate: null,
     dueDate: null,
     totalAmount: null,
     vatAmount: null,
-    currency: fallbackCurrency,
+    currency: "EUR",
   };
-
-  if (!raw || typeof raw !== "object") return emptyParsed;
-  const ocr = raw as Record<string, unknown>;
-
+  if (!isPlainObject(raw)) return empty;
+  const ocr = raw;
   let currency: CurrencyCode = fallbackCurrency;
-  const backendCurrency = ocr.currency as string | undefined;
-  if (backendCurrency && typeof backendCurrency === "string" && backendCurrency.length >= 3) {
+  const backendCurrency = ocr.currency;
+  if (typeof backendCurrency === "string" && backendCurrency.length >= 3) {
     currency = backendCurrency.toUpperCase() as CurrencyCode;
-  } else if (rawText) {
-    const candidates = detectCurrencyCandidates(rawText);
-    currency = candidates[0]?.currency ?? fallbackCurrency;
+  } else if (rawText && rawText.length > 0) {
+    currency = detectCurrencyCandidates(rawText)[0]?.currency ?? fallbackCurrency;
   }
   if (currency === "UNKNOWN") currency = "EUR";
 
@@ -61,32 +58,13 @@ function normalizeToOcrParsed(
   }
   const MAX = 999_999.99;
   if (totalAmount != null && (totalAmount <= 0 || totalAmount > MAX)) totalAmount = null;
-
-  let confidence = 0.5;
-  let matchedLine: string | undefined;
-  if (rawText) {
-    const pickResult = pickBestTotalFromText(rawText);
-    const pickMoney = pickResult.money;
-    const pickConf = pickResult.confidence ?? 0;
-    matchedLine = pickResult.matchedLine;
-
-    if (totalAmount == null && pickMoney) {
-      totalAmount = pickMoney.amount;
-      currency = pickMoney.currency;
-      confidence = pickConf;
-    } else if (
-      totalAmount != null &&
-      pickMoney &&
-      pickConf > 0.6 &&
-      ((Number.isInteger(totalAmount) && totalAmount >= 100000) ||
-        (Number.isInteger(totalAmount) && pickMoney.amount % 1 !== 0))
-    ) {
-      totalAmount = pickMoney.amount;
-      currency = pickMoney.currency;
-      confidence = pickConf;
-    } else if (totalAmount != null && pickConf > confidence) {
-      confidence = pickConf;
-    }
+  if (
+    totalAmount != null &&
+    Number.isInteger(totalAmount) &&
+    totalAmount >= 1990 &&
+    totalAmount <= 2035
+  ) {
+    totalAmount = null;
   }
 
   let vatAmount: number | null = null;
@@ -97,57 +75,7 @@ function normalizeToOcrParsed(
 
   let supplierName = typeof ocr.supplierName === "string" ? ocr.supplierName.trim() : null;
   if (supplierName && /^[\u0600-\u06FF\s]+$/.test(supplierName) && supplierName.length < 10) supplierName = null;
-  if (supplierName && /^[yíýľ]\s+/i.test(supplierName)) supplierName = supplierName.replace(/^[yíýľ]\s+/i, "").trim();
-  if (!supplierName && rawText && typeof ocr.supplierTaxId === "string") {
-    const taxId = ocr.supplierTaxId as string;
-    const idx = rawText.indexOf(taxId);
-    if (idx > 0) {
-      const before = rawText.slice(0, idx);
-      const m = before.match(
-        /([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž0-9\u0600-\u06FF][^\n]{2,50}\s+(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl|s\.a\.|s\.l\.|nv|bv)\b)/i
-      );
-      const ex = m?.[1]?.replace(/\s+/g, " ").trim();
-      if (ex && ex.length >= 4 && ex.length <= 80 && !/\d{6,}/.test(ex) && !(/^[\u0600-\u06FF\s]+$/.test(ex))) {
-        supplierName = ex.replace(/^[yíýľ]\s+/i, "").trim();
-      }
-    }
-    if (!supplierName && idx >= 0) {
-      const after = rawText.slice(idx + taxId.length, idx + 200);
-      const m2 = after.match(
-        /([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž][^\n]{1,40}\s+(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b)/i
-      );
-      const ex2 = m2?.[1]?.replace(/\s+/g, " ").trim();
-      if (ex2 && ex2.length >= 4 && ex2.length <= 80 && !/\d{6,}/.test(ex2) && !(/^[\u0600-\u06FF\s]+$/.test(ex2))) {
-        supplierName = ex2.replace(/^[yíýľ]\s+/i, "").trim();
-      }
-    }
-    if (!supplierName) {
-      const lineList = rawText.split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-      const taxId = ocr.supplierTaxId as string;
-      for (let i = 0; i < lineList.length; i++) {
-        if (!lineList[i].includes(taxId)) continue;
-        for (const offset of [2, 1]) {
-          if (i - offset < 0) continue;
-          const line = lineList[i - offset].trim();
-          if (line.length < 4 || line.length > 80 || /\d{6,}/.test(line)) continue;
-          if (/^[\u0600-\u06FF\s]+$/.test(line) && line.length < 10) continue;
-          supplierName = line.replace(/\s+/g, " ").trim().replace(/^[yíýľ]\s+/i, "").trim();
-          if (/\b(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b/i.test(line)) break;
-        }
-        break;
-      }
-    }
-    if (!supplierName) {
-      const top = rawText.slice(0, 800);
-      const m3 = top.match(
-        /\b([A-ZÁÄČĎÉÍĹĽŇÓÔŔŘŠŤÚÝŽa-záäčďéíĺľňóôřšťúýž][A-Za-záäčďéíĺľňóôřšťúýž0-9\s\-\.]{1,45}(?:s\.?\s*r\.?\s*o\.?|a\.s\.|sro|as|gmbh|ag|ltd|limited|inc|llc|spa|srl)\b)/i
-      );
-      const ex3 = m3?.[1]?.replace(/\s+/g, " ").trim();
-      if (ex3 && ex3.length >= 4 && ex3.length <= 80 && !/\d{6,}/.test(ex3) && !(/^[\u0600-\u06FF\s]+$/.test(ex3))) {
-        supplierName = ex3.replace(/^[yíýľ]\s+/i, "").trim();
-      }
-    }
-  }
+
   return {
     supplierName,
     supplierTaxId: typeof ocr.supplierTaxId === "string" ? ocr.supplierTaxId : null,
@@ -157,8 +85,27 @@ function normalizeToOcrParsed(
     totalAmount,
     vatAmount,
     currency,
-    confidence: { total: confidence, currency: currency !== fallbackCurrency ? 0.9 : 0.5, overall: confidence },
-    matchedLine,
+    confidence: { total: 0.35, currency: 0.4, overall: 0.35 },
+  };
+}
+
+function normalizeToOcrParsed(
+  raw: Record<string, unknown> | null | undefined,
+  rawText: string | null | undefined,
+  invoiceExtractionSource: InvoiceExtractionSource
+): { parsed: OcrParsed; document: ParsedDocumentData | null } {
+  const text = typeof rawText === "string" ? rawText : "";
+  if (text.length >= 8 && !isPlaceholderOrMockOcrText(text)) {
+    const { document, ocrParsed } = mapExtractionToStructured({
+      rawText: text,
+      invoiceExtractionSource,
+      backendParsed: isPlainObject(raw) ? raw : {},
+    });
+    return { parsed: ocrParsed, document };
+  }
+  return {
+    parsed: legacyBackendOnlyParsed(isPlainObject(raw) ? raw : {}, rawText ?? null),
+    document: null,
   };
 }
 
@@ -190,17 +137,38 @@ function attachEnrichment(
   if (result.status !== "success" || !result.parsed) {
     return { ...result, extractionSource: result.extractionSource ?? "none" };
   }
-  let parsed = result.parsed;
+  const parsed = result.parsed;
   const text = rawText ?? result.rawText;
-  if (text) parsed = enrichOcrParsedWithInvoiceText(parsed, text);
   const parsedInvoice =
     text && text.length > 2 ? buildParsedInvoiceEnvelope(text, source, parsed) : undefined;
+  // #region agent log
+  fetch(`${Platform.OS === "android" ? "http://10.0.2.2" : "http://127.0.0.1"}:7281/ingest/2418b79b-8c5b-4006-a07d-878605a09a96`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b82e16" },
+    body: JSON.stringify({
+      sessionId: "b82e16",
+      hypothesisId: "H5",
+      location: "invoiceOCR.ts:attachEnrichment",
+      message: "success_enriched",
+      data: {
+        source,
+        totalAmount: parsed.totalAmount ?? null,
+        supplierLen: parsed.supplierName?.length ?? 0,
+        issueDate: parsed.issueDate ?? null,
+        rawTextLen: (text ?? result.rawText)?.length ?? 0,
+        docType: result.parsedDocument?.documentType ?? null,
+      },
+      timestamp: Date.now(),
+    }),
+  }).catch(() => {});
+  // #endregion
   return {
     ...result,
     parsed,
     rawText: text ?? result.rawText,
     extractionSource: source,
     parsedInvoice,
+    parsedDocument: result.parsedDocument,
   };
 }
 
@@ -221,10 +189,11 @@ async function extractPdfWithLocalAndCloud(input: {
     console.log("[invoiceOCR] PDF extraction diagnostics:", diagnostics);
   }
 
-  let rawText: string | null = mergedLocal;
+  let rawText: string | null =
+    mergedLocal && isPlaceholderOrMockOcrText(mergedLocal) ? null : mergedLocal;
 
   if (rawText && rawText.length > 0) {
-    const parsed0 = normalizeToOcrParsed({}, rawText);
+    const { parsed: parsed0 } = normalizeToOcrParsed({}, rawText, "pdf-text");
     const compact = rawText.replace(/\s/g, "");
     const acceptable =
       isLocalPdfTextUseful(rawText, parsed0) ||
@@ -232,7 +201,7 @@ async function extractPdfWithLocalAndCloud(input: {
       compact.length >= 35;
 
     if (acceptable) {
-      const parsed = enrichOcrParsedWithInvoiceText(parsed0, rawText);
+      const { parsed, document } = normalizeToOcrParsed({}, rawText, "pdf-text");
       if (input.projectId) {
         try {
           await addProjectEvent(
@@ -245,12 +214,16 @@ async function extractPdfWithLocalAndCloud(input: {
           console.warn("[invoiceOCR] Failed to create project event:", eventError);
         }
       }
-      return attachEnrichment({ status: "success", parsed, rawText }, "pdf-text", rawText);
+      return attachEnrichment(
+        { status: "success", parsed, rawText, parsedDocument: document ?? undefined },
+        "pdf-text",
+        rawText
+      );
     }
     console.warn(
       "[invoiceOCR] PDF: local text weak (chars=",
       rawText.length,
-      ") — trying render stub then cloud fallback if configured."
+      ") — trying optional PDF render path, then cloud Storage extraction."
     );
   } else {
     console.warn(
@@ -266,6 +239,7 @@ async function extractPdfWithLocalAndCloud(input: {
   }
 
   let cloudCallError: string | undefined;
+  let cloudResultErrorCode: string | undefined;
 
   if (input.projectId && input.attachmentId) {
     try {
@@ -289,7 +263,14 @@ async function extractPdfWithLocalAndCloud(input: {
         successStrict: rawPayload?.success === true,
         okStrict: rawPayload?.ok === true,
       });
-      const cloud = await finalizeCloudOcrResponse(data, { ...input, filePath: normalizedPath });
+      const cloud = await finalizeCloudOcrResponse(data, {
+        ...input,
+        filePath: normalizedPath,
+        extractionChannel: "storage",
+      });
+      if (cloud.status !== "success" && typeof cloud.errorCode === "string") {
+        cloudResultErrorCode = cloud.errorCode;
+      }
       const cloudText = (cloud.rawText ?? (isPlainObject(data) ? (data as { rawText?: string }).rawText : "") ?? "").trim();
       const compactCloud = cloudText.replace(/\s/g, "");
       if (
@@ -334,7 +315,8 @@ async function extractPdfWithLocalAndCloud(input: {
   const errorCode =
     cloudCallError === "CLOUD_OCR_NOT_FOUND" || cloudCallError === "CLOUD_OCR_FAILED"
       ? cloudCallError
-      : "PDF_NO_TEXT";
+      : cloudResultErrorCode ??
+        "PDF_NO_TEXT";
 
   return { status: "failed", parsed: null, errorCode, extractionSource: "none" };
 }
@@ -429,6 +411,8 @@ async function finalizeCloudOcrResponse(
     attachmentId?: string;
     projectId?: string;
     localPdfUri?: string;
+    /** `storage` = extractInvoiceDataFromStorage; `vision` = extractInvoiceData (image). */
+    extractionChannel?: "vision" | "storage";
   }
 ): Promise<OcrResult> {
   const result = data as OcrResult | ExtractInvoiceDataFromStorageResponse | undefined;
@@ -436,8 +420,22 @@ async function finalizeCloudOcrResponse(
     return { status: "failed", parsed: null };
   }
 
-  /** Storage-OCR envelope: `success` or `ok`, no top-level `status` (avoids colliding with OcrResult). */
+  const invoiceSource: InvoiceExtractionSource =
+    input.extractionChannel === "storage" ? "cloud-ocr" : "image-ocr";
+
+  /** Storage-OCR envelope: explicit failure without stub text. */
   const r = result as Record<string, unknown>;
+  const envelopeExplicitFailure =
+    !("status" in r) && (r.success === false || r.ok === false);
+  if (envelopeExplicitFailure) {
+    const code = typeof r.errorCode === "string" ? r.errorCode : "STORAGE_EXTRACTION_FAILED";
+    if (__DEV__) {
+      console.warn("[invoiceOCR] storage extraction envelope failure", { code, extractionLog: r.extractionLog });
+    }
+    return { status: "failed", parsed: null, errorCode: code };
+  }
+
+  /** Storage-OCR envelope: `success` or `ok`, no top-level `status` (avoids colliding with OcrResult). */
   const envelopeOk =
     !("status" in r) &&
     (r.success === true || r.ok === true);
@@ -450,12 +448,40 @@ async function finalizeCloudOcrResponse(
       (typeof r.fullText === "string" ? r.fullText : null) ??
       (typeof r.ocrText === "string" ? r.ocrText : null) ??
       undefined;
-    const parsed = normalizeToOcrParsed(isPlainObject(rawParsed) ? rawParsed : {}, rawText);
-    return { status: "success" as const, parsed, rawText };
+    if (rawText && isPlaceholderOrMockOcrText(rawText)) {
+      if (__DEV__) {
+        console.warn("[invoiceOCR] rejected placeholder/mock storage OCR text");
+      }
+      return { status: "failed", parsed: null, errorCode: "PLACEHOLDER_OCR_REJECTED" };
+    }
+    const { parsed, document } = normalizeToOcrParsed(
+      isPlainObject(rawParsed) ? rawParsed : {},
+      rawText,
+      invoiceSource
+    );
+    if (__DEV__) {
+      console.log("[invoiceOCR] finalize envelope semantic map", {
+        filePathLen: input.filePath?.length,
+        extractionChannel: input.extractionChannel ?? "vision",
+        documentType: document?.documentType,
+        docConfidence: document?.confidence,
+        parsedTotal: parsed.totalAmount,
+        candidateTotals: document?.candidates?.total?.slice(0, 3),
+      });
+    }
+    return {
+      status: "success" as const,
+      parsed,
+      rawText,
+      parsedDocument: document ?? undefined,
+    };
   }
 
   if (!("status" in result) || !(result as OcrResult).status) {
-    return { status: "failed", parsed: null };
+    const code = typeof (result as Record<string, unknown>).errorCode === "string"
+      ? String((result as Record<string, unknown>).errorCode)
+      : undefined;
+    return { status: "failed", parsed: null, ...(code ? { errorCode: code } : {}) };
   }
   const ocrResult = result as OcrResult & { cooldownSeconds?: number };
   const rawParsed = ocrResult.parsed as Record<string, unknown> | null;
@@ -481,7 +507,19 @@ async function finalizeCloudOcrResponse(
     sum: isPlainObject(rawParsed) ? rawParsed.sum : undefined,
     amountCents: isPlainObject(rawParsed) ? rawParsed.amountCents : undefined,
   });
-  const parsed = normalizeToOcrParsed(isPlainObject(rawParsed) ? rawParsed : {}, rawText);
+  const { parsed, document } = normalizeToOcrParsed(
+    isPlainObject(rawParsed) ? rawParsed : {},
+    rawText,
+    invoiceSource
+  );
+  if (__DEV__) {
+    console.log("[invoiceOCR] finalize legacy status semantic map", {
+      extractionChannel: input.extractionChannel ?? "vision",
+      documentType: document?.documentType,
+      supplier: parsed.supplierName,
+      total: parsed.totalAmount,
+    });
+  }
   if (ocrResult.status === "success" && input.projectId) {
     try {
       await addProjectEvent(
@@ -494,7 +532,16 @@ async function finalizeCloudOcrResponse(
       console.warn("[invoiceOCR] Failed to create project event:", eventError);
     }
   }
-  return { ...(ocrResult ?? {}), parsed };
+  return {
+    status: ocrResult.status,
+    parsed,
+    rawText: ocrResult.rawText ?? rawText,
+    errorCode: ocrResult.errorCode,
+    cooldownSeconds: ocrResult.cooldownSeconds,
+    extractionSource: ocrResult.extractionSource,
+    parsedDocument: document ?? undefined,
+    parsedInvoice: ocrResult.parsedInvoice,
+  };
 }
 
 function mapExtractorErrorToResult(error: unknown): OcrResult {
@@ -544,6 +591,26 @@ export async function extractInvoiceData(input: {
 
   if (isLikelyPdf(input.mimeType, normalizedPath)) {
     const pdfResult = await extractPdfWithLocalAndCloud({ ...input, filePath: normalizedPath });
+    // #region agent log
+    fetch(`${Platform.OS === "android" ? "http://10.0.2.2" : "http://127.0.0.1"}:7281/ingest/2418b79b-8c5b-4006-a07d-878605a09a96`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json", "X-Debug-Session-Id": "b82e16" },
+      body: JSON.stringify({
+        sessionId: "b82e16",
+        hypothesisId: "H4",
+        location: "invoiceOCR.ts:extractInvoiceData",
+        message: "pdf_path_result",
+        data: {
+          status: pdfResult.status,
+          errorCode: pdfResult.errorCode ?? null,
+          totalAmount: pdfResult.parsed?.totalAmount ?? null,
+          rawTextLen: pdfResult.rawText?.length ?? 0,
+          extractionSource: pdfResult.extractionSource ?? null,
+        },
+        timestamp: Date.now(),
+      }),
+    }).catch(() => {});
+    // #endregion
     return pdfResult;
   }
 
@@ -559,7 +626,11 @@ export async function extractInvoiceData(input: {
 
   try {
     const data = await runInvoiceOCR(payload);
-    const finalized = await finalizeCloudOcrResponse(data, { ...input, filePath: normalizedPath });
+    const finalized = await finalizeCloudOcrResponse(data, {
+      ...input,
+      filePath: normalizedPath,
+      extractionChannel: "vision",
+    });
     if (finalized.status === "success" && finalized.parsed) {
       const rawText =
         finalized.rawText ??

@@ -28,6 +28,7 @@ import * as tasksService from "../services/tasks";
 import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
 import { processInvoiceAttachment } from "../services/invoiceProcessing";
+import { getConfidenceAwareExpensePrefill } from "../services/documentPrefill";
 import * as dashboardService from "../services/dashboard";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectCoverService from "../services/projectCover";
@@ -1037,12 +1038,14 @@ export function HomeScreen() {
           projectId: expenseProjectId,
         });
         if (result.status === "success" && result.parsed) {
-          const p = result.parsed;
-          if (p.totalAmount != null && p.totalAmount > 0) setExpenseAmount(String(p.totalAmount));
-          if (p.currency && p.currency !== "UNKNOWN") setExpenseCurrency(p.currency);
-          if (p.supplierName?.trim()) setExpenseSupplierName(p.supplierName.trim());
-          if (p.issueDate) setExpenseDate(p.issueDate);
-          if (p.supplierName?.trim() && !expenseTitle.trim()) setExpenseTitle(p.supplierName.trim());
+          const v = getConfidenceAwareExpensePrefill(result);
+          setExpenseTitle("");
+          setExpenseNote("");
+          if (v.amount) setExpenseAmount(v.amount);
+          if (v.currency) setExpenseCurrency(v.currency);
+          if (v.supplierName) setExpenseSupplierName(v.supplierName);
+          if (v.issueDate) setExpenseDate(v.issueDate);
+          if (v.supplierIco) setExpenseSupplierIco(v.supplierIco);
         } else if (result.status !== "success") {
           const msg =
             result.errorCode === "ENTITLEMENT_REQUIRED"
@@ -1060,7 +1063,7 @@ export function HomeScreen() {
         setExpenseOcrLoading(false);
       }
     },
-    [expenseProjectId, expenseTitle, t]
+    [expenseProjectId, t]
   );
 
   const launchCameraForExpense = async () => {
@@ -1146,6 +1149,9 @@ export function HomeScreen() {
         status: expenseInvoiceImage ? 'PROCESSING' : 'READY',
         category: expenseCategory,
         supplierName: expenseSupplierName.trim() || undefined,
+        attachments: [],
+        receipt: null,
+        travel: null,
       });
 
       // Upload invoice image if provided

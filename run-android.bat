@@ -38,8 +38,8 @@ call gradlew.bat installDebug -PreactNativeArchitectures=x86_64
 if %ERRORLEVEL% NEQ 0 goto :fail
 
 cd /d "%PROJECT_ROOT%"
-REM adb reverse - emulator can reach Metro on host
-where adb >nul 2>&1 && (adb reverse tcp:8081 tcp:8081 & adb reverse tcp:8083 tcp:8083)
+REM adb reverse - device/emulator can reach Metro + Cursor debug ingest on host
+where adb >nul 2>&1 && (adb reverse tcp:8081 tcp:8081 & adb reverse tcp:8083 tcp:8083 & adb reverse tcp:7281 tcp:7281)
 REM 10.0.2.2 = emulator's way to reach host
 set REACT_NATIVE_PACKAGER_HOSTNAME=10.0.2.2
 set EXPO_PACKAGER_HOSTNAME=10.0.2.2

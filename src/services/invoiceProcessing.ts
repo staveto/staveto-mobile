@@ -1,6 +1,8 @@
 /**
- * Unified entry for invoice attachment OCR / text extraction.
- * Delegates to `extractInvoiceData` (image → Vision callable, PDF → local text + cloud fallback).
+ * Expense document extraction — public API for screens.
+ * `processExpenseDocumentAttachment` is the preferred entry name.
  */
-export { extractInvoiceData, extractInvoiceData as processInvoiceAttachment } from "./invoiceOCR";
-export type { OcrParsed, OcrResult, OcrStatus } from "../lib/ocrTypes";
+
+export { extractInvoiceData } from "./invoiceOCR";
+export type { OcrParsed, OcrResult, OcrStatus } from "./invoiceOCR";
+export { processExpenseDocumentAttachment, processInvoiceAttachment } from "./documentProcessing";

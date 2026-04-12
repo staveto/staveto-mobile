@@ -62,7 +62,8 @@ export function ExpenseReviewScreen() {
     parsedAmount = (ocr.amountCents as number) / 100;
   }
   const validAmount = parsedAmount != null && parsedAmount > 0 && parsedAmount <= 999_999.99;
-  const [title, setTitle] = useState(parsed?.supplierName || params.defaultTitle || "");
+  /** OCR must not pre-fill title; only optional prior form value from navigation. */
+  const [title, setTitle] = useState(params.defaultTitle?.trim() || "");
   const [amount, setAmount] = useState(validAmount ? String(parsedAmount) : params.defaultAmount || "");
   const [date, setDate] = useState(parsed?.issueDate || params.defaultDate || "");
   const [supplierName, setSupplierName] = useState(parsed?.supplierName || params.defaultSupplierName || "");

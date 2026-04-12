@@ -1,4 +1,5 @@
 import { getFirestore } from "../firebase";
+import firestoreDefault, { firebase as rnfbFirebase } from "@react-native-firebase/firestore";
 
 function firestoreInstance() {
   const fs = getFirestore();
@@ -118,8 +119,38 @@ export function runTransaction<T>(
 }
 
 export function serverTimestamp() {
-  const { firebase } = require("@react-native-firebase/app");
+  // RNFB v23: `FieldValue` is on the firestore *namespace* (default export / `firebase.firestore`), not on `default()` instance.
+  const ns = firestoreDefault as unknown as { FieldValue?: { serverTimestamp: () => unknown } };
+  if (ns.FieldValue?.serverTimestamp) {
+    return ns.FieldValue.serverTimestamp();
+  }
+  const rootNs = rnfbFirebase?.firestore as unknown as { FieldValue?: { serverTimestamp: () => unknown } } | undefined;
+  if (rootNs?.FieldValue?.serverTimestamp) {
+    return rootNs.FieldValue.serverTimestamp();
+  }
+  const { firebase } = require("@react-native-firebase/app") as {
+    firebase: { firestore: { FieldValue: { serverTimestamp: () => unknown } } };
+  };
   return firebase.firestore.FieldValue.serverTimestamp();
+}
+
+/**
+ * Use the package `Timestamp` namespace (same as `firestore().Timestamp` on the default export).
+ * Avoids the re-exported `Timestamp` Proxy and avoids calling `getFirestore()` before the module graph is ready
+ * (which can leave a named import binding undefined during circular init).
+ */
+export function firestoreTimestampFromDate(date: Date): FirebaseFirestore.Timestamp {
+  const ns = firestoreDefault as unknown as { Timestamp?: { fromDate: (d: Date) => FirebaseFirestore.Timestamp } };
+  if (ns.Timestamp?.fromDate) {
+    return ns.Timestamp.fromDate(date);
+  }
+  const rootNs = rnfbFirebase?.firestore as unknown as
+    | { Timestamp?: { fromDate: (d: Date) => FirebaseFirestore.Timestamp } }
+    | undefined;
+  if (rootNs?.Timestamp?.fromDate) {
+    return rootNs.Timestamp.fromDate(date);
+  }
+  return firestoreInstance().Timestamp.fromDate(date);
 }
 
 let _TimestampClass: FirebaseFirestore.Timestamp | null = null;

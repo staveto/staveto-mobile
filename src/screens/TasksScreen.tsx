@@ -32,9 +32,15 @@ export function TasksScreen() {
   const navigation = useNavigation();
   const { t } = useI18n();
   const { orgId } = useAuth();
-  const routeParams = route.params as { dueFilter?: "today" | "overdue"; dueDateYmd?: string };
+  const routeParams = route.params as {
+    dueFilter?: "today" | "overdue";
+    dueDateYmd?: string;
+    /** When set (e.g. from Home), list only tasks in this status */
+    status?: string;
+  };
   const dueFilter = routeParams?.dueFilter;
   const dueDateYmd = routeParams?.dueDateYmd;
+  const statusRoute = routeParams?.status?.trim().toUpperCase();
   const [tasks, setTasks] = useState<Task[]>([]);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -92,21 +98,27 @@ export function TasksScreen() {
   };
 
   const filteredTasks = (() => {
+    let list = tasks;
     if (dueDateYmd && /^\d{4}-\d{2}-\d{2}$/.test(dueDateYmd)) {
-      return tasks.filter((task) => task.dueDate?.trim() === dueDateYmd);
+      list = list.filter((task) => task.dueDate?.trim() === dueDateYmd);
+    } else if (dueFilter) {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      list = list.filter((task) => {
+        if ((task.status ?? "").toUpperCase() === "DONE") return false;
+        const date = parseDateOnly(task.dueDate);
+        if (!date) return false;
+        date.setHours(0, 0, 0, 0);
+        if (dueFilter === "today") {
+          return date.getTime() === today.getTime();
+        }
+        return date.getTime() < today.getTime();
+      });
     }
-    if (!dueFilter) return tasks;
-    const today = new Date();
-    today.setHours(0, 0, 0, 0);
-    return tasks.filter((task) => {
-      const date = parseDateOnly(task.dueDate);
-      if (!date) return false;
-      date.setHours(0, 0, 0, 0);
-      if (dueFilter === "today") {
-        return date.getTime() === today.getTime();
-      }
-      return date.getTime() < today.getTime();
-    });
+    if (statusRoute) {
+      list = list.filter((task) => (task.status ?? "OPEN").toUpperCase() === statusRoute);
+    }
+    return list;
   })();
 
   const onRefresh = () => {

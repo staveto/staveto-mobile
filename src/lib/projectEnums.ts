@@ -1,13 +1,40 @@
 /**
- * Project classification enums for engine + attributes.
- * Backward compatible: existing projects may have null for new fields.
+ * Wizard step enums (work type, business mode, creation mode).
+ * **Project storage types and engine mapping:** `projectTypeModel.ts` (single source of truth).
  */
 
-/** Engine type - determines project structure (phases, equipment, etc.) */
-export type ProjectEngineType = "BUILD" | "TRADE" | "MAINTENANCE";
+export type {
+  ProjectStorageType,
+  ProjectType,
+  ProjectTypeInput,
+  ProjectEngineType,
+  ProductProjectKind,
+  HomeTypeFilterBucket,
+  ProjectsTabTypeFilter,
+} from "./projectTypeModel";
 
-/** Legacy RESIDENTIAL maps to TRADE in UI. MANAGEMENT maps to BUILD. */
-export type ProjectType = ProjectEngineType | "RESIDENTIAL" | "MANAGEMENT";
+export {
+  getProjectEngine,
+  getEngineType,
+  isLegacyResidential,
+  isKnownStorageType,
+  isBuildLikeStorageType,
+  isTradeLikeStorageType,
+  isMaintenanceStorageType,
+  toProductKind,
+  getHomeTypeFilterBucket,
+  getProjectsTabTypeFilterBucket,
+  matchesProjectsTabTypeFilter,
+  shouldUseCountryCatalogTemplate,
+  projectOverviewLoadsPhases,
+  projectOverviewUsesPhaseGroupedTasks,
+  projectOverviewLoadsDiary,
+  projectOverviewLoadsDocuments,
+  projectOverviewLoadsEquipmentAndServiceRules,
+  projectOverviewIsTradeOrMaintenanceFlatTasks,
+  isSoloOwnerProjectRow,
+  isSharedOrCollaborativeProjectRow,
+} from "./projectTypeModel";
 
 /** Work type – BUILD (construction) */
 export type WorkTypeBuild = "NEW_BUILD" | "RENOVATION" | "INSTALLATION" | "SERVICE";
@@ -31,17 +58,3 @@ export type BusinessMode = "DIRECT" | "SUBCONTRACT" | "INTERNAL";
 
 /** Creation mode attribute */
 export type CreationMode = "AI" | "MANUAL" | "TEMPLATE";
-
-/** Map project.type to engine for display/filtering */
-export function getEngineType(projectType?: ProjectType | null): ProjectEngineType {
-  if (!projectType) return "TRADE";
-  if (projectType === "RESIDENTIAL") return "TRADE";
-  if (projectType === "MANAGEMENT" || projectType === "BUILD") return "BUILD";
-  if (projectType === "TRADE" || projectType === "MAINTENANCE") return projectType;
-  return "TRADE";
-}
-
-/** Check if project is legacy RESIDENTIAL (show Legacy badge) */
-export function isLegacyResidential(projectType?: ProjectType | null): boolean {
-  return projectType === "RESIDENTIAL";
-}

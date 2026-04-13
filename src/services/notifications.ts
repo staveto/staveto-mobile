@@ -72,19 +72,39 @@ export type NotificationDoc = {
 const LOCAL_KEY = "@staveto:local_notifications";
 const PENDING_READ_KEY = "@staveto:pending_notification_reads";
 
+function normalizeDocData(raw: unknown): Record<string, unknown> {
+  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
+    return raw as Record<string, unknown>;
+  }
+  return {};
+}
+
 function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): NotificationDoc {
-  const d = docSnap.data();
+  let raw: Record<string, unknown>;
+  try {
+    const fn = docSnap.data;
+    raw = typeof fn === "function" ? normalizeDocData((fn as () => Record<string, unknown>)()) : {};
+  } catch {
+    raw = {};
+  }
+  const d = raw;
 
   const convertTimestamp = (ts: unknown): string | undefined => {
-    if (!ts) return undefined;
-    if (ts instanceof Timestamp) {
-      return ts.toDate().toISOString();
-    }
-    if (typeof ts === "string") {
-      return ts;
-    }
-    if (typeof ts === "object" && ts !== null && "toDate" in ts) {
-      return (ts as { toDate: () => Date }).toDate().toISOString();
+    if (ts == null) return undefined;
+    try {
+      if (ts instanceof Timestamp) {
+        const d0 = ts.toDate();
+        return d0 instanceof Date && !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
+      }
+      if (typeof ts === "string") {
+        return ts;
+      }
+      if (typeof ts === "object" && ts !== null && "toDate" in ts && typeof (ts as { toDate?: () => unknown }).toDate === "function") {
+        const d0 = (ts as { toDate: () => Date }).toDate();
+        return d0 instanceof Date && !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
+      }
+    } catch {
+      return undefined;
     }
     return undefined;
   };
@@ -94,9 +114,35 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
   const fromUserName = (d.fromUserName as string) ?? undefined;
   const entityType = inferEntityType(type, d);
 
-  const meta = (d.meta as Record<string, unknown>) ?? undefined;
+  const metaRaw = d.meta;
+  const meta =
+    metaRaw && typeof metaRaw === "object" && !Array.isArray(metaRaw)
+      ? (metaRaw as Record<string, unknown>)
+      : undefined;
   const taskIdFromMeta = meta?.taskId as string | undefined;
   const problemIdFromMeta = meta?.problemId as string | undefined;
+
+  const rawDue = d.dueDate;
+  let dueDateOut: string | null = null;
+  if (rawDue != null) {
+    if (typeof rawDue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rawDue)) {
+      dueDateOut = rawDue;
+    } else {
+      const conv = convertTimestamp(rawDue);
+      if (conv) {
+        dueDateOut = conv.slice(0, 10);
+      }
+    }
+  }
+
+  const rawAmount = d.amount;
+  let amountNum: number | null = null;
+  if (typeof rawAmount === "number" && Number.isFinite(rawAmount)) {
+    amountNum = rawAmount;
+  } else if (typeof rawAmount === "string" && rawAmount.trim() !== "") {
+    const p = parseFloat(rawAmount.replace(",", "."));
+    amountNum = Number.isFinite(p) ? p : null;
+  }
 
   return {
     id: docSnap.id,
@@ -109,9 +155,9 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
     taskId: (d.taskId as string) ?? taskIdFromMeta ?? null,
     problemId: (d.problemId as string) ?? problemIdFromMeta ?? null,
     taskTitle: (d.taskTitle as string) ?? null,
-    dueDate: convertTimestamp(d.dueDate) ?? (d.dueDate as string | null) ?? null,
+    dueDate: dueDateOut,
     expenseId: (d.expenseId as string) ?? null,
-    amount: (d.amount as number) ?? null,
+    amount: amountNum,
     currency: (d.currency as string) ?? "EUR",
     severity: (d.severity as NotificationSeverity) ?? "info",
     deepLink: (d.deepLink as { screen: string; params?: Record<string, unknown> }) ?? undefined,
@@ -131,6 +177,7 @@ function inferEntityType(
   type: NotificationType,
   d: Record<string, unknown>
 ): "task" | "project" | "expense" | "document" | "problem" {
+  if (!d || typeof d !== "object") return "project";
   if (d.entityType && ["task", "project", "expense", "document", "problem"].includes(d.entityType as string)) {
     return d.entityType as "task" | "project" | "expense" | "document" | "problem";
   }
@@ -165,8 +212,11 @@ async function loadLocalNotifications(): Promise<NotificationDoc[]> {
   try {
     const raw = await AsyncStorage.getItem(LOCAL_KEY);
     if (!raw) return [];
-    const parsed = JSON.parse(raw) as NotificationDoc[];
-    return parsed.map((n) => ({ ...n, isLocal: true }));
+    const parsed = JSON.parse(raw) as unknown;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .filter((n): n is Record<string, unknown> => n != null && typeof n === "object" && !Array.isArray(n))
+      .map((n) => ({ ...(n as unknown as NotificationDoc), isLocal: true }));
   } catch {
     return [];
   }
@@ -231,7 +281,16 @@ export async function listNotifications(
   const c = collection(db, "notifications");
   const q = query(c, where("userId", "==", userId), orderBy("createdAt", "desc"), limit(opts?.limitCount ?? 50));
   const snap = await getDocs(q);
-  const remote = snap.docs.map((d) => toDoc({ id: d.id, data: d.data.bind(d) }));
+  const remote = snap.docs
+    .map((d) => {
+      try {
+        return toDoc({ id: d.id, data: () => d.data() as Record<string, unknown> });
+      } catch (e) {
+        if (__DEV__) console.warn("[notifications] skip bad doc", d?.id, e);
+        return null;
+      }
+    })
+    .filter((n): n is NotificationDoc => n != null);
   const local = await loadLocalNotifications();
   const merged = [...local, ...remote].sort((a, b) => {
     const aTime = new Date(a.createdAt).getTime();
@@ -332,7 +391,7 @@ export async function upsertTaskDueNotification(data: {
 
   if (existing.exists()) {
     await updateDoc(ref, { ...payload, updatedAt: serverTimestamp() });
-    return toDoc({ id, data: () => ({ ...existing.data(), ...payload }) });
+    return toDoc({ id, data: () => ({ ...normalizeDocData(existing.data()), ...payload }) });
   }
 
   await setDoc(ref, {

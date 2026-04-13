@@ -38,6 +38,15 @@ import { CloneProjectModal } from "../components/CloneProjectModal";
 import { CreateProjectWizard, type WizardResult } from "../components/CreateProjectWizard";
 import { CreateProjectAIFlow } from "../components/CreateProjectAIFlow";
 import { isLegacyResidential } from "../lib/projectEnums";
+import {
+  isBuildLikeStorageType,
+  getHomeTypeFilterBucket,
+  getProjectEngine,
+  matchesProjectsTabTypeFilter,
+  shouldUseCountryCatalogTemplate,
+  isSoloOwnerProjectRow,
+  isSharedOrCollaborativeProjectRow,
+} from "../lib/projectTypeModel";
 import { openInMaps } from "../lib/maps";
 import { COUNTRY_CODES, getLocalizedCountryName } from "../utils/countries";
 import { resolveTemplateIdForCountry, FALLBACK_TEMPLATE_ID } from "../utils/templateResolver";
@@ -68,21 +77,6 @@ function formatCreatedAt(isoStr?: string): string {
 
 type ProjectCreationType = NonNullable<ProjectDoc["projectType"]>;
 type CreationMethod = "template" | "empty";
-type DisplayProjectType = "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
-
-function normalizeProjectType(projectType?: ProjectDoc["projectType"]): DisplayProjectType {
-  if (projectType === "RESIDENTIAL" || projectType === "TRADE" || projectType === "MAINTENANCE") return projectType;
-  return "MANAGEMENT";
-}
-
-/** Map project type to filter engine: RESIDENTIAL -> TRADE for filtering */
-function getEngineForFilter(projectType?: ProjectDoc["projectType"]): TypeFilter {
-  if (!projectType) return "TRADE";
-  if (projectType === "RESIDENTIAL" || projectType === "TRADE") return "TRADE";
-  if (projectType === "MANAGEMENT" || projectType === "BUILD") return "MANAGEMENT";
-  if (projectType === "MAINTENANCE") return "MAINTENANCE";
-  return "TRADE";
-}
 
 function getProjectInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
@@ -214,7 +208,7 @@ export function ProjectsScreen() {
         return ["equipment", "serviceSchedules", "maintenanceHistory", "costs"];
       }
       const items = ["tasks", "expenses", "diary"];
-      if (type === "MANAGEMENT" || type === "BUILD") {
+      if (isBuildLikeStorageType(type)) {
         items.push("phases", "documents");
       }
       return items;
@@ -224,14 +218,14 @@ export function ProjectsScreen() {
 
   const getProjectTypeLabel = useCallback(
     (projectType?: ProjectDoc["projectType"]) => {
-      const normalized = normalizeProjectType(projectType);
+      const normalized = getHomeTypeFilterBucket(projectType);
       return t(`createProject.type.${normalized}.title`);
     },
     [t]
   );
 
   const getThumbTint = useCallback((projectType?: ProjectDoc["projectType"]) => {
-    const normalized = normalizeProjectType(projectType);
+    const normalized = getHomeTypeFilterBucket(projectType);
     if (normalized === "TRADE") return "#5dade220";
     if (normalized === "MAINTENANCE") return "#7dcea022";
     if (normalized === "RESIDENTIAL") return "#8ea7ff22";
@@ -239,7 +233,7 @@ export function ProjectsScreen() {
   }, []);
 
   const getThumbIcon = useCallback((projectType?: ProjectDoc["projectType"]): React.ComponentProps<typeof Ionicons>["name"] => {
-    const normalized = normalizeProjectType(projectType);
+    const normalized = getHomeTypeFilterBucket(projectType);
     if (normalized === "RESIDENTIAL") return "home-outline";
     if (normalized === "TRADE") return "briefcase-outline";
     if (normalized === "MAINTENANCE") return "construct-outline";
@@ -247,7 +241,7 @@ export function ProjectsScreen() {
   }, []);
 
   const getBadgeColor = useCallback((projectType?: ProjectDoc["projectType"]) => {
-    const normalized = normalizeProjectType(projectType);
+    const normalized = getHomeTypeFilterBucket(projectType);
     if (normalized === "TRADE") return "#5dade2";
     if (normalized === "MAINTENANCE") return "#7dcea0";
     if (normalized === "RESIDENTIAL") return "#8ea7ff";
@@ -369,10 +363,10 @@ export function ProjectsScreen() {
       let result = list;
       // Hide templates from normal list (no "Templates" filter yet)
       result = result.filter((p) => !p.isTemplate);
-      if (projectFilter === "mine") result = result.filter((p) => p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0);
-      else if (projectFilter === "shared") result = result.filter((p) => p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0);
+      if (projectFilter === "mine") result = result.filter(isSoloOwnerProjectRow);
+      else if (projectFilter === "shared") result = result.filter(isSharedOrCollaborativeProjectRow);
       if (selectedTypeFilter !== "ALL") {
-        result = result.filter((p) => getEngineForFilter(p.projectType) === selectedTypeFilter);
+        result = result.filter((p) => matchesProjectsTabTypeFilter(p.projectType, selectedTypeFilter));
       }
       return result;
     },
@@ -515,8 +509,7 @@ export function ProjectsScreen() {
     setSubmitting(true);
     
     try {
-      const shouldUseTemplate =
-        selectedType === "BUILD" || (selectedType === "MANAGEMENT" && creationMethod === "template");
+      const shouldUseTemplate = shouldUseCountryCatalogTemplate({ selectedType, creationMethod });
       const countryCodeForCreate = selectedType === "MAINTENANCE" ? undefined : (newCountry.trim() || undefined);
       const finalTemplateId = shouldUseTemplate
         ? resolveTemplateIdForCountry(countryCodeForCreate)
@@ -870,6 +863,10 @@ export function ProjectsScreen() {
               <View style={styles.emptyFiltered}>
                 <Text style={styles.emptyFilteredText}>{t("projects.noProjectsInCategory")}</Text>
               </View>
+            ) : archivedProjects.length ? (
+              <View style={styles.centered}>
+                <Text style={styles.emptyText}>{t("projects.noActive")}</Text>
+              </View>
             ) : null
           }
           refreshControl={
@@ -881,7 +878,7 @@ export function ProjectsScreen() {
             />
           }
           renderItem={({ item }) => {
-            const normalizedType = normalizeProjectType(item.projectType);
+            const normalizedType = getHomeTypeFilterBucket(item.projectType);
             const typeLabel = getProjectTypeLabel(item.projectType);
             const location = getLocationAnchor(item);
             const badgeColor = getBadgeColor(item.projectType);
@@ -915,7 +912,7 @@ export function ProjectsScreen() {
                     {showCover ? (
                       <Image source={{ uri: item.coverImageUrl! }} style={styles.projectThumbImage} resizeMode="cover" />
                     ) : normalizedType === "MAINTENANCE" ? (
-                      <Ionicons name="construct-outline" size={20} color={colors.textSecondary} />
+                      <Ionicons name="construct-outline" size={20} color={colors.textMuted} />
                     ) : (
                       <>
                         <Text style={styles.projectThumbInitials}>{getProjectInitials(item.name || t("projects.noName"))}</Text>
@@ -973,19 +970,12 @@ export function ProjectsScreen() {
               </TouchableOpacity>
             );
           }}
-          ListEmptyComponent={
-            archivedProjects.length ? (
-              <View style={styles.centered}>
-                <Text style={styles.emptyText}>{t("projects.noActive")}</Text>
-              </View>
-            ) : null
-          }
           ListFooterComponent={
             archivedProjects.length ? (
               <View style={styles.archivedSection}>
                 <Text style={styles.archivedTitle}>{t("projects.archiveSection")}</Text>
                 {archivedProjects.map((item) => {
-                  const normalizedType = normalizeProjectType(item.projectType);
+                  const normalizedType = getHomeTypeFilterBucket(item.projectType);
                   const typeLabel = getProjectTypeLabel(item.projectType);
                   const location = getLocationAnchor(item);
                   const badgeColor = getBadgeColor(item.projectType);
@@ -1156,7 +1146,7 @@ export function ProjectsScreen() {
             {creationPath === "ai" ? (
               <View style={styles.stepOneBody}>
                 <CreateProjectAIFlow
-                  engineType={selectedType ?? undefined}
+                  engineType={getProjectEngine(selectedType ?? undefined)}
                   workType={wizardResult?.workType ?? undefined}
                   onCreated={(projectId) => {
                     closeNewModal();
@@ -1433,8 +1423,8 @@ export function ProjectsScreen() {
               </ScrollView>
             )}
             
-            {/* Tlačidlá - step 1 má CreateProjectWizard vlastné tlačidlá */}
-            {newStep === 1 ? null : newStep === 2 ? (
+            {/* AI flow má vlastné tlačidlá; krok 1 = wizard; krok 2+ len manuálny tok */}
+            {creationPath === "ai" ? null : newStep === 1 ? null : newStep === 2 ? (
               <View style={styles.modalButtons}>
                 <TouchableOpacity 
                   style={styles.modalCancel} 
@@ -1655,7 +1645,7 @@ const styles = StyleSheet.create({
   projectThumbInitials: {
     fontSize: 13,
     fontWeight: "700",
-    color: colors.textSecondary,
+    color: colors.textMuted,
   },
   projectThumbIcon: {
     position: "absolute",

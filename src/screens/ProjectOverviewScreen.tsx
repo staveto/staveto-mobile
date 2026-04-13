@@ -75,6 +75,7 @@ import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { exportProjectToCsv } from "../services/projectExport";
 import { exportProjectAsProtocol } from "../services/projectProtocolExport";
 import * as timeTracking from "../services/timeTracking";
+import * as quickNotesService from "../services/quickNotes";
 import { updateTaskStatus } from "../services/taskService";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
 import { addPhasesToProject } from "../services/addPhasesToProject";
@@ -97,6 +98,14 @@ import type { ProjectWeatherSnapshot } from "../services/weather";
 import { DescriptionInputModal } from "../components/DescriptionInputModal";
 import { CurrencyDropdown } from "../components/CurrencyDropdown";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
+import {
+  isBuildLikeStorageType,
+  isMaintenanceStorageType,
+  projectOverviewLoadsDiary,
+  projectOverviewLoadsDocuments,
+  projectOverviewLoadsEquipmentAndServiceRules,
+  projectOverviewIsTradeOrMaintenanceFlatTasks,
+} from "../lib/projectTypeModel";
 
 const DONE_COLOR = "#2e7d32";
 
@@ -119,8 +128,14 @@ export function ProjectOverviewScreen() {
     openExpenseModal?: boolean;
     initialExpenseCategory?: "WORK" | "TRAVEL";
     openNewTask?: boolean;
+    /** Prefill new task title (e.g. from quick note inbox) */
+    initialNewTaskTitle?: string;
     openDiaryModal?: boolean;
     diaryInputMode?: "text" | "voice";
+    /** Prefill diary work description (e.g. from quick note) */
+    initialDiaryWorkDescription?: string;
+    /** After task/diary saved, mark this quick note processed */
+    processQuickNoteId?: string;
     selectedPhaseId?: string | null;
     openExpenseId?: string | null;
     expandExpensesSection?: boolean;
@@ -133,8 +148,11 @@ export function ProjectOverviewScreen() {
     openExpenseModal: paramOpenExpenseModal,
     initialExpenseCategory: paramInitialExpenseCategory,
     openNewTask: paramOpenNewTask,
+    initialNewTaskTitle: paramInitialNewTaskTitle,
     openDiaryModal: paramOpenDiaryModal,
     diaryInputMode: paramDiaryInputMode,
+    initialDiaryWorkDescription: paramInitialDiaryWorkDescription,
+    processQuickNoteId: paramProcessQuickNoteId,
     selectedPhaseId: paramSelectedPhaseId,
     openExpenseId: paramOpenExpenseId,
     expandExpensesSection: paramExpandExpensesSection,
@@ -336,7 +354,7 @@ export function ProjectOverviewScreen() {
   const [taskFilter, setTaskFilter] = useState<'service' | 'all'>('service');
   const [activityEvents, setActivityEvents] = useState<ProjectEvent[]>([]);
   useEffect(() => {
-    if (projectType === 'MAINTENANCE') setTaskFilter('service');
+    if (isMaintenanceStorageType(projectType)) setTaskFilter("service");
   }, [projectId, projectType]);
   const [activityLoading, setActivityLoading] = useState(false);
   const [activityExpanded, setActivityExpanded] = useState(false);
@@ -510,7 +528,7 @@ export function ProjectOverviewScreen() {
       
       // Load phases (only for BUILD projects), tasks, expenses, and BUILD-specific data
       const projectTypeForLoad = project?.projectType || projectType;
-      const isBuildProject = projectTypeForLoad === 'BUILD' || projectTypeForLoad === 'MANAGEMENT';
+      const isBuildProject = isBuildLikeStorageType(projectTypeForLoad);
       
       // If useProjectAccess failed (e.g. first getDoc timed out) but getProject succeeded,
       // still load subcollections when the loaded project shows this user is the owner.
@@ -567,9 +585,9 @@ export function ProjectOverviewScreen() {
         loadPromises.push(Promise.resolve([]));
       }
       
-      // Diary is available across project types; documents remain BUILD/MANAGEMENT only.
-      const hasDiary = projectTypeForLoad === 'BUILD' || projectTypeForLoad === 'MANAGEMENT' || projectTypeForLoad === 'TRADE' || projectTypeForLoad === 'MAINTENANCE' || projectTypeForLoad === 'RESIDENTIAL';
-      const hasDocuments = isBuildProject;
+      // Diary / documents: see `projectTypeModel` (documents = build-like only).
+      const hasDiary = projectOverviewLoadsDiary(projectTypeForLoad);
+      const hasDocuments = projectOverviewLoadsDocuments(projectTypeForLoad);
       if (hasDiary && canReadDiary) {
         loadPromises.push(
           constructionDiaryService.listDiaryEntries(projectId).catch((error: any) => {
@@ -635,7 +653,7 @@ export function ProjectOverviewScreen() {
       setProjectMembers(members);
 
       // MAINTENANCE v2: load equipment and service rules count only for MAINTENANCE projects
-      const isMaintenanceLike = projectTypeForLoad === 'MAINTENANCE';
+      const isMaintenanceLike = projectOverviewLoadsEquipmentAndServiceRules(projectTypeForLoad);
       if (isMaintenanceLike) {
         try {
           const [eq, rules] = await Promise.all([
@@ -831,9 +849,20 @@ export function ProjectOverviewScreen() {
   useEffect(() => {
     if (paramOpenNewTask && projectId && access.canWrite && (access.sharedItems.tasks || access.sharedItems.phases)) {
       setSelectedPhaseId(paramSelectedPhaseId ?? null);
+      if (paramInitialNewTaskTitle?.trim()) {
+        setNewTitle(paramInitialNewTaskTitle.trim());
+      }
       setShowNewTask(true);
     }
-  }, [paramOpenNewTask, projectId, paramSelectedPhaseId, access.canWrite, access.sharedItems.tasks, access.sharedItems.phases]);
+  }, [
+    paramOpenNewTask,
+    paramInitialNewTaskTitle,
+    projectId,
+    paramSelectedPhaseId,
+    access.canWrite,
+    access.sharedItems.tasks,
+    access.sharedItems.phases,
+  ]);
 
   const goBack = () => navigation.goBack();
   const goToMembers = () => (navigation as { navigate: (n: string, p?: object) => void }).navigate("ProjectMembers", { projectId, projectName, projectType });
@@ -955,6 +984,18 @@ export function ProjectOverviewScreen() {
       setRecordingUri(null);
       setShowTaskDescriptionModal(false);
       await load(true); // Reload with refresh
+      if (paramProcessQuickNoteId && user?.id) {
+        try {
+          await quickNotesService.markQuickNoteProcessed(user.id, paramProcessQuickNoteId);
+        } catch {
+          /* ignore */
+        }
+        try {
+          (navigation as unknown as { setParams?: (p: object) => void }).setParams?.({ processQuickNoteId: undefined });
+        } catch {
+          /* ignore */
+        }
+      }
       const { logTaskCreateSuccess } = require("../services/analytics");
       logTaskCreateSuccess("project_overview");
       console.log(`[ProjectOverview] Custom task created successfully`);
@@ -979,7 +1020,8 @@ export function ProjectOverviewScreen() {
     setShowNewTask(true);
   };
 
-  const openNewDiaryModal = useCallback((mode: "text" | "voice" = "text", showPermissionAlert = true) => {
+  const openNewDiaryModal = useCallback(
+    (mode: "text" | "voice" = "text", showPermissionAlert = true, prefillWorkDescription?: string) => {
     if (!access.canWrite || access.sharedItems?.diary !== true) {
       if (!showPermissionAlert) return;
       Alert.alert(t("common.error"), t("projectOverview.noPermission"));
@@ -989,21 +1031,38 @@ export function ProjectOverviewScreen() {
     setDiaryDate(new Date().toISOString().split("T")[0]);
     setDiaryWeather("");
     setDiaryWorkers("");
-    setDiaryWorkDescription("");
+    setDiaryWorkDescription(prefillWorkDescription?.trim() ?? "");
     setDiaryWorkDescriptionRecordingUri(null);
     setShowDiaryDescriptionModal(false);
     setDiaryMaterials("");
     setDiaryPhaseId(null);
     setDiaryAttachments([]);
     setShowDiaryModal(true);
-  }, [access.canWrite, access.sharedItems.diary, t]);
+  },
+  [access.canWrite, access.sharedItems.diary, t]
+);
 
   useEffect(() => {
     if (!paramOpenDiaryModal || !projectId) return;
     if (!projectOwnerId && access.loading) return;
     if (!access.canReadDiary || !access.canWrite || access.sharedItems?.diary !== true) return;
-    openNewDiaryModal(paramDiaryInputMode === "voice" ? "voice" : "text", false);
-  }, [paramOpenDiaryModal, paramDiaryInputMode, projectId, projectOwnerId, access.loading, access.canReadDiary, access.canWrite, access.sharedItems?.diary, openNewDiaryModal]);
+    openNewDiaryModal(
+      paramDiaryInputMode === "voice" ? "voice" : "text",
+      false,
+      paramInitialDiaryWorkDescription
+    );
+  }, [
+    paramOpenDiaryModal,
+    paramDiaryInputMode,
+    paramInitialDiaryWorkDescription,
+    projectId,
+    projectOwnerId,
+    access.loading,
+    access.canReadDiary,
+    access.canWrite,
+    access.sharedItems?.diary,
+    openNewDiaryModal,
+  ]);
 
   const openTaskDetail = (task: TaskDoc) => {
     console.log(`[ProjectOverview] Opening task detail for task ${task.id}`);
@@ -2822,6 +2881,18 @@ export function ProjectOverviewScreen() {
           projectName: projectName || null,
         });
         Alert.alert(t("common.success"), t("projectOverview.diaryEntryAdded"));
+        if (paramProcessQuickNoteId && user?.id) {
+          try {
+            await quickNotesService.markQuickNoteProcessed(user.id, paramProcessQuickNoteId);
+          } catch {
+            /* ignore */
+          }
+          try {
+            (navigation as unknown as { setParams?: (p: object) => void }).setParams?.({ processQuickNoteId: undefined });
+          } catch {
+            /* ignore */
+          }
+        }
       }
       
       setShowDiaryModal(false);
@@ -3353,10 +3424,10 @@ export function ProjectOverviewScreen() {
     );
   };
 
-  // Determine project type: BUILD has phases, TRADE/MAINTENANCE don't
-  const isBuildProject = projectType === 'BUILD' || projectType === 'MANAGEMENT';
-  const isTradeOrMaintenance = projectType === 'TRADE' || projectType === 'RESIDENTIAL' || projectType === 'MAINTENANCE';
-  const supportsDiary = isBuildProject || isTradeOrMaintenance;
+  // Structure: build-like = phased; trade-like + maintenance = flat tasks (see `projectTypeModel`).
+  const isBuildProject = isBuildLikeStorageType(projectType);
+  const isTradeOrMaintenance = projectOverviewIsTradeOrMaintenanceFlatTasks(projectType);
+  const supportsDiary = projectOverviewLoadsDiary(projectType);
   
   // Group tasks by phase (only for BUILD projects)
   const tasksByPhase = new Map<string, TaskDoc[]>();

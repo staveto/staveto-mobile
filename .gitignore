@@ -26,6 +26,12 @@ npm-debug.*
 yarn-debug.*
 yarn-error.*
 
+# Cursor / local IDE logs (do not commit)
+.cursor/
+
+# Windows folder metadata
+desktop.ini
+
 # macOS
 .DS_Store
 *.pem

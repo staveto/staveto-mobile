@@ -1,3 +1,7 @@
+/**
+ * @deprecated Unused in current navigation — kept for reference or future revival.
+ * Active creation flow uses `CreateProjectWizard` + `projectTypeModel` storage types.
+ */
 import React from "react";
 import { View, Text, TouchableOpacity, StyleSheet, useWindowDimensions } from "react-native";
 import Svg, { Line, Path } from "react-native-svg";

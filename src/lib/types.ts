@@ -6,7 +6,10 @@ import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
 
 type Timestamp = FirebaseFirestoreTypes.Timestamp;
 
-export type ProjectType = 'BUILD' | 'MAINTENANCE' | 'TRADE' | 'RESIDENTIAL' | 'MANAGEMENT';
+import type { ProjectStorageType } from "./projectTypeModel";
+
+/** Firestore `projects.projectType` — canonical definition in `projectTypeModel.ts`. */
+export type ProjectType = ProjectStorageType;
 
 export type TaskStatus = 'OPEN' | 'DONE' | 'IN_PROGRESS' | 'BLOCKED';
 

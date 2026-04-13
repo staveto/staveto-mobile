@@ -1,4 +1,4 @@
-import React, { useState } from "react";
+import React, { useCallback, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, Pressable } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
@@ -36,8 +36,15 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
   const [engineType, setEngineType] = useState<ProjectEngineType | null>(null);
   const [workType, setWorkType] = useState<WorkType | null>(null);
   const [businessMode, setBusinessMode] = useState<BusinessMode | null>(null);
-  const [creationMode, setCreationMode] = useState<CreationMode | null>(null);
   const [showHelpSheet, setShowHelpSheet] = useState(false);
+
+  const completeWithCreationMode = useCallback(
+    (creationMode: CreationMode) => {
+      if (!engineType) return;
+      onComplete({ engineType, workType, businessMode, creationMode });
+    },
+    [engineType, workType, businessMode, onComplete]
+  );
 
   const handleNext = () => {
     if (step === 1 && engineType) {
@@ -55,13 +62,6 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
       }
     } else if (step === 3) {
       setStep(4);
-    } else if (step === 4 && creationMode) {
-      onComplete({
-        engineType: engineType!,
-        workType,
-        businessMode,
-        creationMode,
-      });
     }
   };
 
@@ -72,7 +72,6 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
 
   const canNext = () => {
     if (step === 1) return !!engineType;
-    if (step === 4) return !!creationMode;
     return true;
   };
 
@@ -189,29 +188,46 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
         )}
 
         {step === 4 && engineType && (
-          <View style={styles.creationButtons}>
-            {(engineType === "TRADE"
-              ? (["AI", "MANUAL"] as const)
-              : engineType === "BUILD"
-                ? (locale === "sk" ? (["AI", "MANUAL", "TEMPLATE"] as const) : (["AI", "MANUAL"] as const))
-                : []
-            ).map((mode) => {
-              const isActive = creationMode === mode;
-              const icon = mode === "AI" ? "sparkles-outline" : mode === "MANUAL" ? "create-outline" : "copy-outline";
-              return (
-                <TouchableOpacity
-                  key={mode}
-                  style={[styles.creationBtn, isActive && styles.creationBtnActive]}
-                  onPress={() => setCreationMode(mode)}
-                  activeOpacity={0.8}
-                >
-                  <Ionicons name={icon} size={20} color={isActive ? colors.primary : colors.textMuted} />
-                  <Text style={[styles.creationBtnText, isActive && styles.creationBtnTextActive]}>
-                    {t(`createProject.wizard.creationMode.${mode}`)}
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+          <View style={styles.creationStep}>
+            <Text style={styles.step4Lead}>{t(`createProject.wizard.step4Subtitle.${engineType}`)}</Text>
+            <TouchableOpacity
+              style={styles.creationChoiceCard}
+              onPress={() => completeWithCreationMode("AI")}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+            >
+              <View style={styles.creationChoiceHeader}>
+                <Ionicons name="sparkles-outline" size={22} color={colors.primary} />
+                <Text style={styles.creationChoiceTitle}>{t("createProject.wizard.creationMode.AI")}</Text>
+              </View>
+              <Text style={styles.creationChoiceHint}>{t(`createProject.wizard.creationModeAiHint.${engineType}`)}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={styles.creationChoiceCard}
+              onPress={() => completeWithCreationMode("MANUAL")}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+            >
+              <View style={styles.creationChoiceHeader}>
+                <Ionicons name="create-outline" size={22} color={colors.textMuted} />
+                <Text style={styles.creationChoiceTitle}>{t("createProject.wizard.creationMode.MANUAL")}</Text>
+              </View>
+              <Text style={styles.creationChoiceHintMuted}>{t(`createProject.wizard.creationModeManualHint.${engineType}`)}</Text>
+            </TouchableOpacity>
+            {engineType === "BUILD" && locale === "sk" ? (
+              <TouchableOpacity
+                style={styles.creationChoiceCard}
+                onPress={() => completeWithCreationMode("TEMPLATE")}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+              >
+                <View style={styles.creationChoiceHeader}>
+                  <Ionicons name="copy-outline" size={22} color={colors.textMuted} />
+                  <Text style={styles.creationChoiceTitle}>{t("createProject.wizard.creationMode.TEMPLATE")}</Text>
+                </View>
+                <Text style={styles.creationChoiceHintMuted}>{t("createProject.wizard.creationModeTemplateHint")}</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
         )}
       </ScrollView>
@@ -219,19 +235,19 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
       {step === 1 && (
         <Text style={styles.laterCombine}>{t("createProject.wizard.laterCombine")}</Text>
       )}
-      <View style={styles.buttons}>
-        <TouchableOpacity style={styles.cancelBtn} onPress={handleBack}>
+      <View style={[styles.buttons, step === 4 && styles.buttonsStep4Only]}>
+        <TouchableOpacity style={[styles.cancelBtn, step === 4 && styles.cancelBtnAlone]} onPress={handleBack}>
           <Text style={styles.cancelBtnText}>{step === 1 ? t("projects.cancel") : t("projects.back")}</Text>
         </TouchableOpacity>
-        <TouchableOpacity
-          style={[styles.nextBtn, !canNext() && styles.nextBtnDisabled]}
-          onPress={handleNext}
-          disabled={!canNext()}
-        >
-          <Text style={styles.nextBtnText}>
-            {step === 4 ? t("common.continue") : t("projects.next")}
-          </Text>
-        </TouchableOpacity>
+        {step !== 4 ? (
+          <TouchableOpacity
+            style={[styles.nextBtn, !canNext() && styles.nextBtnDisabled]}
+            onPress={handleNext}
+            disabled={!canNext()}
+          >
+            <Text style={styles.nextBtnText}>{t("projects.next")}</Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       <Modal visible={showHelpSheet} transparent animationType="slide">
@@ -398,7 +414,7 @@ const styles = StyleSheet.create({
   helpHandle: {
     width: 36,
     height: 4,
-    backgroundColor: colors.textMuted + "60",
+    backgroundColor: "rgba(255,255,255,0.35)",
     borderRadius: 2,
     alignSelf: "center",
     marginBottom: spacing.md,
@@ -406,7 +422,7 @@ const styles = StyleSheet.create({
   helpTitle: {
     fontSize: 18,
     fontWeight: "700",
-    color: colors.text,
+    color: colors.textOnDark,
     marginBottom: spacing.lg,
   },
   helpScroll: {
@@ -419,12 +435,12 @@ const styles = StyleSheet.create({
   helpText: {
     fontSize: 14,
     lineHeight: 20,
-    color: colors.text,
+    color: colors.textOnDark,
   },
   helpAiHint: {
     fontSize: 13,
     lineHeight: 18,
-    color: colors.textMuted,
+    color: "rgba(255,255,255,0.92)",
     fontStyle: "italic",
     marginTop: spacing.sm,
   },
@@ -466,32 +482,47 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontWeight: "600",
   },
-  creationButtons: {
-    gap: spacing.sm,
+  creationStep: {
+    gap: spacing.md,
     marginBottom: spacing.md,
   },
-  creationBtn: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
+  step4Lead: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.textMuted,
+    marginBottom: spacing.xs,
+  },
+  creationChoiceCard: {
     padding: spacing.md,
-    borderRadius: radius,
+    borderRadius: radius + 2,
     borderWidth: 1,
     borderColor: colors.border,
     backgroundColor: colors.card,
   },
-  creationBtnActive: {
-    borderColor: colors.primary,
-    backgroundColor: colors.primary + "12",
+  creationChoiceHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
   },
-  creationBtnText: {
-    fontSize: 15,
-    fontWeight: "500",
+  creationChoiceTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "600",
     color: colors.text,
   },
-  creationBtnTextActive: {
-    color: colors.primary,
-    fontWeight: "600",
+  creationChoiceHint: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
+    marginLeft: 22 + spacing.sm,
+  },
+  creationChoiceHintMuted: {
+    fontSize: 12,
+    lineHeight: 17,
+    color: colors.textMuted,
+    marginTop: spacing.sm,
+    marginLeft: 22 + spacing.sm,
   },
   buttons: {
     flexDirection: "row",
@@ -500,6 +531,13 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
     borderTopWidth: 1,
     borderTopColor: colors.border,
+  },
+  buttonsStep4Only: {
+    justifyContent: "center",
+  },
+  cancelBtnAlone: {
+    flexGrow: 1,
+    maxWidth: "100%",
   },
   cancelBtn: {
     flex: 1,

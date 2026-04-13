@@ -23,6 +23,7 @@ import * as problemPhotosService from "../services/problemPhotos";
 import * as projectMembersService from "../services/projectMembers";
 import * as attachmentsService from "../services/attachments";
 import * as equipmentService from "../services/equipment";
+import * as quickNotesService from "../services/quickNotes";
 import type { ProblemCategory, ProblemPriority, ProblemPhoto } from "../services/problems";
 import type { ProjectMemberDoc } from "../services/projectMembers";
 import type { EquipmentDoc } from "../services/equipment";
@@ -42,7 +43,13 @@ try {
   DateTimePicker = pkg.default ?? pkg;
 } catch {}
 
-type RouteParams = { projectId: string; projectName?: string; projectType?: string };
+type RouteParams = {
+  projectId: string;
+  projectName?: string;
+  projectType?: string;
+  initialDescription?: string;
+  processQuickNoteId?: string;
+};
 
 function toYmd(d: Date): string {
   const y = d.getFullYear();
@@ -59,7 +66,8 @@ export function CreateProblemScreen() {
   const route = useRoute();
   const navigation = useNavigation<any>();
   const { t } = useI18n();
-  const { projectId, projectName, projectType } = (route.params ?? {}) as RouteParams;
+  const { projectId, projectName, projectType, initialDescription, processQuickNoteId } =
+    (route.params ?? {}) as RouteParams;
   const { user } = useAuth();
   const access = useProjectAccess(projectId);
   const [members, setMembers] = useState<ProjectMemberDoc[]>([]);
@@ -110,6 +118,11 @@ export function CreateProblemScreen() {
   useEffect(() => {
     if (blocksWork) setPriority("high");
   }, [blocksWork]);
+
+  useEffect(() => {
+    const pre = initialDescription?.trim();
+    if (pre) setTitle(pre);
+  }, [initialDescription]);
 
   useEffect(() => {
     let cancelled = false;
@@ -319,6 +332,13 @@ export function CreateProblemScreen() {
       }
 
       showToast(t("problems.saved"));
+      if (processQuickNoteId && user?.id) {
+        try {
+          await quickNotesService.markQuickNoteProcessed(user.id, processQuickNoteId);
+        } catch {
+          /* ignore */
+        }
+      }
       navigation.goBack();
     } catch (e: unknown) {
       const msg = e instanceof Error ? e.message : t("common.error");

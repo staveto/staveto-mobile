@@ -16,6 +16,9 @@ import {
 import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
+import type { ProjectStorageType } from "../lib/projectTypeModel";
+
+/** Map keys = Firestore `projects.projectType` (see `projectTypeModel.ProjectStorageType`). */
 
 export type ProblemStatus = "open" | "in_progress" | "fixed" | "verified" | "rejected";
 export type ProblemPriority = "low" | "medium" | "high";
@@ -141,7 +144,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
   };
 }
 
-/** Categories available per project type (stable keys stored in Firestore) */
+/** Categories available per storage `projectType` (stable keys in Firestore). */
 export const PROBLEM_CATEGORIES_BY_PROJECT_TYPE: Record<string, ProblemCategory[]> = {
   BUILD: ["safety", "quality", "incomplete_work", "damage", "material_logistics", "documentation", "other"],
   MANAGEMENT: ["safety", "quality", "incomplete_work", "damage", "material_logistics", "documentation", "other"],
@@ -160,7 +163,7 @@ const DEFAULT_CATEGORIES: ProblemCategory[] = [
   "other",
 ];
 
-export function getCategoriesForProjectType(projectType: string): ProblemCategory[] {
+export function getCategoriesForProjectType(projectType: ProjectStorageType | string): ProblemCategory[] {
   return PROBLEM_CATEGORIES_BY_PROJECT_TYPE[projectType] ?? DEFAULT_CATEGORIES;
 }
 

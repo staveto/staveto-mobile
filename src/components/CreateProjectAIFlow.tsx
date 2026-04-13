@@ -66,10 +66,15 @@ function getScopeLabel(scope: string, t: (key: string) => string): string {
   return translated !== key ? translated : scope;
 }
 
+function normalizeAiErrorMessage(message: string): string {
+  return message.replace(/^\[internal\]\s*/i, "").replace(/\s*\[internal\]\s*/gi, " ").trim();
+}
+
 function getAiErrorMessage(code: string | undefined, message: string, t: (key: string) => string): string {
+  const cleaned = normalizeAiErrorMessage(message);
   const codeLower = (code ?? "").toLowerCase();
-  const msgLower = (message ?? "").toLowerCase();
-  if (!message && !code) return t("createProject.ai.error") || "AI nemohla vytvoriť plán. Skús znova alebo vytvor manuálne.";
+  const msgLower = cleaned.toLowerCase();
+  if (!cleaned && !code) return t("createProject.ai.error") || "AI nemohla vytvoriť plán. Skús znova alebo vytvor manuálne.";
   if (codeLower === "unauthenticated" || msgLower.includes("authentication required")) {
     return t("createProject.ai.errorAuth") || "Musíte byť prihlásený. Skúste sa odhlásiť a znova prihlásiť.";
   }
@@ -79,7 +84,10 @@ function getAiErrorMessage(code: string | undefined, message: string, t: (key: s
   if (msgLower.includes("network") || msgLower.includes("timeout") || msgLower.includes("slabé pripojenie")) {
     return t("createProject.ai.errorNetwork") || "Slabé pripojenie alebo žiadny internet. Skúste znova.";
   }
-  return message && message.length < 120 ? message : (t("createProject.ai.error") || "AI nemohla vytvoriť plán. Skús znova alebo vytvor manuálne.");
+  if (msgLower.includes("internal") || msgLower.includes("ai generation failed")) {
+    return t("createProject.ai.error") || "AI nemohla vytvoriť plán. Skús znova alebo vytvor manuálne.";
+  }
+  return cleaned && cleaned.length < 120 ? cleaned : (t("createProject.ai.error") || "AI nemohla vytvoriť plán. Skús znova alebo vytvor manuálne.");
 }
 
 export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType, workType }: Props) {
@@ -92,8 +100,6 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
   const [floorCount, setFloorCount] = useState("");
   const [plan, setPlan] = useState<AiProjectPlan | null>(null);
   const [error, setError] = useState<string | null>(null);
-  /** Raw error for dev debugging (code + message) */
-  const [rawError, setRawError] = useState<{ code?: string; message: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingDocs, setUploadingDocs] = useState(false);
 
@@ -161,7 +167,6 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
     }
 
     setError(null);
-    setRawError(null);
     setStep("generating");
 
     try {
@@ -191,12 +196,11 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
       setPlan(result);
       setStep("preview");
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = normalizeAiErrorMessage(e instanceof Error ? e.message : String(e));
       const code = (e as { code?: string })?.code;
       if (__DEV__) {
-        console.error("[CreateProjectAIFlow] AI generation failed:", { code, message: msg, error: e });
+        console.warn("[CreateProjectAIFlow] AI generation failed", code, msg);
       }
-      setRawError({ code, message: msg });
       setError(getAiErrorMessage(code, msg, t));
       setStep("brief");
       setUploadingDocs(false);
@@ -210,13 +214,11 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
   const handleChangeDescription = () => {
     setStep("brief");
     setError(null);
-    setRawError(null);
   };
 
   const handleGenerateAgain = async () => {
     if (!brief.trim()) return;
     setError(null);
-    setRawError(null);
     setStep("generating");
     try {
       let documentStoragePaths: string[] = [];
@@ -244,12 +246,11 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
       setPlan(result);
       setStep("preview");
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = normalizeAiErrorMessage(e instanceof Error ? e.message : String(e));
       const code = (e as { code?: string })?.code;
       if (__DEV__) {
-        console.error("[CreateProjectAIFlow] AI generate again failed:", { code, message: msg });
+        console.warn("[CreateProjectAIFlow] AI generate again failed", code, msg);
       }
-      setRawError({ code, message: msg });
       setError(getAiErrorMessage(code, msg, t));
       setStep("preview");
       setUploadingDocs(false);
@@ -260,7 +261,6 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
     if (!plan) return;
 
     setError(null);
-    setRawError(null);
     setSubmitting(true);
 
     try {
@@ -271,10 +271,12 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
       const projectId = await createProjectFromAiPlan(params);
       onCreated(projectId);
     } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e);
+      const msg = normalizeAiErrorMessage(e instanceof Error ? e.message : String(e));
       const code = (e as { code?: string })?.code;
-      setRawError({ code, message: msg });
-      setError(msg);
+      if (__DEV__) {
+        console.warn("[CreateProjectAIFlow] create from plan failed", code, msg);
+      }
+      setError(getAiErrorMessage(code, msg, t));
     } finally {
       setSubmitting(false);
     }
@@ -305,7 +307,6 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
           onChangeText={(text) => {
             setBrief(text);
             setError(null);
-            setRawError(null);
           }}
           placeholder={t("createProject.ai.placeholder")}
           placeholderTextColor="#666666"
@@ -388,16 +389,7 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
             })}
           </View>
         )}
-        {error && (
-          <View>
-            <Text style={styles.errorText}>{error}</Text>
-            {__DEV__ && rawError && (
-              <Text style={[styles.errorText, { fontSize: 11, opacity: 0.8, marginTop: 4 }]} selectable>
-                [{rawError.code ?? "—"}] {rawError.message}
-              </Text>
-            )}
-          </View>
-        )}
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
         <View style={styles.actions}>
           <TouchableOpacity
             style={[styles.btn, styles.btnPrimary]}
@@ -458,16 +450,7 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
             </View>
           ))}
         </ScrollView>
-        {error && (
-          <View>
-            <Text style={styles.errorText}>{error}</Text>
-            {__DEV__ && rawError && (
-              <Text style={[styles.errorText, { fontSize: 11, opacity: 0.8, marginTop: 4 }]} selectable>
-                [{rawError.code ?? "—"}] {rawError.message}
-              </Text>
-            )}
-          </View>
-        )}
+        {error ? <Text style={styles.errorText}>{error}</Text> : null}
         <View style={styles.previewActions}>
           <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={handleChangeDescription}>
             <Text style={styles.btnSecondaryText}>{t("createProject.ai.changeDescription")}</Text>

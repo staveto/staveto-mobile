@@ -12,6 +12,8 @@ export type DashboardViewModel = {
     openCount: number;
     doneTodayCount: number;
     blockedCount: number;
+    /** Open / doing / blocked tasks with due date strictly before today */
+    overdueCount: number;
     expensesMonthSum: number;
     expensesTotalSum: number; // Total expenses across all projects
     hasExpensesAccess: boolean; // True if user can see expenses in at least one project
@@ -27,7 +29,15 @@ export type DashboardViewModel = {
 const EMPTY_DASHBOARD: DashboardViewModel = {
   projects: [],
   todayTasks: [],
-  kpis: { openCount: 0, doneTodayCount: 0, blockedCount: 0, expensesMonthSum: 0, expensesTotalSum: 0, hasExpensesAccess: false },
+  kpis: {
+    openCount: 0,
+    doneTodayCount: 0,
+    blockedCount: 0,
+    overdueCount: 0,
+    expensesMonthSum: 0,
+    expensesTotalSum: 0,
+    hasExpensesAccess: false,
+  },
   projectStats: new Map(),
   timeTrackingProjectIds: [],
 };
@@ -181,6 +191,15 @@ async function loadDashboardDataInternal(ownerId: string, options?: { forceServe
     return new Date(y, m - 1, d);
   };
 
+  const overdueTasks = allTasks.filter((task) => {
+    if (task.status === "DONE") return false;
+    if (!task.dueDate) return false;
+    const dueDate = parseDateOnly(task.dueDate);
+    if (!dueDate) return false;
+    dueDate.setHours(0, 0, 0, 0);
+    return dueDate.getTime() < today.getTime();
+  });
+
   // Upcoming tasks (with dueDate today or later), sorted by date
   const upcomingTasks = allTasks
     .filter((task) => {
@@ -209,6 +228,7 @@ async function loadDashboardDataInternal(ownerId: string, options?: { forceServe
       openCount: openTasks.length,
       doneTodayCount: doneTodayTasks.length,
       blockedCount: blockedTasks.length,
+      overdueCount: overdueTasks.length,
       expensesMonthSum,
       expensesTotalSum,
       hasExpensesAccess: projectIdsWithExpensesAccess.size > 0,

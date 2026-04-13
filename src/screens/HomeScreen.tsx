@@ -15,7 +15,6 @@ import {
   ActionSheetIOS,
   Platform,
   Image,
-  useWindowDimensions,
 } from "react-native";
 import { DrawerActions, TabActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -44,22 +43,21 @@ import { QuickTimeModal } from "../components/QuickTimeModal";
 import { BottomSheetModal } from "@gorhom/bottom-sheet";
 import * as timeTracking from "../services/timeTracking";
 import { openInMaps } from "../lib/maps";
-import { RoleChip } from "../components/RoleChip";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
-import { ProjectTypeChip } from "../components/ProjectTypeChip";
-import { normalizeRoleKey } from "../helpers/role";
-import type { RoleKey } from "../helpers/role";
-import { getKpiCardsWithTasks } from "../helpers/kpi/getKpiCards";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
 import { logEventSafe } from "../services/analytics";
 import { hasShownFirstProjectPrompt, markFirstProjectPromptShown } from "../utils/firstProjectPrompt";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
-import { KpiCardComponent } from "../components/KpiCard";
-import type { KpiCard } from "../helpers/kpi/getKpiCards";
 import { CurrencyDropdown } from "../components/CurrencyDropdown";
 import { QuickNoteModal } from "../components/QuickNoteModal";
 import * as quickNotesService from "../services/quickNotes";
 import { useQuickNoteContext } from "../context/QuickNoteContext";
+import { getCurrentPositionSafe } from "../lib/location";
+import {
+  getHomeTypeFilterBucket,
+  isSoloOwnerProjectRow,
+  isSharedOrCollaborativeProjectRow,
+} from "../lib/projectTypeModel";
 
 // Conditional imports for image/document picker
 let ImagePicker: typeof import('expo-image-picker') | null = null;
@@ -79,7 +77,6 @@ function formatMinutesToHours(minutes: number): string {
 }
 
 const LAST_USED_PROJECT_KEY = "@staveto:lastUsedProjectId";
-const ROLE_FILTER_KEY = "@staveto:lastRoleFilter";
 const PROJECTS_FILTER_KEY = "projects_filter_v1";
 const TYPE_FILTER_KEY = "home_type_filter_v1";
 type ProjectFilter = "all" | "mine" | "shared";
@@ -92,6 +89,7 @@ type DashboardViewModel = {
     openCount: number;
     doneTodayCount: number;
     blockedCount: number;
+    overdueCount: number;
     expensesMonthSum: number;
     expensesTotalSum: number;
     hasExpensesAccess: boolean;
@@ -118,14 +116,9 @@ type CompactProjectItemProps = {
   onPhoto: (projectId: string) => void;
   onTask: (projectId: string) => void;
   onCoverPress?: (project: ProjectDoc) => void;
+  /** Home list: fewer badges, calmer status, larger taps */
+  minimal?: boolean;
 };
-
-type DisplayProjectType = "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
-
-function normalizeProjectType(projectType?: ProjectDoc["projectType"]): DisplayProjectType {
-  if (projectType === "RESIDENTIAL" || projectType === "TRADE" || projectType === "MAINTENANCE") return projectType;
-  return "MANAGEMENT";
-}
 
 function getProjectInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
@@ -152,10 +145,11 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
   onTask,
   onCoverPress,
   currentUserId,
+  minimal,
 }: CompactProjectItemProps) {
   const { t } = useI18n();
   const isOwner = !!project.ownerId && project.ownerId === currentUserId;
-  const normalizedType = normalizeProjectType(project.projectType);
+  const normalizedType = getHomeTypeFilterBucket(project.projectType);
   const stripeColor =
     normalizedType === "MANAGEMENT"
       ? "#ff9f43"
@@ -183,10 +177,13 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
       ? "#8ea7ff"
       : "#7dcea0";
   const maintenanceCount =
-    normalizedType === "MAINTENANCE" && typeof project.equipmentCount === "number"
+    !minimal &&
+    normalizedType === "MAINTENANCE" &&
+    typeof project.equipmentCount === "number"
       ? t("projectCard.equipmentCount", { count: String(project.equipmentCount) })
       : null;
   const statusLabel = status === "OK" ? "OK" : status === "RISK" ? t("home.statusRisk") : t("home.statusWaiting");
+  const showStatusTag = !minimal ? status !== "OK" : status === "PROBLEM";
 
   const isSharedToMe = project.isSharedToMe === true;
 
@@ -194,6 +191,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
     <TouchableOpacity
       style={[
         styles.compactProjectRow,
+        minimal && styles.compactProjectRowMinimal,
         !isOwner && styles.compactProjectRowMember,
         isSharedToMe && styles.compactProjectRowShared,
       ]}
@@ -210,7 +208,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
         {normalizedType !== "MAINTENANCE" && project.coverImageUrl ? (
           <Image source={{ uri: project.coverImageUrl }} style={styles.compactThumbImage} resizeMode="cover" />
         ) : normalizedType === "MAINTENANCE" ? (
-          <Ionicons name="construct-outline" size={20} color={colors.textSecondary} />
+          <Ionicons name="construct-outline" size={20} color={colors.textMuted} />
         ) : (
           <>
             <Text style={styles.compactThumbInitials}>{getProjectInitials(project.name || t("projects.noName"))}</Text>
@@ -231,53 +229,74 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
       </Pressable>
       <View style={styles.compactProjectBody}>
         <View style={styles.compactProjectTitleRow}>
-          <Text style={styles.compactProjectTitle} numberOfLines={1}>
+          <Text style={[styles.compactProjectTitle, minimal && styles.compactProjectTitleMinimal]} numberOfLines={1}>
             {project.name}
           </Text>
         </View>
-        <View style={styles.compactTypeBadgeRow}>
-          <View style={[styles.compactTypeBadge, { borderColor: badgeColor }]}>
-            <Text style={[styles.compactTypeBadgeText, { color: badgeColor }]} numberOfLines={1}>
-              {typeLabel.toUpperCase()}
-            </Text>
+        {!minimal ? (
+          <View style={styles.compactTypeBadgeRow}>
+            <View style={[styles.compactTypeBadge, { borderColor: badgeColor }]}>
+              <Text style={[styles.compactTypeBadgeText, { color: badgeColor }]} numberOfLines={1}>
+                {typeLabel.toUpperCase()}
+              </Text>
+            </View>
+            {location ? (
+              <Text style={styles.compactTypeBadgeCity} numberOfLines={1}>
+                {location}
+              </Text>
+            ) : null}
           </View>
-          {location ? (
-            <Text style={styles.compactTypeBadgeCity} numberOfLines={1}>{location}</Text>
-          ) : null}
-        </View>
-        <ProjectBadgesRow isOwner={isOwner} sharedWithCount={project.sharedWithCount ?? 0} isSharedToMe={project.isSharedToMe} />
-        {maintenanceCount && (
+        ) : location ? (
+          <Text style={styles.compactLocationOnly} numberOfLines={1}>
+            {location}
+          </Text>
+        ) : null}
+        {!minimal ? (
+          <ProjectBadgesRow isOwner={isOwner} sharedWithCount={project.sharedWithCount ?? 0} isSharedToMe={project.isSharedToMe} />
+        ) : isSharedToMe ? (
+          <Text style={styles.compactSharedHint} numberOfLines={1}>
+            {t("home.sharedBadge")}
+          </Text>
+        ) : null}
+        {maintenanceCount ? (
           <Text style={styles.compactMaintenanceMeta} numberOfLines={1}>
             {maintenanceCount}
           </Text>
-        )}
-        <Text style={styles.compactProjectSubline} numberOfLines={1}>
-          {openTasks} {openTasks === 1 ? t("home.openTask_one") : t("home.openTask_other")} • {t("home.activityLabel")} {lastActivity}
+        ) : null}
+        <Text style={[styles.compactProjectSubline, minimal && styles.compactProjectSublineMinimal]} numberOfLines={minimal ? 2 : 1}>
+          {openTasks} {openTasks === 1 ? t("home.openTask_one") : t("home.openTask_other")}
+          {minimal ? "\n" : " • "}
+          {minimal ? "" : `${t("home.activityLabel")} `}
+          {lastActivity}
         </Text>
       </View>
       <View style={styles.compactActions}>
         <TouchableOpacity
-          style={styles.compactActionBtn}
+          style={[styles.compactActionBtn, minimal && styles.compactActionBtnLarge]}
           onPress={(e) => {
             e.stopPropagation();
             onPhoto(project.id);
           }}
+          accessibilityLabel={t("home.quickPhoto")}
         >
-          <Ionicons name="camera-outline" size={16} color="#fff" />
+          <Ionicons name="camera-outline" size={minimal ? 20 : 18} color="#fff" />
         </TouchableOpacity>
         <TouchableOpacity
-          style={[styles.compactActionBtn, styles.compactActionBtnTask]}
+          style={[styles.compactActionBtn, styles.compactActionBtnTask, minimal && styles.compactActionBtnLarge]}
           onPress={(e) => {
             e.stopPropagation();
             onTask(project.id);
           }}
+          accessibilityLabel={t("home.quickTask")}
         >
-          <Ionicons name="checkmark-outline" size={16} color="#fff" />
+          <Ionicons name="checkmark-outline" size={minimal ? 20 : 18} color="#fff" />
         </TouchableOpacity>
       </View>
-      <View style={styles.statusTag}>
-        <Text style={styles.statusTagText}>{statusLabel}</Text>
-      </View>
+      {showStatusTag ? (
+        <View style={[styles.statusTag, status === "PROBLEM" ? styles.statusTagProblem : styles.statusTagRisk]}>
+          <Text style={styles.statusTagText}>{statusLabel}</Text>
+        </View>
+      ) : null}
     </TouchableOpacity>
   );
 });
@@ -285,18 +304,16 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
 export function HomeScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
-  const { width: windowWidth } = useWindowDimensions();
   const { t } = useI18n();
   const { user, orgId } = useAuth();
   const { isOnline } = useOnlineStatus();
   const [dashboardData, setDashboardData] = useState<DashboardViewModel | null>(null);
-  const [allTasks, setAllTasks] = useState<TaskDoc[]>([]);
   const [liveRows, setLiveRows] = useState<LiveProjectRow[]>([]);
   const [liveLoading, setLiveLoading] = useState(false);
   const [loading, setLoading] = useState(true);
+  const [loadError, setLoadError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUsedProjectId, setLastUsedProjectId] = useState<string | null>(null);
-  const [roleFilter, setRoleFilter] = useState<RoleKey | "ALL">("ALL");
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<TypeFilter>("ALL");
 
@@ -309,21 +326,6 @@ export function HomeScreen() {
         if (__DEV__) console.log("[analytics] test event failed:", e);
       }
     })();
-  }, []);
-
-  // Load persisted role filter on mount
-  useEffect(() => {
-    const loadPersistedFilter = async () => {
-      try {
-        const savedFilter = await AsyncStorage.getItem(ROLE_FILTER_KEY);
-        if (savedFilter && (savedFilter === "ALL" || ["ADMIN", "MANAGER", "TRADE"].includes(savedFilter))) {
-          setRoleFilter(savedFilter as RoleKey | "ALL");
-        }
-      } catch (error) {
-        console.warn("[HomeScreen] Failed to load persisted role filter:", error);
-      }
-    };
-    loadPersistedFilter();
   }, []);
 
   useEffect(() => {
@@ -362,20 +364,10 @@ export function HomeScreen() {
     }
   }, []);
 
-  // Persist role filter when it changes
-  const handleRoleFilterChange = useCallback(async (filter: RoleKey | "ALL") => {
-    setRoleFilter(filter);
-    try {
-      await AsyncStorage.setItem(ROLE_FILTER_KEY, filter);
-    } catch (error) {
-      console.warn("[HomeScreen] Failed to persist role filter:", error);
-    }
-  }, []);
   const [showProjectSelector, setShowProjectSelector] = useState(false);
   const [showFirstProjectModal, setShowFirstProjectModal] = useState(false);
   const [pendingAction, setPendingAction] = useState<"task" | "photo" | "expense" | "voice" | "problem" | null>(null);
   const [pendingExpenseType, setPendingExpenseType] = useState<"WORK" | "TRAVEL" | null>(null);
-  const [fabProjectSelectionMode, setFabProjectSelectionMode] = useState(false);
   const [actionProjectId, setActionProjectId] = useState<string | null>(null);
   const [showExpenseTypeModal, setShowExpenseTypeModal] = useState(false);
   const [showExpenseModal, setShowExpenseModal] = useState(false);
@@ -397,6 +389,7 @@ export function HomeScreen() {
   const [homeLayout, setHomeLayout] = useState<{ sections: HomeSectionConfig[] } | null>(null);
   const [photoURL, setPhotoURL] = useState<string | null>(null);
   const [showCustomizeModal, setShowCustomizeModal] = useState(false);
+  const [showTypeFilterModal, setShowTypeFilterModal] = useState(false);
   const customizeSheetRef = useRef<BottomSheetModal | null>(null);
   const calendarSheetRef = useRef<BottomSheetModal | null>(null);
   const quickTimeSheetRef = useRef<BottomSheetModal | null>(null);
@@ -405,7 +398,7 @@ export function HomeScreen() {
   const [timerTick, setTimerTick] = useState(0);
   const [monthlyMinutes, setMonthlyMinutes] = useState<number>(0);
   const [showQuickNoteModal, setShowQuickNoteModal] = useState(false);
-  const [todayNotesCount, setTodayNotesCount] = useState(0);
+  const [pendingQuickNotesCount, setPendingQuickNotesCount] = useState(0);
   const quickNoteCtx = useQuickNoteContext();
 
   useEffect(() => {
@@ -452,7 +445,7 @@ export function HomeScreen() {
     useCallback(() => {
       if (!user?.id) return;
       refreshActiveTimer();
-      quickNotesService.getTodayNotesCount(user.id).then(setTodayNotesCount);
+      quickNotesService.getOpenQuickNotesCount(user.id).then(setPendingQuickNotesCount);
       timeTracking.checkAutoStopOnAppOpen().then((entry) => {
         if (entry) {
           setActiveTimer(null);
@@ -539,11 +532,11 @@ export function HomeScreen() {
       const diffMs = Date.now() - date.getTime();
       const diffMin = Math.floor(diffMs / 60000);
       if (diffMin < 1) return t("events.justNow");
-      if (diffMin < 60) return `${diffMin}m ago`;
+      if (diffMin < 60) return t("home.timeMinutes", { count: String(diffMin) });
       const diffH = Math.floor(diffMin / 60);
-      if (diffH < 24) return `${diffH}h ago`;
+      if (diffH < 24) return t("home.timeHours", { count: String(diffH) });
       const diffD = Math.floor(diffH / 24);
-      return `${diffD}d ago`;
+      return t("home.timeDays", { count: String(diffD) });
     },
     [t]
   );
@@ -670,8 +663,10 @@ export function HomeScreen() {
         kpis: data.kpis,
         projectStats: data.projectStats,
       });
+      setLoadError(false);
     } catch (error: any) {
       console.error("[HomeScreen] Error loading dashboard:", error);
+      setLoadError(true);
       setDashboardData({
         projects: [],
         todayTasks: [],
@@ -679,6 +674,7 @@ export function HomeScreen() {
           openCount: 0,
           doneTodayCount: 0,
           blockedCount: 0,
+          overdueCount: 0,
           expensesMonthSum: 0,
           expensesTotalSum: 0,
           hasExpensesAccess: false,
@@ -1254,26 +1250,23 @@ export function HomeScreen() {
     setPendingAction(null);
     setPendingExpenseType(null);
     setActionProjectId(null);
-    setFabProjectSelectionMode(false);
     setShowExpenseTypeModal(false);
     setShowActionSheet(false);
     setShowProjectSelector(true);
   }, []);
 
-  const handleTaskClick = useCallback(
-    (task: TaskDoc & { projectName: string }) => {
-      stackNav.navigate("ProjectOverview", {
-        projectId: task.projectId,
-        projectName: task.projectName,
-      });
-    },
-    [stackNav]
-  );
-
   const data = dashboardData || {
     projects: [],
     todayTasks: [],
-    kpis: { openCount: 0, doneTodayCount: 0, blockedCount: 0, expensesMonthSum: 0, expensesTotalSum: 0, hasExpensesAccess: false },
+    kpis: {
+      openCount: 0,
+      doneTodayCount: 0,
+      blockedCount: 0,
+      overdueCount: 0,
+      expensesMonthSum: 0,
+      expensesTotalSum: 0,
+      hasExpensesAccess: false,
+    },
     projectStats: new Map(),
   };
 
@@ -1285,13 +1278,10 @@ export function HomeScreen() {
 
   const filteredProjects = useMemo(() => {
     let list = data.projects;
-    if (projectFilter === "mine") list = list.filter((p) => p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0);
-    else if (projectFilter === "shared") list = list.filter((p) => p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0);
+    if (projectFilter === "mine") list = list.filter(isSoloOwnerProjectRow);
+    else if (projectFilter === "shared") list = list.filter(isSharedOrCollaborativeProjectRow);
     if (selectedTypeFilter !== "ALL") {
-      list = list.filter((p) => {
-        const norm = normalizeProjectType(p.projectType);
-        return norm === selectedTypeFilter;
-      });
+      list = list.filter((p) => getHomeTypeFilterBucket(p.projectType) === selectedTypeFilter);
     }
     return list;
   }, [data.projects, projectFilter, selectedTypeFilter]);
@@ -1305,19 +1295,25 @@ export function HomeScreen() {
     return data.projects[0] ?? null;
   }, [data.projects, lastUsedProjectId]);
 
+  const focusIsFromLastUsed = useMemo(() => {
+    if (!lastUsedProjectId || !focusProject) return false;
+    return focusProject.id === lastUsedProjectId;
+  }, [lastUsedProjectId, focusProject]);
+
   const otherProjects = useMemo(() => {
     return filteredProjects.filter((p) => p.id !== focusProject?.id);
   }, [filteredProjects, focusProject?.id]);
 
-  const overdueCount = useMemo(
-    () =>
-      data.todayTasks.filter((task) => {
-        if (!task.dueDate) return false;
-        if (task.status === "DONE") return false;
-        return new Date(task.dueDate).getTime() < Date.now();
-      }).length,
-    [data.todayTasks]
-  );
+  const overdueCount = data.kpis.overdueCount ?? 0;
+
+  const dueTodayCount = useMemo(() => {
+    const t0 = new Date();
+    t0.setHours(0, 0, 0, 0);
+    const ymd = `${t0.getFullYear()}-${String(t0.getMonth() + 1).padStart(2, "0")}-${String(t0.getDate()).padStart(2, "0")}`;
+    return data.todayTasks.filter(
+      (task) => task.status !== "DONE" && task.dueDate?.trim() === ymd
+    ).length;
+  }, [data.todayTasks]);
 
   const alerts = useMemo(() => {
     const rows: Array<{ id: string; icon: string; text: string; onPress: () => void }> = [];
@@ -1325,7 +1321,7 @@ export function HomeScreen() {
       rows.push({
         id: "blocked",
         icon: "⚠️",
-        text: `${data.kpis.blockedCount} veci čakajú na materiál`,
+        text: t("home.alertBlocked", { count: String(data.kpis.blockedCount) }),
         onPress: () => stackNav.navigate("Tasks", { status: "BLOCKED" }),
       });
     }
@@ -1333,18 +1329,38 @@ export function HomeScreen() {
       rows.push({
         id: "overdue",
         icon: "⏱️",
-        text: `${overdueCount} úloha mešká`,
-        onPress: () => stackNav.navigate("Tasks", { overdue: true }),
+        text: t("home.alertOverdue", { count: String(overdueCount) }),
+        onPress: () => stackNav.navigate("Tasks", { dueFilter: "overdue" }),
       });
     }
-    return rows.slice(0, 2);
-  }, [data.kpis.blockedCount, overdueCount, stackNav]);
+    if (dueTodayCount > 0) {
+      rows.push({
+        id: "today",
+        icon: "📌",
+        text: t("home.alertToday", { count: String(dueTodayCount) }),
+        onPress: () => stackNav.navigate("Tasks", { dueFilter: "today" }),
+      });
+    }
+    return rows.slice(0, 3);
+  }, [data.kpis.blockedCount, overdueCount, dueTodayCount, stackNav, t]);
+
+  const focusActivityDisplay = useMemo(() => {
+    if (!focusProject) return "";
+    const raw = liveMap.get(focusProject.id)?.lastActivityLabel ?? "—";
+    if (!raw || raw === "—" || raw === t("home.noRecentActivity")) {
+      return t("home.activityNone");
+    }
+    return raw;
+  }, [focusProject, liveMap, t]);
 
   if (loading && !dashboardData) {
     return (
       <View style={styles.container}>
         <View style={[styles.loadingContainer, { paddingTop: insets.top + spacing.lg }]}>
           <ActivityIndicator size="large" color={colors.primary} />
+          <Text style={styles.loadingHint} maxFontSizeMultiplier={1.3}>
+            {t("home.loadingProjects")}
+          </Text>
         </View>
       </View>
     );
@@ -1372,8 +1388,12 @@ export function HomeScreen() {
           )}
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={styles.welcomeTitle} numberOfLines={1}>{t("home.greeting", { name: greetingName })}</Text>
-          <Text style={styles.welcomeSubtitle}>{t("home.projectsOverviewTitle")}</Text>
+          <Text style={styles.welcomeTitle} numberOfLines={1}>
+            {t("home.greeting", { name: greetingName })}
+          </Text>
+          <Text style={styles.welcomeSubtitle} numberOfLines={2}>
+            {t("home.headerHint")}
+          </Text>
         </View>
         <Pressable
           style={styles.headerCustomizeBtn}
@@ -1391,12 +1411,60 @@ export function HomeScreen() {
         data={enabledSectionIds.has("other_projects") ? otherProjects : []}
         keyExtractor={(item) => item.id}
         extraData={`${selectedTypeFilter}-${projectFilter}`}
-        contentContainerStyle={[styles.content, { paddingTop: spacing.md, paddingBottom: insets.bottom + 120 }]}
+        contentContainerStyle={[styles.content, { paddingTop: spacing.sm, paddingBottom: insets.bottom + 100 }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
         }
         ListHeaderComponent={
           <>
+            {loadError && orgId ? (
+              <View style={styles.loadErrorBanner}>
+                <Ionicons name="cloud-offline-outline" size={20} color="#fff" style={{ marginRight: spacing.sm }} />
+                <Text style={[styles.loadErrorText, { flex: 1 }]} maxFontSizeMultiplier={1.2}>
+                  {t("home.loadError")}
+                </Text>
+                <TouchableOpacity onPress={() => loadDashboard(true)} style={styles.loadErrorRetry} accessibilityRole="button">
+                  <Text style={styles.loadErrorRetryText}>{t("home.retry")}</Text>
+                </TouchableOpacity>
+              </View>
+            ) : null}
+            {orgId ? (
+              <TouchableOpacity
+                style={styles.quickCaptureCard}
+                onPress={() => setShowQuickNoteModal(true)}
+                activeOpacity={0.88}
+                accessibilityRole="button"
+                accessibilityLabel={t("home.quickCaptureTitle")}
+              >
+                <View style={styles.quickCaptureIconWrap}>
+                  <Ionicons name="create-outline" size={22} color="#fff" />
+                </View>
+                <View style={styles.quickCaptureTextCol}>
+                  <Text style={styles.quickCaptureTitleText} maxFontSizeMultiplier={1.25}>
+                    {t("home.quickCaptureTitle")}
+                  </Text>
+                  <Text style={styles.quickCaptureSubtitleText} maxFontSizeMultiplier={1.2}>
+                    {t("home.quickCaptureSubtitle")}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={22} color="rgba(255,255,255,0.85)" />
+              </TouchableOpacity>
+            ) : null}
+            {orgId && pendingQuickNotesCount > 0 ? (
+              <TouchableOpacity
+                style={styles.quickNotesInboxHint}
+                onPress={() => stackNav.navigate("QuickNotesInbox")}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={t("home.pendingQuickNotes", { count: String(pendingQuickNotesCount) })}
+              >
+                <Ionicons name="file-tray-full-outline" size={20} color="rgba(255,255,255,0.92)" />
+                <Text style={styles.quickNotesInboxHintText} maxFontSizeMultiplier={1.2}>
+                  {t("home.pendingQuickNotes", { count: String(pendingQuickNotesCount) })}
+                </Text>
+                <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.78)" />
+              </TouchableOpacity>
+            ) : null}
             {data.projects.length === 0 && (
               <TouchableOpacity
                 style={styles.firstProjectCtaCard}
@@ -1429,64 +1497,88 @@ export function HomeScreen() {
                     (enabledSectionIds.has("expenses_chip") && data.kpis.hasExpensesAccess)) && (
             <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
               {enabledSectionIds.has("open_tasks_chip") && (
-                <TouchableOpacity style={styles.statChip} onPress={() => stackNav.navigate("Tasks")} activeOpacity={0.8}>
-                  <Text style={styles.statChipText}>{t("home.openTasksChip")} {data.kpis.openCount}</Text>
+                <TouchableOpacity style={styles.statChipMuted} onPress={() => stackNav.navigate("Tasks")} activeOpacity={0.8}>
+                  <Text style={styles.statChipTextMuted}>
+                    {t("home.openTasksChip")} <Text style={styles.statChipValueMuted}>{data.kpis.openCount}</Text>
+                  </Text>
                 </TouchableOpacity>
               )}
               {enabledSectionIds.has("projects_chip") && (
-                <TouchableOpacity style={styles.statChip} onPress={() => goToProjects()} activeOpacity={0.8}>
-                  <Text style={styles.statChipText}>{t("home.projectsCount", { count: String(data.projects.length) })}</Text>
+                <TouchableOpacity style={styles.statChipMuted} onPress={() => goToProjects()} activeOpacity={0.8}>
+                  <Text style={styles.statChipTextMuted}>
+                    {t("home.projectsCount", { count: String(data.projects.length) })}
+                  </Text>
                 </TouchableOpacity>
               )}
               {enabledSectionIds.has("time_tracking_chip") && (
                 <TouchableOpacity
-                  style={styles.statChip}
+                  style={styles.statChipMuted}
                   onPress={() => stackNav.navigate("AttendanceReportScreen")}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.statChipText}>
+                  <Text style={styles.statChipTextMuted}>
                     {t("home.attendanceChip", { hours: formatMinutesToHours(monthlyMinutes) })}
                   </Text>
                 </TouchableOpacity>
               )}
               {enabledSectionIds.has("expenses_chip") && data.kpis.hasExpensesAccess && (
                 <TouchableOpacity
-                  style={styles.statChip}
+                  style={styles.statChipMuted}
                   onPress={() => stackNav.navigate("ExpensesKpiScreen")}
                   activeOpacity={0.8}
                 >
-                  <Text style={styles.statChipText}>{t("home.expensesCount", { amount: String(Math.round(data.kpis.expensesTotalSum)) })}</Text>
+                  <Text style={styles.statChipTextMuted}>
+                    {t("home.expensesCount", { amount: String(Math.round(data.kpis.expensesTotalSum)) })}
+                  </Text>
                 </TouchableOpacity>
               )}
             </ScrollView>
                   )}
                   {enabledSectionIds.has("current_work") && focusProject ? (
-              <View style={styles.focusCard}>
+              <View style={[styles.focusCard, !focusIsFromLastUsed && styles.focusCardSuggested]}>
                 <View style={styles.focusCaptionRow}>
-                  <Text style={styles.focusCaption}>{t("home.currentlyWorkingOn")}</Text>
+                  <Text
+                    style={[styles.focusTrustLine, !focusIsFromLastUsed && styles.focusTrustLineMuted]}
+                    maxFontSizeMultiplier={1.2}
+                  >
+                    {focusIsFromLastUsed ? t("home.continueCaptionLastOpened") : t("home.continueCaptionSuggested")}
+                  </Text>
                   {(focusProject.isSharedToMe === true || (focusProject.sharedWithCount ?? 0) > 0) && (
                     <View style={styles.focusSharedBadge}>
                       <Text style={styles.focusSharedBadgeText}>{t("home.filterShared")}</Text>
                     </View>
                   )}
                 </View>
-                <Text style={styles.focusTitle} numberOfLines={1}>
+                <Text style={[styles.focusTitle, !focusIsFromLastUsed && styles.focusTitleSuggested]} numberOfLines={2}>
                   {focusProject.name}
                 </Text>
-                <Text style={styles.focusSubline}>
+                <Text style={styles.focusTasksLine} maxFontSizeMultiplier={1.2}>
                   {(data.projectStats.get(focusProject.id)?.openCount ?? 0)}{" "}
                   {(data.projectStats.get(focusProject.id)?.openCount ?? 0) === 1
                     ? t("home.openTask_one")
-                    : t("home.openTask_other")}{" "}
-                  • {t("home.lastActivityBefore")}{" "}
-                  {liveMap.get(focusProject.id)?.lastActivityLabel ?? "—"}
+                    : t("home.openTask_other")}
                 </Text>
+                {(focusIsFromLastUsed || (focusActivityDisplay !== t("home.activityNone") && focusActivityDisplay !== "—")) ? (
+                  <Text style={styles.focusActivityLine} maxFontSizeMultiplier={1.15}>
+                    <Text style={styles.focusActivityIntro}>{t("home.focusActivityIntro")}</Text>
+                    <Text style={styles.focusActivityDot}> · </Text>
+                    <Text style={styles.focusActivityValue}>{focusActivityDisplay}</Text>
+                  </Text>
+                ) : null}
                 <TouchableOpacity
-                  style={styles.focusCta}
+                  style={[styles.focusCta, !focusIsFromLastUsed && styles.focusCtaSecondary]}
                   onPress={() => handleProjectClick(focusProject.id)}
                   activeOpacity={0.85}
                 >
-                  <Text style={styles.focusCtaText}>{t("home.continueWorking")}</Text>
+                  <Text style={[styles.focusCtaText, !focusIsFromLastUsed && styles.focusCtaTextSecondary]}>
+                    {t("home.continueWorking")}
+                  </Text>
+                  <Ionicons
+                    name="arrow-forward"
+                    size={18}
+                    color={focusIsFromLastUsed ? "#fff" : colors.primary}
+                    style={{ marginLeft: spacing.sm }}
+                  />
                 </TouchableOpacity>
               </View>
             ) : null}
@@ -1502,46 +1594,82 @@ export function HomeScreen() {
             ) : null}
                   {enabledSectionIds.has("project_filters") && (
             <>
-            <View style={styles.typeFilterWrapper}>
               <ScrollView
                 horizontal
                 showsHorizontalScrollIndicator={false}
-                contentContainerStyle={[styles.typeFilterRow, { paddingRight: spacing.xl }]}
-                style={[styles.typeFilterScroll, { width: windowWidth - 2 * spacing.lg }]}
+                contentContainerStyle={styles.filterRowMerged}
               >
-                {(["ALL", "MANAGEMENT", "RESIDENTIAL", "TRADE", "MAINTENANCE"] as TypeFilter[]).map((type) => (
                 <TouchableOpacity
-                  key={type}
-                  style={[styles.filterChip, selectedTypeFilter === type && styles.filterChipActive]}
-                  onPress={() => handleTypeFilterChange(type)}
+                  style={styles.filterTypeTrigger}
+                  onPress={() => setShowTypeFilterModal(true)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("home.filterTypeTitle")}
                 >
-                  <Text style={[styles.filterChipText, selectedTypeFilter === type && styles.filterChipTextActive]}>
-                    {t(`home.filter.type.${type.toLowerCase()}`)}
+                  <Ionicons name="options-outline" size={17} color={colors.text} />
+                  <Text style={styles.filterTypeTriggerText} numberOfLines={1}>
+                    {t(`home.filter.type.${selectedTypeFilter.toLowerCase()}`)}
+                  </Text>
+                  <Ionicons name="chevron-down" size={15} color={colors.textMuted} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.filterChip, projectFilter === "all" && styles.filterChipActive]}
+                  onPress={() => handleProjectFilterChange("all")}
+                >
+                  <Text style={[styles.filterChipText, projectFilter === "all" && styles.filterChipTextActive]}>
+                    {t("home.filterAll")}
                   </Text>
                 </TouchableOpacity>
-              ))}
+                <TouchableOpacity
+                  style={[styles.filterChip, projectFilter === "mine" && styles.filterChipActive]}
+                  onPress={() => handleProjectFilterChange("mine")}
+                >
+                  <Text style={[styles.filterChipText, projectFilter === "mine" && styles.filterChipTextActive]}>
+                    {t("home.filterMine")}
+                  </Text>
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={[styles.filterChip, projectFilter === "shared" && styles.filterChipActive]}
+                  onPress={() => handleProjectFilterChange("shared")}
+                >
+                  <Text style={[styles.filterChipText, projectFilter === "shared" && styles.filterChipTextActive]}>
+                    {t("home.filterShared")}
+                  </Text>
+                </TouchableOpacity>
               </ScrollView>
-            </View>
-            <View style={styles.filterRow}>
-              <TouchableOpacity
-                style={[styles.filterChip, projectFilter === "all" && styles.filterChipActive]}
-                onPress={() => handleProjectFilterChange("all")}
-              >
-                <Text style={[styles.filterChipText, projectFilter === "all" && styles.filterChipTextActive]}>{t("home.filterAll")}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.filterChip, projectFilter === "mine" && styles.filterChipActive]}
-                onPress={() => handleProjectFilterChange("mine")}
-              >
-                <Text style={[styles.filterChipText, projectFilter === "mine" && styles.filterChipTextActive]}>{t("home.filterMine")}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.filterChip, projectFilter === "shared" && styles.filterChipActive]}
-                onPress={() => handleProjectFilterChange("shared")}
-              >
-                <Text style={[styles.filterChipText, projectFilter === "shared" && styles.filterChipTextActive]}>{t("home.filterShared")}</Text>
-              </TouchableOpacity>
-            </View>
+              <Modal visible={showTypeFilterModal} transparent animationType="fade" onRequestClose={() => setShowTypeFilterModal(false)}>
+                <Pressable style={styles.typeFilterModalOverlay} onPress={() => setShowTypeFilterModal(false)}>
+                  <Pressable style={styles.typeFilterModalCard} onPress={(e) => e.stopPropagation()}>
+                    <Text style={styles.typeFilterModalTitle}>{t("home.filterTypeTitle")}</Text>
+                    {(["ALL", "MANAGEMENT", "RESIDENTIAL", "TRADE", "MAINTENANCE"] as TypeFilter[]).map((type) => (
+                      <TouchableOpacity
+                        key={type}
+                        style={[styles.typeFilterModalRow, selectedTypeFilter === type && styles.typeFilterModalRowActive]}
+                        onPress={() => {
+                          void handleTypeFilterChange(type);
+                          setShowTypeFilterModal(false);
+                        }}
+                      >
+                        <Text
+                          style={[
+                            styles.typeFilterModalRowText,
+                            selectedTypeFilter === type && styles.typeFilterModalRowTextActive,
+                          ]}
+                        >
+                          {t(`home.filter.type.${type.toLowerCase()}`)}
+                        </Text>
+                        {selectedTypeFilter === type ? (
+                          <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
+                        ) : (
+                          <Ionicons name="ellipse-outline" size={22} color={colors.border} />
+                        )}
+                      </TouchableOpacity>
+                    ))}
+                    <TouchableOpacity style={styles.typeFilterModalClose} onPress={() => setShowTypeFilterModal(false)}>
+                      <Text style={styles.typeFilterModalCloseText}>{t("common.close")}</Text>
+                    </TouchableOpacity>
+                  </Pressable>
+                </Pressable>
+              </Modal>
             </>
                   )}
                   {enabledSectionIds.has("other_projects") && (
@@ -1568,6 +1696,7 @@ export function HomeScreen() {
               onTask={(projectId) => runContextAction("task", projectId)}
               onCoverPress={showCoverSheet}
               currentUserId={user?.id}
+              minimal
             />
           );
         }}
@@ -1632,12 +1761,11 @@ export function HomeScreen() {
         <View style={styles.modalOverlay}>
           <View style={styles.modal}>
             <View style={styles.modalHeader}>
-              <Text style={styles.modalTitle}>{t("home.selectProjectModal")}</Text>
+              <Text style={styles.modalTitle}>{t("home.projectSheetTitle")}</Text>
               <TouchableOpacity onPress={() => {
                 setShowProjectSelector(false);
                 setPendingAction(null);
                 setActionProjectId(null);
-                setFabProjectSelectionMode(false);
               }}>
                 <Ionicons name="close" size={24} color="#FFFFFF" />
               </TouchableOpacity>
@@ -1663,7 +1791,7 @@ export function HomeScreen() {
                 <Ionicons name="folder-open-outline" size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
                 <Text style={styles.quickNoteRowText}>
                   {t("quickNotes.viewInbox") || "Zobraziť zápisky"}
-                  {todayNotesCount > 0 ? ` (${todayNotesCount})` : ""}
+                  {pendingQuickNotesCount > 0 ? ` (${pendingQuickNotesCount})` : ""}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -1716,49 +1844,59 @@ export function HomeScreen() {
         </View>
       </Modal>
 
-      {/* Central FAB */}
-      <TouchableOpacity
-        style={[styles.fab, styles.fabCenter, { bottom: insets.bottom + spacing.md }]}
-        onPress={startFabFlow}
-      >
-        <Text style={styles.fabText}>+</Text>
-      </TouchableOpacity>
-
-      {/* Timer FAB - above calendar */}
-      <TouchableOpacity
-        style={[
-          styles.timerFab,
-          {
-            bottom: enabledSectionIds.has("calendar")
-              ? insets.bottom + spacing.md + 64 + 8
-              : insets.bottom + spacing.md,
-          },
-        ]}
-        onPress={openQuickTimeSheet}
-        activeOpacity={0.8}
-      >
-        {activeTimer ? (
-          <View key={timerTick} style={styles.timerFabContent}>
-            <Text style={styles.timerFabElapsed}>
-              {`${String(Math.floor((Date.now() - new Date(activeTimer.startedAt).getTime()) / 3600000)).padStart(2, "0")}:${String(Math.floor(((Date.now() - new Date(activeTimer.startedAt).getTime()) % 3600000) / 60000)).padStart(2, "0")}`}
-            </Text>
-            <Ionicons name="stop" size={16} color="#1a1a1a" />
+      {/* Unified bottom dock: calendar (optional) · project actions · time */}
+      <View style={[styles.fabDockWrap, { bottom: insets.bottom + spacing.sm }]} pointerEvents="box-none">
+        <View style={styles.fabDockInner}>
+          <View style={styles.fabDockThird}>
+            {enabledSectionIds.has("calendar") ? (
+              <TouchableOpacity
+                style={styles.fabDockIconBtn}
+                onPress={openCalendarSheet}
+                activeOpacity={0.75}
+                accessibilityRole="button"
+                accessibilityLabel={t("home.sectionCalendar")}
+              >
+                <Ionicons name="calendar-outline" size={24} color={colors.primary} />
+              </TouchableOpacity>
+            ) : (
+              <View style={styles.fabDockIconBtn} />
+            )}
           </View>
-        ) : (
-          <Ionicons name="time-outline" size={22} color="#1a1a1a" />
-        )}
-      </TouchableOpacity>
-
-      {/* Semi-circular calendar button on right edge - minimal hitbox (28x64) */}
-      {enabledSectionIds.has("calendar") && (
-        <TouchableOpacity
-          style={[styles.calendarFab, { bottom: insets.bottom + spacing.md }]}
-          onPress={openCalendarSheet}
-          activeOpacity={0.8}
-        >
-          <Ionicons name="calendar-outline" size={22} color="#fff" />
-        </TouchableOpacity>
-      )}
+          <View style={styles.fabDockThird}>
+            <TouchableOpacity
+              style={styles.fabDockCenterBtn}
+              onPress={startFabFlow}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+              accessibilityLabel={t("home.fabQuickActionsA11y")}
+            >
+              <Ionicons name="add" size={28} color={colors.primary} />
+            </TouchableOpacity>
+          </View>
+          <View style={styles.fabDockThird}>
+            <TouchableOpacity
+              style={styles.fabDockIconBtn}
+              onPress={openQuickTimeSheet}
+              activeOpacity={0.75}
+              accessibilityRole="button"
+              accessibilityLabel={t("time.title")}
+            >
+              {activeTimer ? (
+                <View key={timerTick} style={styles.fabDockTimerCol}>
+                  <Text style={styles.fabDockTimerDigits}>
+                    {`${String(Math.floor((Date.now() - new Date(activeTimer.startedAt).getTime()) / 3600000)).padStart(2, "0")}:${String(
+                      Math.floor(((Date.now() - new Date(activeTimer.startedAt).getTime()) % 3600000) / 60000)
+                    ).padStart(2, "0")}`}
+                  </Text>
+                  <Ionicons name="stop-circle" size={18} color={colors.primary} />
+                </View>
+              ) : (
+                <Ionicons name="time-outline" size={26} color={colors.primary} />
+              )}
+            </TouchableOpacity>
+          </View>
+        </View>
+      </View>
 
       {/* Expense Type Selection Modal - Klasický vs Cestovné */}
       <Modal visible={showExpenseTypeModal} transparent animationType="slide">
@@ -2187,11 +2325,43 @@ export function HomeScreen() {
         visible={showQuickNoteModal}
         onClose={() => setShowQuickNoteModal(false)}
         onSaved={() => {
-          if (user?.id) quickNotesService.getTodayNotesCount(user.id).then(setTodayNotesCount);
+          if (user?.id) quickNotesService.getOpenQuickNotesCount(user.id).then(setPendingQuickNotesCount);
         }}
         onSubmit={async (text, attachments) => {
           if (!user?.id) return;
-          await quickNotesService.addQuickNote(user.id, text, attachments);
+          let suggestedProjectId: string | null = null;
+          let suggestedProjectName: string | null = null;
+          let latitude: number | null = null;
+          let longitude: number | null = null;
+          try {
+            const lastId = await AsyncStorage.getItem(LAST_USED_PROJECT_KEY);
+            if (lastId && dashboardData?.projects?.length) {
+              const p = dashboardData.projects.find((x) => x.id === lastId);
+              if (p) {
+                suggestedProjectId = lastId;
+                suggestedProjectName = p.name ?? null;
+              }
+            }
+          } catch {
+            /* ignore */
+          }
+          try {
+            const pos = await getCurrentPositionSafe();
+            if (pos) {
+              latitude = pos.lat;
+              longitude = pos.lng;
+            }
+          } catch {
+            /* ignore */
+          }
+          await quickNotesService.addQuickNote(user.id, text, attachments, {
+            sourceScreen: "home",
+            createdByUserId: user.id,
+            suggestedProjectId,
+            suggestedProjectName,
+            latitude,
+            longitude,
+          });
         }}
         placeholder={t("quickNotes.placeholder") || "Čo si chcete zapamätať?"}
         saveLabel={t("quickNotes.save") || "Uložiť"}
@@ -2217,23 +2387,34 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     alignItems: "center",
   },
+  loadingHint: {
+    marginTop: spacing.md,
+    fontSize: 15,
+    color: "rgba(255,255,255,0.88)",
+    fontWeight: "500",
+    textAlign: "center",
+    paddingHorizontal: spacing.xl,
+  },
   welcomeHeader: {
     marginBottom: spacing.lg,
   },
   welcomeTitle: {
-    fontSize: 28,
+    fontSize: 22,
     fontWeight: "700",
     color: colors.textOnDark,
-    marginBottom: spacing.xs,
+    marginBottom: 2,
+    letterSpacing: -0.3,
   },
   welcomeSubtitle: {
-    fontSize: 14,
-    color: "rgba(255,255,255,0.85)",
+    fontSize: 12,
+    lineHeight: 16,
+    color: "rgba(255,255,255,0.72)",
+    fontWeight: "500",
   },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
-    marginBottom: spacing.md,
+    marginBottom: spacing.lg,
   },
   headerAvatarBtn: {
     width: 44,
@@ -2286,30 +2467,112 @@ const styles = StyleSheet.create({
   },
   chipsRow: {
     gap: spacing.sm,
-    paddingBottom: spacing.md,
+    paddingBottom: spacing.sm,
+    paddingTop: spacing.xs,
   },
-  statChip: {
-    backgroundColor: colors.card,
+  statChipMuted: {
+    backgroundColor: "rgba(240,244,248,0.72)",
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "rgba(45,74,122,0.35)",
     borderRadius: 999,
     paddingHorizontal: spacing.md,
-    paddingVertical: spacing.sm,
-    minHeight: 44,
+    paddingVertical: 9,
+    minHeight: 40,
     justifyContent: "center",
   },
-  statChipText: {
+  statChipTextMuted: {
+    color: "rgba(17,17,17,0.72)",
+    fontSize: 12,
+    fontWeight: "500",
+  },
+  statChipValueMuted: {
+    fontWeight: "700",
     color: colors.text,
+  },
+  loadErrorBanner: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: "rgba(220,53,69,0.92)",
+    borderRadius: radius,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.md,
+  },
+  loadErrorText: {
+    color: "#fff",
     fontSize: 13,
     fontWeight: "600",
   },
+  loadErrorRetry: {
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 8,
+    backgroundColor: "rgba(255,255,255,0.2)",
+  },
+  loadErrorRetryText: {
+    color: "#fff",
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  quickCaptureCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    backgroundColor: colors.primary,
+    borderRadius: radius,
+    paddingVertical: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    marginBottom: spacing.lg,
+    minHeight: 72,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.22,
+    shadowRadius: 8,
+    elevation: 5,
+  },
+  quickCaptureIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    backgroundColor: "rgba(255,255,255,0.22)",
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.md,
+  },
+  quickCaptureTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  quickCaptureTitleText: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "800",
+    marginBottom: 3,
+  },
+  quickCaptureSubtitleText: {
+    color: "rgba(255,255,255,0.9)",
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "500",
+  },
   focusCard: {
-    borderWidth: 1.5,
-    borderColor: "#ff9f43",
+    borderWidth: 1,
+    borderColor: "rgba(45,74,122,0.45)",
+    borderLeftWidth: 4,
+    borderLeftColor: colors.primary,
     borderRadius: radius,
     backgroundColor: colors.card,
-    padding: spacing.md,
+    padding: spacing.lg,
     marginBottom: spacing.md,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.08,
+    shadowRadius: 4,
+    elevation: 2,
+  },
+  focusCardSuggested: {
+    borderLeftWidth: 3,
+    borderLeftColor: "rgba(45,74,122,0.55)",
+    backgroundColor: "rgba(248,250,252,0.98)",
   },
   focusCaptionRow: {
     flexDirection: "row",
@@ -2318,44 +2581,91 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   focusCaption: {
-    color: "#ffb266",
-    fontSize: 12,
+    color: colors.primary,
+    fontSize: 11,
     fontWeight: "700",
+    letterSpacing: 0.6,
     textTransform: "uppercase",
   },
+  focusTrustLine: {
+    flex: 1,
+    color: colors.primary,
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.2,
+  },
+  focusTrustLineMuted: {
+    color: colors.textMuted,
+    fontWeight: "600",
+  },
   focusSharedBadge: {
-    backgroundColor: "rgba(255,159,67,0.25)",
-    paddingHorizontal: spacing.xs,
-    paddingVertical: 2,
-    borderRadius: 4,
+    backgroundColor: "rgba(224,103,55,0.12)",
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 3,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(224,103,55,0.35)",
   },
   focusSharedBadgeText: {
     fontSize: 11,
-    fontWeight: "600",
-    color: "#ff9f43",
+    fontWeight: "700",
+    color: colors.primary,
   },
   focusTitle: {
-    color: "#111111",
-    fontSize: 20,
+    color: colors.text,
+    fontSize: 22,
     fontWeight: "700",
-    marginBottom: spacing.xs,
+    marginBottom: spacing.sm,
+    letterSpacing: -0.2,
   },
-  focusSubline: {
-    color: colors.textMuted,
+  focusTitleSuggested: {
+    fontSize: 19,
+    fontWeight: "700",
+  },
+  focusTasksLine: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: "600",
+    marginBottom: 4,
+  },
+  focusActivityLine: {
     fontSize: 13,
+    lineHeight: 18,
     marginBottom: spacing.md,
   },
+  focusActivityIntro: {
+    color: colors.textMuted,
+    fontWeight: "500",
+  },
+  focusActivityDot: {
+    color: colors.textMuted,
+    fontWeight: "500",
+  },
+  focusActivityValue: {
+    color: colors.textMuted,
+    fontWeight: "600",
+  },
   focusCta: {
-    minHeight: 46,
+    minHeight: 52,
     borderRadius: radius,
     backgroundColor: colors.primary,
     alignItems: "center",
     justifyContent: "center",
+    flexDirection: "row",
+    paddingHorizontal: spacing.lg,
+  },
+  focusCtaSecondary: {
+    backgroundColor: "transparent",
+    borderWidth: 2,
+    borderColor: colors.primary,
   },
   focusCtaText: {
     color: "#fff",
-    fontSize: 15,
+    fontSize: 16,
     fontWeight: "700",
+  },
+  focusCtaTextSecondary: {
+    color: colors.primary,
   },
   alertsSection: {
     marginBottom: spacing.md,
@@ -2400,28 +2710,103 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
     marginBottom: spacing.sm,
   },
-  filterChip: {
-    paddingVertical: spacing.xs,
+  filterRowMerged: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingBottom: spacing.sm,
+    paddingRight: spacing.lg,
+  },
+  filterTypeTrigger: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    paddingVertical: 9,
     paddingHorizontal: spacing.md,
-    borderRadius: radius,
+    borderRadius: 12,
+    backgroundColor: "rgba(240,244,248,0.72)",
+    borderWidth: 1,
+    borderColor: "rgba(45,74,122,0.35)",
+    maxWidth: 200,
+  },
+  filterTypeTriggerText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.text,
+    flexShrink: 1,
+  },
+  typeFilterModalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.5)",
+    justifyContent: "center",
+    padding: spacing.lg,
+  },
+  typeFilterModalCard: {
     backgroundColor: colors.card,
+    borderRadius: radius,
+    padding: spacing.md,
     borderWidth: 1,
     borderColor: colors.border,
+  },
+  typeFilterModalTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.sm,
+  },
+  typeFilterModalRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 10,
+  },
+  typeFilterModalRowActive: {
+    backgroundColor: "rgba(224,103,55,0.08)",
+  },
+  typeFilterModalRowText: {
+    fontSize: 15,
+    color: colors.text,
+    fontWeight: "600",
+    flex: 1,
+  },
+  typeFilterModalRowTextActive: {
+    color: colors.primary,
+  },
+  typeFilterModalClose: {
+    marginTop: spacing.sm,
+    paddingVertical: spacing.md,
+    alignItems: "center",
+  },
+  typeFilterModalCloseText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.textMuted,
+  },
+  filterChip: {
+    paddingVertical: 7,
+    paddingHorizontal: spacing.md,
+    borderRadius: 12,
+    backgroundColor: "rgba(240,244,248,0.55)",
+    borderWidth: 1,
+    borderColor: "rgba(45,74,122,0.3)",
   },
   filterChipActive: {
     backgroundColor: colors.primary,
     borderColor: colors.primary,
   },
   filterChipText: {
-    fontSize: 14,
-    color: colors.text,
+    fontSize: 13,
+    color: "rgba(17,17,17,0.85)",
+    fontWeight: "500",
   },
   filterChipTextActive: {
     color: "#fff",
     fontWeight: "600",
   },
   compactProjectRow: {
-    minHeight: 82,
+    minHeight: 88,
     backgroundColor: colors.card,
     borderRadius: radius,
     borderWidth: 1,
@@ -2430,6 +2815,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     overflow: "hidden",
+  },
+  compactProjectRowMinimal: {
+    minHeight: 96,
   },
   compactProjectRowShared: {
     borderLeftWidth: 3,
@@ -2463,7 +2851,7 @@ const styles = StyleSheet.create({
   compactThumbInitials: {
     fontSize: 13,
     fontWeight: "700",
-    color: colors.textSecondary,
+    color: colors.textMuted,
   },
   compactThumbIcon: {
     position: "absolute",
@@ -2481,6 +2869,21 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     flex: 1,
   },
+  compactProjectTitleMinimal: {
+    fontSize: 16,
+    letterSpacing: -0.2,
+  },
+  compactLocationOnly: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  compactSharedHint: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.primary,
+    marginTop: 2,
+  },
   compactProjectRowMember: {
     borderLeftWidth: 3,
     borderLeftColor: colors.primary + "99",
@@ -2489,6 +2892,12 @@ const styles = StyleSheet.create({
     marginTop: 2,
     color: colors.textMuted,
     fontSize: 12,
+  },
+  compactProjectSublineMinimal: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textMuted,
+    fontWeight: "500",
   },
   compactTypeBadgeRow: {
     flexDirection: "row",
@@ -2527,29 +2936,44 @@ const styles = StyleSheet.create({
     marginRight: spacing.sm,
   },
   compactActionBtn: {
-    width: 32,
-    height: 32,
-    borderRadius: 16,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
     alignItems: "center",
     justifyContent: "center",
     backgroundColor: "#2f80ed",
+  },
+  compactActionBtnLarge: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
   },
   compactActionBtnTask: {
     backgroundColor: "#27ae60",
   },
   statusTag: {
-    marginRight: spacing.md,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 4,
-    borderRadius: 999,
-    backgroundColor: "rgba(255,159,67,0.18)",
+    marginRight: spacing.sm,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 10,
+    maxWidth: 88,
+  },
+  statusTagRisk: {
+    backgroundColor: "rgba(249,168,37,0.15)",
     borderWidth: 1,
-    borderColor: "rgba(255,159,67,0.45)",
+    borderColor: "rgba(249,168,37,0.45)",
+  },
+  statusTagProblem: {
+    backgroundColor: "rgba(198,40,40,0.12)",
+    borderWidth: 1,
+    borderColor: "rgba(198,40,40,0.4)",
   },
   statusTagText: {
-    color: "#ffb266",
-    fontSize: 11,
-    fontWeight: "700",
+    color: colors.text,
+    fontSize: 10,
+    fontWeight: "800",
+    textAlign: "center",
+    letterSpacing: 0.2,
   },
   showAllButton: {
     minHeight: 44,
@@ -2565,10 +2989,6 @@ const styles = StyleSheet.create({
     color: colors.primary,
     fontSize: 14,
     fontWeight: "700",
-  },
-  fabCenter: {
-    alignSelf: "center",
-    right: undefined,
   },
   sheetBackdrop: {
     flex: 1,
@@ -2587,8 +3007,8 @@ const styles = StyleSheet.create({
     minHeight: 56,
     borderRadius: radius,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
+    borderColor: "rgba(255,255,255,0.12)",
+    backgroundColor: "rgba(255,255,255,0.06)",
     flexDirection: "row",
     alignItems: "center",
     paddingHorizontal: spacing.md,
@@ -2598,8 +3018,8 @@ const styles = StyleSheet.create({
     marginRight: spacing.sm,
   },
   sheetActionText: {
-    color: "#111111",
-    fontSize: 15,
+    color: "#f0f4f8",
+    fontSize: 16,
     fontWeight: "600",
   },
   comingSoonModal: {
@@ -2794,9 +3214,11 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   sectionTitle: {
-    fontSize: 18,
-    fontWeight: "600",
-    color: colors.textOnDark,
+    fontSize: 15,
+    fontWeight: "700",
+    color: "rgba(255,255,255,0.92)",
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
   },
   sectionMore: {
     fontSize: 14,
@@ -3004,74 +3426,75 @@ const styles = StyleSheet.create({
     justifyContent: "center",
   },
   emptyListText: {
-    fontSize: 14,
-    color: colors.textMuted,
+    fontSize: 15,
+    color: "rgba(255,255,255,0.88)",
     textAlign: "center",
+    lineHeight: 22,
+    fontWeight: "500",
   },
-  fab: {
+  fabDockWrap: {
     position: "absolute",
-    right: spacing.md,
-    width: 56,
-    height: 56,
-    borderRadius: 28,
-    backgroundColor: colors.primary,
+    left: 0,
+    right: 0,
     alignItems: "center",
-    justifyContent: "center",
-    elevation: 4,
+    paddingHorizontal: spacing.lg,
+  },
+  fabDockInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    width: "100%",
+    maxWidth: 400,
+    minHeight: 58,
+    backgroundColor: colors.card,
+    borderRadius: 29,
+    borderWidth: 1,
+    borderColor: "rgba(45,74,122,0.35)",
+    paddingVertical: 6,
+    paddingHorizontal: spacing.sm,
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3.84,
+    shadowOpacity: 0.15,
+    shadowRadius: 6,
+    elevation: 6,
   },
-  fabText: {
-    fontSize: 28,
-    fontWeight: "bold",
-    color: "#FFFFFF",
-  },
-  timerFab: {
-    position: "absolute",
-    right: 0,
-    width: 36,
-    height: 64,
-    borderTopLeftRadius: 32,
-    borderBottomLeftRadius: 32,
-    backgroundColor: colors.primary,
+  fabDockThird: {
+    flex: 1,
     alignItems: "center",
     justifyContent: "center",
-    flexDirection: "column",
-    gap: 2,
-    elevation: 4,
+    minHeight: 52,
+  },
+  fabDockIconBtn: {
+    minWidth: 48,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: 24,
+  },
+  fabDockCenterBtn: {
+    width: 50,
+    height: 50,
+    borderRadius: 25,
+    backgroundColor: "rgba(255,255,255,0.95)",
+    borderWidth: 2,
+    borderColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
     shadowColor: "#000",
-    shadowOffset: { width: -2, height: 0 },
-    shadowOpacity: 0.25,
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.12,
     shadowRadius: 3,
+    elevation: 2,
   },
-  timerFabContent: {
+  fabDockTimerCol: {
     alignItems: "center",
     justifyContent: "center",
-    flexDirection: "column",
     gap: 2,
   },
-  timerFabElapsed: {
+  fabDockTimerDigits: {
     fontSize: 11,
-    color: "#1a1a1a",
-    fontWeight: "700",
-  },
-  calendarFab: {
-    position: "absolute",
-    right: 0,
-    width: 28,
-    height: 64,
-    borderTopLeftRadius: 32,
-    borderBottomLeftRadius: 32,
-    backgroundColor: colors.primary,
-    alignItems: "center",
-    justifyContent: "center",
-    elevation: 4,
-    shadowColor: "#000",
-    shadowOffset: { width: -2, height: 0 },
-    shadowOpacity: 0.25,
-    shadowRadius: 3,
+    fontWeight: "800",
+    color: colors.primary,
+    fontVariant: ["tabular-nums"],
   },
   actionSheetOverlay: {
     flex: 1,
@@ -3205,17 +3628,37 @@ const styles = StyleSheet.create({
   quickNoteRow: {
     flexDirection: "row",
     alignItems: "center",
-    padding: spacing.md,
-    backgroundColor: colors.background,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    backgroundColor: colors.card,
     borderRadius: radius,
     marginBottom: spacing.sm,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "rgba(45,74,122,0.25)",
+    minHeight: 52,
   },
   quickNoteRowText: {
     fontSize: 16,
-    color: "#FFFFFF",
+    color: colors.text,
+    fontWeight: "600",
     flex: 1,
+  },
+  quickNotesInboxHint: {
+    flexDirection: "row",
+    alignItems: "center",
+    marginTop: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    backgroundColor: "rgba(255,255,255,0.12)",
+    borderRadius: radius,
+  },
+  quickNotesInboxHintText: {
+    flex: 1,
+    marginLeft: spacing.sm,
+    marginRight: spacing.sm,
+    fontSize: 14,
+    color: "rgba(255,255,255,0.92)",
+    fontWeight: "600",
   },
   projectList: {
     maxHeight: 400,
@@ -3224,15 +3667,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     padding: spacing.md,
-    backgroundColor: colors.background,
+    backgroundColor: colors.card,
     borderRadius: radius,
     marginBottom: spacing.sm,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "rgba(45,74,122,0.25)",
+    minHeight: 52,
   },
   projectItemText: {
     fontSize: 16,
-    color: "#FFFFFF",
+    color: colors.text,
+    fontWeight: "600",
     flex: 1,
   },
   expenseTypeModalHint: {

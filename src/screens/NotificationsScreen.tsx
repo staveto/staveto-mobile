@@ -29,6 +29,7 @@ export function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const { user, orgId } = useAuth();
+  const notificationUserId = user?.id ?? orgId;
   const { refresh: refreshUnreadCount, setCount: setUnreadCount } = useUnreadCountContext();
   const navigation = useNavigation();
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
@@ -39,7 +40,7 @@ export function NotificationsScreen() {
   const [showMenu, setShowMenu] = useState(false);
 
   const loadNotifications = useCallback(async (isRefresh = false) => {
-    if (!orgId) {
+    if (!notificationUserId) {
       setLoading(false);
       setRefreshing(false);
       setNotifications([]);
@@ -54,7 +55,7 @@ export function NotificationsScreen() {
 
     try {
       const [list, invites] = await Promise.all([
-        notificationsService.listNotifications(orgId, { limitCount: 50 }),
+        notificationsService.listNotifications(notificationUserId, { limitCount: 50 }),
         invitesService.listPendingInvites(),
       ]);
       setNotifications(list);
@@ -67,7 +68,7 @@ export function NotificationsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [orgId]);
+  }, [notificationUserId]);
 
   const onRefresh = useCallback(() => {
     loadNotifications(true);

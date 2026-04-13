@@ -26,11 +26,12 @@ export type HomeLayout = {
   sections: HomeSectionConfig[];
 };
 
+/** Calmer first-time Home: one tasks shortcut; extra KPI chips off by default (customize to turn on). */
 const DEFAULT_SECTIONS: HomeSectionConfig[] = [
   { id: "open_tasks_chip", enabled: true },
-  { id: "projects_chip", enabled: true },
-  { id: "time_tracking_chip", enabled: true },
-  { id: "expenses_chip", enabled: true },
+  { id: "projects_chip", enabled: false },
+  { id: "time_tracking_chip", enabled: false },
+  { id: "expenses_chip", enabled: false },
   { id: "current_work", enabled: true },
   { id: "project_filters", enabled: true },
   { id: "other_projects", enabled: true },

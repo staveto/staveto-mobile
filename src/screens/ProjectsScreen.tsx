@@ -1155,9 +1155,18 @@ export function ProjectsScreen() {
                   }}
                   onManual={() => {
                     setCreationPath("manual");
-                    setNewStep(1);
-                    setCreationMethod("template");
+                    setCreationMethod("empty");
+                    setNewStep(2);
                   }}
+                  onUseTemplate={
+                    wizardResult?.engineType === "BUILD"
+                      ? () => {
+                          setCreationPath("manual");
+                          setCreationMethod("template");
+                          setNewStep(2);
+                        }
+                      : undefined
+                  }
                   onCancel={closeNewModal}
                 />
               </View>

@@ -2,7 +2,7 @@
   "functions": [
     {
       "codebase": "default",
-      "source": "functions",
+      "source": "../functions",
       "ignore": [
         "node_modules",
         ".git",

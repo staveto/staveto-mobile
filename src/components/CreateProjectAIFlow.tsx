@@ -24,6 +24,7 @@ import {
   generateProjectStructureWithAI,
   createProjectFromAiPlan,
   uploadAiDraftDocument,
+  normalizeCallableErrorCode,
   type CreateProjectFromAiPlanParams,
   type AiDraftDocument,
 } from "../services/aiProjectService";
@@ -48,6 +49,8 @@ type Step = "brief" | "preview" | "generating";
 type Props = {
   onCreated: (projectId: string) => void;
   onManual: () => void;
+  /** BUILD catalog path — skip AI and use country template (phases). */
+  onUseTemplate?: () => void;
   onCancel: () => void;
   /** Context from wizard: Bau/Aufträge + work type (Neubau, Renovierung, etc.) */
   engineType?: ProjectEngineType;
@@ -72,7 +75,7 @@ function normalizeAiErrorMessage(message: string): string {
 
 function getAiErrorMessage(code: string | undefined, message: string, t: (key: string) => string): string {
   const cleaned = normalizeAiErrorMessage(message);
-  const codeLower = (code ?? "").toLowerCase();
+  const codeLower = normalizeCallableErrorCode(code);
   const msgLower = cleaned.toLowerCase();
   if (!cleaned && !code) return t("createProject.ai.error") || "AI nemohla vytvoriť plán. Skús znova alebo vytvor manuálne.";
   if (codeLower === "unauthenticated" || msgLower.includes("authentication required")) {
@@ -80,6 +83,9 @@ function getAiErrorMessage(code: string | undefined, message: string, t: (key: s
   }
   if (codeLower === "failed-precondition" || msgLower.includes("not configured") || msgLower.includes("api key")) {
     return t("createProject.ai.errorNotConfigured") || "AI služba nie je nakonfigurovaná. Kontaktujte podporu.";
+  }
+  if (codeLower === "resource-exhausted" || msgLower.includes("overloaded")) {
+    return t("createProject.ai.errorRateLimit") || "AI je dočasne preťažená. Skúste o chvíľu alebo pokračujte bez AI.";
   }
   if (msgLower.includes("network") || msgLower.includes("timeout") || msgLower.includes("slabé pripojenie")) {
     return t("createProject.ai.errorNetwork") || "Slabé pripojenie alebo žiadny internet. Skúste znova.";
@@ -90,7 +96,7 @@ function getAiErrorMessage(code: string | undefined, message: string, t: (key: s
   return cleaned && cleaned.length < 120 ? cleaned : (t("createProject.ai.error") || "AI nemohla vytvoriť plán. Skús znova alebo vytvor manuálne.");
 }
 
-export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType, workType }: Props) {
+export function CreateProjectAIFlow({ onCreated, onManual, onUseTemplate, onCancel, engineType, workType }: Props) {
   const { t } = useI18n();
   const [step, setStep] = useState<Step>("brief");
   const [brief, setBrief] = useState("");
@@ -197,9 +203,9 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
       setStep("preview");
     } catch (e) {
       const msg = normalizeAiErrorMessage(e instanceof Error ? e.message : String(e));
-      const code = (e as { code?: string })?.code;
+      const code = normalizeCallableErrorCode((e as { code?: string })?.code);
       if (__DEV__) {
-        console.warn("[CreateProjectAIFlow] AI generation failed", code, msg);
+        console.warn("[CreateProjectAIFlow] AI generation failed", code, msg.slice(0, 160));
       }
       setError(getAiErrorMessage(code, msg, t));
       setStep("brief");
@@ -247,9 +253,9 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
       setStep("preview");
     } catch (e) {
       const msg = normalizeAiErrorMessage(e instanceof Error ? e.message : String(e));
-      const code = (e as { code?: string })?.code;
+      const code = normalizeCallableErrorCode((e as { code?: string })?.code);
       if (__DEV__) {
-        console.warn("[CreateProjectAIFlow] AI generate again failed", code, msg);
+        console.warn("[CreateProjectAIFlow] AI generate again failed", code, msg.slice(0, 160));
       }
       setError(getAiErrorMessage(code, msg, t));
       setStep("preview");
@@ -272,9 +278,9 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
       onCreated(projectId);
     } catch (e) {
       const msg = normalizeAiErrorMessage(e instanceof Error ? e.message : String(e));
-      const code = (e as { code?: string })?.code;
+      const code = normalizeCallableErrorCode((e as { code?: string })?.code);
       if (__DEV__) {
-        console.warn("[CreateProjectAIFlow] create from plan failed", code, msg);
+        console.warn("[CreateProjectAIFlow] create from plan failed", code, msg.slice(0, 160));
       }
       setError(getAiErrorMessage(code, msg, t));
     } finally {
@@ -396,12 +402,28 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
             onPress={handleWithAI}
           >
             <Ionicons name="sparkles" size={18} color="#fff" />
-            <Text style={styles.btnPrimaryText}>{t("createProject.ai.withAi")}</Text>
+            <Text style={styles.btnPrimaryText}>
+              {error ? t("createProject.ai.tryAgain") : t("createProject.ai.withAi")}
+            </Text>
           </TouchableOpacity>
-          <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={handleManual}>
-            <Ionicons name="create-outline" size={18} color={colors.primary} />
-            <Text style={styles.btnSecondaryText}>{t("createProject.ai.manual")}</Text>
-          </TouchableOpacity>
+          <View style={styles.secondaryActions}>
+            <TouchableOpacity style={[styles.btn, styles.btnSecondary, styles.secondaryActionBtn]} onPress={handleManual}>
+              <Ionicons name="create-outline" size={18} color={colors.primary} />
+              <Text style={styles.btnSecondaryText}>{t("createProject.ai.manual")}</Text>
+            </TouchableOpacity>
+            {onUseTemplate ? (
+              <TouchableOpacity
+                style={[styles.btn, styles.btnSecondary, styles.secondaryActionBtn]}
+                onPress={() => {
+                  setError(null);
+                  onUseTemplate();
+                }}
+              >
+                <Ionicons name="layers-outline" size={18} color={colors.primary} />
+                <Text style={styles.btnSecondaryText}>{t("createProject.ai.useTemplate")}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
         </View>
         <TouchableOpacity style={styles.cancelBtn} onPress={onCancel}>
           <Text style={styles.cancelText}>{t("projects.cancel")}</Text>
@@ -451,6 +473,30 @@ export function CreateProjectAIFlow({ onCreated, onManual, onCancel, engineType,
           ))}
         </ScrollView>
         {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        {error ? (
+          <View style={styles.previewFallbackRow}>
+            <TouchableOpacity
+              style={[styles.btn, styles.btnSecondary, styles.previewFallbackBtn]}
+              onPress={() => {
+                setError(null);
+                onManual();
+              }}
+            >
+              <Text style={styles.btnSecondaryText}>{t("createProject.ai.manual")}</Text>
+            </TouchableOpacity>
+            {onUseTemplate ? (
+              <TouchableOpacity
+                style={[styles.btn, styles.btnSecondary, styles.previewFallbackBtn]}
+                onPress={() => {
+                  setError(null);
+                  onUseTemplate();
+                }}
+              >
+                <Text style={styles.btnSecondaryText}>{t("createProject.ai.useTemplate")}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </View>
+        ) : null}
         <View style={styles.previewActions}>
           <TouchableOpacity style={[styles.btn, styles.btnSecondary]} onPress={handleChangeDescription}>
             <Text style={styles.btnSecondaryText}>{t("createProject.ai.changeDescription")}</Text>
@@ -633,6 +679,25 @@ const styles = StyleSheet.create({
   actions: {
     gap: spacing.sm,
     marginBottom: spacing.md,
+  },
+  secondaryActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+  },
+  secondaryActionBtn: {
+    flex: 1,
+    minWidth: 120,
+  },
+  previewFallbackRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  previewFallbackBtn: {
+    flex: 1,
+    minWidth: 100,
   },
   btn: {
     flexDirection: "row",

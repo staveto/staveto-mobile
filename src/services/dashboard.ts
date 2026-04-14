@@ -5,9 +5,14 @@ import { fetchProjectAccess } from "../hooks/useProjectAccess";
 import type { ProjectDoc } from "./projects";
 import type { TaskDoc } from "./tasks";
 
+/** Home "today's work": overdue, blocked, or due today — max items, no extra Firestore reads. */
+export type TodaysWorkTask = TaskDoc & { projectName: string; workKind: "overdue" | "due_today" | "blocked" };
+
 export type DashboardViewModel = {
   projects: ProjectDoc[];
   todayTasks: Array<TaskDoc & { projectName: string; phaseName?: string }>;
+  /** Scannable priority list for Home (subset of already-loaded tasks). */
+  todaysWorkTasks: TodaysWorkTask[];
   kpis: {
     openCount: number;
     doneTodayCount: number;
@@ -29,6 +34,7 @@ export type DashboardViewModel = {
 const EMPTY_DASHBOARD: DashboardViewModel = {
   projects: [],
   todayTasks: [],
+  todaysWorkTasks: [],
   kpis: {
     openCount: 0,
     doneTodayCount: 0,
@@ -221,9 +227,38 @@ async function loadDashboardDataInternal(ownerId: string, options?: { forceServe
       projectName: projects.find(p => p.id === task.projectId)?.name || 'Unknown',
     }));
 
+  const projectNameById = (projectId: string) => projects.find((p) => p.id === projectId)?.name || "—";
+  const activeNonDone = (task: TaskDoc) => task.status !== "DONE" && task.isActive !== false;
+
+  const blockedForHome = allTasks.filter((t) => t.status === "BLOCKED" && activeNonDone(t));
+  const dueTodayForHome = allTasks.filter((task) => {
+    if (!activeNonDone(task) || !task.dueDate) return false;
+    const dueDate = parseDateOnly(task.dueDate);
+    if (!dueDate) return false;
+    dueDate.setHours(0, 0, 0, 0);
+    return dueDate.getTime() === today.getTime();
+  });
+
+  const todaysWorkSeen = new Set<string>();
+  const todaysWorkTasks: TodaysWorkTask[] = [];
+  const pushWork = (task: TaskDoc, workKind: TodaysWorkTask["workKind"]) => {
+    if (todaysWorkSeen.has(task.id)) return;
+    todaysWorkSeen.add(task.id);
+    todaysWorkTasks.push({
+      ...task,
+      projectName: projectNameById(task.projectId),
+      workKind,
+    });
+  };
+  overdueTasks.forEach((t) => pushWork(t, "overdue"));
+  blockedForHome.forEach((t) => pushWork(t, "blocked"));
+  dueTodayForHome.forEach((t) => pushWork(t, "due_today"));
+  const todaysWorkTasksCapped = todaysWorkTasks.slice(0, 8);
+
   return {
     projects,
     todayTasks: upcomingTasks,
+    todaysWorkTasks: todaysWorkTasksCapped,
     kpis: {
       openCount: openTasks.length,
       doneTodayCount: doneTodayTasks.length,

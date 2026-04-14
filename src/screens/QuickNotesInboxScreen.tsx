@@ -12,6 +12,7 @@ import {
   Modal,
   Pressable,
   TextInput,
+  ScrollView,
 } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -382,17 +383,69 @@ export function QuickNotesInboxScreen() {
           </View>
           {tab === "pending" ? (
             <View style={styles.actionsRow}>
-              <TouchableOpacity style={styles.primaryBtn} onPress={() => openProcessMenu(item)} activeOpacity={0.85}>
-                <Text style={styles.primaryBtnText}>{t("quickNotes.process")}</Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.iconGhost}
-                onPress={() => handleDelete(item)}
-                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
-                accessibilityLabel={t("common.delete")}
+              <ScrollView
+                horizontal
+                showsHorizontalScrollIndicator={false}
+                contentContainerStyle={styles.inboxIconBar}
+                keyboardShouldPersistTaps="handled"
               >
-                <Ionicons name="trash-outline" size={22} color={colors.error} />
-              </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.inboxIconBtn}
+                  onPress={() => openProjectPicker(item, "assign")}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("quickNotes.assignProject")}
+                >
+                  <Ionicons name="folder-open-outline" size={24} color={colors.primary} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.inboxIconBtn}
+                  onPress={() => startConversion(item, "task")}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("quickNotes.createTask")}
+                >
+                  <Ionicons name="checkbox-outline" size={24} color={colors.primary} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.inboxIconBtn}
+                  onPress={() => startConversion(item, "diary")}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("quickNotes.addDiary")}
+                >
+                  <Ionicons name="book-outline" size={24} color={colors.primary} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.inboxIconBtn}
+                  onPress={() => startConversion(item, "problem")}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("quickNotes.reportProblem")}
+                >
+                  <Ionicons name="warning-outline" size={24} color={colors.primary} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.inboxIconBtn}
+                  onPress={() => void markDone(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("quickNotes.markDone")}
+                >
+                  <Ionicons name="checkmark-done-outline" size={24} color="#2e7d32" />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.inboxIconBtn}
+                  onPress={() => handleDelete(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("common.delete")}
+                >
+                  <Ionicons name="trash-outline" size={24} color={colors.error} />
+                </TouchableOpacity>
+                <TouchableOpacity
+                  style={styles.inboxIconBtn}
+                  onPress={() => openProcessMenu(item)}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("quickNotes.process")}
+                >
+                  <Ionicons name="ellipsis-horizontal" size={22} color={colors.textMuted} />
+                </TouchableOpacity>
+              </ScrollView>
             </View>
           ) : (
             <View style={styles.actionsRow}>
@@ -411,7 +464,17 @@ export function QuickNotesInboxScreen() {
         </View>
       );
     },
-    [effectiveProjectLabel, handleDelete, openProcessMenu, t, tab, reopen]
+    [
+      effectiveProjectLabel,
+      handleDelete,
+      openProcessMenu,
+      openProjectPicker,
+      startConversion,
+      markDone,
+      t,
+      tab,
+      reopen,
+    ]
   );
 
   const ListEmpty = (
@@ -773,10 +836,24 @@ const styles = StyleSheet.create({
     fontStyle: "italic",
   },
   actionsRow: {
+    marginTop: spacing.md,
+  },
+  inboxIconBar: {
     flexDirection: "row",
     alignItems: "center",
-    marginTop: spacing.md,
-    gap: spacing.sm,
+    gap: spacing.xs,
+    paddingVertical: spacing.xs,
+    paddingRight: spacing.sm,
+  },
+  inboxIconBtn: {
+    minWidth: 48,
+    minHeight: 48,
+    alignItems: "center",
+    justifyContent: "center",
+    borderRadius: radius,
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
   },
   primaryBtn: {
     flex: 1,

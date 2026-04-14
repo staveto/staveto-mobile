@@ -22,13 +22,13 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
-import * as projectsService from "../services/projects";
 import * as tasksService from "../services/tasks";
 import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
 import { processInvoiceAttachment } from "../services/invoiceProcessing";
 import { getConfidenceAwareExpensePrefill } from "../services/documentPrefill";
 import * as dashboardService from "../services/dashboard";
+import type { TodaysWorkTask } from "../services/dashboard";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectCoverService from "../services/projectCover";
 import type { ProjectDoc } from "../services/projects";
@@ -85,6 +85,7 @@ type TypeFilter = "ALL" | "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE"
 type DashboardViewModel = {
   projects: ProjectDoc[];
   todayTasks: Array<TaskDoc & { projectName: string; phaseName?: string }>;
+  todaysWorkTasks: TodaysWorkTask[];
   kpis: {
     openCount: number;
     doneTodayCount: number;
@@ -471,6 +472,28 @@ export function HomeScreen() {
   );
 
   const stackNav = navigation as { navigate: (name: string, params?: object) => void };
+
+  const openTodaysWorkTask = useCallback(
+    (task: TaskDoc) => {
+      let nav: unknown = navigation;
+      for (let i = 0; i < 8 && nav && typeof nav === "object"; i++) {
+        const n = nav as {
+          getState?: () => { routeNames?: string[] };
+          navigate?: (name: string, params?: object) => void;
+          getParent?: () => unknown;
+        };
+        const names = n.getState?.()?.routeNames;
+        if (names?.includes("TaskDetail") && n.navigate) {
+          n.navigate("TaskDetail", { task });
+          return;
+        }
+        nav = n.getParent?.();
+      }
+      if (__DEV__) console.warn("[HomeScreen] TaskDetail screen not found from Home");
+    },
+    [navigation]
+  );
+
   const goToProjects = useCallback(
     (params?: object) => {
       let nav: any = navigation;
@@ -624,44 +647,20 @@ export function HomeScreen() {
         );
       }
 
-      // Enrich today tasks with project names and phase names
-      let enrichedTasks: typeof data.todayTasks = [];
-      try {
-        enrichedTasks = await Promise.all(
-          data.todayTasks.map(async (task) => {
-            try {
-              const project = data.projects.find((p) => p.id === task.projectId);
-              let phaseName: string | undefined;
-              if (task?.phaseId && project) {
-                try {
-                  const phases = await projectsService.listProjectPhases(project.id);
-                  const phase = phases.find((p) => p.id === task.phaseId);
-                  phaseName = phase?.name;
-                } catch {
-                  // Ignore phase loading errors
-                }
-              }
-              return {
-                ...(task && typeof task === "object" ? task : {}),
-                projectName: project?.name || "Unknown",
-                phaseName,
-              };
-            } catch (err) {
-              if (__DEV__) console.warn("[HomeScreen] enrich task failed:", err);
-              return { ...task, projectName: "Unknown", phaseName: undefined };
-            }
-          })
-        );
-      } catch (err) {
-        console.warn("[HomeScreen] enrichTasks failed, using raw:", err);
-        enrichedTasks = data.todayTasks.map((t) => ({ ...t, projectName: "Unknown", phaseName: undefined }));
-      }
+      // Upcoming tasks already carry projectName from dashboard — no per-task phase fetch (expensive, unused on Home).
+      const enrichedTasks = data.todayTasks.map((t) => ({
+        ...t,
+        projectName: t.projectName || data.projects.find((p) => p.id === t.projectId)?.name || "—",
+        phaseName: undefined as string | undefined,
+      }));
 
       setDashboardData({
         projects: data.projects,
         todayTasks: enrichedTasks,
+        todaysWorkTasks: data.todaysWorkTasks ?? [],
         kpis: data.kpis,
         projectStats: data.projectStats,
+        timeTrackingProjectIds: data.timeTrackingProjectIds,
       });
       setLoadError(false);
     } catch (error: any) {
@@ -670,6 +669,7 @@ export function HomeScreen() {
       setDashboardData({
         projects: [],
         todayTasks: [],
+        todaysWorkTasks: [],
         kpis: {
           openCount: 0,
           doneTodayCount: 0,
@@ -680,6 +680,7 @@ export function HomeScreen() {
           hasExpensesAccess: false,
         },
         projectStats: new Map(),
+        timeTrackingProjectIds: [],
       });
     } finally {
       setLoading(false);
@@ -1258,6 +1259,7 @@ export function HomeScreen() {
   const data = dashboardData || {
     projects: [],
     todayTasks: [],
+    todaysWorkTasks: [],
     kpis: {
       openCount: 0,
       doneTodayCount: 0,
@@ -1464,6 +1466,63 @@ export function HomeScreen() {
                 </Text>
                 <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.78)" />
               </TouchableOpacity>
+            ) : null}
+            {orgId && data.todaysWorkTasks.length > 0 ? (
+              <View style={styles.todaysWorkSection} accessibilityRole="summary">
+                <View style={styles.todaysWorkHeaderRow}>
+                  <Ionicons name="today-outline" size={22} color={colors.textOnDark} />
+                  <Text style={styles.todaysWorkTitle} maxFontSizeMultiplier={1.2}>
+                    {t("home.todaysWorkTitle")}
+                  </Text>
+                </View>
+                {data.todaysWorkTasks.map((tw) => {
+                  const badgeKey =
+                    tw.workKind === "overdue"
+                      ? "home.todaysWorkBadgeOverdue"
+                      : tw.workKind === "blocked"
+                        ? "home.todaysWorkBadgeBlocked"
+                        : "home.todaysWorkBadgeDueToday";
+                  const badgeStyle =
+                    tw.workKind === "overdue"
+                      ? styles.todaysWorkBadgeOverdue
+                      : tw.workKind === "blocked"
+                        ? styles.todaysWorkBadgeBlocked
+                        : styles.todaysWorkBadgeDueToday;
+                  return (
+                    <TouchableOpacity
+                      key={`${tw.projectId}-${tw.id}`}
+                      style={styles.todaysWorkRow}
+                      onPress={() => openTodaysWorkTask(tw)}
+                      activeOpacity={0.82}
+                      accessibilityRole="button"
+                      accessibilityLabel={`${tw.title}, ${tw.projectName}`}
+                    >
+                      <View style={[styles.todaysWorkBadge, badgeStyle]}>
+                        <Text style={styles.todaysWorkBadgeText} maxFontSizeMultiplier={1.15}>
+                          {t(badgeKey)}
+                        </Text>
+                      </View>
+                      <View style={styles.todaysWorkTextCol}>
+                        <Text style={styles.todaysWorkTaskTitle} numberOfLines={2} maxFontSizeMultiplier={1.2}>
+                          {tw.title}
+                        </Text>
+                        <Text style={styles.todaysWorkProject} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                          {tw.projectName}
+                        </Text>
+                      </View>
+                      <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+                    </TouchableOpacity>
+                  );
+                })}
+                <TouchableOpacity
+                  style={styles.todaysWorkSeeTasks}
+                  onPress={() => stackNav.navigate("Tasks")}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                >
+                  <Text style={styles.todaysWorkSeeTasksText}>{t("home.todaysWorkSeeAllTasks")}</Text>
+                </TouchableOpacity>
+              </View>
             ) : null}
             {data.projects.length === 0 && (
               <TouchableOpacity
@@ -3659,6 +3718,81 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "rgba(255,255,255,0.92)",
     fontWeight: "600",
+  },
+  todaysWorkSection: {
+    marginTop: spacing.md,
+    padding: spacing.md,
+    backgroundColor: colors.card,
+    borderRadius: radius + 2,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  todaysWorkHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  todaysWorkTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: colors.text,
+    flex: 1,
+  },
+  todaysWorkRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
+    minHeight: 52,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  todaysWorkBadge: {
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    marginRight: spacing.sm,
+    maxWidth: 100,
+  },
+  todaysWorkBadgeOverdue: {
+    backgroundColor: "rgba(211,47,47,0.15)",
+  },
+  todaysWorkBadgeDueToday: {
+    backgroundColor: "rgba(255,159,67,0.2)",
+  },
+  todaysWorkBadgeBlocked: {
+    backgroundColor: "rgba(142,68,173,0.18)",
+  },
+  todaysWorkBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.text,
+    textTransform: "uppercase",
+  },
+  todaysWorkTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  todaysWorkTaskTitle: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  todaysWorkProject: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  todaysWorkSeeTasks: {
+    marginTop: spacing.sm,
+    paddingVertical: spacing.sm,
+    alignItems: "center",
+  },
+  todaysWorkSeeTasksText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.primary,
   },
   projectList: {
     maxHeight: 400,

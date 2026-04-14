@@ -72,6 +72,31 @@ export type NotificationDoc = {
 const LOCAL_KEY = "@staveto:local_notifications";
 const PENDING_READ_KEY = "@staveto:pending_notification_reads";
 
+const KNOWN_NOTIFICATION_TYPES: readonly NotificationType[] = [
+  "TASK_ASSIGNED",
+  "TASK_DUE_TODAY",
+  "TASK_OVERDUE",
+  "PROJECT_ACTIVITY",
+  "PROJECT_CREATED",
+  "PROJECT_INVITED",
+  "PROBLEM_ASSIGNED",
+  "EXPENSE_ADDED",
+  "DIARY_ADDED",
+  "MEMBER_JOINED",
+  "MEMBER_LEFT",
+  "MEMBER_REMOVED",
+  "SYNC_ISSUE",
+  "TIME_TRACKING_STOPPED",
+] as const;
+
+/** Firestore `type` may be missing or wrong shape — never call string methods on non-strings. */
+function normalizeNotificationType(raw: unknown): NotificationType {
+  if (typeof raw === "string" && (KNOWN_NOTIFICATION_TYPES as readonly string[]).includes(raw)) {
+    return raw as NotificationType;
+  }
+  return "PROJECT_ACTIVITY";
+}
+
 function normalizeDocData(raw: unknown): Record<string, unknown> {
   if (raw && typeof raw === "object" && !Array.isArray(raw)) {
     return raw as Record<string, unknown>;
@@ -109,7 +134,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
     return undefined;
   };
 
-  const type = (d.type as NotificationType) ?? "PROJECT_ACTIVITY";
+  const type = normalizeNotificationType(d.type);
   const message = (d.message as string) ?? undefined;
   const fromUserName = (d.fromUserName as string) ?? undefined;
   const entityType = inferEntityType(type, d);
@@ -181,10 +206,11 @@ function inferEntityType(
   if (d.entityType && ["task", "project", "expense", "document", "problem"].includes(d.entityType as string)) {
     return d.entityType as "task" | "project" | "expense" | "document" | "problem";
   }
-  if (type.includes("TASK")) return "task";
-  if (type === "PROBLEM_ASSIGNED") return "problem";
-  if (type.includes("PROJECT") || type.includes("MEMBER")) return "project";
-  if (type.includes("EXPENSE")) return "expense";
+  const t = typeof type === "string" ? type : "";
+  if (t.includes("TASK")) return "task";
+  if (t === "PROBLEM_ASSIGNED") return "problem";
+  if (t.includes("PROJECT") || t.includes("MEMBER")) return "project";
+  if (t.includes("EXPENSE")) return "expense";
   return "project";
 }
 

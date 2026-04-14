@@ -1117,6 +1117,8 @@ export {
 export { cloneProjectStructure } from "./cloneProject";
 export { generateProjectStructure } from "./generateProjectStructure";
 export { createProjectFromAiPlan } from "./createProjectFromAiPlan";
+/** PDF/image invoice OCR (Storage path); deployed from mobile stub — kept in main codebase. */
+export { extractInvoiceDataFromStorage } from "./extractInvoiceDataFromStorage";
 export { calculateDistanceKm } from "./distance";
 export { redeemPromoCode } from "./promo"; // disabled – no-op, throws PROMO_DISABLED
 export { getBillingStatus, checkEntitlement } from "./billing";

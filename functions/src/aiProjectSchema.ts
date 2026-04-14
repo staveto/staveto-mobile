@@ -77,14 +77,81 @@ export interface ValidationError {
   message: string;
 }
 
+/**
+ * Normalizes common Gemini output quirks before validation.
+ * Keep in sync with mobile/src/lib/aiProjectSchema.ts
+ */
+export function sanitizeAiProjectPlanFromModel(data: unknown): unknown {
+  if (data === null || data === undefined) return data;
+  if (Array.isArray(data)) {
+    if (data.length === 1 && data[0] && typeof data[0] === "object" && !Array.isArray(data[0])) {
+      return sanitizeAiProjectPlanFromModel(data[0]);
+    }
+    return data;
+  }
+  if (typeof data !== "object") return data;
+  let obj: Record<string, unknown>;
+  try {
+    obj = JSON.parse(JSON.stringify(data)) as Record<string, unknown>;
+  } catch {
+    return data;
+  }
+
+  const canon = (s: string): string => s.trim().toLowerCase().replace(/[\s-]+/g, "_");
+
+  if (typeof obj.category === "string") {
+    const c = canon(obj.category);
+    if ((AI_CATEGORIES as readonly string[]).includes(c)) obj.category = c;
+  }
+
+  if (typeof obj.scope === "string") {
+    const sc = canon(obj.scope);
+    if ((AI_SCOPES as readonly string[]).includes(sc)) obj.scope = sc;
+  }
+
+  if (typeof obj.uiMode === "string") {
+    const u = canon(obj.uiMode);
+    if (u === "work_packages" || u === "workpackages") obj.uiMode = "work_packages";
+    else if (u === "phases") obj.uiMode = "phases";
+  }
+
+  if (Array.isArray(obj.phases)) {
+    for (const phase of obj.phases) {
+      if (!phase || typeof phase !== "object" || Array.isArray(phase)) continue;
+      const p = phase as Record<string, unknown>;
+      if (!Array.isArray(p.tasks)) continue;
+      for (const task of p.tasks) {
+        if (!task || typeof task !== "object" || Array.isArray(task)) continue;
+        const t = task as Record<string, unknown>;
+        if (typeof t.taskType === "string") {
+          const tt = canon(String(t.taskType));
+          if ((AI_TASK_TYPES as readonly string[]).includes(tt)) t.taskType = tt;
+        } else if (t.taskType === undefined || t.taskType === null || t.taskType === "") {
+          t.taskType = "execution";
+        }
+        if (typeof t.priority === "string") {
+          const pr = canon(String(t.priority));
+          if ((AI_PRIORITIES as readonly string[]).includes(pr)) t.priority = pr;
+        } else if (t.priority === undefined || t.priority === null || t.priority === "") {
+          t.priority = "medium";
+        }
+      }
+    }
+  }
+
+  return obj;
+}
+
 export function validateAiProjectPlan(data: unknown): ValidationError[] | null {
   const errors: ValidationError[] = [];
 
-  if (!data || typeof data !== "object") {
+  const normalized = sanitizeAiProjectPlanFromModel(data);
+
+  if (!normalized || typeof normalized !== "object" || Array.isArray(normalized)) {
     return [{ path: "root", message: "Expected object" }];
   }
 
-  const obj = data as Record<string, unknown>;
+  const obj = normalized as Record<string, unknown>;
 
   if (!isString(obj.projectTitle)) {
     errors.push({

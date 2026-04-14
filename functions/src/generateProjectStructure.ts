@@ -7,9 +7,13 @@
 import * as admin from "firebase-admin";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
 import { log } from "firebase-functions/logger";
-import { validateAiProjectPlan } from "./aiProjectSchema";
+import { sanitizeAiProjectPlanFromModel, validateAiProjectPlan } from "./aiProjectSchema";
 
-const GEMINI_MODEL = "gemini-1.5-flash";
+/**
+ * Gemini 1.5 Flash family has been removed from the public API (see Gemini API changelog).
+ * Default to a current stable flash model; override via GEMINI_MODEL for staged upgrades.
+ */
+const GEMINI_MODEL = (process.env.GEMINI_MODEL ?? "gemini-2.5-flash").trim();
 const GEMINI_URL = `https://generativelanguage.googleapis.com/v1beta/models/${GEMINI_MODEL}:generateContent`;
 
 const MAX_BRIEF_LEN = 600;
@@ -78,12 +82,34 @@ function getApiKey(): string {
 }
 
 function extractJsonFromResponse(text: string): object {
-  const trimmed = text.trim();
-  const jsonMatch = trimmed.match(/\{[\s\S]*\}/);
+  let s = text.trim();
+  s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
+  if (s.charCodeAt(0) === 0xfeff) {
+    s = s.slice(1);
+  }
+
+  const parseObject = (raw: string): object => {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as object;
+    }
+    if (Array.isArray(parsed) && parsed.length === 1 && parsed[0] && typeof parsed[0] === "object") {
+      return parsed[0] as object;
+    }
+    throw new Error("Expected JSON object (or single-element object array)");
+  };
+
+  try {
+    return parseObject(s);
+  } catch {
+    // fall through: model may wrap JSON in prose
+  }
+
+  const jsonMatch = s.match(/\{[\s\S]*\}/);
   if (!jsonMatch) {
     throw new Error("No JSON found in AI response");
   }
-  return JSON.parse(jsonMatch[0]) as object;
+  return parseObject(jsonMatch[0]);
 }
 
 export const generateProjectStructure = onCall(
@@ -211,7 +237,23 @@ export const generateProjectStructure = onCall(
 
     if (!response.ok) {
       const errText = await response.text();
-      log("[generateProjectStructure] Gemini API error", response.status, errText);
+      log("[generateProjectStructure] Gemini API error", {
+        status: response.status,
+        model: GEMINI_MODEL,
+        bodyPreview: errText.slice(0, 800),
+      });
+      if (response.status === 429) {
+        throw new HttpsError(
+          "resource-exhausted",
+          "AI is temporarily overloaded. Try again in a moment or create manually."
+        );
+      }
+      if (response.status === 404 || response.status === 400) {
+        throw new HttpsError(
+          "failed-precondition",
+          "AI model or API configuration is outdated. Contact support."
+        );
+      }
       throw new HttpsError("internal", "AI generation failed. Try again or create manually.");
     }
 
@@ -242,6 +284,8 @@ export const generateProjectStructure = onCall(
       throw new HttpsError("internal", "AI returned invalid structure. Try again or create manually.");
     }
 
-    return { plan, raw: text };
+    const planForClient = sanitizeAiProjectPlanFromModel(plan) as object;
+
+    return { plan: planForClient, raw: text };
   }
 );

@@ -53,3 +53,9 @@ Po nasadení skús v aplikácii vytvoriť nový projekt cez **Mit KI erstellen**
 
 - **„AI service not configured“** – tajný kľúč nie je nastavený alebo function nemá prístup. Skontroluj, či si spustil `firebase functions:secrets:set GOOGLE_GENERATIVE_AI_API_KEY` a znovu nasadil functions.
 - **„AI generation failed“** – API kľúč môže byť neplatný, Generative Language API nemusí byť povolená, alebo môže ísť o rate limit. Skontroluj [Google AI Studio](https://aistudio.google.com/) a [Cloud Console](https://console.cloud.google.com/apis/library).
+- **„UNAUTHENTICATED“** – v2 Callable funkcie môžu vyžadovať explicitnú URL. Po deploy skopíruj URL z výstupu (napr. `https://generateprojectstructure-xxx-ew.a.run.app`) a pridaj do `.env`:
+  ```
+  EXPO_PUBLIC_AI_GENERATE_PROJECT_URL=https://URL_Z_DEPLOY_VYSTUPU
+  EXPO_PUBLIC_AI_CREATE_PROJECT_URL=https://URL_PRE_createProjectFromAiPlan
+  ```
+  Reštartuj Metro (`npx expo start --clear`) a znova skús.

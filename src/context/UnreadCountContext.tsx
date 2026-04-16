@@ -2,6 +2,7 @@ import React, { createContext, useCallback, useContext, useEffect, useState } fr
 import { AppState, AppStateStatus, Platform } from "react-native";
 import * as Notifications from "expo-notifications";
 import { useAuth } from "./AuthContext";
+import { auth } from "../firebase";
 import * as notificationsService from "../services/notifications";
 import * as invitesService from "../services/invites";
 
@@ -20,7 +21,8 @@ export function UnreadCountProvider({ children }: { children: React.ReactNode })
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    if (!orgId) {
+    const uid = auth.currentUser?.uid ?? orgId;
+    if (!uid) {
       setCount(0);
       setLoading(false);
       return;
@@ -28,7 +30,7 @@ export function UnreadCountProvider({ children }: { children: React.ReactNode })
     setLoading(true);
     try {
       const [unreadNotifications, pendingInvites] = await Promise.all([
-        notificationsService.getUnreadCount(orgId),
+        notificationsService.getUnreadCount(uid),
         invitesService.listPendingInvites(),
       ]);
       const total = unreadNotifications + pendingInvites.length;
@@ -38,7 +40,7 @@ export function UnreadCountProvider({ children }: { children: React.ReactNode })
     } finally {
       setLoading(false);
     }
-  }, [orgId]);
+  }, [orgId]); // orgId tracks login; getUnreadCount uses auth.currentUser?.uid ?? orgId inside refresh
 
   useEffect(() => {
     refresh();

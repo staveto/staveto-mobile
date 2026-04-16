@@ -43,6 +43,7 @@ import { useAuth } from "../context/AuthContext";
 import { useProjectAccess } from "../hooks/useProjectAccess";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
+import { auth } from "../firebase";
 import { updatePhase, deletePhase, createPhase } from "../services/projects";
 import * as tasksService from "../services/tasks";
 import * as expensesService from "../services/expenses";
@@ -542,6 +543,8 @@ export function ProjectOverviewScreen() {
       const canReadExpenses = isProjectOwner || access.canReadExpenses;
       const canReadDiary = isProjectOwner || access.canReadDiary;
       const canReadDocuments = isProjectOwner || access.canReadDocuments;
+      /** Firestore rules: attachments read = tasks OR expenses OR documents */
+      const canReadAttachments = canReadTasks || canReadExpenses || canReadDocuments;
       
       console.log(`[ProjectOverview] Loading data for projectType="${projectTypeForLoad}", isProjectOwner=${isProjectOwner}, canRead: phases=${canReadPhases}, tasks=${canReadTasks}, expenses=${canReadExpenses}, diary=${canReadDiary}, documents=${canReadDocuments}...`);
       const loadPromises: Promise<any>[] = [];
@@ -681,36 +684,51 @@ export function ProjectOverviewScreen() {
         setOpenProblemsCount(0);
       }
       
-      // Load all attachments for the project to build attachment count maps
-      try {
-        const allAttachments = await attachmentsService.listAttachments(projectId);
-        const safeAttachments = Array.isArray(allAttachments) ? allAttachments : [];
-        console.log(`[ProjectOverview] Loaded ${safeAttachments.length} total attachments`);
-        
-        // Build task attachments map
-        const taskMap = new Map<string, number>();
-        const expenseMap = new Map<string, number>();
-        
-        safeAttachments.forEach((att) => {
-          if (!att || typeof att !== "object") return;
-          if (att.taskId) {
-            const count = taskMap.get(att.taskId) || 0;
-            taskMap.set(att.taskId, count + 1);
+      // Attachment counts on tasks/expenses — only when rules allow reading `attachments`
+      if (canReadAttachments) {
+        try {
+          const allAttachments = await attachmentsService.listAttachments(projectId);
+          const safeAttachments = Array.isArray(allAttachments) ? allAttachments : [];
+          console.log(`[ProjectOverview] Loaded ${safeAttachments.length} total attachments`);
+
+          const taskMap = new Map<string, number>();
+          const expenseMap = new Map<string, number>();
+
+          safeAttachments.forEach((att) => {
+            if (!att || typeof att !== "object") return;
+            if (att.taskId) {
+              const count = taskMap.get(att.taskId) || 0;
+              taskMap.set(att.taskId, count + 1);
+            }
+            if (att.expenseId) {
+              const count = expenseMap.get(att.expenseId) || 0;
+              expenseMap.set(att.expenseId, count + 1);
+            }
+          });
+
+          console.log(`[ProjectOverview] Task attachments map:`, Array.from(taskMap.entries()));
+          console.log(`[ProjectOverview] Expense attachments map:`, Array.from(expenseMap.entries()));
+
+          setTaskAttachmentsMap(taskMap);
+          setExpenseAttachmentsMap(expenseMap);
+        } catch (error: any) {
+          const code = String(error?.code ?? "");
+          const msg = String(error?.message ?? "");
+          const denied =
+            code.includes("permission-denied") ||
+            msg.includes("permission-denied") ||
+            code.includes("PERMISSION_DENIED");
+          if (denied) {
+            if (__DEV__) {
+              console.warn(`[ProjectOverview] No access to attachments list (expected for some shares):`, projectId);
+            }
+          } else {
+            console.error(`[ProjectOverview] Error loading attachments for map:`, error);
           }
-          if (att.expenseId) {
-            const count = expenseMap.get(att.expenseId) || 0;
-            expenseMap.set(att.expenseId, count + 1);
-          }
-        });
-        
-        console.log(`[ProjectOverview] Task attachments map:`, Array.from(taskMap.entries()));
-        console.log(`[ProjectOverview] Expense attachments map:`, Array.from(expenseMap.entries()));
-        
-        setTaskAttachmentsMap(taskMap);
-        setExpenseAttachmentsMap(expenseMap);
-      } catch (error: any) {
-        console.error(`[ProjectOverview] Error loading attachments for map:`, error);
-        // Don't fail - attachments map is optional
+          setTaskAttachmentsMap(new Map());
+          setExpenseAttachmentsMap(new Map());
+        }
+      } else {
         setTaskAttachmentsMap(new Map());
         setExpenseAttachmentsMap(new Map());
       }
@@ -1469,18 +1487,30 @@ export function ProjectOverviewScreen() {
           text: t("common.delete"),
           style: 'destructive',
           onPress: async () => {
-            if (!projectId || !orgId) return;
+            if (!projectId) return;
+            const uid = auth.currentUser?.uid ?? orgId;
+            if (!uid) {
+              Alert.alert(t("common.error"), t("createProject.notSignedIn"));
+              return;
+            }
             setSubmitting(true);
             try {
               console.log(`[ProjectOverview] Deleting project ${projectId}`);
-              await projectsService.deleteProject(orgId, projectId);
+              await projectsService.deleteProject(uid, projectId);
               Alert.alert(t("common.success"), t("projectOverview.projectDeleted"));
               // Navigate back to projects list
               navigation.goBack();
             } catch (error: any) {
               console.error(`[ProjectOverview] Error deleting project:`, error);
-              const c = (error as { code?: string }).code;
-              Alert.alert(t("common.error"), c === "permission-denied" ? t("projectOverview.noPermission") : (error instanceof Error ? error.message : t("common.error")));
+              const c = projectsService.getFirestoreErrorCode(error);
+              const denied =
+                c === "permission-denied" ||
+                c === "firestore/permission-denied" ||
+                c.includes("permission-denied");
+              Alert.alert(
+                t("common.error"),
+                denied ? t("projectOverview.noPermission") : error instanceof Error ? error.message : t("common.error")
+              );
             } finally {
               setSubmitting(false);
             }

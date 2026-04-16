@@ -25,6 +25,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
+import * as projectMembersService from "../services/projectMembers";
 import * as tasksService from "../services/tasks";
 import * as projectCoverService from "../services/projectCover";
 import * as projectFactory from "../services/projectFactory";
@@ -50,13 +51,35 @@ import {
 import { openInMaps } from "../lib/maps";
 import { COUNTRY_CODES, getLocalizedCountryName } from "../utils/countries";
 import { resolveTemplateIdForCountry, FALLBACK_TEMPLATE_ID } from "../utils/templateResolver";
-import { getCallable } from "../firebase";
+import { getCallable, auth } from "../firebase";
 import { showToast } from "../helpers/toast";
 
 type Project = ProjectDoc;
 
 function showError(msg: string) {
   Alert.alert("", msg);
+}
+
+/** Cloud Function HttpsError("not-found", "errors.member.notFound") — treat as already left. */
+function isCloudMemberNotFoundError(e: unknown): boolean {
+  const code = String((e as { code?: string })?.code ?? "").toLowerCase();
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  return (
+    msg === "errors.member.notFound" ||
+    msg.includes("errors.member.notFound") ||
+    code === "functions/not-found" ||
+    code.endsWith("/not-found")
+  );
+}
+
+function formatCallableUserMessage(e: unknown, translate: (key: string) => string): string {
+  const msg = e instanceof Error ? e.message : String(e ?? "");
+  const trimmed = msg.trim();
+  if (trimmed.startsWith("errors.")) {
+    const localized = translate(trimmed);
+    return localized.trim() || trimmed;
+  }
+  return trimmed || translate("projectMembers.leaveError");
 }
 
 const ALLOWED_CLONE_TYPES = ["BUILD", "RESIDENTIAL", "TRADE", "MANAGEMENT"] as const;
@@ -680,8 +703,61 @@ export function ProjectsScreen() {
     }
   };
 
+  const onMenuLeaveProject = () => {
+    if (!menuProject) return;
+    const projectId = menuProject.id;
+    Alert.alert(
+      t("projectMembers.leaveConfirm"),
+      t("projectMembers.leaveConfirmMessage"),
+      [
+        { text: t("projects.cancel"), style: "cancel" },
+        {
+          text: t("projectMembers.leaveProject"),
+          style: "destructive",
+          onPress: () => {
+            closeProjectMenu();
+            void (async () => {
+              const uid = auth.currentUser?.uid;
+              if (!uid) {
+                showError(t("createProject.notSignedIn"));
+                return;
+              }
+              try {
+                const finishLeaveOk = async () => {
+                  projectsService.invalidateProjectsSessionCache();
+                  await load(true);
+                  showToast(t("projectMembers.leaveSuccess"));
+                };
+
+                const members = await projectMembersService.listProjectMembers(projectId, true);
+                const self = members.find((m) => m.userId === uid);
+                try {
+                  if (self) {
+                    await projectMembersService.removeMember(projectId, self.id, self.userId);
+                  } else {
+                    await projectMembersService.removeMember(projectId, uid, uid);
+                  }
+                } catch (inner: unknown) {
+                  if (isCloudMemberNotFoundError(inner)) {
+                    await finishLeaveOk();
+                    return;
+                  }
+                  throw inner;
+                }
+                await finishLeaveOk();
+              } catch (e: unknown) {
+                showError(formatCallableUserMessage(e, t));
+              }
+            })();
+          },
+        },
+      ]
+    );
+  };
+
   const onMenuDelete = () => {
     if (!menuProject) return;
+    const projectId = menuProject.id;
     Alert.alert(
       t("projects.deleteConfirm"),
       "",
@@ -690,20 +766,32 @@ export function ProjectsScreen() {
         {
           text: t("projects.delete"),
           style: "destructive",
-          onPress: async () => {
-            if (!orgId) return;
-            try {
-              await projectsService.deleteProject(orgId, menuProject.id);
-              load();
-            } catch (e: unknown) {
-              const c = (e as { code?: string }).code;
-              showError(c === "permission-denied" ? t("projectOverview.noPermission") : (e instanceof Error ? e.message : "Chyba."));
-            }
+          onPress: () => {
+            closeProjectMenu();
+            void (async () => {
+              const uid = auth.currentUser?.uid;
+              if (!uid) {
+                showError(t("createProject.notSignedIn"));
+                return;
+              }
+              try {
+                await projectsService.deleteProject(orgId ?? uid, projectId);
+                await load(true);
+              } catch (e: unknown) {
+                const c = projectsService.getFirestoreErrorCode(e);
+                const denied =
+                  c === "permission-denied" ||
+                  c === "firestore/permission-denied" ||
+                  c.includes("permission-denied");
+                showError(
+                  denied ? t("projectOverview.noPermission") : e instanceof Error ? e.message : "Chyba."
+                );
+              }
+            })();
           },
         },
       ]
     );
-    closeProjectMenu();
   };
 
   const onSaveEdit = async () => {
@@ -1123,9 +1211,18 @@ export function ProjectsScreen() {
                 {menuProject?.archivedAt ? t("projects.unarchive") : t("projects.archive")}
               </Text>
             </TouchableOpacity>
-            <TouchableOpacity style={styles.menuItem} onPress={onMenuDelete}>
-              <Text style={styles.menuTextDanger}>{t("projects.delete")}</Text>
-            </TouchableOpacity>
+            {menuProject?.isSharedToMe === true &&
+              (!menuProject.ownerId || menuProject.ownerId !== auth.currentUser?.uid) && (
+                <TouchableOpacity style={styles.menuItem} onPress={onMenuLeaveProject}>
+                  <Text style={styles.menuTextDanger}>{t("projectMembers.leaveProject")}</Text>
+                </TouchableOpacity>
+              )}
+            {menuProject &&
+              (!menuProject.isSharedToMe || menuProject.ownerId === auth.currentUser?.uid) && (
+                <TouchableOpacity style={styles.menuItem} onPress={onMenuDelete}>
+                  <Text style={styles.menuTextDanger}>{t("projects.delete")}</Text>
+                </TouchableOpacity>
+              )}
           </View>
         </TouchableOpacity>
       </Modal>

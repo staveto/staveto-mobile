@@ -72,7 +72,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
       const ob = await AsyncStorage.getItem(ONBOARDING_KEY);
       setState((s) => ({ ...s, onboardingDone: ob === "1", onboardingLoaded: true }));
     } catch {
-      setState((s) => ({ ...s, onboardingDone: true, onboardingLoaded: true }));
+      setState((s) => ({ ...s, onboardingDone: false, onboardingLoaded: true }));
     }
   };
 

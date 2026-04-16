@@ -15,6 +15,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
+import { auth } from "../firebase";
 import { useUnreadCountContext } from "../context/UnreadCountContext";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
@@ -29,7 +30,8 @@ export function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const { user, orgId } = useAuth();
-  const notificationUserId = user?.id ?? orgId;
+  /** Inbox is always scoped to the signed-in Firebase user (never mix org vs another uid). */
+  const notificationUserId = auth.currentUser?.uid ?? user?.id ?? orgId ?? null;
   const { refresh: refreshUnreadCount, setCount: setUnreadCount } = useUnreadCountContext();
   const navigation = useNavigation();
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
@@ -55,7 +57,9 @@ export function NotificationsScreen() {
 
     try {
       const [list, invites] = await Promise.all([
-        notificationsService.listNotifications(notificationUserId, { limitCount: 50 }),
+        notificationsService.listNotifications(notificationUserId, {
+          limitCount: notificationsService.USER_NOTIFICATION_QUERY_LIMIT,
+        }),
         invitesService.listPendingInvites(),
       ]);
       setNotifications(list);
@@ -67,8 +71,11 @@ export function NotificationsScreen() {
     } finally {
       setLoading(false);
       setRefreshing(false);
+      if (notificationUserId) {
+        void refreshUnreadCount();
+      }
     }
-  }, [notificationUserId]);
+  }, [notificationUserId, refreshUnreadCount]);
 
   const onRefresh = useCallback(() => {
     loadNotifications(true);
@@ -82,23 +89,54 @@ export function NotificationsScreen() {
 
   const markAsRead = useCallback(
     async (notification: NotificationDoc) => {
+      const readNow = new Date().toISOString();
+      const prevReadAt = notification.readAt ?? null;
+      console.log("[notifications:diag] markAsRead before markNotificationAsRead", {
+        id: notification.id,
+        prevReadAt,
+      });
+      setNotifications((prev) =>
+        prev.map((n) => (n.id === notification.id ? { ...n, readAt: readNow } : n))
+      );
       try {
-        await notificationsService.markNotificationAsRead(notification);
-        setNotifications((prev) =>
-          prev.map((n) => (n.id === notification.id ? { ...n, readAt: new Date().toISOString() } : n))
-        );
+        const ok = await notificationsService.markNotificationAsRead(notification);
+        console.log("[notifications:diag] markAsRead after markNotificationAsRead", {
+          id: notification.id,
+          ok,
+        });
+        if (!ok) {
+          console.warn("[notifications:diag] markAsRead rollback (persist returned false)", {
+            id: notification.id,
+          });
+          setNotifications((prev) =>
+            prev.map((n) => (n.id === notification.id ? { ...n, readAt: prevReadAt } : n))
+          );
+        }
       } catch (error: any) {
         console.error("[NotificationsScreen] Error marking as read:", error);
+        console.warn("[notifications:diag] markAsRead rollback (catch)", {
+          id: notification.id,
+          err: String(error?.message ?? error),
+        });
+        setNotifications((prev) =>
+          prev.map((n) => (n.id === notification.id ? { ...n, readAt: prevReadAt } : n))
+        );
+      } finally {
+        console.log("[notifications:diag] markAsRead finally refreshUnreadCount", {
+          id: notification.id,
+        });
+        void refreshUnreadCount();
       }
     },
-    []
+    [refreshUnreadCount]
   );
 
   const handleMarkAllAsRead = useCallback(async () => {
-    if (!orgId) return;
+    const uid = auth.currentUser?.uid ?? orgId;
+    if (!uid) return;
     try {
       setUnreadCount(0);
-      await notificationsService.markAllAsRead(orgId);
+      await notificationsService.markAllAsRead(uid);
       setNotifications((prev) => prev.map((n) => ({ ...n, readAt: n.readAt || new Date().toISOString() })));
       setShowMenu(false);
       await refreshUnreadCount();
@@ -107,7 +145,7 @@ export function NotificationsScreen() {
       await refreshUnreadCount();
       Alert.alert(t("common.error"), t("notifications.markAllReadFailed"));
     }
-  }, [orgId, refreshUnreadCount, setUnreadCount]);
+  }, [orgId, refreshUnreadCount, setUnreadCount, t]);
 
   // Safe date helpers (handle Timestamp, string, Date, null)
   const toDateSafe = (v: any): Date | null => {
@@ -136,8 +174,9 @@ export function NotificationsScreen() {
   };
 
   const formatRelativeTime = (createdAt: any): string => {
+    if (createdAt == null || createdAt === "") return "\u2014";
     const date = toDateSafe(createdAt);
-    if (!date) return "";
+    if (!date || Number.isNaN(date.getTime())) return "\u2014";
 
     const now = new Date();
     const diffMs = now.getTime() - date.getTime();
@@ -145,7 +184,8 @@ export function NotificationsScreen() {
     const diffHours = Math.floor(diffMs / (1000 * 60 * 60));
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
-    if (diffMinutes < 60) return `${Math.max(diffMinutes, 1)} min`;
+    if (diffMinutes < 1) return t("notifications.justNow");
+    if (diffMinutes < 60) return `${diffMinutes} min`;
     if (diffHours < 24) return `${diffHours} h`;
     if (diffDays === 1) return t("notifications.yesterday");
     if (diffDays < 7) return `${diffDays} d`;

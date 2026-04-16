@@ -260,6 +260,23 @@ function shouldSkipInvoiceSerialMoneyToken(raw: string, value: number, line: str
   return false;
 }
 
+/**
+ * Skip `DD.MM` / `DD,MM` when it begins a European calendar date `DD.MM.YY` or `DD.MM.YYYY` on the same line.
+ * OCR otherwise treats `16.04` in `Datum: 16.04.26` as a decimal amount (e.g. Swiss retail receipts).
+ */
+function shouldSkipEuropeanDatePrefixMoneyToken(line: string, tokenStart: number, raw: string): boolean {
+  const head = line.slice(tokenStart);
+  const normToken = raw.replace(/,/g, ".");
+  const m = head.match(/^(\d{1,2})[.,](\d{2})[.,](\d{2}|\d{4})\b/);
+  if (!m) return false;
+  const rebuilt = `${m[1]}.${m[2]}`;
+  if (rebuilt !== normToken) return false;
+  const day = Number(m[1]);
+  const month = Number(m[2]);
+  if (day < 1 || day > 31 || month < 1 || month > 12) return false;
+  return true;
+}
+
 export type InvoiceTotalCandidateKind =
   | "final_total"
   | "subtotal"
@@ -474,6 +491,7 @@ export function pickBestTotalFromText(rawText: string): PickBestTotalResult {
       const { value, raw, start, end } = tokens[ti];
       if (shouldSkipBareYearMoneyToken(raw, value, line)) continue;
       if (shouldSkipInvoiceSerialMoneyToken(raw, value, line)) continue;
+      if (shouldSkipEuropeanDatePrefixMoneyToken(line, start, raw)) continue;
 
       const tokenIsPrimaryOnExplicitLine = explicit != null && ti === primaryTokenIndex;
       const effectiveExplicit = tokenIsPrimaryOnExplicitLine ? explicit : null;

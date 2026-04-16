@@ -35,6 +35,13 @@ export type NotificationType =
 
 export type NotificationSeverity = "info" | "warning" | "error";
 
+/**
+ * Max notifications fetched for inbox + unread badge count.
+ * Must stay in sync: `listNotifications` default, `getUnreadCount`, and Notifications screen use the same value
+ * so the tab badge (capped at 99 in `UnreadCountContext`) matches "Neprečítané (N)" on the list.
+ */
+export const USER_NOTIFICATION_QUERY_LIMIT = 99;
+
 export type NotificationDoc = {
   id: string;
   userId: string;
@@ -67,6 +74,10 @@ export type NotificationDoc = {
   /** Client timestamp for dedupe queries (reliable immediately; createdAt is serverTimestamp) */
   createdAtClient?: string | null;
   isLocal?: boolean;
+  /** Firestore `updatedAt` when present (e.g. task-due upsert). */
+  updatedAt?: string | null;
+  /** Which raw field produced `createdAt` (debug). */
+  createdAtSource?: "createdAt" | "createdAtClient" | "missing";
 };
 
 const LOCAL_KEY = "@staveto:local_notifications";
@@ -104,6 +115,41 @@ function normalizeDocData(raw: unknown): Record<string, unknown> {
   return {};
 }
 
+/** Normalize Firestore Timestamp, millis/seconds number, or plain {seconds|_seconds, nanoseconds}. */
+export function convertTimelikeToIso(ts: unknown): string | undefined {
+  if (ts == null) return undefined;
+  try {
+    if (typeof ts === "number" && Number.isFinite(ts)) {
+      const d0 = new Date(ts > 1e12 ? ts : ts * 1000);
+      return d0 instanceof Date && !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
+    }
+    if (ts instanceof Timestamp) {
+      const d0 = ts.toDate();
+      return d0 instanceof Date && !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
+    }
+    if (typeof ts === "string" && ts.trim() !== "") {
+      return ts;
+    }
+    if (typeof ts === "object" && ts !== null && "toDate" in ts && typeof (ts as { toDate?: () => unknown }).toDate === "function") {
+      const d0 = (ts as { toDate: () => Date }).toDate();
+      return d0 instanceof Date && !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
+    }
+    if (typeof ts === "object" && ts !== null) {
+      const o = ts as { seconds?: unknown; _seconds?: unknown; nanoseconds?: unknown; _nanoseconds?: unknown };
+      const sec = o.seconds ?? o._seconds;
+      if (typeof sec === "number" && Number.isFinite(sec)) {
+        const nanoRaw = o.nanoseconds ?? o._nanoseconds ?? 0;
+        const nano = typeof nanoRaw === "number" && Number.isFinite(nanoRaw) ? nanoRaw : 0;
+        const d0 = new Date(sec * 1000 + nano / 1e6);
+        return !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
+      }
+    }
+  } catch {
+    return undefined;
+  }
+  return undefined;
+}
+
 function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): NotificationDoc {
   let raw: Record<string, unknown>;
   try {
@@ -113,26 +159,6 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
     raw = {};
   }
   const d = raw;
-
-  const convertTimestamp = (ts: unknown): string | undefined => {
-    if (ts == null) return undefined;
-    try {
-      if (ts instanceof Timestamp) {
-        const d0 = ts.toDate();
-        return d0 instanceof Date && !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
-      }
-      if (typeof ts === "string") {
-        return ts;
-      }
-      if (typeof ts === "object" && ts !== null && "toDate" in ts && typeof (ts as { toDate?: () => unknown }).toDate === "function") {
-        const d0 = (ts as { toDate: () => Date }).toDate();
-        return d0 instanceof Date && !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
-      }
-    } catch {
-      return undefined;
-    }
-    return undefined;
-  };
 
   const type = normalizeNotificationType(d.type);
   const message = (d.message as string) ?? undefined;
@@ -153,7 +179,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
     if (typeof rawDue === "string" && /^\d{4}-\d{2}-\d{2}$/.test(rawDue)) {
       dueDateOut = rawDue;
     } else {
-      const conv = convertTimestamp(rawDue);
+      const conv = convertTimelikeToIso(rawDue);
       if (conv) {
         dueDateOut = conv.slice(0, 10);
       }
@@ -169,12 +195,25 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
     amountNum = Number.isFinite(p) ? p : null;
   }
 
+  const createdFromServer = convertTimelikeToIso(d.createdAt);
+  const createdFromClient = convertTimelikeToIso(d.createdAtClient);
+  let createdAtSource: "createdAt" | "createdAtClient" | "missing" = "missing";
+  let createdAtIso = "";
+  if (createdFromServer) {
+    createdAtIso = createdFromServer;
+    createdAtSource = "createdAt";
+  } else if (createdFromClient) {
+    createdAtIso = createdFromClient;
+    createdAtSource = "createdAtClient";
+  }
+
   return {
     id: docSnap.id,
     userId: (d.userId as string) ?? "",
     type,
-    createdAt: convertTimestamp(d.createdAt) ?? new Date().toISOString(),
-    readAt: convertTimestamp(d.readAt) ?? null,
+    createdAt: createdAtIso,
+    createdAtSource,
+    readAt: convertTimelikeToIso(d.readAt) ?? null,
     projectId: (d.projectId as string) ?? null,
     projectName: (d.projectName as string) ?? null,
     taskId: (d.taskId as string) ?? taskIdFromMeta ?? null,
@@ -194,7 +233,8 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
     entityType,
     meta,
     dedupeKey: (d.dedupeKey as string) ?? null,
-    createdAtClient: convertTimestamp(d.createdAtClient) ?? null,
+    createdAtClient: convertTimelikeToIso(d.createdAtClient) ?? null,
+    updatedAt: convertTimelikeToIso(d.updatedAt) ?? null,
   };
 }
 
@@ -253,11 +293,50 @@ async function saveLocalNotifications(list: NotificationDoc[]): Promise<void> {
   await AsyncStorage.setItem(LOCAL_KEY, JSON.stringify(cleaned));
 }
 
-async function queuePendingRead(notificationId: string): Promise<void> {
+async function queuePendingRead(notificationId: string, reason: string): Promise<void> {
   const raw = await AsyncStorage.getItem(PENDING_READ_KEY);
   const list = raw ? (JSON.parse(raw) as string[]) : [];
-  if (!list.includes(notificationId)) list.push(notificationId);
+  const newlyAdded = !list.includes(notificationId);
+  if (newlyAdded) list.push(notificationId);
   await AsyncStorage.setItem(PENDING_READ_KEY, JSON.stringify(list));
+  if (newlyAdded) {
+    console.warn("[notifications:diag] queuePendingRead enqueue", { id: notificationId, reason });
+  } else {
+    console.log("[notifications:diag] queuePendingRead already in queue", { id: notificationId, reason });
+  }
+}
+
+async function readPendingReadQueue(): Promise<string[]> {
+  const raw = await AsyncStorage.getItem(PENDING_READ_KEY);
+  if (!raw) return [];
+  try {
+    const list = JSON.parse(raw) as unknown;
+    return Array.isArray(list) ? (list as string[]) : [];
+  } catch {
+    return [];
+  }
+}
+
+/** Writes `readAt` on an existing `notifications/{id}` doc; throws if both strategies fail. */
+async function persistReadAtOnNotificationDoc(ref: ReturnType<typeof doc>, logId: string): Promise<void> {
+  try {
+    await updateDoc(ref, { readAt: serverTimestamp() });
+    console.log("[notifications:diag] persistReadAt updateDoc success", { id: logId });
+  } catch (e1) {
+    const reason1 = e1 instanceof Error ? e1.message : String(e1);
+    console.warn("[notifications:diag] persistReadAt updateDoc fail, try setDoc merge", {
+      id: logId,
+      reason: reason1,
+    });
+    try {
+      await setDoc(ref, { readAt: serverTimestamp() }, { merge: true });
+      console.log("[notifications:diag] persistReadAt setDoc merge success", { id: logId });
+    } catch (e2) {
+      const reason2 = e2 instanceof Error ? e2.message : String(e2);
+      console.warn("[notifications:diag] persistReadAt setDoc merge fail", { id: logId, reason: reason2 });
+      throw e2;
+    }
+  }
 }
 
 async function flushPendingReads(userId: string): Promise<void> {
@@ -265,16 +344,27 @@ async function flushPendingReads(userId: string): Promise<void> {
   if (!raw) return;
   const pending = JSON.parse(raw) as string[];
   if (!pending.length) return;
+  console.log("[notifications:diag] flushPendingReads start", {
+    userId,
+    count: pending.length,
+    ids: pending.slice(0, 20),
+  });
   const remaining: string[] = [];
   for (const id of pending) {
     try {
       const ref = doc(db, "notifications", id);
-      await updateDoc(ref, { readAt: serverTimestamp() });
-    } catch {
+      await persistReadAtOnNotificationDoc(ref, id);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      console.warn("[notifications:diag] flushPendingReads item fail (keeping in queue)", { id, reason });
       remaining.push(id);
     }
   }
   await AsyncStorage.setItem(PENDING_READ_KEY, JSON.stringify(remaining));
+  console.log("[notifications:diag] flushPendingReads done", {
+    remaining: remaining.length,
+    remainingIds: remaining.slice(0, 20),
+  });
 }
 
 /**
@@ -283,7 +373,7 @@ async function flushPendingReads(userId: string): Promise<void> {
  */
 export async function getUnreadCount(userId: string): Promise<number> {
   try {
-    const list = await listNotifications(userId, { limitCount: 99 });
+    const list = await listNotifications(userId, { limitCount: USER_NOTIFICATION_QUERY_LIMIT });
     return list.filter((n) => !n.readAt).length;
   } catch {
     return 0;
@@ -305,7 +395,12 @@ export async function listNotifications(
   await flushPendingReads(userId);
 
   const c = collection(db, "notifications");
-  const q = query(c, where("userId", "==", userId), orderBy("createdAt", "desc"), limit(opts?.limitCount ?? 50));
+  const q = query(
+    c,
+    where("userId", "==", userId),
+    orderBy("createdAt", "desc"),
+    limit(opts?.limitCount ?? USER_NOTIFICATION_QUERY_LIMIT)
+  );
   const snap = await getDocs(q);
   const remote = snap.docs
     .map((d) => {
@@ -317,42 +412,172 @@ export async function listNotifications(
       }
     })
     .filter((n): n is NotificationDoc => n != null);
+
+  if (__DEV__) {
+    const limit = Math.min(30, snap.docs.length);
+    for (let i = 0; i < limit; i++) {
+      const d = snap.docs[i]!;
+      const raw = d.data() as Record<string, unknown>;
+      let parsed: NotificationDoc | null = null;
+      try {
+        parsed = toDoc({ id: d.id, data: () => raw });
+      } catch {
+        parsed = null;
+      }
+      console.log("[notifications:debug]", {
+        id: d.id,
+        rawCreatedAt: raw.createdAt,
+        rawCreatedAtClient: raw.createdAtClient,
+        rawReadAt: raw.readAt,
+        rawUpdatedAt: raw.updatedAt,
+        parsedCreatedAt: parsed?.createdAt ?? null,
+        createdAtSource: parsed?.createdAtSource ?? null,
+        unreadDecision: parsed ? !parsed.readAt : null,
+      });
+    }
+  }
+
   const local = await loadLocalNotifications();
-  const merged = [...local, ...remote].sort((a, b) => {
-    const aTime = new Date(a.createdAt).getTime();
-    const bTime = new Date(b.createdAt).getTime();
-    return bTime - aTime;
-  });
-  return merged;
+  const merged = mergeRemoteAndLocalNotifications(remote, local);
+
+  /** IDs still in queue after flush = writes that failed; treat as read in UI until retry succeeds. */
+  const pendingAfterFlush = await readPendingReadQueue();
+  const pendingSet = new Set(pendingAfterFlush);
+  const mergedWithPendingRead =
+    pendingSet.size === 0
+      ? merged
+      : merged.map((n) =>
+          pendingSet.has(n.id) && (n.readAt == null || n.readAt === "")
+            ? { ...n, readAt: new Date().toISOString() }
+            : n
+        );
+  if (pendingSet.size > 0) {
+    console.log("[notifications:diag] listNotifications pending-read overlay", {
+      pendingCount: pendingSet.size,
+      sampleIds: pendingAfterFlush.slice(0, 12),
+    });
+  }
+
+  if (__DEV__) {
+    if (pendingAfterFlush.length) {
+      for (const id of pendingAfterFlush.slice(0, 8)) {
+        const serverDoc = snap.docs.find((x) => x.id === id);
+        const rawRead = serverDoc ? (serverDoc.data() as Record<string, unknown>).readAt : undefined;
+        const mergedRow = mergedWithPendingRead.find((m) => m.id === id);
+        console.log("[notifications:listAfterMerge]", {
+          id,
+          pendingStill: true,
+          rawReadAtOnServer: rawRead ?? "(absent)",
+          mergedParsedReadAt: mergedRow?.readAt ?? null,
+          mergeWouldShowUnread: !mergedRow?.readAt,
+        });
+      }
+    }
+  }
+
+  const sessionUid = auth.currentUser?.uid;
+  if (!sessionUid) return mergedWithPendingRead;
+  const inboxOnly = mergedWithPendingRead.filter((n) => n.userId === sessionUid);
+  if (__DEV__ && inboxOnly.length !== mergedWithPendingRead.length) {
+    console.warn("[notifications] dropped notifications not owned by current user", {
+      sessionUid,
+      dropped: mergedWithPendingRead.length - inboxOnly.length,
+    });
+  }
+  return inboxOnly;
 }
 
-export async function markNotificationAsRead(notification: NotificationDoc): Promise<void> {
-  if (notification.readAt) return;
+const notificationSortKey = (n: NotificationDoc) => {
+  if (!n.createdAt) return 0;
+  const t = new Date(n.createdAt).getTime();
+  return Number.isNaN(t) ? 0 : t;
+};
+
+/** Dedupe by id: prefer an entry with readAt set; avoids duplicate rows and stale local overwriting server read. */
+function mergeRemoteAndLocalNotifications(remote: NotificationDoc[], local: NotificationDoc[]): NotificationDoc[] {
+  const pickBetter = (a: NotificationDoc, b: NotificationDoc): NotificationDoc => {
+    const aRead = !!a.readAt;
+    const bRead = !!b.readAt;
+    if (aRead !== bRead) return aRead ? a : b;
+    return notificationSortKey(a) >= notificationSortKey(b) ? a : b;
+  };
+  const byId = new Map<string, NotificationDoc>();
+  for (const r of remote) {
+    byId.set(r.id, r);
+  }
+  for (const loc of local) {
+    const ex = byId.get(loc.id);
+    if (!ex) {
+      byId.set(loc.id, loc);
+    } else {
+      byId.set(loc.id, pickBetter(ex, loc));
+    }
+  }
+  return Array.from(byId.values()).sort((a, b) => notificationSortKey(b) - notificationSortKey(a));
+}
+
+/**
+ * Marks one notification read in Firestore (or local AsyncStorage for isLocal).
+ * @returns true if persisted immediately (or already read / local saved); false if Firestore write failed and id was queued for retry.
+ */
+export async function markNotificationAsRead(notification: NotificationDoc): Promise<boolean> {
   if (notification.isLocal) {
     const local = await loadLocalNotifications();
     const updated = local.map((n) =>
       n.id === notification.id ? { ...n, readAt: new Date().toISOString() } : n
     );
     await saveLocalNotifications(updated);
-    return;
+    return true;
   }
 
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
     throw new Error("Musíte byť prihlásený na označenie notifikácie ako prečítanej.");
   }
-  if (currentUser.uid !== notification.userId) {
+  const ownerUid = (notification.userId ?? "").trim();
+  if (!ownerUid || ownerUid !== currentUser.uid) {
     throw new Error("Nemáte oprávnenie na úpravu tejto notifikácie.");
   }
+
+  const ref = doc(db, "notifications", notification.id);
+
+  // Client may already show optimistic readAt while server still has null — must not skip the write.
+  if (notification.readAt) {
+    try {
+      const snap = await getDoc(ref);
+      if (snap.exists()) {
+        const rawRa = (snap.data() as Record<string, unknown> | undefined)?.readAt;
+        if (rawRa != null) {
+          console.log("[notifications:diag] markNotificationAsRead server already has readAt", {
+            id: notification.id,
+          });
+          return true;
+        }
+      }
+    } catch (e) {
+      console.warn("[notifications:diag] markNotificationAsRead getDoc check failed, will persist", {
+        id: notification.id,
+        reason: e instanceof Error ? e.message : String(e),
+      });
+    }
+  }
+
   try {
-    const ref = doc(db, "notifications", notification.id);
-    await updateDoc(ref, { readAt: serverTimestamp() });
-  } catch {
-    await queuePendingRead(notification.id);
+    await persistReadAtOnNotificationDoc(ref, notification.id);
+    console.log("[notifications:diag] markNotificationAsRead persisted", { id: notification.id });
+    return true;
+  } catch (e) {
+    const reason = e instanceof Error ? e.message : String(e);
+    await queuePendingRead(notification.id, reason);
+    console.warn("[notifications:diag] markNotificationAsRead failed, queued for retry", {
+      id: notification.id,
+      reason,
+    });
+    return false;
   }
 }
 
-export async function markAllAsRead(userId: string, maxCount: number = 100): Promise<void> {
+export async function markAllAsRead(userId: string, maxCount: number = USER_NOTIFICATION_QUERY_LIMIT): Promise<void> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
     throw new Error("Musíte byť prihlásený na označenie notifikácií.");
@@ -366,17 +591,16 @@ export async function markAllAsRead(userId: string, maxCount: number = 100): Pro
   await saveLocalNotifications(updatedLocal);
 
   const c = collection(db, "notifications");
-  const q = query(
-    c,
-    where("userId", "==", userId),
-    where("readAt", "==", null),
-    orderBy("createdAt", "desc"),
-    limit(maxCount)
-  );
+  const q = query(c, where("userId", "==", userId), orderBy("createdAt", "desc"), limit(maxCount));
   const snap = await getDocs(q);
+  const unreadDocs = snap.docs.filter((d) => {
+    const ra = (d.data() as Record<string, unknown>).readAt;
+    return ra == null;
+  });
+  if (unreadDocs.length === 0) return;
   const batch = writeBatch(db);
-  snap.docs.forEach((d) => {
-    batch.update(d.ref, { readAt: serverTimestamp() });
+  unreadDocs.forEach((d) => {
+    batch.set(d.ref, { readAt: serverTimestamp() }, { merge: true });
   });
   await batch.commit();
 }
@@ -466,11 +690,25 @@ export async function markTaskNotificationsRead(userId: string, taskId: string):
     `task_${userId}_${taskId}_TASK_OVERDUE`,
   ];
   for (const id of ids) {
+    const ref = doc(db, "notifications", id);
     try {
-      const ref = doc(db, "notifications", id);
-      await updateDoc(ref, { readAt: serverTimestamp() });
-    } catch {
-      // ignore
+      const snap = await getDoc(ref);
+      if (!snap.exists()) {
+        console.log("[notifications:diag] markTaskNotificationsRead skip (no doc)", { id });
+        continue;
+      }
+      await persistReadAtOnNotificationDoc(ref, id);
+    } catch (e) {
+      const reason = e instanceof Error ? e.message : String(e);
+      console.warn("[notifications:diag] markTaskNotificationsRead persist fail", { id, reason });
+      try {
+        await queuePendingRead(id, `markTaskNotificationsRead: ${reason}`);
+      } catch (queueErr) {
+        console.warn("[notifications:diag] markTaskNotificationsRead queuePendingRead fail", {
+          id,
+          reason: queueErr instanceof Error ? queueErr.message : String(queueErr),
+        });
+      }
     }
   }
 }

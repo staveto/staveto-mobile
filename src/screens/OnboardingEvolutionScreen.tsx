@@ -54,12 +54,6 @@ const STEPS: OnboardingStep[] = [
     subtitleKey: "onboardingEvolution.step3.subtitle",
     image: require("../../assets/onboarding_3.png"),
   },
-  {
-    id: "step4",
-    titleKey: "onboardingEvolution.step4.title",
-    subtitleKey: "onboardingEvolution.step4.subtitle",
-    image: require("../../assets/onboarding_4.png"),
-  },
 ];
 
 const PARTICLE_COUNT = 16;
@@ -129,8 +123,14 @@ export function OnboardingEvolutionScreen() {
   const { t } = useI18n();
   const { finishOnboarding } = useAuth();
   const listRef = useRef<FlatList<OnboardingStep> | null>(null);
-  const { width } = useWindowDimensions();
+  const { width, height } = useWindowDimensions();
   const [activeIndex, setActiveIndex] = useState(0);
+
+  /** Portrait hero: fill card edge-to-edge; `cover` crops overflow. */
+  const heroCardWidth = Math.min(width - spacing.md * 2, 480);
+  const heroImageHeight = Math.round(
+    Math.max(280, Math.min(heroCardWidth * 1.18, height * 0.46, 580))
+  );
 
   const imageOpacity = useSharedValue(1);
   const imageScale = useSharedValue(1);
@@ -218,13 +218,19 @@ export function OnboardingEvolutionScreen() {
             <Text style={styles.subtitle}>{t(item.subtitleKey)}</Text>
             <Text style={styles.featureTag}>{t("onboardingEvolution.featureTag")}</Text>
           </Animated.View>
-          <Animated.View style={[styles.imageWrap, mascotStyle]}>
-            <Image source={item.image} style={styles.image} resizeMode="contain" />
+          <Animated.View
+            style={[
+              styles.imageWrap,
+              { width: heroCardWidth, height: heroImageHeight },
+              mascotStyle,
+            ]}
+          >
+            <Image source={item.image} style={styles.image} resizeMode="cover" />
           </Animated.View>
         </View>
       );
     },
-    [mascotStyle, textStyle, t, width]
+    [heroCardWidth, heroImageHeight, mascotStyle, textStyle, t, width]
   );
 
   return (
@@ -245,8 +251,9 @@ export function OnboardingEvolutionScreen() {
 
           <AnimatedFlatList
             ref={(node) => {
-              listRef.current = node;
+              listRef.current = node as FlatList<OnboardingStep> | null;
             }}
+            style={styles.carousel}
             data={STEPS}
             keyExtractor={(item) => item.id}
             renderItem={renderItem}
@@ -258,7 +265,12 @@ export function OnboardingEvolutionScreen() {
           />
 
           <View style={styles.progressWrap}>
-            <Text style={styles.progressText}>{t("onboardingEvolution.progress", { current: activeIndex + 1, total: STEPS.length })}</Text>
+            <Text style={styles.progressText}>
+              {t("onboardingEvolution.progress", {
+                current: String(activeIndex + 1),
+                total: String(STEPS.length),
+              })}
+            </Text>
             <View style={styles.progressBarTrack}>
               <View style={[styles.progressBarFill, { width: `${Math.max(8, progressRatio * 100)}%` }]} />
             </View>
@@ -280,13 +292,15 @@ export function OnboardingEvolutionScreen() {
 const styles = StyleSheet.create({
   root: {
     flex: 1,
-    backgroundColor: "#eef1f6",
+    backgroundColor: "#ffffff",
   },
   safe: {
     flex: 1,
+    backgroundColor: "#ffffff",
   },
   content: {
     flex: 1,
+    backgroundColor: "#ffffff",
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.md,
     paddingTop: spacing.xs,
@@ -324,33 +338,35 @@ const styles = StyleSheet.create({
   skipTextHidden: {
     opacity: 0,
   },
+  carousel: {
+    flex: 1,
+    minHeight: 0,
+  },
   slide: {
+    flexGrow: 1,
     alignItems: "center",
-    justifyContent: "center",
-    paddingTop: spacing.sm,
+    justifyContent: "flex-start",
+    paddingTop: spacing.xs,
     paddingBottom: spacing.sm,
   },
   textWrap: {
     width: "100%",
     alignItems: "center",
     paddingHorizontal: spacing.sm,
-    marginBottom: spacing.md,
+    marginBottom: spacing.sm,
   },
   imageWrap: {
-    width: "94%",
-    maxWidth: 380,
-    aspectRatio: 1.02,
-    marginTop: spacing.md,
+    alignSelf: "center",
+    marginTop: spacing.xs,
     borderRadius: radius * 2,
-    alignItems: "center",
-    justifyContent: "center",
-    backgroundColor: "rgba(255,255,255,0.86)",
+    overflow: "hidden",
+    backgroundColor: "#ffffff",
     borderWidth: 1,
-    borderColor: "rgba(37,58,106,0.14)",
+    borderColor: "rgba(0,0,0,0.08)",
   },
   image: {
-    width: "92%",
-    height: "92%",
+    width: "100%",
+    height: "100%",
   },
   title: {
     fontSize: 28,
@@ -388,7 +404,7 @@ const styles = StyleSheet.create({
     width: 140,
     height: 7,
     borderRadius: 999,
-    backgroundColor: "rgba(37,58,106,0.2)",
+    backgroundColor: "rgba(0,0,0,0.1)",
     overflow: "hidden",
   },
   progressBarFill: {

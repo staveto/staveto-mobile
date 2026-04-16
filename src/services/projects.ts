@@ -14,7 +14,7 @@ const CACHE_TTL_MS = 300_000;
 const OWNER_QUERY_SERVER_RETRY_MS = 28_000;
 
 /** Unwrap Firebase / firestoreSmartRead wrapped errors so permission-denied is detected. */
-function getFirestoreErrorCode(error: unknown): string {
+export function getFirestoreErrorCode(error: unknown): string {
   let e: unknown = error;
   for (let depth = 0; depth < 4 && e; depth++) {
     if (typeof e === "object" && e !== null && "code" in e) {
@@ -48,6 +48,12 @@ function setCachedProjects(projects: ProjectDoc[]): void {
     return;
   }
   sessionCache = { projects, fetchedAt: Date.now() };
+}
+
+/** Clears in-memory project list cache (e.g. after delete or leaving a shared project). */
+export function invalidateProjectsSessionCache(): void {
+  sessionCache = null;
+  inFlightPromise = null;
 }
 
 export function getProjectsPerfStats(): { callCount: number } {
@@ -369,25 +375,12 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
       .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }))
       .filter((p): p is ProjectDoc => p != null);
 
-    // Include projects shared via invite claim (projectRefs) and via membership (projects/*/members).
-    let memberProjectIds = new Set<string>();
+    // Shared projects: collectionGroup(members) is authoritative when available.
+    // users/{uid}/projectRefs can lag after leaving; do not list ref-only projects without a matching members doc.
+    const memberProjectIds = new Set<string>();
     const ownerIds = new Set(ownerProjects.map((p) => p.id));
 
-    // Source 1: users/{uid}/projectRefs (created by claimProjectInvites Cloud Function)
-    try {
-      const refsSnap = await getDocsSmart(
-        collection(db, paths.userProjectRefs(actualOwnerId)),
-        smartOpts
-      );
-      refsSnap.docs.forEach((d) => {
-        const projectId = typeof d.data().projectId === "string" ? (d.data().projectId as string) : d.id;
-        if (projectId && !ownerIds.has(projectId)) memberProjectIds.add(projectId);
-      });
-    } catch (error) {
-      console.warn("[projects] Failed to load member project refs:", error);
-    }
-
-    // Source 2: collectionGroup('members') where userId == uid (fallback when projectRefs empty or member added directly)
+    // Source 1: collectionGroup('members') where userId == uid
     if (!memberQueryPermissionDenied) {
       try {
         const membersGroup = collectionGroup(db, "members");
@@ -410,11 +403,55 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
           (typeof msg === "string" && msg.includes("permission-denied"));
         if (isPermDenied) {
           memberQueryPermissionDenied = true;
-          // Silent: return empty member projects, no warn spam
         } else {
           if (__DEV__) console.warn("[projects] Failed to load member projects via collectionGroup:", error);
         }
       }
+    }
+
+    // Source 2: users/{uid}/projectRefs — merge with membership check (skip stale refs after leave)
+    try {
+      const refsSnap = await getDocsSmart(
+        collection(db, paths.userProjectRefs(actualOwnerId)),
+        smartOpts
+      );
+      const refOnlyToVerify: string[] = [];
+      for (const d of refsSnap.docs) {
+        const raw = d.data() as Record<string, unknown>;
+        const projectId =
+          typeof raw.projectId === "string" && raw.projectId.trim() !== ""
+            ? (raw.projectId as string)
+            : d.id;
+        if (!projectId || ownerIds.has(projectId)) continue;
+        if (memberProjectIds.has(projectId)) continue;
+        if (memberQueryPermissionDenied) {
+          memberProjectIds.add(projectId);
+          continue;
+        }
+        refOnlyToVerify.push(projectId);
+      }
+      for (const projectId of refOnlyToVerify) {
+        try {
+          const mq = query(
+            collection(db, paths.projectMembers(projectId)),
+            where("userId", "==", actualOwnerId),
+            limit(1)
+          );
+          const mSnap = await getDocsSmart(mq, smartOpts);
+          if (mSnap.empty) {
+            if (__DEV__) {
+              console.log("[projects] Skipping projectRef (no members doc for user)", projectId);
+            }
+            continue;
+          }
+          memberProjectIds.add(projectId);
+        } catch (vErr) {
+          console.warn("[projects] projectRef membership verify failed, keeping ref", projectId, vErr);
+          memberProjectIds.add(projectId);
+        }
+      }
+    } catch (error) {
+      console.warn("[projects] Failed to load member project refs:", error);
     }
 
     const memberProjects: ProjectDoc[] = [];
@@ -575,6 +612,7 @@ export async function deleteProject(_ownerId: string, projectId: string): Promis
   
   const ref = doc(db, COLLECTION, projectId);
   await deleteDoc(ref);
+  invalidateProjectsSessionCache();
   console.log(`[projects] Deleted project ${projectId}`);
 }
 

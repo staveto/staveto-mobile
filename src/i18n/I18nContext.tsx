@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { interpolate, type Locale, translations, LOCALE_NAMES } from "./translations";
+import { interpolate, translations, LOCALE_NAMES } from "./translations";
+import type { Locale } from "./translations";
 
 const STORAGE_KEY = "staveto_locale";
 

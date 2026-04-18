@@ -1,5 +1,13 @@
-import React from "react";
-import { View, Text, TouchableOpacity, StyleSheet, Image } from "react-native";
+import React, { useCallback, useEffect, useRef, useState } from "react";
+import {
+  Animated,
+  Image,
+  LayoutChangeEvent,
+  Pressable,
+  StyleSheet,
+  Text,
+  View,
+} from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useI18n } from "../i18n/I18nContext";
@@ -8,21 +16,42 @@ import type { Locale } from "../i18n/translations";
 
 const LANGUAGE_SELECTION_DONE_KEY = "language_selection_done";
 
-const LANGUAGES: { code: Locale; label: string }[] = [
-  { code: "en", label: "🇬🇧 English" },
-  { code: "de", label: "🇩🇪 Deutsch" },
-  { code: "sk", label: "🇸🇰 Slovenčina" },
-  { code: "cs", label: "🇨🇿 Čeština" },
-  { code: "es", label: "🇪🇸 Español" },
-  { code: "it", label: "🇮🇹 Italiano" },
-  { code: "pl", label: "🇵🇱 Polski" },
+/** Len tieto štyri jazyky; CZ = locale `cs` v i18n. */
+const SLIDER_LANGS: { code: Locale; short: string }[] = [
+  { code: "de", short: "DE" },
+  { code: "en", short: "EN" },
+  { code: "es", short: "ES" },
+  { code: "cs", short: "CZ" },
 ];
 
 type Props = { onComplete?: () => void };
 
 export function LanguageSelectionScreen({ onComplete }: Props) {
   const navigation = useNavigation();
-  const { t, setLocale } = useI18n();
+  const { t, locale, setLocale } = useI18n();
+  const [trackW, setTrackW] = useState(0);
+  const slideX = useRef(new Animated.Value(0)).current;
+  const segmentW = trackW > 0 ? trackW / SLIDER_LANGS.length : 0;
+
+  const syncThumb = useCallback(
+    (w: number) => {
+      if (w <= 0) return;
+      const idx = SLIDER_LANGS.findIndex((l) => l.code === locale);
+      const i = idx >= 0 ? idx : 0;
+      slideX.setValue((i * w) / SLIDER_LANGS.length);
+    },
+    [locale, slideX]
+  );
+
+  useEffect(() => {
+    syncThumb(trackW);
+  }, [syncThumb, trackW]);
+
+  const onTrackLayout = (e: LayoutChangeEvent) => {
+    const w = e.nativeEvent.layout.width;
+    setTrackW(w);
+    syncThumb(w);
+  };
 
   const onSelect = (code: Locale) => {
     setLocale(code);
@@ -32,6 +61,19 @@ export function LanguageSelectionScreen({ onComplete }: Props) {
     } else {
       (navigation as { navigate: (name: string) => void }).navigate("OnboardingIntro");
     }
+  };
+
+  const onSegmentPress = (index: number) => {
+    const { code } = SLIDER_LANGS[index];
+    if (trackW > 0) {
+      Animated.spring(slideX, {
+        toValue: (index * trackW) / SLIDER_LANGS.length,
+        useNativeDriver: true,
+        friction: 9,
+        tension: 80,
+      }).start();
+    }
+    onSelect(code);
   };
 
   return (
@@ -44,25 +86,44 @@ export function LanguageSelectionScreen({ onComplete }: Props) {
       />
       <Text style={styles.title}>{t("languageSelect.title")}</Text>
       <Text style={styles.subtitle}>{t("languageSelect.subtitle")}</Text>
-      <View style={styles.list}>
-        {LANGUAGES.map((lang) => (
-          <TouchableOpacity
-            key={lang.code}
-            style={styles.button}
-            onPress={() => onSelect(lang.code)}
-            activeOpacity={0.8}
-          >
-            <Text style={styles.buttonText}>{lang.label}</Text>
-          </TouchableOpacity>
-        ))}
+
+      <View style={styles.sliderWrap}>
+        <View style={styles.track} onLayout={onTrackLayout}>
+          {segmentW > 0 ? (
+            <Animated.View
+              pointerEvents="none"
+              style={[
+                styles.thumb,
+                {
+                  width: segmentW,
+                  transform: [{ translateX: slideX }],
+                },
+              ]}
+            />
+          ) : null}
+          <View style={styles.segmentsRow}>
+            {SLIDER_LANGS.map((lang, index) => (
+              <Pressable
+                key={lang.code}
+                style={styles.segment}
+                onPress={() => onSegmentPress(index)}
+                accessibilityRole="button"
+                accessibilityLabel={lang.short}
+              >
+                <Text style={styles.segmentLabel}>{lang.short}</Text>
+              </Pressable>
+            ))}
+          </View>
+        </View>
       </View>
+
       {!onComplete && (
-        <TouchableOpacity
+        <Pressable
           style={styles.loginLink}
           onPress={() => (navigation as { navigate: (name: string) => void }).navigate("Login")}
         >
           <Text style={styles.loginLinkText}>{t("register.haveAccount")}</Text>
-        </TouchableOpacity>
+        </Pressable>
       )}
     </View>
   );
@@ -93,9 +154,48 @@ const styles = StyleSheet.create({
     alignSelf: "center",
     marginBottom: spacing.lg,
   },
-  list: {
-    marginTop: spacing.xl,
-    gap: spacing.md,
+  sliderWrap: {
+    marginTop: spacing.xl * 1.25,
+    width: "100%",
+    maxWidth: 400,
+    alignSelf: "center",
+  },
+  track: {
+    borderRadius: radius + 6,
+    backgroundColor: "rgba(255,255,255,0.14)",
+    overflow: "hidden",
+    minHeight: 52,
+    justifyContent: "center",
+  },
+  thumb: {
+    position: "absolute",
+    left: 0,
+    top: 0,
+    bottom: 0,
+    borderRadius: radius + 4,
+    backgroundColor: colors.primary,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  segmentsRow: {
+    flexDirection: "row",
+    alignItems: "stretch",
+    minHeight: 52,
+  },
+  segment: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingVertical: spacing.md,
+  },
+  segmentLabel: {
+    color: "#fff",
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: 0.5,
   },
   loginLink: {
     marginTop: spacing.xl,
@@ -105,16 +205,5 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.9)",
     fontSize: 14,
     fontWeight: "600",
-  },
-  button: {
-    backgroundColor: colors.primary,
-    paddingVertical: spacing.md,
-    borderRadius: radius,
-    alignItems: "center",
-  },
-  buttonText: {
-    color: "#fff",
-    fontSize: 18,
-    fontWeight: "700",
   },
 });

@@ -382,7 +382,7 @@ function BootLoader({ children }: { children: React.ReactNode }) {
     const showLastStep = (showDebugOverlay && bootExceeded6s) && lastBootStep;
     return (
       <Pressable onPress={handleDebugTap} style={[styles.loading, styles.bootingScreen]}>
-        <ActivityIndicator size="large" color="#fff" />
+        <ActivityIndicator size="large" color={colors.primary} />
         <Text style={styles.bootingText}>Načítavam…</Text>
         {showLastStep && (
           <View style={[styles.debugOverlay, { position: "absolute", bottom: 24 }]}>
@@ -523,9 +523,9 @@ const styles = StyleSheet.create({
     fontFamily: Platform.OS === "ios" ? "Menlo" : "monospace",
   },
   /** Matches splash backgroundColor – seamless transition */
-  bootingScreen: { backgroundColor: "#1D376A" },
+  bootingScreen: { backgroundColor: "#ffffff" },
   bootingText: {
-    color: "rgba(255,255,255,0.9)",
+    color: colors.primary,
     fontSize: 14,
     marginTop: 12,
   },

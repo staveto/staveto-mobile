@@ -194,7 +194,7 @@ export function LoginScreen() {
         {submitting ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("login.button")}</Text>}
       </TouchableOpacity>
       <TouchableOpacity style={styles.googleBtn} onPress={onGoogleLogin} disabled={submitting || appleSubmitting}>
-        <Ionicons name="logo-google" size={20} color="#fff" />
+        <Ionicons name="logo-google" size={20} color={colors.text} />
         <Text style={styles.googleBtnText}>{t("login.google")}</Text>
       </TouchableOpacity>
       {Platform.OS === "ios" && appleSignInAvailable && (
@@ -343,7 +343,7 @@ export function LoginScreen() {
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: "#ffffff",
     justifyContent: "center",
     padding: spacing.lg,
   },
@@ -354,29 +354,42 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   title: {
-    fontSize: 36,
+    fontSize: 28,
     fontWeight: "700",
-    color: "#FFFFFF",
+    color: colors.primary,
     marginBottom: spacing.md,
     textAlign: "center",
+    textTransform: "uppercase",
+    letterSpacing: 1,
   },
   input: {
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: "#eef2f7",
+    borderWidth: 2,
+    borderColor: "rgba(17, 17, 17, 0.28)",
     borderRadius: radius,
     padding: spacing.md,
     fontSize: 16,
     color: colors.text,
+    marginBottom: spacing.sm,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 2,
+    elevation: 2,
   },
   passwordContainer: {
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.card,
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: "#eef2f7",
+    borderWidth: 2,
+    borderColor: "rgba(17, 17, 17, 0.28)",
     borderRadius: radius,
     marginTop: spacing.sm,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 2,
+    elevation: 2,
   },
   passwordInput: {
     flex: 1,
@@ -397,7 +410,7 @@ const styles = StyleSheet.create({
     fontSize: 14,
   },
   error: {
-    color: colors.accent,
+    color: colors.error,
     marginTop: spacing.sm,
     fontSize: 14,
   },
@@ -468,9 +481,11 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.sm,
-    backgroundColor: "#4285F4",
+    backgroundColor: "#ffffff",
+    borderWidth: 2,
+    borderColor: "rgba(17, 17, 17, 0.2)",
   },
-  googleBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
+  googleBtnText: { color: colors.text, fontSize: 16, fontWeight: "600" },
   appleBtn: {
     marginTop: spacing.md,
     padding: spacing.md,

@@ -13,14 +13,20 @@ module.exports = ({ config }) => {
 
   return {
     ...config,
-    newArchEnabled: true,
+    /** Musí byť zhodné s `app.json` – inak EAS/Android prepíše na New Arch a build môže padať (Reanimated/CMake). */
+    newArchEnabled: false,
 
     // explicit assets (istota)
     icon: "./assets/icon.png",
     splash: {
       image: "./assets/splash-icon.png",
       resizeMode: "contain",
-      backgroundColor: "#1D376A",
+      backgroundColor: "#ffffff",
+      /** Bez tohto môže Android (night / dark theme) generovať tmavé splash pozadie namiesto bieleho. */
+      dark: {
+        image: "./assets/splash-icon.png",
+        backgroundColor: "#ffffff",
+      },
     },
 
     ios: {
@@ -51,7 +57,7 @@ module.exports = ({ config }) => {
       },
       adaptiveIcon: {
         foregroundImage: "./assets/adaptive-icon.png",
-        backgroundColor: "#1D376A",
+        backgroundColor: "#ffffff",
       },
       permissions: [
         ...(config.android?.permissions ?? []),
@@ -61,6 +67,18 @@ module.exports = ({ config }) => {
     },
 
     plugins: [
+      [
+        "expo-splash-screen",
+        {
+          backgroundColor: "#ffffff",
+          image: "./assets/splash-icon.png",
+          resizeMode: "contain",
+          dark: {
+            backgroundColor: "#ffffff",
+            image: "./assets/splash-icon.png",
+          },
+        },
+      ],
       "@react-native-firebase/app",
       "@react-native-firebase/messaging",
       ["expo-location", { locationWhenInUsePermission: "Staveto potrebuje polohu pre check-in/check-out a evidenciu času na stavenisku." }],

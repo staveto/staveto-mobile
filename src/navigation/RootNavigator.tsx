@@ -253,7 +253,7 @@ export function RootNavigator() {
     return (
       <Stack.Navigator
         screenOptions={{ headerShown: false }}
-        initialRouteName={onboardingDone ? "Login" : "LanguageSelect"}
+        initialRouteName={onboardingDone ? "Login" : "OnboardingIntro"}
       >
         <Stack.Screen name="LanguageSelect" component={LanguageSelectionScreen} />
         <Stack.Screen name="OnboardingIntro" component={OnboardingEvolutionScreen} />

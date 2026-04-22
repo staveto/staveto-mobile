@@ -22,6 +22,7 @@ import type { ActiveTimer } from "../services/timeTracking";
 import type { ProjectDoc } from "../services/projects";
 import type { ProjectPhaseDoc } from "../services/projects";
 import type { TaskDoc } from "../services/tasks";
+import { isBuildLikeStorageType } from "../lib/projectTypeModel";
 
 /** Virtual task option for "Administrativa na projekte" – not a real task, stored as taskTitleSnapshot only */
 const TASK_OPTION_ADMINISTRATION = "__administration__" as const;
@@ -73,7 +74,7 @@ export function QuickTimeModal({
   const [elapsedDisplay, setElapsedDisplay] = useState("");
   const rotateAnim = useRef(new Animated.Value(0)).current;
 
-  const isBuildOrManagement = selectedProject?.projectType === "BUILD" || selectedProject?.projectType === "MANAGEMENT";
+  const isBuildOrManagement = isBuildLikeStorageType(selectedProject?.projectType);
 
   useEffect(() => {
     if (!selectedProject?.id) {

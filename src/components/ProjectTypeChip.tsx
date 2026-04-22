@@ -2,9 +2,10 @@ import React from "react";
 import { View, Text, StyleSheet } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, radius, spacing } from "../theme";
+import { isBuildLikeStorageType, isMaintenanceStorageType } from "../lib/projectTypeModel";
 
 type ProjectTypeChipProps = {
-  projectType?: "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "BUILD" | "MAINTENANCE";
+  projectType?: string;
   label?: string; // Optional override label
   showIcon?: boolean;
 };
@@ -19,11 +20,9 @@ export function ProjectTypeChip({ projectType, label, showIcon = false }: Projec
   // Get icon based on project type
   const getProjectIcon = (): keyof typeof Ionicons.glyphMap => {
     if (!projectType) return "folder-outline";
-    if (projectType === "BUILD" || projectType === "MANAGEMENT") return "clipboard-outline";
-    if (projectType === "MAINTENANCE") return "construct-outline";
-    if (projectType === "RESIDENTIAL") return "home-outline";
-    if (projectType === "TRADE") return "person-outline";
-    return "folder-outline";
+    if (isMaintenanceStorageType(projectType)) return "construct-outline";
+    if (isBuildLikeStorageType(projectType)) return "clipboard-outline";
+    return "person-outline";
   };
 
   const displayLabel = label || projectType || "";

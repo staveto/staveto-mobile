@@ -44,6 +44,7 @@ import type { DiaryEntryDoc } from "../services/constructionDiary";
 import type { ExpenseDoc } from "../services/expenses";
 import type { AttachmentDoc } from "../services/attachments";
 import type { ProblemDoc } from "../services/problems";
+import { isBuildLikeStorageType, getProblemsTitleContext } from "../lib/projectTypeModel";
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -83,17 +84,16 @@ export function ProjectOverviewDashboardScreen() {
   const [projectHoursMinutes, setProjectHoursMinutes] = useState<number>(0);
   const [canSeeHours, setCanSeeHours] = useState(false);
 
-  const isBuildOrManagement = projectType === "BUILD" || projectType === "MANAGEMENT";
-
   const load = useCallback(
     async (isRefresh = false) => {
       if (!projectId) return;
       if (isRefresh) setRefreshing(true);
       else setLoading(true);
       try {
-        const [proj, ph, tk, prb, diary, exp, atts] = await Promise.all([
-          projectsService.getProject(projectId).catch(() => null),
-          isBuildOrManagement ? projectsService.listProjectPhases(projectId).catch(() => []) : Promise.resolve([]),
+        const proj = await projectsService.getProject(projectId).catch(() => null);
+        const buildLike = isBuildLikeStorageType(proj?.projectType ?? projectType);
+        const [ph, tk, prb, diary, exp, atts] = await Promise.all([
+          buildLike ? projectsService.listProjectPhases(projectId).catch(() => []) : Promise.resolve([]),
           tasksService.listTasksByProject(projectId).catch(() => []),
           problemsService.listProblems(projectId).catch(() => []),
           constructionDiaryService.listDiaryEntries(projectId).catch(() => []),
@@ -153,12 +153,25 @@ export function ProjectOverviewDashboardScreen() {
         setRefreshing(false);
       }
     },
-    [projectId, isBuildOrManagement, isOffline, isPoorNetwork, user?.id]
+    [projectId, projectType, isOffline, isPoorNetwork, user?.id]
   );
 
   useEffect(() => {
     load();
   }, [load]);
+
+  const effectiveProjectType = project?.projectType ?? projectType;
+  const isBuildOrManagement = isBuildLikeStorageType(effectiveProjectType);
+
+  const problemsTitle = useMemo(() => {
+    const ctx = getProblemsTitleContext({
+      projectType: project?.projectType ?? projectType,
+      jobsTabVisible: project?.jobsTabVisible,
+    });
+    if (ctx === "maintenanceHub") return t("problems.titlePoruchy");
+    if (ctx === "buildLike") return t("problems.titleDefekty");
+    return t("problems.titleReklamacie");
+  }, [project?.projectType, project?.jobsTabVisible, projectType, t]);
 
   const kpis = useMemo(() => {
     const activeTasks = tasks.filter((t) => t.isActive !== false);
@@ -391,13 +404,6 @@ export function ProjectOverviewDashboardScreen() {
       projectName,
       projectType,
     });
-
-  const problemsTitle =
-    projectType === "MAINTENANCE"
-      ? t("problems.titlePoruchy")
-      : projectType === "TRADE" || projectType === "RESIDENTIAL"
-        ? t("problems.titleReklamacie") || t("problems.title")
-        : t("problems.titleDefekty") || t("problems.title");
 
   if (!projectId) {
     return (

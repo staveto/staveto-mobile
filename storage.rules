@@ -97,6 +97,13 @@ service firebase.storage {
         && request.resource.size < 10 * 1024 * 1024; // Max 10MB
     }
     
+    // User-owned equipment photos (tab Equipment, not project subcollection)
+    match /users/{userId}/equipment/{equipmentId}/{fileName} {
+      allow read: if signedIn() && uid() == userId;
+      allow write: if signedIn() && uid() == userId
+        && request.resource.size < 10 * 1024 * 1024;
+    }
+
     // Deny all other paths (must come after specific matches)
     match /{allPaths=**} {
       allow read, write: if false;

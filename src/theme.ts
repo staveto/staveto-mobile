@@ -12,6 +12,18 @@ export const colors = {
   error: "#dc3545",
   /** Team / secondary accent (e.g. calendar dots for team entries) */
   teamAccent: "#4a9fd9",
+  /**
+   * Light panels for forms on dark `background` (Equipment tab, etc.).
+   * Use with `text` for field values — not `textOnDark`.
+   */
+  formPanel: "#f0f4f8",
+  formPanelBorder: "#8fa4bf",
+  /** Section labels on dark backgrounds */
+  labelOnDark: "#ffffff",
+  labelMutedOnDark: "rgba(255,255,255,0.78)",
+  /** Inactive chip on dark (outline style) */
+  chipOnDarkBg: "rgba(255,255,255,0.12)",
+  chipOnDarkBorder: "rgba(255,255,255,0.38)",
 };
 
 export const spacing = { xs: 4, sm: 8, md: 16, lg: 24, xl: 32 };

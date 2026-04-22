@@ -123,6 +123,8 @@ export type OnboardingProfileData = {
   phoneE164?: string;
   primaryCountry?: string;
   timezone?: string;
+  /** Build vs trade — stored on `users.primaryUsageMode` (legacy `maintenance` still readable elsewhere). */
+  primaryUsageMode?: "build" | "trade";
 };
 
 /** Update Firestore user profile from onboarding. Does not overwrite existing values. */
@@ -155,6 +157,9 @@ export async function updateUserProfileFromOnboarding(
   }
   if (data.timezone && (!hasField(existing, "timezone") || !existing.timezone)) {
     update.timezone = data.timezone;
+  }
+  if (data.primaryUsageMode === "build" || data.primaryUsageMode === "trade") {
+    update.primaryUsageMode = data.primaryUsageMode;
   }
   await setDoc(ref, update, { merge: true });
 

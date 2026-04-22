@@ -8,6 +8,7 @@ import { configurePurchases } from "../services/billing";
 import { getExtraEnv } from "../lib/env";
 import { IOS_SKIP_GOOGLE_SIGNIN } from "../lib/iosDiagnostic";
 import { bootStep, setLastBootStep } from "../lib/bootLogger";
+import { normalizeLegacyUsageMode, persistPrimaryUsageMode } from "../lib/primaryUsageMode";
 
 export type BillingStatus = {
   status: "trial" | "active" | "expired";
@@ -138,6 +139,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (ln) user = { ...user, lastName: ln };
             if (dn && !user.name) user = { ...user, name: dn };
             if (!user.name && fn && ln) user = { ...user, name: `${fn} ${ln}`.trim() };
+            const rawUsage = d.primaryUsageMode as unknown;
+            const usage = normalizeLegacyUsageMode(rawUsage);
+            if (usage) {
+              persistPrimaryUsageMode(usage).catch(() => {});
+            }
           }
         } catch (e) {
           setLastBootStep("user_doc_error");

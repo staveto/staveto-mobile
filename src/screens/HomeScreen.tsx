@@ -54,10 +54,13 @@ import * as quickNotesService from "../services/quickNotes";
 import { useQuickNoteContext } from "../context/QuickNoteContext";
 import { getCurrentPositionSafe } from "../lib/location";
 import {
-  getHomeTypeFilterBucket,
+  getActiveProductProjectType,
+  isLegacyMaintenanceEquipmentHub,
   isSoloOwnerProjectRow,
   isSharedOrCollaborativeProjectRow,
 } from "../lib/projectTypeModel";
+import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
+import { readStoredPrimaryUsageMode } from "../lib/primaryUsageMode";
 
 // Conditional imports for image/document picker
 let ImagePicker: typeof import('expo-image-picker') | null = null;
@@ -80,7 +83,7 @@ const LAST_USED_PROJECT_KEY = "@staveto:lastUsedProjectId";
 const PROJECTS_FILTER_KEY = "projects_filter_v1";
 const TYPE_FILTER_KEY = "home_type_filter_v1";
 type ProjectFilter = "all" | "mine" | "shared";
-type TypeFilter = "ALL" | "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
+type TypeFilter = "ALL" | "BUILD" | "TRADE";
 
 type DashboardViewModel = {
   projects: ProjectDoc[];
@@ -150,36 +153,17 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
 }: CompactProjectItemProps) {
   const { t } = useI18n();
   const isOwner = !!project.ownerId && project.ownerId === currentUserId;
-  const normalizedType = getHomeTypeFilterBucket(project.projectType);
-  const stripeColor =
-    normalizedType === "MANAGEMENT"
-      ? "#ff9f43"
-      : normalizedType === "TRADE"
-      ? "#5dade2"
-      : normalizedType === "RESIDENTIAL"
-      ? "#8ea7ff"
-      : "#7dcea0";
-  const thumbTint =
-    normalizedType === "MANAGEMENT"
-      ? "#ff9f4322"
-      : normalizedType === "TRADE"
-      ? "#5dade220"
-      : normalizedType === "RESIDENTIAL"
-      ? "#8ea7ff22"
-      : "#7dcea022";
-  const typeLabel = t(`createProject.type.${normalizedType}.title`);
+  const hub = isLegacyMaintenanceEquipmentHub(project);
+  const active = getActiveProductProjectType(project);
+  const stripeColor = hub ? "#7dcea0" : active === "TRADE" ? "#5dade2" : "#ff9f43";
+  const thumbTint = hub ? "#7dcea022" : active === "TRADE" ? "#5dade220" : "#ff9f4322";
+  const typeLabelKey = hub ? "MAINTENANCE" : active === "TRADE" ? "TRADE" : "MANAGEMENT";
+  const typeLabel = t(`createProject.type.${typeLabelKey}.title`);
   const location = getLocationAnchor(project);
-  const badgeColor =
-    normalizedType === "MANAGEMENT"
-      ? "#ff9f43"
-      : normalizedType === "TRADE"
-      ? "#5dade2"
-      : normalizedType === "RESIDENTIAL"
-      ? "#8ea7ff"
-      : "#7dcea0";
+  const badgeColor = hub ? "#7dcea0" : active === "TRADE" ? "#5dade2" : "#ff9f43";
   const maintenanceCount =
     !minimal &&
-    normalizedType === "MAINTENANCE" &&
+    hub &&
     typeof project.equipmentCount === "number"
       ? t("projectCard.equipmentCount", { count: String(project.equipmentCount) })
       : null;
@@ -206,21 +190,15 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
           if (isOwner && onCoverPress) onCoverPress(project);
         }}
       >
-        {normalizedType !== "MAINTENANCE" && project.coverImageUrl ? (
+        {!hub && project.coverImageUrl ? (
           <Image source={{ uri: project.coverImageUrl }} style={styles.compactThumbImage} resizeMode="cover" />
-        ) : normalizedType === "MAINTENANCE" ? (
+        ) : hub ? (
           <Ionicons name="construct-outline" size={20} color={colors.textMuted} />
         ) : (
           <>
             <Text style={styles.compactThumbInitials}>{getProjectInitials(project.name || t("projects.noName"))}</Text>
             <Ionicons
-              name={
-                normalizedType === "RESIDENTIAL"
-                  ? "home-outline"
-                  : normalizedType === "TRADE"
-                  ? "briefcase-outline"
-                  : "clipboard-outline"
-              }
+              name={active === "TRADE" ? "briefcase-outline" : "clipboard-outline"}
               size={11}
               color={colors.textMuted}
               style={styles.compactThumbIcon}
@@ -315,8 +293,14 @@ export function HomeScreen() {
   const [loadError, setLoadError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [lastUsedProjectId, setLastUsedProjectId] = useState<string | null>(null);
+  /** User equipment service work — Home shows a small alert only, not as a project. */
+  const [equipmentHomeSummary, setEquipmentHomeSummary] = useState<{
+    openServiceTasks: number;
+    dueTodayOrOverdue: number;
+  } | null>(null);
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<TypeFilter>("ALL");
+  const [headerUsageMode, setHeaderUsageMode] = useState<PrimaryUsageMode | null>(null);
 
   // Firebase Analytics test event (first screen after login)
   useEffect(() => {
@@ -340,8 +324,14 @@ export function HomeScreen() {
 
   useEffect(() => {
     AsyncStorage.getItem(TYPE_FILTER_KEY).then((saved) => {
-      if (saved === "MANAGEMENT" || saved === "RESIDENTIAL" || saved === "TRADE" || saved === "MAINTENANCE" || saved === "ALL") {
-        setSelectedTypeFilter(saved);
+      if (saved === "MANAGEMENT") {
+        setSelectedTypeFilter("BUILD");
+        AsyncStorage.setItem(TYPE_FILTER_KEY, "BUILD").catch(() => {});
+      } else if (saved === "RESIDENTIAL" || saved === "MAINTENANCE") {
+        setSelectedTypeFilter("TRADE");
+        AsyncStorage.setItem(TYPE_FILTER_KEY, "TRADE").catch(() => {});
+      } else if (saved === "BUILD" || saved === "TRADE" || saved === "ALL") {
+        setSelectedTypeFilter(saved as TypeFilter);
       }
     });
   }, []);
@@ -444,6 +434,7 @@ export function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
+      readStoredPrimaryUsageMode().then(setHeaderUsageMode);
       if (!user?.id) return;
       refreshActiveTimer();
       quickNotesService.getOpenQuickNotesCount(user.id).then(setPendingQuickNotesCount);
@@ -515,19 +506,35 @@ export function HomeScreen() {
     },
     [navigation]
   );
+
+  const goToEquipment = useCallback(
+    (params?: object) => {
+      let nav: any = navigation;
+      while (nav && typeof nav.getState === "function") {
+        const routeNames = nav.getState?.().routeNames as string[] | undefined;
+        if (routeNames?.includes("Equipment")) {
+          if (nav.navigate) {
+            nav.navigate("Equipment", params);
+            return;
+          }
+          if (nav.dispatch) {
+            nav.dispatch(TabActions.jumpTo("Equipment", params));
+            return;
+          }
+        }
+        nav = nav.getParent?.();
+      }
+      console.warn("[HomeScreen] Unable to navigate to Equipment tab");
+    },
+    [navigation]
+  );
   const goToSearch = useCallback(() => {
     let nav: any = navigation;
-    while (nav && typeof nav.getState === "function") {
+    for (let i = 0; i < 10 && nav; i++) {
       const routeNames = nav.getState?.().routeNames as string[] | undefined;
-      if (routeNames?.includes("Search")) {
-        if (nav.navigate) {
-          nav.navigate("Search");
-          return;
-        }
-        if (nav.dispatch) {
-          nav.dispatch(TabActions.jumpTo("Search"));
-          return;
-        }
+      if (routeNames?.includes("GlobalSearch")) {
+        nav.navigate("GlobalSearch");
+        return;
       }
       nav = nav.getParent?.();
     }
@@ -547,6 +554,24 @@ export function HomeScreen() {
       }
     });
   }, []);
+
+  /** Post-login onboarding may have created the first project — avoid duplicate "first project" modal. */
+  useEffect(() => {
+    let cancelled = false;
+    AsyncStorage.getItem("pending_onboarding").then((raw) => {
+      if (cancelled || !raw) return;
+      try {
+        const p = JSON.parse(raw) as { createdProject?: boolean };
+        if (p?.createdProject) void markFirstProjectPromptShown();
+      } catch {
+        /* ignore */
+      }
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
   const greetingName = user?.firstName ?? user?.name ?? onboardingFirstName ?? onboardingDisplayName ?? user?.email ?? t("home.userFallback");
 
   const formatLastActivity = useCallback(
@@ -606,6 +631,7 @@ export function HomeScreen() {
 
   const loadDashboard = useCallback(async (isRefresh = false) => {
     if (!orgId) {
+      setEquipmentHomeSummary(null);
       setLoading(false);
       return;
     }
@@ -646,6 +672,14 @@ export function HomeScreen() {
           console.warn("[HomeScreen] ensureOverdueNotificationsIfNeeded failed:", e)
         );
       }
+      if (user?.id) {
+        const { ensureUserEquipmentServiceOverdueNotificationsIfNeeded } = await import(
+          "../services/userEquipmentServiceTasks"
+        );
+        ensureUserEquipmentServiceOverdueNotificationsIfNeeded(user.id).catch((e) =>
+          console.warn("[HomeScreen] ensureUserEquipmentServiceOverdueNotificationsIfNeeded failed:", e)
+        );
+      }
 
       // Upcoming tasks already carry projectName from dashboard — no per-task phase fetch (expensive, unused on Home).
       const enrichedTasks = data.todayTasks.map((t) => ({
@@ -663,6 +697,19 @@ export function HomeScreen() {
         timeTrackingProjectIds: data.timeTrackingProjectIds,
       });
       setLoadError(false);
+
+      if (user?.id) {
+        try {
+          const { getUserEquipmentHomeSummary } = await import("../services/userEquipmentServiceTasks");
+          const s = await getUserEquipmentHomeSummary(user.id);
+          setEquipmentHomeSummary(s);
+        } catch (e) {
+          if (__DEV__) console.warn("[HomeScreen] getUserEquipmentHomeSummary failed:", e);
+          setEquipmentHomeSummary({ openServiceTasks: 0, dueTodayOrOverdue: 0 });
+        }
+      } else {
+        setEquipmentHomeSummary(null);
+      }
     } catch (error: any) {
       console.error("[HomeScreen] Error loading dashboard:", error);
       setLoadError(true);
@@ -682,11 +729,20 @@ export function HomeScreen() {
         projectStats: new Map(),
         timeTrackingProjectIds: [],
       });
+      setEquipmentHomeSummary(null);
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   }, [orgId, user?.id]);
+
+  // Last-opened project must be a real job workspace (legacy equipment hubs are excluded from dashboard).
+  useEffect(() => {
+    if (!dashboardData || !lastUsedProjectId) return;
+    if (dashboardData.projects.some((p) => p.id === lastUsedProjectId)) return;
+    AsyncStorage.removeItem(LAST_USED_PROJECT_KEY).catch(() => {});
+    setLastUsedProjectId(null);
+  }, [dashboardData, lastUsedProjectId]);
 
   const loadLiveActivity = useCallback(async () => {
     if (!user?.id || !dashboardData?.projects?.length) {
@@ -1227,12 +1283,10 @@ export function HomeScreen() {
     }
   };
 
-  const getProjectIcon = (projectType?: string): React.ComponentProps<typeof Ionicons>["name"] => {
-    if (projectType === "BUILD" || projectType === "MANAGEMENT") return "clipboard-outline";
-    if (projectType === "MAINTENANCE") return "construct-outline";
-    if (projectType === "RESIDENTIAL") return "home-outline";
-    if (projectType === "TRADE") return "person-outline";
-    return "folder-outline";
+  const getProjectIcon = (p?: ProjectDoc): React.ComponentProps<typeof Ionicons>["name"] => {
+    if (!p?.projectType) return "folder-outline";
+    if (isLegacyMaintenanceEquipmentHub(p)) return "construct-outline";
+    return getActiveProductProjectType(p) === "TRADE" ? "person-outline" : "clipboard-outline";
   };
 
   const handleProjectClick = useCallback(
@@ -1283,12 +1337,12 @@ export function HomeScreen() {
     if (projectFilter === "mine") list = list.filter(isSoloOwnerProjectRow);
     else if (projectFilter === "shared") list = list.filter(isSharedOrCollaborativeProjectRow);
     if (selectedTypeFilter !== "ALL") {
-      list = list.filter((p) => getHomeTypeFilterBucket(p.projectType) === selectedTypeFilter);
+      list = list.filter((p) => getActiveProductProjectType(p) === selectedTypeFilter);
     }
     return list;
   }, [data.projects, projectFilter, selectedTypeFilter]);
 
-  // Focus project comes from ALL projects so "Currently Working On" always shows user's last-used project
+  // Focus card: job workspaces only (dashboard omits legacy MAINTENANCE equipment hubs).
   const focusProject = useMemo(() => {
     if (lastUsedProjectId) {
       const selected = data.projects.find((p) => p.id === lastUsedProjectId);
@@ -1394,7 +1448,13 @@ export function HomeScreen() {
             {t("home.greeting", { name: greetingName })}
           </Text>
           <Text style={styles.welcomeSubtitle} numberOfLines={2}>
-            {t("home.headerHint")}
+            {t(
+              headerUsageMode === "trade"
+                ? "home.headerHintTrade"
+                : headerUsageMode === "build"
+                  ? "home.headerHintBuild"
+                  : "home.headerHint"
+            )}
           </Text>
         </View>
         <Pressable
@@ -1651,6 +1711,32 @@ export function HomeScreen() {
                 ))}
               </View>
             ) : null}
+                  {equipmentHomeSummary &&
+              (equipmentHomeSummary.openServiceTasks > 0 || equipmentHomeSummary.dueTodayOrOverdue > 0) ? (
+                <TouchableOpacity
+                  style={[styles.alertRow, { marginBottom: spacing.md }]}
+                  onPress={() => goToEquipment({ screen: "EquipmentMain" })}
+                  activeOpacity={0.8}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("home.equipmentAlert.a11y")}
+                >
+                  <Ionicons name="construct-outline" size={20} color={colors.primary} style={{ marginRight: spacing.sm }} />
+                  <View style={{ flex: 1 }}>
+                    <Text style={styles.alertText} numberOfLines={2}>
+                      {equipmentHomeSummary.dueTodayOrOverdue > 0
+                        ? t("home.equipmentAlert.lineDue", {
+                            due: String(equipmentHomeSummary.dueTodayOrOverdue),
+                            open: String(equipmentHomeSummary.openServiceTasks),
+                          })
+                        : t("home.equipmentAlert.lineOpen", {
+                            count: String(equipmentHomeSummary.openServiceTasks),
+                          })}
+                    </Text>
+                    <Text style={styles.equipmentAlertHint}>{t("home.equipmentAlert.hint")}</Text>
+                  </View>
+                  <Ionicons name="chevron-forward" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
+              ) : null}
                   {enabledSectionIds.has("project_filters") && (
             <>
               <ScrollView
@@ -1666,7 +1752,13 @@ export function HomeScreen() {
                 >
                   <Ionicons name="options-outline" size={17} color={colors.text} />
                   <Text style={styles.filterTypeTriggerText} numberOfLines={1}>
-                    {t(`home.filter.type.${selectedTypeFilter.toLowerCase()}`)}
+                    {t(
+                      selectedTypeFilter === "ALL"
+                        ? "home.filter.type.all"
+                        : selectedTypeFilter === "BUILD"
+                          ? "home.filter.type.management"
+                          : "home.filter.type.trade"
+                    )}
                   </Text>
                   <Ionicons name="chevron-down" size={15} color={colors.textMuted} />
                 </TouchableOpacity>
@@ -1699,7 +1791,7 @@ export function HomeScreen() {
                 <Pressable style={styles.typeFilterModalOverlay} onPress={() => setShowTypeFilterModal(false)}>
                   <Pressable style={styles.typeFilterModalCard} onPress={(e) => e.stopPropagation()}>
                     <Text style={styles.typeFilterModalTitle}>{t("home.filterTypeTitle")}</Text>
-                    {(["ALL", "MANAGEMENT", "RESIDENTIAL", "TRADE", "MAINTENANCE"] as TypeFilter[]).map((type) => (
+                    {(["ALL", "BUILD", "TRADE"] as TypeFilter[]).map((type) => (
                       <TouchableOpacity
                         key={type}
                         style={[styles.typeFilterModalRow, selectedTypeFilter === type && styles.typeFilterModalRowActive]}
@@ -1714,7 +1806,13 @@ export function HomeScreen() {
                             selectedTypeFilter === type && styles.typeFilterModalRowTextActive,
                           ]}
                         >
-                          {t(`home.filter.type.${type.toLowerCase()}`)}
+                          {t(
+                            type === "ALL"
+                              ? "home.filter.type.all"
+                              : type === "BUILD"
+                                ? "home.filter.type.management"
+                                : "home.filter.type.trade"
+                          )}
                         </Text>
                         {selectedTypeFilter === type ? (
                           <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
@@ -1894,7 +1992,7 @@ export function HomeScreen() {
                     setShowActionSheet(true);
                   }}
                 >
-                  <Ionicons name={getProjectIcon(project.projectType)} size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
+                  <Ionicons name={getProjectIcon(project)} size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
                   <Text style={styles.projectItemText}>{project.name}</Text>
                 </TouchableOpacity>
               ))}
@@ -2151,7 +2249,7 @@ export function HomeScreen() {
                         setExpenseStep(2);
                       }}
                     >
-                      <Ionicons name={getProjectIcon(project.projectType)} size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
+                      <Ionicons name={getProjectIcon(project)} size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
                       <Text style={styles.projectItemText}>{project.name}</Text>
                       <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
                     </TouchableOpacity>
@@ -2748,6 +2846,11 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontSize: 13,
     flex: 1,
+  },
+  equipmentAlertHint: {
+    color: colors.textMuted,
+    fontSize: 11,
+    marginTop: 2,
   },
   sectionHeaderCompact: {
     marginBottom: spacing.sm,

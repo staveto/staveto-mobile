@@ -1,43 +1,41 @@
 /**
- * Single source of truth for Firestore `projects.projectType` and derived behavior.
+ * Firestore may still store legacy `projects.projectType` values.
+ * **Active product model (new writes & primary UX):** `BUILD` | `TRADE` only.
  *
- * ## User-facing product types (SK UI — i18n `home.filter.type.*`, `projectType.*`)
- *
- * 1) **Stavba** (chip key often `management` in `home.filter.type.management`)
- *    - **Storage:** `BUILD` (wizard) or legacy `MANAGEMENT`
- *    - **Behavior:** phased project, catalog template when creation path uses it, documents module,
- *      problem categories like BUILD/MANAGEMENT in `problems.ts`.
- *    - `MANAGEMENT` is a **legacy alias** of the same build/phased engine as `BUILD`.
- *
- * 2) **Zákazky** (`trade` chip on Projects tab = TRADE + RESIDENTIAL storage)
- *    - **Storage:** `TRADE` or legacy `RESIDENTIAL`
- *    - **Behavior:** flat tasks, diary; Home may still show separate “Dom” filter for `RESIDENTIAL`.
- *
- * 3) **Údržba** (`maintenance`)
- *    - **Storage:** `MAINTENANCE` — equipment, service rules, flat tasks.
- *
- * ## Layers
- * - **Storage** — Firestore values (legacy preserved; never rewrite in client).
- * - **Engine** — `BUILD` | `TRADE` | `MAINTENANCE` for coarse grouping.
- * - **UI buckets** — Home vs Projects tab differ (see `getHomeTypeFilterBucket` vs `getProjectsTabTypeFilterBucket`).
+ * Legacy storage (read compatibility, not for new projects):
+ * - `MANAGEMENT` → treated as `BUILD`
+ * - `RESIDENTIAL` → treated as `TRADE`
+ * - `MAINTENANCE` + `jobsTabVisible === true` → treated as `TRADE` (flat job workspace)
+ * - `MAINTENANCE` + `jobsTabVisible !== true` → legacy equipment/inventory hub (hidden from project lists;
+ *   overview may still load project-scoped equipment rules for those IDs)
  */
 
-/** Values that may appear on `projects.projectType` in Firestore. */
-export type ProjectStorageType = "BUILD" | "MANAGEMENT" | "TRADE" | "RESIDENTIAL" | "MAINTENANCE";
+/** Values that may still appear on `projects.projectType` in Firestore. */
+export type LegacyProjectStorageType =
+  | "BUILD"
+  | "MANAGEMENT"
+  | "TRADE"
+  | "RESIDENTIAL"
+  | "MAINTENANCE";
 
-/** Coarse engine (not the only persisted type). */
-export type ProjectEngineType = "BUILD" | "TRADE" | "MAINTENANCE";
+/** Persisted / product-facing type for new projects and normalized logic. */
+export type ActiveProjectStorageType = "BUILD" | "TRADE";
 
-/** Product bucket for docs / analytics (not a DB field). */
-export type ProductProjectKind = "stavba" | "zakazky" | "udrzba";
+/** Alias for all values that can appear in Firestore. */
+export type ProjectStorageType = LegacyProjectStorageType;
 
-/** @deprecated Prefer `ProjectStorageType`; widely imported as `ProjectType`. */
+/** @deprecated Prefer `ProjectStorageType` — kept for widespread imports as `ProjectType`. */
 export type ProjectType = ProjectStorageType;
 
-/** Raw `projectType` from Firestore / navigation — may be unknown strings until normalized. */
-export type ProjectTypeInput = ProjectStorageType | string | null | undefined;
+export type ProjectTypeInput = LegacyProjectStorageType | string | null | undefined;
 
-const ALL_STORAGE: readonly ProjectStorageType[] = [
+/** Engine / UX coarse grouping — only two supported modes. */
+export type ProjectEngineType = ActiveProjectStorageType;
+
+/** Product bucket for analytics / copy (no `udrzba` — maintenance jobs are `zakazky`). */
+export type ProductProjectKind = "stavba" | "zakazky";
+
+const ALL_LEGACY: readonly LegacyProjectStorageType[] = [
   "BUILD",
   "MANAGEMENT",
   "TRADE",
@@ -45,30 +43,52 @@ const ALL_STORAGE: readonly ProjectStorageType[] = [
   "MAINTENANCE",
 ] as const;
 
-export function isKnownStorageType(value: unknown): value is ProjectStorageType {
-  return typeof value === "string" && (ALL_STORAGE as readonly string[]).includes(value);
+export function isKnownStorageType(value: unknown): value is LegacyProjectStorageType {
+  return typeof value === "string" && (ALL_LEGACY as readonly string[]).includes(value);
 }
 
-/** Legacy phased “construction management” label — treat like `BUILD` everywhere. */
+/** Legacy phased “construction management” — same engine as `BUILD`. */
 export function isBuildLikeStorageType(projectType?: ProjectTypeInput): boolean {
   return projectType === "BUILD" || projectType === "MANAGEMENT";
 }
 
-/** Trade / simple jobs; `RESIDENTIAL` is legacy storage but trade-like in UI/engine. */
+/** Trade-style / flat task layout (includes legacy residential + maintenance job workspaces). */
 export function isTradeLikeStorageType(projectType?: ProjectTypeInput): boolean {
-  return projectType === "TRADE" || projectType === "RESIDENTIAL";
+  return projectType === "TRADE" || projectType === "RESIDENTIAL" || projectType === "MAINTENANCE";
 }
 
+/** Raw MAINTENANCE document (any). */
 export function isMaintenanceStorageType(projectType?: ProjectTypeInput): boolean {
   return projectType === "MAINTENANCE";
 }
 
-/** Default `TRADE` when missing — matches historical `getEngineType`. */
+/**
+ * Legacy MAINTENANCE projects used as equipment/inventory hubs (not job workspaces).
+ * Kept for compatibility with `projects/{id}/equipment` and older flows — not an active product type.
+ */
+export function isLegacyMaintenanceEquipmentHub(project: {
+  projectType?: ProjectTypeInput;
+  jobsTabVisible?: boolean;
+}): boolean {
+  return project.projectType === "MAINTENANCE" && project.jobsTabVisible !== true;
+}
+
+/**
+ * Active product type for filters, chips, and new work — always `BUILD` or `TRADE`.
+ * Does not distinguish legacy hubs (use `isLegacyMaintenanceEquipmentHub` + list filters).
+ */
+export function getActiveProductProjectType(project: {
+  projectType?: ProjectTypeInput;
+  jobsTabVisible?: boolean;
+}): ActiveProjectStorageType {
+  const raw = project.projectType;
+  if (raw === "BUILD" || raw === "MANAGEMENT") return "BUILD";
+  return "TRADE";
+}
+
 export function getProjectEngine(projectType?: ProjectTypeInput): ProjectEngineType {
   if (!projectType) return "TRADE";
-  if (projectType === "RESIDENTIAL") return "TRADE";
   if (projectType === "MANAGEMENT" || projectType === "BUILD") return "BUILD";
-  if (projectType === "TRADE" || projectType === "MAINTENANCE") return projectType;
   return "TRADE";
 }
 
@@ -82,30 +102,22 @@ export function isLegacyResidential(projectType?: ProjectTypeInput): boolean {
 }
 
 export function toProductKind(projectType?: ProjectTypeInput): ProductProjectKind {
-  if (isMaintenanceStorageType(projectType)) return "udrzba";
   if (isBuildLikeStorageType(projectType)) return "stavba";
   return "zakazky";
 }
 
-/** Home type filter: `MANAGEMENT` bucket = BUILD + MANAGEMENT + unknown. */
-export type HomeTypeFilterBucket = "MANAGEMENT" | "RESIDENTIAL" | "TRADE" | "MAINTENANCE";
+/** Home / Projects type filter — only `BUILD` and `TRADE` buckets. */
+export type HomeTypeFilterBucket = ActiveProjectStorageType;
 
 export function getHomeTypeFilterBucket(projectType?: ProjectTypeInput): HomeTypeFilterBucket {
-  if (projectType === "MAINTENANCE") return "MAINTENANCE";
-  if (projectType === "RESIDENTIAL") return "RESIDENTIAL";
-  if (projectType === "TRADE") return "TRADE";
-  return "MANAGEMENT";
+  return getProjectEngine(projectType);
 }
 
-/** Projects tab chips: TRADE chip includes both TRADE and RESIDENTIAL. */
-export type ProjectsTabTypeFilter = "ALL" | "MANAGEMENT" | "TRADE" | "MAINTENANCE";
+/** Projects tab chips — `BUILD` (stavba) vs `TRADE` (jobs). */
+export type ProjectsTabTypeFilter = "ALL" | "BUILD" | "TRADE";
 
-export function getProjectsTabTypeFilterBucket(
-  projectType?: ProjectTypeInput
-): Exclude<ProjectsTabTypeFilter, "ALL"> {
-  if (projectType === "MAINTENANCE") return "MAINTENANCE";
-  if (projectType === "RESIDENTIAL" || projectType === "TRADE") return "TRADE";
-  return "MANAGEMENT";
+export function getProjectsTabTypeFilterBucket(projectType?: ProjectTypeInput): ActiveProjectStorageType {
+  return getActiveProductProjectType({ projectType });
 }
 
 export function matchesProjectsTabTypeFilter(
@@ -116,13 +128,21 @@ export function matchesProjectsTabTypeFilter(
   return getProjectsTabTypeFilterBucket(projectType) === selected;
 }
 
-/** Catalog template + phases/tasks on create (`ProjectsScreen` / `projectFactory`). */
+export function isProjectShownOnProjectsJobsTab(project: {
+  projectType?: ProjectTypeInput;
+  jobsTabVisible?: boolean;
+}): boolean {
+  if (project.jobsTabVisible === false) return false;
+  if (isLegacyMaintenanceEquipmentHub(project)) return false;
+  return true;
+}
+
 export function shouldUseCountryCatalogTemplate(params: {
   selectedType: ProjectStorageType;
   creationMethod: "template" | "empty";
 }): boolean {
   const { selectedType, creationMethod } = params;
-  return selectedType === "BUILD" || (selectedType === "MANAGEMENT" && creationMethod === "template");
+  return selectedType === "BUILD" && creationMethod === "template";
 }
 
 // --- ProjectOverview ---
@@ -147,22 +167,35 @@ export function projectOverviewLoadsDocuments(projectType?: ProjectTypeInput): b
   return isBuildLikeStorageType(projectType);
 }
 
-export function projectOverviewLoadsEquipmentAndServiceRules(projectType?: ProjectTypeInput): boolean {
-  return isMaintenanceStorageType(projectType);
+/** Project-scoped equipment + service rules (legacy MAINTENANCE hubs only). */
+export function projectOverviewLoadsEquipmentAndServiceRules(project: {
+  projectType?: ProjectTypeInput;
+  jobsTabVisible?: boolean;
+}): boolean {
+  return isLegacyMaintenanceEquipmentHub(project);
 }
 
 export function projectOverviewIsTradeOrMaintenanceFlatTasks(projectType?: ProjectTypeInput): boolean {
-  return isTradeLikeStorageType(projectType) || isMaintenanceStorageType(projectType);
+  return isTradeLikeStorageType(projectType);
 }
 
-// --- Home / Projects “Moje” / “Zdieľané” (intent-revealing names; logic unchanged) ---
+/** Title key group for Problems list / dashboard (legacy MAINTENANCE hub keeps “poruchy”). */
+export function getProblemsTitleContext(project: {
+  projectType?: ProjectTypeInput;
+  jobsTabVisible?: boolean;
+}): "maintenanceHub" | "tradeLike" | "buildLike" {
+  if (isLegacyMaintenanceEquipmentHub(project)) return "maintenanceHub";
+  if (isBuildLikeStorageType(project.projectType)) return "buildLike";
+  return "tradeLike";
+}
 
-/** Solo owner row: not shared-to-me and no collaborators on project. */
 export function isSoloOwnerProjectRow(p: { isSharedToMe?: boolean; sharedWithCount?: number | null }): boolean {
   return p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0;
 }
 
-/** Invited member OR owner with team (shared count). */
-export function isSharedOrCollaborativeProjectRow(p: { isSharedToMe?: boolean; sharedWithCount?: number | null }): boolean {
+export function isSharedOrCollaborativeProjectRow(p: {
+  isSharedToMe?: boolean;
+  sharedWithCount?: number | null;
+}): boolean {
   return p.isSharedToMe === true || (p.sharedWithCount ?? 0) > 0;
 }

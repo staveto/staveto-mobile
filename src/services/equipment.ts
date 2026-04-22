@@ -60,6 +60,8 @@ export interface EquipmentDoc {
   qrToken: string;
   photoUrl?: string;
   photoPath?: string;
+  /** Optional migration pointer (written by legacy → user equipment migration). */
+  migratedToUserEquipmentId?: string;
   createdAt: string;
   updatedAt: string;
 }
@@ -86,6 +88,7 @@ function toEquipmentDoc(snap: { id: string; data: () => Record<string, unknown> 
     qrToken: (d.qrToken as string) ?? '',
     photoUrl: d.photoUrl as string | undefined,
     photoPath: d.photoPath as string | undefined,
+    migratedToUserEquipmentId: d.migratedToUserEquipmentId as string | undefined,
     createdAt: toDate(d.createdAt),
     updatedAt: toDate(d.updatedAt),
   };

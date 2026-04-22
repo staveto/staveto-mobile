@@ -5,6 +5,10 @@
 
 import { colors } from "../theme";
 import type { ProjectDoc } from "../services/projects";
+import {
+  getActiveProductProjectType,
+  isLegacyMaintenanceEquipmentHub,
+} from "../lib/projectTypeModel";
 
 export type RoleKey = "ADMIN" | "MANAGER" | "TRADE" | "UNKNOWN";
 export type RoleLabel = "SPRÁVCA" | "STAVBYVEDÚCI" | "REMESLENÍK" | "NEZNÁMA ROLA";
@@ -14,10 +18,10 @@ export type RoleLabel = "SPRÁVCA" | "STAVBYVEDÚCI" | "REMESLENÍK" | "NEZNÁMA
  * Reads from project.ownerId, project.members, or any existing role field
  * Returns normalized key for filtering/comparison
  * 
- * Role mapping based on projectType:
- * - BUILD/MANAGEMENT → STAVBYVEDÚCI (site manager)
+ * Role mapping (active product types BUILD / TRADE; legacy docs normalized in logic):
+ * - BUILD → STAVBYVEDÚCI (site manager)
  * - TRADE → REMESELNÍK (craftsman)
- * - RESIDENTIAL/MAINTENANCE → SPRÁVCA (administrator)
+ * - Legacy MAINTENANCE equipment hub → SPRÁVCA (administrator)
  */
 export function normalizeRoleKey(
   project: ProjectDoc & { ownerId?: string },
@@ -30,32 +34,13 @@ export function normalizeRoleKey(
     return "UNKNOWN";
   }
 
-  // Determine role based on projectType
-  // This is a UI-only mapping - no DB changes
-  const projectType = project.projectType;
-  
-  if (projectType === "BUILD" || projectType === "MANAGEMENT") {
-    // BUILD/MANAGEMENT projects → STAVBYVEDÚCI (site manager)
-    return "MANAGER";
-  }
-  
-  if (projectType === "TRADE") {
-    // TRADE projects → REMESELNÍK (craftsman)
-    return "TRADE";
-  }
-  
-  if (projectType === "RESIDENTIAL" || projectType === "MAINTENANCE") {
-    // RESIDENTIAL/MAINTENANCE projects → SPRÁVCA (administrator)
+  if (isLegacyMaintenanceEquipmentHub(project)) {
     return "ADMIN";
   }
 
-  // Fallback: if projectType is missing or unknown, default to ADMIN (SPRÁVCA)
-  if (__DEV__) {
-    console.warn(
-      `[role] Unknown projectType for project ${project.id}: ${projectType}. Defaulting to ADMIN.`
-    );
-  }
-  return "ADMIN";
+  const active = getActiveProductProjectType(project);
+  if (active === "BUILD") return "MANAGER";
+  return "TRADE";
 }
 
 /**

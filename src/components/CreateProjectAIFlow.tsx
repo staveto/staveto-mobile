@@ -1,5 +1,5 @@
 /**
- * AI-first project creation flow.
+ * AI-first project creation flow (projects / jobs — not equipment inventory).
  * Screen 1: Project brief input + optional technical documents
  * Screen 2: AI preview (phases + tasks)
  */

@@ -39,27 +39,26 @@ import * as problemsService from "../services/problems";
 import type { TaskWithProject } from "../services/tasks";
 import type { ProblemWithProject } from "../services/problems";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
+import { getProjectEngine } from "../lib/projectTypeModel";
 
 const SHEET_BG = "#1e2530";
 const SHEET_TEXT = "#ffffff";
 const SHEET_ACTION = "#7dd3fc";
 
-/** Farba podľa typu – legenda pre všetky typy projektov + problémy + overdue + completed */
+/** Farba podľa typu – legenda (BUILD / TRADE / service task) + problémy + overdue + completed */
 const COLOR_BY_TYPE: Record<string, string> = {
-  MANAGEMENT: "#6b7280",
-  RESIDENTIAL: "#8b5cf6",
   TRADE: "#f59e0b",
   BUILD: colors.primary,
-  MAINTENANCE: "#60a5fa",
+  /** Service / equipment-linked tasks (not a project type). */
+  service: "#60a5fa",
   problem: "#ef4444",
   overdue: "#ef4444",
   completed: "#22c55e",
-  /** Spätná kompatibilita */
   COLOR_SERVICE: "#60a5fa",
   COLOR_CONSTRUCTION: colors.primary,
 };
 
-const COLOR_SERVICE = COLOR_BY_TYPE.MAINTENANCE;
+const COLOR_SERVICE = COLOR_BY_TYPE.service;
 const COLOR_CONSTRUCTION = COLOR_BY_TYPE.BUILD;
 
 const CALENDAR_PADDING = spacing.md * 2;
@@ -95,7 +94,7 @@ const WEEKDAYS_BY_LOCALE: Record<Locale, string[]> = {
   pl: ["Pn", "Wt", "Śr", "Cz", "Pt", "So", "Nd"],
 };
 
-const PROJECT_TYPES = ["MANAGEMENT", "RESIDENTIAL", "TRADE", "BUILD", "MAINTENANCE"] as const;
+const CALENDAR_TASK_BUCKETS = ["BUILD", "TRADE", "service"] as const;
 
 export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSeeAllForDate, refreshTrigger }: Props) {
   const { t, locale } = useI18n();
@@ -190,17 +189,19 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
     getTasksForDay(day).some(isTaskOverdue) || getProblemsForDay(day).some(isProblemOverdue);
   const hasCompletedPastDueOnDay = (day: Date) =>
     getTasksForDay(day).some(isTaskCompletedPastDue);
-  const getTaskType = (t: TaskWithProject) =>
-    t.projectType === "MAINTENANCE" || !!t.equipmentId || !!t.serviceRuleId ? "MAINTENANCE" : (t.projectType ?? "BUILD");
+  const getTaskCalendarBucket = (t: TaskWithProject): "BUILD" | "TRADE" | "service" => {
+    if (t.equipmentId || t.serviceRuleId) return "service";
+    return getProjectEngine(t.projectType);
+  };
   const hasTypeOnDay = (day: Date, type: string) => {
     if (type === "problem") return getProblemsForDay(day).length > 0;
     if (type === "overdue") return hasOverdueOnDay(day);
     if (type === "completed") return hasCompletedPastDueOnDay(day);
-    return getTasksForDay(day).some((t) => getTaskType(t) === type);
+    return getTasksForDay(day).some((t) => getTaskCalendarBucket(t) === type);
   };
   const legendTypesInMonth = useMemo(
     () =>
-      [...PROJECT_TYPES, "problem", "overdue", "completed"].filter((type) =>
+      [...CALENDAR_TASK_BUCKETS, "problem", "overdue", "completed"].filter((type) =>
         days.some((day) => isSameMonth(day, currentMonth) && hasTypeOnDay(day, type))
       ),
     [days, currentMonth, tasksByYmd, problemsByYmd]
@@ -300,7 +301,9 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                 const today = isToday(day);
                 const hasOverdue = hasOverdueOnDay(day);
                 const hasCompleted = hasCompletedPastDueOnDay(day);
-                let typesPresent = [...PROJECT_TYPES, "problem", "overdue", "completed"].filter((t) => hasTypeOnDay(day, t));
+                let typesPresent = [...CALENDAR_TASK_BUCKETS, "problem", "overdue", "completed"].filter((t) =>
+                  hasTypeOnDay(day, t)
+                );
                 if (hasOverdue) {
                   typesPresent = ["overdue", ...typesPresent.filter((t) => t !== "overdue")];
                 } else if (hasCompleted) {
@@ -357,7 +360,15 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
               <View key={pt} style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: COLOR_BY_TYPE[pt] ?? "#888" }]} />
                 <Text style={styles.legendText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-                  {pt === "problem" ? t("home.legendProblem") : pt === "overdue" ? t("home.legendOverdue") : pt === "completed" ? t("home.legendCompleted") : t(`projectType.${pt}`)}
+                  {pt === "problem"
+                    ? t("home.legendProblem")
+                    : pt === "overdue"
+                      ? t("home.legendOverdue")
+                      : pt === "completed"
+                        ? t("home.legendCompleted")
+                        : pt === "service"
+                          ? t("projectType.maintenance")
+                          : t(`projectType.${pt}`)}
                 </Text>
               </View>
             ))}

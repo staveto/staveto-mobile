@@ -20,7 +20,7 @@ import { useUnreadCountContext } from "../context/UnreadCountContext";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import * as notificationsService from "../services/notifications";
-import type { NotificationDoc, NotificationType } from "../services/notifications";
+import { hasMeaningfulReadAt, type NotificationDoc, type NotificationType } from "../services/notifications";
 import * as invitesService from "../services/invites";
 import type { PendingInvite } from "../services/invites";
 import * as tasksService from "../services/tasks";
@@ -108,6 +108,7 @@ export function NotificationsScreen() {
           console.warn("[notifications:diag] markAsRead rollback (persist returned false)", {
             id: notification.id,
           });
+          showToast(t("common.error"));
           setNotifications((prev) =>
             prev.map((n) => (n.id === notification.id ? { ...n, readAt: prevReadAt } : n))
           );
@@ -137,7 +138,12 @@ export function NotificationsScreen() {
     try {
       setUnreadCount(0);
       await notificationsService.markAllAsRead(uid);
-      setNotifications((prev) => prev.map((n) => ({ ...n, readAt: n.readAt || new Date().toISOString() })));
+      setNotifications((prev) =>
+        prev.map((n) => ({
+          ...n,
+          readAt: hasMeaningfulReadAt(n.readAt) ? n.readAt : new Date().toISOString(),
+        }))
+      );
       setShowMenu(false);
       await refreshUnreadCount();
     } catch (error: any) {
@@ -306,6 +312,19 @@ export function NotificationsScreen() {
       }
 
       if (notification.type === "TASK_DUE_TODAY" || notification.type === "TASK_OVERDUE") {
+        const meta = notification.meta;
+        if (
+          meta &&
+          meta.userEquipmentServiceTask === true &&
+          typeof meta.equipmentId === "string" &&
+          meta.equipmentId.length > 0
+        ) {
+          (navigation as { navigate: (name: string, params?: object) => void }).navigate("Equipment", {
+            screen: "EquipmentDetail",
+            params: { equipmentId: meta.equipmentId },
+          });
+          return;
+        }
         if (notification.taskId && notification.projectId) {
           try {
             const task = await tasksService.getTaskById(notification.projectId, notification.taskId);
@@ -389,7 +408,7 @@ export function NotificationsScreen() {
   /** Tap on card: mark as read only, no navigation. */
   const handleMarkAsReadOnly = useCallback(
     (notification: NotificationDoc) => {
-      if (!notification.readAt) {
+      if (!hasMeaningfulReadAt(notification.readAt)) {
         markAsRead(notification);
       }
     },
@@ -413,13 +432,13 @@ export function NotificationsScreen() {
   };
 
   const filteredNotifications = notifications.filter((n) => {
-    if (filter === "unread") return !n.readAt;
+    if (filter === "unread") return !hasMeaningfulReadAt(n.readAt);
     if (filter === "today") return isTodayNotification(n);
     if (filter === "overdue") return isOverdueNotification(n);
     return true;
   });
 
-  const unreadNotificationsCount = notifications.filter((n) => !n.readAt).length;
+  const unreadNotificationsCount = notifications.filter((n) => !hasMeaningfulReadAt(n.readAt)).length;
   const unreadCount = unreadNotificationsCount + pendingInvites.length;
   const todayCount = notifications.filter(isTodayNotification).length;
   const overdueCount = notifications.filter(isOverdueNotification).length;
@@ -535,7 +554,12 @@ export function NotificationsScreen() {
                 </View>
               </TouchableOpacity>
             ) : (
-              <View style={[styles.notificationCard, !item.notification.readAt && styles.notificationCardUnread]}>
+              <View
+                style={[
+                  styles.notificationCard,
+                  !hasMeaningfulReadAt(item.notification.readAt) && styles.notificationCardUnread,
+                ]}
+              >
                 <TouchableOpacity
                   style={styles.cardContent}
                   onPress={() => handleMarkAsReadOnly(item.notification)}
@@ -553,7 +577,7 @@ export function NotificationsScreen() {
                     </Text>
                   </View>
                   <View style={styles.rightContainer}>
-                    {!item.notification.readAt && <View style={styles.unreadDot} />}
+                    {!hasMeaningfulReadAt(item.notification.readAt) && <View style={styles.unreadDot} />}
                     <Text style={styles.timeText}>{formatRelativeTime(item.notification.createdAt)}</Text>
                   </View>
                 </TouchableOpacity>
@@ -586,7 +610,9 @@ export function NotificationsScreen() {
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
           }
           renderItem={({ item }) => (
-            <View style={[styles.notificationCard, !item.readAt && styles.notificationCardUnread]}>
+            <View
+              style={[styles.notificationCard, !hasMeaningfulReadAt(item.readAt) && styles.notificationCardUnread]}
+            >
               <TouchableOpacity
                 style={styles.cardContent}
                 onPress={() => handleMarkAsReadOnly(item)}
@@ -604,7 +630,7 @@ export function NotificationsScreen() {
                   </Text>
                 </View>
                 <View style={styles.rightContainer}>
-                  {!item.readAt && <View style={styles.unreadDot} />}
+                  {!hasMeaningfulReadAt(item.readAt) && <View style={styles.unreadDot} />}
                   <Text style={styles.timeText}>{formatRelativeTime(item.createdAt)}</Text>
                 </View>
               </TouchableOpacity>

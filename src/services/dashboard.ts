@@ -2,6 +2,7 @@ import * as projectsService from "./projects";
 import * as tasksService from "./tasks";
 import * as expensesService from "./expenses";
 import { fetchProjectAccess } from "../hooks/useProjectAccess";
+import { isProjectShownOnProjectsJobsTab } from "../lib/projectTypeModel";
 import type { ProjectDoc } from "./projects";
 import type { TaskDoc } from "./tasks";
 
@@ -62,8 +63,9 @@ export async function loadDashboardData(ownerId: string, options?: { forceServer
 }
 
 async function loadDashboardDataInternal(ownerId: string, options?: { forceServerRead?: boolean }): Promise<DashboardViewModel> {
-  // Load projects
-  const projects = await projectsService.listMyProjects(ownerId, { forceServerRead: options?.forceServerRead });
+  // Load projects, then keep only job workspaces (same rule as Projects tab — hide legacy MAINTENANCE equipment hubs).
+  const allFetched = await projectsService.listMyProjects(ownerId, { forceServerRead: options?.forceServerRead });
+  const projects = allFetched.filter(isProjectShownOnProjectsJobsTab);
 
   // Load all tasks from all projects in parallel (skip projects without valid id)
   const allTasksPromises = projects

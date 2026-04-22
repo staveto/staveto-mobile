@@ -9,6 +9,7 @@ export type {
   ProjectTypeInput,
   ProjectEngineType,
   ProductProjectKind,
+  ActiveProjectStorageType,
   HomeTypeFilterBucket,
   ProjectsTabTypeFilter,
 } from "./projectTypeModel";
@@ -16,22 +17,26 @@ export type {
 export {
   getProjectEngine,
   getEngineType,
+  getActiveProductProjectType,
   isLegacyResidential,
   isKnownStorageType,
   isBuildLikeStorageType,
   isTradeLikeStorageType,
   isMaintenanceStorageType,
+  isLegacyMaintenanceEquipmentHub,
   toProductKind,
   getHomeTypeFilterBucket,
   getProjectsTabTypeFilterBucket,
   matchesProjectsTabTypeFilter,
   shouldUseCountryCatalogTemplate,
+  isProjectShownOnProjectsJobsTab,
   projectOverviewLoadsPhases,
   projectOverviewUsesPhaseGroupedTasks,
   projectOverviewLoadsDiary,
   projectOverviewLoadsDocuments,
   projectOverviewLoadsEquipmentAndServiceRules,
   projectOverviewIsTradeOrMaintenanceFlatTasks,
+  getProblemsTitleContext,
   isSoloOwnerProjectRow,
   isSharedOrCollaborativeProjectRow,
 } from "./projectTypeModel";
@@ -42,7 +47,7 @@ export type WorkTypeBuild = "NEW_BUILD" | "RENOVATION" | "INSTALLATION" | "SERVI
 /** Work type – TRADE (Aufträge, craftsmen) */
 export type WorkTypeTrade = "INSTALLATION" | "REPAIR" | "RENOVATION" | "DELIVERY";
 
-/** Maintenance scope – MAINTENANCE (Wartung) */
+/** Legacy wizard attribute — not a supported project type anymore; kept for old Firestore `workType`. */
 export type MaintenanceScope = "FLEET" | "MACHINERY" | "PROPERTY" | "EQUIPMENT";
 
 /** Work type attribute – union for storage (engine-specific at wizard) */

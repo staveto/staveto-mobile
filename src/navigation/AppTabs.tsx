@@ -6,7 +6,7 @@ import { useUnreadCount } from "../hooks/useUnreadCount";
 import { HomeStack } from "./HomeStack";
 import { ProjectsScreen } from "../screens/ProjectsScreen";
 import { NotificationsScreen } from "../screens/NotificationsScreen";
-import { SearchScreen } from "../screens/SearchScreen";
+import { EquipmentStack } from "./EquipmentStack";
 import { AccountScreen } from "../screens/AccountScreen";
 import { colors } from "../theme";
 
@@ -15,12 +15,12 @@ const Tab = createBottomTabNavigator();
 const tabIcons: Record<string, React.ComponentProps<typeof Ionicons>["name"]> = {
   Home: "home",
   Projects: "folder-open",
+  Equipment: "construct-outline",
   Notifications: "notifications-outline",
-  Search: "search",
   Account: "person",
 };
 
-/** Tabs: Home, Projects, Notifications, Search, Account. */
+/** Tabs: Home, Projects, Equipment, Notifications, Account. */
 export function AppTabs() {
   const { t } = useI18n();
   const { count: unreadCount } = useUnreadCount();
@@ -41,6 +41,11 @@ export function AppTabs() {
       <Tab.Screen name="Home" component={HomeStack} options={{ title: t("tabs.home"), headerShown: false }} />
       <Tab.Screen name="Projects" component={ProjectsScreen} options={{ title: t("tabs.projects") }} />
       <Tab.Screen
+        name="Equipment"
+        component={EquipmentStack}
+        options={{ title: t("tabs.equipment"), headerShown: false }}
+      />
+      <Tab.Screen
         name="Notifications"
         component={NotificationsScreen}
         options={{
@@ -48,7 +53,6 @@ export function AppTabs() {
           tabBarBadge: unreadCount > 0 ? unreadCount : undefined,
         }}
       />
-      <Tab.Screen name="Search" component={SearchScreen} options={{ title: t("tabs.search") }} />
       <Tab.Screen name="Account" component={AccountScreen} options={{ title: t("tabs.account") }} />
     </Tab.Navigator>
   );

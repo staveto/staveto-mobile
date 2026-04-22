@@ -11,6 +11,7 @@ import { OnboardingEvolutionScreen } from "../screens/OnboardingEvolutionScreen"
 import { ConsentRequiredScreen } from "../screens/ConsentRequiredScreen";
 import { OnboardingMvpScreen } from "../screens/OnboardingMvpScreen";
 import { HomeScreen } from "../screens/HomeScreen";
+import { SearchScreen } from "../screens/SearchScreen";
 import { NotificationsScreen } from "../screens/NotificationsScreen";
 import { CustomizeHomeScreen } from "../screens/CustomizeHomeScreen";
 import { TaskDetailScreen } from "../screens/TaskDetailScreen";
@@ -311,6 +312,11 @@ export function RootNavigator() {
         }}
       >
         <Stack.Screen name="AppTabs" component={AppDrawer} />
+      <Stack.Screen
+        name="GlobalSearch"
+        component={SearchScreen}
+        options={{ headerShown: true, title: t("tabs.search") }}
+      />
       <Stack.Screen name="Home" component={HomeScreen} options={{ headerShown: true, title: t("nav.home") }} />
       <Stack.Screen name="Notifications" component={NotificationsScreen} options={{ headerShown: true, title: t("nav.notifications") }} />
       <Stack.Screen

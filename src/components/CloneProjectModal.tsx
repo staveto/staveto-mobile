@@ -21,8 +21,7 @@ import { COUNTRY_CODES, getLocalizedCountryName } from "../utils/countries";
 import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
 import { doc, getDoc } from "../lib/rnFirestore";
 import { withTimeout } from "../utils/withTimeout";
-
-const ALLOWED_PROJECT_TYPES = ["BUILD", "RESIDENTIAL", "TRADE", "MANAGEMENT"] as const;
+import { isKnownStorageType, isLegacyMaintenanceEquipmentHub } from "../lib/projectTypeModel";
 
 type Props = {
   visible: boolean;
@@ -30,6 +29,8 @@ type Props = {
   sourceProjectId: string;
   sourceProjectName: string;
   sourceProjectType?: string;
+  /** When `sourceProjectType` is `MAINTENANCE`, distinguishes job workspace vs legacy equipment hub. */
+  sourceJobsTabVisible?: boolean;
   sourceCountryCode?: string;
   sourceCity?: string;
   sourceAddressText?: string;
@@ -43,6 +44,7 @@ export function CloneProjectModal({
   sourceProjectId,
   sourceProjectName,
   sourceProjectType,
+  sourceJobsTabVisible,
   sourceCountryCode = "SK",
   sourceCity = "",
   sourceAddressText = "",
@@ -170,7 +172,15 @@ export function CloneProjectModal({
     handleClose,
   ]);
 
-  const canShow = visible && isOwner && sourceProjectType && ALLOWED_PROJECT_TYPES.includes(sourceProjectType as (typeof ALLOWED_PROJECT_TYPES)[number]);
+  const canShow =
+    visible &&
+    isOwner &&
+    !!sourceProjectType &&
+    isKnownStorageType(sourceProjectType) &&
+    !isLegacyMaintenanceEquipmentHub({
+      projectType: sourceProjectType,
+      jobsTabVisible: sourceJobsTabVisible,
+    });
 
   if (!canShow) return null;
 

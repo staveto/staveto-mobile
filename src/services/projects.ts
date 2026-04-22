@@ -56,6 +56,17 @@ export function invalidateProjectsSessionCache(): void {
   inFlightPromise = null;
 }
 
+/** Owner-only field patch (e.g. idempotent `projectType` migration). */
+export async function patchProjectDocument(projectId: string, patch: Record<string, unknown>): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený.");
+  }
+  const ref = doc(db, COLLECTION, projectId);
+  await updateDoc(ref, { ...patch, updatedAt: serverTimestamp() });
+  invalidateProjectsSessionCache();
+}
+
 export function getProjectsPerfStats(): { callCount: number } {
   return { callCount: perfCallCount };
 }
@@ -82,6 +93,13 @@ export type ProjectDoc = {
   businessMode?: BusinessMode | null;
   creationMode?: CreationMode | null;
   isTemplate?: boolean; // Hidden from normal list when true
+  /**
+   * Job workspace marker for the Projects tab. New projects set `true` in `projectFactory`.
+   * Legacy `MAINTENANCE` docs used as equipment hubs omit this field and are hidden from the tab.
+   */
+  jobsTabVisible?: boolean;
+  /** Set once when client migrates legacy `projectType` to BUILD/TRADE (traceability). */
+  projectTypeBeforeProductV2?: string;
 };
 
 export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
@@ -123,6 +141,10 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     businessMode: businessMode ?? undefined,
     creationMode: creationMode ?? undefined,
     isTemplate: !!d.isTemplate,
+    jobsTabVisible:
+      typeof d.jobsTabVisible === "boolean" ? (d.jobsTabVisible as boolean) : undefined,
+    projectTypeBeforeProductV2:
+      typeof d.projectTypeBeforeProductV2 === "string" ? (d.projectTypeBeforeProductV2 as string) : undefined,
   };
 }
 

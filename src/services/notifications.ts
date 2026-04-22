@@ -16,6 +16,7 @@ import {
   addDoc,
 } from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
+import { getExtraEnv } from "../lib/env";
 
 export type NotificationType =
   | "TASK_ASSIGNED"
@@ -82,6 +83,18 @@ export type NotificationDoc = {
 
 const LOCAL_KEY = "@staveto:local_notifications";
 const PENDING_READ_KEY = "@staveto:pending_notification_reads";
+/** Client-side read receipts: notificationId -> ISO read time. Survives reload until server doc shows readAt (fixes stale remote / merge / eventual consistency). */
+const READ_RECEIPTS_KEY = "@staveto:notification_read_receipts_v1";
+const READ_RECEIPTS_MAX = 400;
+
+const NOTIF_READ_DEBUG = (typeof __DEV__ !== "undefined" && __DEV__) || getExtraEnv("EXPO_PUBLIC_NOTIF_READ_DEBUG") === "1";
+
+function notifReadLog(message: string, data?: Record<string, unknown>) {
+  if (NOTIF_READ_DEBUG) {
+    if (data) console.log(`[notifications:readDebug] ${message}`, data);
+    else console.log(`[notifications:readDebug] ${message}`);
+  }
+}
 
 const KNOWN_NOTIFICATION_TYPES: readonly NotificationType[] = [
   "TASK_ASSIGNED",
@@ -150,6 +163,65 @@ export function convertTimelikeToIso(ts: unknown): string | undefined {
   return undefined;
 }
 
+/** True if Firestore `readAt` should be treated as read (handles Timestamp, ISO string, millis). */
+export function hasMeaningfulReadAt(raw: unknown): boolean {
+  const iso = convertTimelikeToIso(raw);
+  return !!iso && String(iso).trim() !== "";
+}
+
+async function loadReadReceipts(): Promise<Record<string, string>> {
+  try {
+    const raw = await AsyncStorage.getItem(READ_RECEIPTS_KEY);
+    if (!raw) return {};
+    const parsed = JSON.parse(raw) as unknown;
+    if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) return {};
+    return parsed as Record<string, string>;
+  } catch {
+    return {};
+  }
+}
+
+async function saveReadReceipts(map: Record<string, string>): Promise<void> {
+  await AsyncStorage.setItem(READ_RECEIPTS_KEY, JSON.stringify(map));
+}
+
+/** Remember that this notification was read on this device until server snapshot shows readAt. */
+export async function recordReadReceipt(notificationId: string, readAtIso: string): Promise<void> {
+  const m = await loadReadReceipts();
+  m[notificationId] = readAtIso;
+  const entries = Object.entries(m).sort((a, b) => a[1].localeCompare(b[1]));
+  while (entries.length > READ_RECEIPTS_MAX) entries.shift();
+  await saveReadReceipts(Object.fromEntries(entries));
+  notifReadLog("recordReadReceipt", { id: notificationId, readAtIso });
+}
+
+async function clearReadReceipt(notificationId: string): Promise<void> {
+  const m = await loadReadReceipts();
+  if (!m[notificationId]) return;
+  delete m[notificationId];
+  await saveReadReceipts(m);
+  notifReadLog("clearReadReceipt", { id: notificationId });
+}
+
+/** Apply local receipts on top of remote rows; drop receipts when server already has readAt. */
+function applyReadReceiptsToRemoteList(
+  remote: NotificationDoc[],
+  receipts: Record<string, string>
+): { list: NotificationDoc[]; receiptIdsToClear: string[] } {
+  const receiptIdsToClear: string[] = [];
+  const list = remote.map((n) => {
+    const localIso = receipts[n.id];
+    if (!localIso) return n;
+    if (hasMeaningfulReadAt(n.readAt)) {
+      receiptIdsToClear.push(n.id);
+      return n;
+    }
+    notifReadLog("applyReadReceipt overlay (remote unread, client read)", { id: n.id, localIso });
+    return { ...n, readAt: localIso };
+  });
+  return { list, receiptIdsToClear };
+}
+
 function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): NotificationDoc {
   let raw: Record<string, unknown>;
   try {
@@ -213,7 +285,10 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
     type,
     createdAt: createdAtIso,
     createdAtSource,
-    readAt: convertTimelikeToIso(d.readAt) ?? null,
+    readAt: (() => {
+      const iso = convertTimelikeToIso(d.readAt);
+      return iso && String(iso).trim() !== "" ? iso : null;
+    })(),
     projectId: (d.projectId as string) ?? null,
     projectName: (d.projectName as string) ?? null,
     taskId: (d.taskId as string) ?? taskIdFromMeta ?? null,
@@ -294,8 +369,16 @@ async function saveLocalNotifications(list: NotificationDoc[]): Promise<void> {
 }
 
 async function queuePendingRead(notificationId: string, reason: string): Promise<void> {
-  const raw = await AsyncStorage.getItem(PENDING_READ_KEY);
-  const list = raw ? (JSON.parse(raw) as string[]) : [];
+  let list: string[] = [];
+  try {
+    const raw = await AsyncStorage.getItem(PENDING_READ_KEY);
+    if (raw) {
+      const parsed = JSON.parse(raw) as unknown;
+      if (Array.isArray(parsed)) list = parsed.filter((x): x is string => typeof x === "string");
+    }
+  } catch {
+    list = [];
+  }
   const newlyAdded = !list.includes(notificationId);
   if (newlyAdded) list.push(notificationId);
   await AsyncStorage.setItem(PENDING_READ_KEY, JSON.stringify(list));
@@ -342,7 +425,15 @@ async function persistReadAtOnNotificationDoc(ref: ReturnType<typeof doc>, logId
 async function flushPendingReads(userId: string): Promise<void> {
   const raw = await AsyncStorage.getItem(PENDING_READ_KEY);
   if (!raw) return;
-  const pending = JSON.parse(raw) as string[];
+  let pending: string[];
+  try {
+    const parsed = JSON.parse(raw) as unknown;
+    pending = Array.isArray(parsed) ? (parsed as unknown[]).filter((x): x is string => typeof x === "string") : [];
+  } catch (e) {
+    notifReadLog("flushPendingReads corrupt queue — clearing", { rawLen: raw.length, err: e instanceof Error ? e.message : String(e) });
+    await AsyncStorage.removeItem(PENDING_READ_KEY);
+    return;
+  }
   if (!pending.length) return;
   console.log("[notifications:diag] flushPendingReads start", {
     userId,
@@ -365,6 +456,11 @@ async function flushPendingReads(userId: string): Promise<void> {
     remaining: remaining.length,
     remainingIds: remaining.slice(0, 20),
   });
+  notifReadLog("flushPendingReads done", {
+    attempted: pending.length,
+    remaining: remaining.length,
+    remainingIds: remaining.slice(0, 24),
+  });
 }
 
 /**
@@ -374,7 +470,7 @@ async function flushPendingReads(userId: string): Promise<void> {
 export async function getUnreadCount(userId: string): Promise<number> {
   try {
     const list = await listNotifications(userId, { limitCount: USER_NOTIFICATION_QUERY_LIMIT });
-    return list.filter((n) => !n.readAt).length;
+    return list.filter((n) => !hasMeaningfulReadAt(n.readAt)).length;
   } catch {
     return 0;
   }
@@ -413,6 +509,12 @@ export async function listNotifications(
     })
     .filter((n): n is NotificationDoc => n != null);
 
+  const receipts = await loadReadReceipts();
+  const { list: remoteWithReceipts, receiptIdsToClear } = applyReadReceiptsToRemoteList(remote, receipts);
+  for (const id of receiptIdsToClear) {
+    await clearReadReceipt(id);
+  }
+
   if (__DEV__) {
     const limit = Math.min(30, snap.docs.length);
     for (let i = 0; i < limit; i++) {
@@ -432,13 +534,24 @@ export async function listNotifications(
         rawUpdatedAt: raw.updatedAt,
         parsedCreatedAt: parsed?.createdAt ?? null,
         createdAtSource: parsed?.createdAtSource ?? null,
-        unreadDecision: parsed ? !parsed.readAt : null,
+        unreadDecision: parsed ? !hasMeaningfulReadAt(parsed.readAt) : null,
       });
     }
   }
 
   const local = await loadLocalNotifications();
-  const merged = mergeRemoteAndLocalNotifications(remote, local);
+  const merged = mergeRemoteAndLocalNotifications(remoteWithReceipts, local);
+
+  const receiptOverlayCount = remoteWithReceipts.filter(
+    (n, i) => hasMeaningfulReadAt(n.readAt) && !hasMeaningfulReadAt(remote[i]?.readAt)
+  ).length;
+  notifReadLog("listNotifications after merge", {
+    remoteCount: remote.length,
+    receiptOverlayCount,
+    mergedCount: merged.length,
+    idsHead: merged.slice(0, 20).map((n) => n.id),
+    unreadIdsHead: merged.filter((n) => !hasMeaningfulReadAt(n.readAt)).slice(0, 15).map((n) => n.id),
+  });
 
   /** IDs still in queue after flush = writes that failed; treat as read in UI until retry succeeds. */
   const pendingAfterFlush = await readPendingReadQueue();
@@ -447,7 +560,7 @@ export async function listNotifications(
     pendingSet.size === 0
       ? merged
       : merged.map((n) =>
-          pendingSet.has(n.id) && (n.readAt == null || n.readAt === "")
+          pendingSet.has(n.id) && !hasMeaningfulReadAt(n.readAt)
             ? { ...n, readAt: new Date().toISOString() }
             : n
         );
@@ -469,7 +582,7 @@ export async function listNotifications(
           pendingStill: true,
           rawReadAtOnServer: rawRead ?? "(absent)",
           mergedParsedReadAt: mergedRow?.readAt ?? null,
-          mergeWouldShowUnread: !mergedRow?.readAt,
+          mergeWouldShowUnread: mergedRow ? !hasMeaningfulReadAt(mergedRow.readAt) : true,
         });
       }
     }
@@ -493,12 +606,17 @@ const notificationSortKey = (n: NotificationDoc) => {
   return Number.isNaN(t) ? 0 : t;
 };
 
-/** Dedupe by id: prefer an entry with readAt set; avoids duplicate rows and stale local overwriting server read. */
+/** Dedupe by id: prefer an entry with readAt set; avoids duplicate rows and stale remote unread overwriting local/read receipt. */
 function mergeRemoteAndLocalNotifications(remote: NotificationDoc[], local: NotificationDoc[]): NotificationDoc[] {
   const pickBetter = (a: NotificationDoc, b: NotificationDoc): NotificationDoc => {
-    const aRead = !!a.readAt;
-    const bRead = !!b.readAt;
+    const aRead = hasMeaningfulReadAt(a.readAt);
+    const bRead = hasMeaningfulReadAt(b.readAt);
     if (aRead !== bRead) return aRead ? a : b;
+    if (aRead && bRead) {
+      const ta = new Date(String(a.readAt)).getTime();
+      const tb = new Date(String(b.readAt)).getTime();
+      if (Number.isFinite(ta) && Number.isFinite(tb) && ta !== tb) return ta >= tb ? a : b;
+    }
     return notificationSortKey(a) >= notificationSortKey(b) ? a : b;
   };
   const byId = new Map<string, NotificationDoc>();
@@ -518,7 +636,9 @@ function mergeRemoteAndLocalNotifications(remote: NotificationDoc[], local: Noti
 
 /**
  * Marks one notification read in Firestore (or local AsyncStorage for isLocal).
- * @returns true if persisted immediately (or already read / local saved); false if Firestore write failed and id was queued for retry.
+ * @returns true if the inbox should treat the item as read: persisted on server, already read on server,
+ *   saved locally, or **queued for retry with a client read receipt** (reload stays read until Firestore catches up).
+ * @returns false only if neither server nor durable local fallback (receipt + pending queue) could be applied.
  */
 export async function markNotificationAsRead(notification: NotificationDoc): Promise<boolean> {
   if (notification.isLocal) {
@@ -539,7 +659,9 @@ export async function markNotificationAsRead(notification: NotificationDoc): Pro
     throw new Error("Nemáte oprávnenie na úpravu tejto notifikácie.");
   }
 
+  const readAtBefore = notification.readAt ?? null;
   const ref = doc(db, "notifications", notification.id);
+  notifReadLog("markNotificationAsRead start", { id: notification.id, readAtBefore });
 
   // Client may already show optimistic readAt while server still has null — must not skip the write.
   if (notification.readAt) {
@@ -547,7 +669,14 @@ export async function markNotificationAsRead(notification: NotificationDoc): Pro
       const snap = await getDoc(ref);
       if (snap.exists()) {
         const rawRa = (snap.data() as Record<string, unknown> | undefined)?.readAt;
-        if (rawRa != null) {
+        if (hasMeaningfulReadAt(rawRa)) {
+          const readAtAfter = convertTimelikeToIso(rawRa) ?? null;
+          notifReadLog("markNotificationAsRead server already read — skip write", {
+            id: notification.id,
+            readAtBefore,
+            readAtAfter,
+          });
+          await clearReadReceipt(notification.id).catch(() => {});
           console.log("[notifications:diag] markNotificationAsRead server already has readAt", {
             id: notification.id,
           });
@@ -564,16 +693,48 @@ export async function markNotificationAsRead(notification: NotificationDoc): Pro
 
   try {
     await persistReadAtOnNotificationDoc(ref, notification.id);
+    notifReadLog("markNotificationAsRead remote write OK", { id: notification.id, readAtBefore });
     console.log("[notifications:diag] markNotificationAsRead persisted", { id: notification.id });
+    await clearReadReceipt(notification.id).catch(() => {});
     return true;
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
-    await queuePendingRead(notification.id, reason);
+    const readNow = new Date().toISOString();
+    try {
+      await recordReadReceipt(notification.id, readNow);
+    } catch (receiptErr) {
+      notifReadLog("markNotificationAsRead recordReadReceipt failed", {
+        id: notification.id,
+        err: receiptErr instanceof Error ? receiptErr.message : String(receiptErr),
+      });
+    }
+    try {
+      await queuePendingRead(notification.id, reason);
+    } catch (queueErr) {
+      notifReadLog("markNotificationAsRead queuePendingRead failed — caller may rollback UI", {
+        id: notification.id,
+        err: queueErr instanceof Error ? queueErr.message : String(queueErr),
+      });
+      console.warn("[notifications:diag] markNotificationAsRead failed, NOT queued", {
+        id: notification.id,
+        reason,
+        queueErr: queueErr instanceof Error ? queueErr.message : String(queueErr),
+      });
+      return false;
+    }
+    notifReadLog("markNotificationAsRead remote write FAILED — receipt + pending queue", {
+      id: notification.id,
+      readAtBefore,
+      readAtAfterClient: readNow,
+      remoteWriteOk: false,
+      queued: true,
+      reason,
+    });
     console.warn("[notifications:diag] markNotificationAsRead failed, queued for retry", {
       id: notification.id,
       reason,
     });
-    return false;
+    return true;
   }
 }
 
@@ -595,14 +756,37 @@ export async function markAllAsRead(userId: string, maxCount: number = USER_NOTI
   const snap = await getDocs(q);
   const unreadDocs = snap.docs.filter((d) => {
     const ra = (d.data() as Record<string, unknown>).readAt;
-    return ra == null;
+    return !hasMeaningfulReadAt(ra);
   });
   if (unreadDocs.length === 0) return;
+  const ids = unreadDocs.map((d) => d.id);
   const batch = writeBatch(db);
   unreadDocs.forEach((d) => {
     batch.set(d.ref, { readAt: serverTimestamp() }, { merge: true });
   });
-  await batch.commit();
+  try {
+    await batch.commit();
+    for (const id of ids) {
+      await clearReadReceipt(id).catch(() => {});
+    }
+  } catch (e) {
+    const readNow = new Date().toISOString();
+    const msg = e instanceof Error ? e.message : String(e);
+    notifReadLog("markAllAsRead batch failed — recording receipts + queue", { count: ids.length, reason: msg });
+    for (const id of ids) {
+      try {
+        await recordReadReceipt(id, readNow);
+      } catch {
+        /* best effort */
+      }
+      try {
+        await queuePendingRead(id, `markAllAsRead: ${msg}`);
+      } catch {
+        /* best effort */
+      }
+    }
+    throw e;
+  }
 }
 
 export async function upsertTaskDueNotification(data: {
@@ -612,6 +796,8 @@ export async function upsertTaskDueNotification(data: {
   dueDate?: string | null;
   projectId?: string | null;
   projectName?: string | null;
+  /** Extra routing context (e.g. user-owned equipment service tasks). */
+  meta?: Record<string, unknown>;
 }): Promise<NotificationDoc | null> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
@@ -628,7 +814,7 @@ export async function upsertTaskDueNotification(data: {
   const ref = doc(db, "notifications", id);
   const existing = await getDoc(ref);
   const dueTimestamp = data.dueDate ? Timestamp.fromDate(parseDateOnly(data.dueDate) ?? new Date()) : null;
-  const payload = {
+  const payload: Record<string, unknown> = {
     userId: data.userId,
     type,
     projectId: data.projectId ?? null,
@@ -636,8 +822,11 @@ export async function upsertTaskDueNotification(data: {
     taskId: data.taskId,
     taskTitle: data.taskTitle ?? null,
     dueDate: dueTimestamp,
-    severity: type === "TASK_OVERDUE" ? "warning" : "info" as const,
+    severity: type === "TASK_OVERDUE" ? "warning" : "info",
   };
+  if (data.meta && typeof data.meta === "object") {
+    payload.meta = data.meta;
+  }
 
   if (existing.exists()) {
     await updateDoc(ref, { ...payload, updatedAt: serverTimestamp() });
@@ -651,7 +840,7 @@ export async function upsertTaskDueNotification(data: {
     expenseId: null,
     amount: null,
     currency: "EUR",
-  });
+  } as Record<string, unknown>);
 
   if (type === "TASK_OVERDUE") {
     const todayId = `task_${data.userId}_${data.taskId}_TASK_DUE_TODAY`;
@@ -701,6 +890,12 @@ export async function markTaskNotificationsRead(userId: string, taskId: string):
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       console.warn("[notifications:diag] markTaskNotificationsRead persist fail", { id, reason });
+      const readNow = new Date().toISOString();
+      try {
+        await recordReadReceipt(id, readNow);
+      } catch {
+        /* best effort */
+      }
       try {
         await queuePendingRead(id, `markTaskNotificationsRead: ${reason}`);
       } catch (queueErr) {

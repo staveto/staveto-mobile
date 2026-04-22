@@ -68,6 +68,20 @@ export const paths = {
   userProjectRefs: (uid: string) => `users/${uid}/projectRefs`,
   userProjectRef: (uid: string, projectId: string) =>
     `users/${uid}/projectRefs/${projectId}`,
+  /** User-owned equipment (tools, machines) — not project subdocuments. */
+  userEquipment: (uid: string) => `users/${uid}/equipment`,
+  userEquipmentItem: (uid: string, equipmentId: string) =>
+    `users/${uid}/equipment/${equipmentId}`,
+  /** Service rules (plans) on user-owned equipment — same semantics as project serviceRules. */
+  userEquipmentServiceRules: (uid: string, equipmentId: string) =>
+    `users/${uid}/equipment/${equipmentId}/serviceRules`,
+  userEquipmentServiceRule: (uid: string, equipmentId: string, ruleId: string) =>
+    `users/${uid}/equipment/${equipmentId}/serviceRules/${ruleId}`,
+  /** Open/done service work items for user equipment (not project tasks). */
+  userEquipmentServiceTasks: (uid: string, equipmentId: string) =>
+    `users/${uid}/equipment/${equipmentId}/serviceTasks`,
+  userEquipmentServiceTask: (uid: string, equipmentId: string, taskId: string) =>
+    `users/${uid}/equipment/${equipmentId}/serviceTasks/${taskId}`,
   // Time tracking
   userDoc: (uid: string) => `users/${uid}`,
   timeEntries: () => `timeEntries`,

@@ -272,16 +272,15 @@ export function validateAiProjectPlan(data: unknown): ValidationError[] | null {
  */
 export function mapAiCategoryToFirestore(
   category: AiCategory
-): "BUILD" | "TRADE" | "MAINTENANCE" {
+): "BUILD" | "TRADE" {
   switch (category) {
     case "construction":
     case "renovation":
       return "BUILD";
     case "trade_installation":
-      return "TRADE";
     case "service":
     case "maintenance":
-      return "MAINTENANCE";
+      return "TRADE";
     default:
       return "BUILD";
   }

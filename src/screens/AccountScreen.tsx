@@ -78,7 +78,8 @@ const rowStyles = StyleSheet.create({
     borderBottomColor: colors.border,
   },
   icon: { marginRight: spacing.md, width: 28, textAlign: "center" },
-  label: { flex: 1, fontSize: 16, color: colors.text },
+  /** minWidth: 0 so long right-side text cannot squeeze label to one-character width (Android). */
+  label: { flex: 1, minWidth: 0, flexShrink: 1, fontSize: 16, color: colors.text },
 });
 
 function SectionTitle({ title }: { title: string }) {
@@ -127,10 +128,15 @@ export function AccountScreen() {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [contractorsEnabled, setContractorsEnabled] = useState(false);
   const [showFeedbackModal, setShowFeedbackModal] = useState(false);
-  const [primaryUsageMode, setPrimaryUsageMode] = useState<"build" | "trade" | "maintenance" | null>(null);
+  const [primaryUsageMode, setPrimaryUsageMode] = useState<"build" | "trade" | null>(null);
   const [showUsageModeModal, setShowUsageModeModal] = useState(false);
 
-  const nav = navigation as { navigate: (name: string) => void };
+  const nav = navigation as { navigate: (name: string, params?: object) => void };
+
+  const openTasksTab = useCallback(() => {
+    // Tasks lives in HomeStack, not on the tab root — nest by tab name "Home".
+    nav.navigate("Home", { screen: "Tasks" });
+  }, [nav]);
   const displayName = user?.name ?? user?.email ?? "—";
   const initials = displayName !== "—" ? displayName.slice(0, 2).toUpperCase() : "?";
 
@@ -195,15 +201,20 @@ export function AccountScreen() {
         setProfileFirstName(data.firstName ?? user.firstName ?? "");
         setProfileLastName(data.lastName ?? user.lastName ?? "");
         setProfilePhone(data.phoneE164 ?? "");
-        if (data.primaryUsageMode && ["build", "trade", "maintenance"].includes(data.primaryUsageMode)) {
-          setPrimaryUsageMode(data.primaryUsageMode);
+        const rawUsage = data.primaryUsageMode;
+        if (rawUsage === "build" || rawUsage === "trade") {
+          setPrimaryUsageMode(rawUsage);
+        } else if (rawUsage === "maintenance") {
+          setPrimaryUsageMode("trade");
         } else {
           const pending = await AsyncStorage.getItem("pending_onboarding");
           if (pending) {
             try {
-              const parsed = JSON.parse(pending) as { mode?: "build" | "trade" | "maintenance" };
-              if (parsed?.mode && ["build", "trade", "maintenance"].includes(parsed.mode)) {
+              const parsed = JSON.parse(pending) as { mode?: string };
+              if (parsed?.mode === "build" || parsed?.mode === "trade") {
                 setPrimaryUsageMode(parsed.mode);
+              } else if (parsed?.mode === "maintenance") {
+                setPrimaryUsageMode("trade");
               }
             } catch {
               // ignore
@@ -233,9 +244,11 @@ export function AccountScreen() {
         const pending = await AsyncStorage.getItem("pending_onboarding");
         if (pending) {
           try {
-            const parsed = JSON.parse(pending) as { mode?: "build" | "trade" | "maintenance" };
-            if (parsed?.mode && ["build", "trade", "maintenance"].includes(parsed.mode)) {
+            const parsed = JSON.parse(pending) as { mode?: string };
+            if (parsed?.mode === "build" || parsed?.mode === "trade") {
               setPrimaryUsageMode(parsed.mode);
+            } else if (parsed?.mode === "maintenance") {
+              setPrimaryUsageMode("trade");
             }
           } catch {
             // ignore
@@ -314,11 +327,13 @@ export function AccountScreen() {
   }, [user?.id, profileFirstName, profileLastName, profilePhone, profileProfessionCode, profileProfessionOtherText, profilePhotoURL, profileHourlyRate, t]);
 
   const saveUsageMode = useCallback(
-    async (mode: "build" | "trade" | "maintenance") => {
+    async (mode: "build" | "trade") => {
       if (!user?.id) return;
       setPrimaryUsageMode(mode);
       setShowUsageModeModal(false);
       try {
+        const { persistPrimaryUsageMode } = await import("../lib/primaryUsageMode");
+        await persistPrimaryUsageMode(mode);
         await updateDoc(doc(db, "users", user.id), {
           primaryUsageMode: mode,
           updatedAt: serverTimestamp(),
@@ -444,17 +459,19 @@ export function AccountScreen() {
           }
         />
         <Row icon="chatbubble-outline" label={t("account.sendMessage")} onPress={() => Alert.alert(t("account.comingSoon"))} />
-        <Row icon="checkbox-outline" label={t("account.viewTasks")} onPress={() => nav.navigate("Tasks")} />
+        <Row icon="checkbox-outline" label={t("account.viewTasks")} onPress={openTasksTab} />
         <Row
           icon="construct-outline"
-          label={t("account.primaryUsageMode")}
+          label={t("account.usageModeRowLabel")}
           onPress={() => setShowUsageModeModal(true)}
           right={
-            <Text style={styles.localeBadge}>
-              {primaryUsageMode
-                ? t(`onboardingMvp.option${primaryUsageMode.charAt(0).toUpperCase() + primaryUsageMode.slice(1)}`)
-                : t("account.primaryUsageModeNotSet")}
-            </Text>
+            <View style={styles.usageModeValueWrap}>
+              <Text style={styles.localeBadge} numberOfLines={1} ellipsizeMode="tail">
+                {primaryUsageMode
+                  ? t(`onboardingMvp.option${primaryUsageMode.charAt(0).toUpperCase() + primaryUsageMode.slice(1)}`)
+                  : t("account.primaryUsageModeNotSet")}
+              </Text>
+            </View>
           }
         />
       </View>
@@ -842,8 +859,8 @@ export function AccountScreen() {
         <View style={styles.modalBackdrop}>
           <Pressable style={StyleSheet.absoluteFill} onPress={() => setShowUsageModeModal(false)} />
           <View style={styles.languageModal}>
-            <Text style={styles.languageModalTitle}>{t("account.primaryUsageMode")}</Text>
-            {(["build", "trade", "maintenance"] as const).map((mode) => (
+            <Text style={styles.languageModalTitle}>{t("onboardingMvp.step1Title")}</Text>
+            {(["build", "trade"] as const).map((mode) => (
               <TouchableOpacity
                 key={mode}
                 style={[styles.languageOption, primaryUsageMode === mode && styles.languageOptionActive]}
@@ -1052,6 +1069,8 @@ const styles = StyleSheet.create({
   },
   logoutBtnText: { color: "#fff", fontWeight: "600" },
   localeBadge: { fontSize: 14, color: colors.textMuted },
+  /** Keep long usage-mode option text from stealing all row width next to the label. */
+  usageModeValueWrap: { maxWidth: "52%", flexShrink: 0, marginLeft: spacing.sm },
   modalBackdrop: {
     flex: 1,
     backgroundColor: "rgba(0,0,0,0.5)",

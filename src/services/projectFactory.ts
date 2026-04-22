@@ -10,7 +10,7 @@ import { paths } from '../lib/firestorePaths';
 import { getTemplatePhases, getTemplateTasks } from './templateService';
 import { FALLBACK_TEMPLATE_ID } from '../utils/templateResolver';
 import { createProjectCreatedNotification } from './notifications';
-import type { ProjectType } from '../lib/types';
+import type { ActiveProjectStorageType } from '../lib/projectTypeModel';
 import type { WorkType, BusinessMode, CreationMode } from '../lib/projectEnums';
 
 export type PhaseStatus = 'completed' | 'active' | 'later';
@@ -23,7 +23,8 @@ export interface PhaseCustomization {
 
 export interface CreateProjectFromTemplateParams {
   // ownerId removed - always uses auth.currentUser.uid internally
-  projectType: ProjectType;
+  /** Must be `BUILD` or `TRADE` (active product types). */
+  projectType: ActiveProjectStorageType;
   templateId: string;
   name: string;
   addressText?: string; // Optional: project address
@@ -99,7 +100,12 @@ export async function instantiateTemplate(
     throw new Error('Názov projektu je povinný');
   }
   
-  console.log(`[projectFactory] Creating project: name="${name}", type="${projectType}", template="${templateId}"`);
+  if (projectType !== "BUILD" && projectType !== "TRADE") {
+    throw new Error(`Nepodporovaný typ projektu: ${projectType}. Povolené sú len BUILD a TRADE.`);
+  }
+  const storageType = projectType as ActiveProjectStorageType;
+
+  console.log(`[projectFactory] Creating project: name="${name}", type="${storageType}", template="${templateId}"`);
   console.log(`[projectFactory] Using ownerId from auth.currentUser.uid: "${ownerId}"`);
   
   // 1. Create project document
@@ -110,11 +116,13 @@ export async function instantiateTemplate(
   // This ensures exact match with what Firestore rules expect
   const projectData: any = {
     ownerId: ownerId, // Direct assignment from currentUser.uid (no modifications)
-    projectType,
+    projectType: storageType,
     templateId,
     name,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
+    /** Projects tab: job workspace (excludes legacy MAINTENANCE equipment hubs without this flag). */
+    jobsTabVisible: true,
   };
   
   // Add addressText if provided
@@ -157,7 +165,7 @@ export async function instantiateTemplate(
   if (templateId && templateId.trim()) {
     try {
       console.log(`[projectFactory] Loading template ${templateId}...`);
-      console.log(`[projectFactory] DEBUG: templateId="${templateId}", projectType="${projectType}"`);
+      console.log(`[projectFactory] DEBUG: templateId="${templateId}", projectType="${storageType}"`);
       
       const [loadedPhases, loadedTasks] = await Promise.all([
         getTemplatePhases(templateId),
@@ -247,7 +255,7 @@ export async function instantiateTemplate(
   console.log(`[projectFactory] DEBUG: Match? ${projectData.ownerId === currentUser.uid ? '✅ YES' : '❌ NO'}`);
   
   try {
-    console.log(`[projectFactory] Setting project document... projectType="${projectType}"`);
+    console.log(`[projectFactory] Setting project document... projectType="${storageType}"`);
     await setDoc(projectRef, projectData);
     console.log(`[projectFactory] ✅ Project document created successfully. Project ID: ${projectId}, projectType: ${projectData.projectType}`);
   } catch (error: any) {

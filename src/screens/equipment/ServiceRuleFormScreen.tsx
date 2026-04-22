@@ -26,6 +26,8 @@ try {
 }
 import * as serviceRulesService from "../../services/serviceRules";
 import * as serviceTasksService from "../../services/serviceTasks";
+import * as userServiceRulesService from "../../services/userServiceRules";
+import * as userEquipmentServiceTasks from "../../services/userEquipmentServiceTasks";
 
 function genId() {
   return "id_" + Date.now() + "_" + Math.random().toString(36).slice(2, 11);
@@ -36,15 +38,28 @@ export function ServiceRuleFormScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
-  const { projectId, projectName, equipmentId, equipmentName, ruleId, rule: ruleParam } = (route.params as {
+  const {
+    projectId,
+    projectName,
+    equipmentId,
+    equipmentName,
+    ruleId,
+    rule: ruleParam,
+    serviceScope,
+    userId: userScopeId,
+  } = (route.params as {
     projectId?: string;
     projectName?: string;
     equipmentId?: string;
     equipmentName?: string;
     ruleId?: string;
     rule?: import("../../services/serviceRules").ServiceRuleDoc;
+    /** When set to "user", reads/writes users/{userId}/equipment/.../serviceRules */
+    serviceScope?: "user" | "project";
+    userId?: string;
   }) ?? {};
 
+  const userScope = serviceScope === "user" && !!userScopeId && !!equipmentId;
   const isEdit = !!ruleId;
 
   const [title, setTitle] = useState("");
@@ -59,11 +74,16 @@ export function ServiceRuleFormScreen() {
   const goBack = () => navigation.goBack();
 
   useEffect(() => {
-    if (!isEdit || !projectId || !ruleId) return;
+    if (!isEdit || !ruleId) return;
+    if (!userScope && !projectId) return;
+    if (userScope && !userScopeId) return;
+
     const loadRule = async () => {
       setLoading(true);
       try {
-        const r = ruleParam ?? (await serviceRulesService.getServiceRule(projectId, ruleId));
+        const r = userScope
+          ? ruleParam ?? (await userServiceRulesService.getUserEquipmentServiceRule(userScopeId!, equipmentId!, ruleId))
+          : ruleParam ?? (await serviceRulesService.getServiceRule(projectId!, ruleId));
         if (r) {
           setTitle(r.title);
           setIntervalUnit(r.intervalUnit);
@@ -80,7 +100,7 @@ export function ServiceRuleFormScreen() {
       }
     };
     loadRule();
-  }, [isEdit, projectId, ruleId]);
+  }, [isEdit, projectId, ruleId, userScope, userScopeId, equipmentId]);
 
   const addChecklistItem = () => {
     setChecklistItems((prev) => [...prev, { id: genId(), title: "" }]);
@@ -95,7 +115,9 @@ export function ServiceRuleFormScreen() {
   };
 
   const onSave = async () => {
-    if (!projectId || !equipmentId) return;
+    if (!equipmentId) return;
+    if (!userScope && !projectId) return;
+    if (userScope && !userScopeId) return;
     if (!title.trim()) {
       Alert.alert(t("common.error"), t("equipment.servicePlanNameRequired"));
       return;
@@ -108,6 +130,32 @@ export function ServiceRuleFormScreen() {
     setSubmitting(true);
     try {
       const checklist = checklistItems.filter((i) => i.title.trim()).map((i) => ({ id: i.id, title: i.title.trim() }));
+      if (userScope && userScopeId) {
+        if (isEdit && ruleId) {
+          await userServiceRulesService.updateUserEquipmentServiceRule(userScopeId, equipmentId, ruleId, {
+            title: title.trim(),
+            intervalUnit,
+            intervalValue: val,
+            startFrom: startFromDate,
+            checklistTemplate: checklist,
+          });
+          goBack();
+        } else {
+          const rule = await userServiceRulesService.createUserEquipmentServiceRule(userScopeId, equipmentId, {
+            title: title.trim(),
+            intervalUnit,
+            intervalValue: val,
+            startFrom: startFromDate,
+            checklistTemplate: checklist,
+          });
+          const dueAt = new Date(rule.nextDueAt);
+          await userEquipmentServiceTasks.createUserEquipmentServiceTaskFromRule(userScopeId, equipmentId, rule, dueAt);
+          goBack();
+        }
+        return;
+      }
+
+      if (!projectId) return;
       if (isEdit && ruleId) {
         await serviceRulesService.updateServiceRule(projectId, ruleId, {
           title: title.trim(),

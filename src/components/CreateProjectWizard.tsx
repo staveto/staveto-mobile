@@ -1,4 +1,8 @@
-import React, { useCallback, useState } from "react";
+/**
+ * New-project wizard: **Build vs trade job** — primary product modes.
+ * MAINTENANCE / equipment remain in backend types only, not as a primary choice here.
+ */
+import React, { useCallback, useEffect, useState } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Platform } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
@@ -12,7 +16,6 @@ import type {
 import {
   WORK_TYPES_BUILD,
   WORK_TYPES_TRADE,
-  MAINTENANCE_SCOPES,
 } from "../lib/projectEnums";
 
 export type WizardResult = {
@@ -22,18 +25,26 @@ export type WizardResult = {
   creationMode: CreationMode;
 };
 
-const ENGINE_TYPES: ProjectEngineType[] = ["BUILD", "TRADE", "MAINTENANCE"];
+const ENGINE_TYPES = ["BUILD", "TRADE"] as const satisfies readonly ProjectEngineType[];
 const BUSINESS_MODES: BusinessMode[] = ["DIRECT", "SUBCONTRACT", "INTERNAL"];
 
 type Props = {
   onComplete: (result: WizardResult) => void;
   onCancel: () => void;
+  /** From onboarding / profile — preselect step 1. */
+  initialEngineType?: "BUILD" | "TRADE";
 };
 
-export function CreateProjectWizard({ onComplete, onCancel }: Props) {
+export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }: Props) {
   const { t, locale } = useI18n();
   const [step, setStep] = useState(1);
   const [engineType, setEngineType] = useState<ProjectEngineType | null>(null);
+
+  useEffect(() => {
+    if (step === 1 && (initialEngineType === "BUILD" || initialEngineType === "TRADE")) {
+      setEngineType(initialEngineType);
+    }
+  }, [initialEngineType, step]);
   const [workType, setWorkType] = useState<WorkType | null>(null);
   const [businessMode, setBusinessMode] = useState<BusinessMode | null>(null);
 
@@ -49,16 +60,7 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
     if (step === 1 && engineType) {
       setStep(2);
     } else if (step === 2) {
-      if (engineType === "MAINTENANCE") {
-        onComplete({
-          engineType: "MAINTENANCE",
-          workType,
-          businessMode: null,
-          creationMode: "MANUAL",
-        });
-      } else {
-        setStep(3);
-      }
+      setStep(3);
     } else if (step === 3) {
       setStep(4);
     }
@@ -85,7 +87,7 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
 
   return (
     <View style={styles.wrapper}>
-      {step === 1 ? (
+        {step === 1 ? (
         <View style={styles.step1HeaderOnly}>
           <Text style={styles.stepHeadline}>{t("createProject.wizard.step1Headline")}</Text>
         </View>
@@ -97,12 +99,7 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
           <View style={styles.engineCardsColumn}>
             {ENGINE_TYPES.map((type) => {
               const isActive = engineType === type;
-              const icon =
-                type === "BUILD"
-                  ? "home-outline"
-                  : type === "TRADE"
-                    ? "briefcase-outline"
-                    : "settings-outline";
+              const icon = type === "BUILD" ? "home-outline" : "briefcase-outline";
               return (
                 <TouchableOpacity
                   key={type}
@@ -152,17 +149,9 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
 
         {step === 2 && engineType && (
           <View style={styles.chipsRow}>
-            {(engineType === "BUILD"
-              ? WORK_TYPES_BUILD
-              : engineType === "TRADE"
-                ? WORK_TYPES_TRADE
-                : MAINTENANCE_SCOPES
-            ).map((type) => {
+            {(engineType === "BUILD" ? WORK_TYPES_BUILD : WORK_TYPES_TRADE).map((type) => {
               const isActive = workType === type;
-              const keyPrefix =
-                engineType === "MAINTENANCE"
-                  ? "createProject.wizard.maintenanceScope"
-                  : "createProject.wizard.workType";
+              const keyPrefix = "createProject.wizard.workType";
               return (
                 <TouchableOpacity
                   key={type}
@@ -179,7 +168,7 @@ export function CreateProjectWizard({ onComplete, onCancel }: Props) {
           </View>
         )}
 
-        {step === 3 && engineType && engineType !== "MAINTENANCE" && (
+        {step === 3 && engineType && (
           <View style={styles.chipsRow}>
             {BUSINESS_MODES.map((mode) => {
               const isActive = businessMode === mode;
@@ -270,6 +259,9 @@ const styles = StyleSheet.create({
   wrapper: {
     flex: 1,
     minHeight: 280,
+  },
+  step1HeaderOnly: {
+    marginBottom: spacing.sm,
   },
   step1HeaderRow: {
     flexDirection: "row",

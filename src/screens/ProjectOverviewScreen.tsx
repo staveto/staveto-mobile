@@ -656,7 +656,10 @@ export function ProjectOverviewScreen() {
       setProjectMembers(members);
 
       // MAINTENANCE v2: load equipment and service rules count only for MAINTENANCE projects
-      const isMaintenanceLike = projectOverviewLoadsEquipmentAndServiceRules(projectTypeForLoad);
+      const isMaintenanceLike = projectOverviewLoadsEquipmentAndServiceRules({
+        projectType: projectTypeForLoad,
+        jobsTabVisible: project?.jobsTabVisible,
+      });
       if (isMaintenanceLike) {
         try {
           const [eq, rules] = await Promise.all([

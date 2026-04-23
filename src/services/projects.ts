@@ -6,7 +6,7 @@ import { db, auth } from "../firebase";
 import { getApp } from "@react-native-firebase/app";
 import { paths } from "../lib/firestorePaths";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
-import type { WorkType, BusinessMode, CreationMode } from "../lib/projectEnums";
+import type { WorkType, BusinessMode, CreationMode, JobWorkflowKind, ServiceMaintenanceScope } from "../lib/projectEnums";
 
 const COLLECTION = "projects";
 const CACHE_TTL_MS = 300_000;
@@ -100,6 +100,10 @@ export type ProjectDoc = {
   jobsTabVisible?: boolean;
   /** Set once when client migrates legacy `projectType` to BUILD/TRADE (traceability). */
   projectTypeBeforeProductV2?: string;
+  /** TRADE: standard job vs service/maintenance workflow (optional on legacy docs). */
+  jobWorkflowKind?: JobWorkflowKind | null;
+  /** When jobWorkflowKind is SERVICE: property vs equipment maintenance. */
+  serviceMaintenanceScope?: ServiceMaintenanceScope | null;
 };
 
 export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
@@ -121,6 +125,8 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
   const workType = d.workType as WorkType | null | undefined;
   const businessMode = d.businessMode as BusinessMode | null | undefined;
   const creationMode = d.creationMode as CreationMode | null | undefined;
+  const jwk = d.jobWorkflowKind as JobWorkflowKind | null | undefined;
+  const sms = d.serviceMaintenanceScope as ServiceMaintenanceScope | null | undefined;
   return {
     id: docSnap.id,
     name: (d.name as string) ?? "",
@@ -145,6 +151,9 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
       typeof d.jobsTabVisible === "boolean" ? (d.jobsTabVisible as boolean) : undefined,
     projectTypeBeforeProductV2:
       typeof d.projectTypeBeforeProductV2 === "string" ? (d.projectTypeBeforeProductV2 as string) : undefined,
+    jobWorkflowKind: jwk === "STANDARD" || jwk === "SERVICE" ? jwk : undefined,
+    serviceMaintenanceScope:
+      sms === "PROPERTY" || sms === "EQUIPMENT" ? sms : undefined,
   };
 }
 

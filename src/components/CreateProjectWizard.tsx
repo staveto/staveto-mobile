@@ -1,9 +1,18 @@
 /**
- * New-project wizard: **Build vs trade job** — primary product modes.
- * MAINTENANCE / equipment remain in backend types only, not as a primary choice here.
+ * Simplified new-project wizard: BUILD vs TRADE only.
+ * TRADE: standard job vs service/maintenance → property vs equipment maintenance.
+ * BUILD: Neubau / Renovierung only. Name step before AI/manual choice.
  */
 import React, { useCallback, useEffect, useState } from "react";
-import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Platform } from "react-native";
+import {
+  View,
+  Text,
+  TouchableOpacity,
+  StyleSheet,
+  ScrollView,
+  Platform,
+  TextInput,
+} from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
@@ -12,10 +21,8 @@ import type {
   WorkType,
   BusinessMode,
   CreationMode,
-} from "../lib/projectEnums";
-import {
-  WORK_TYPES_BUILD,
-  WORK_TYPES_TRADE,
+  JobWorkflowKind,
+  ServiceMaintenanceScope,
 } from "../lib/projectEnums";
 
 export type WizardResult = {
@@ -23,78 +30,135 @@ export type WizardResult = {
   workType: WorkType | null;
   businessMode: BusinessMode | null;
   creationMode: CreationMode;
+  jobWorkflowKind?: JobWorkflowKind | null;
+  serviceMaintenanceScope?: ServiceMaintenanceScope | null;
+  /** Shown in next modal / AI brief — required before creation mode. */
+  projectNameOrDescription: string;
 };
 
 const ENGINE_TYPES = ["BUILD", "TRADE"] as const satisfies readonly ProjectEngineType[];
-const BUSINESS_MODES: BusinessMode[] = ["DIRECT", "SUBCONTRACT", "INTERNAL"];
+const BUILD_KINDS = ["NEW_BUILD", "RENOVATION"] as const;
 
 type Props = {
   onComplete: (result: WizardResult) => void;
   onCancel: () => void;
-  /** From onboarding / profile — preselect step 1. */
   initialEngineType?: "BUILD" | "TRADE";
 };
 
 export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }: Props) {
-  const { t, locale } = useI18n();
+  const { t } = useI18n();
   const [step, setStep] = useState(1);
   const [engineType, setEngineType] = useState<ProjectEngineType | null>(null);
+  const [buildKind, setBuildKind] = useState<(typeof BUILD_KINDS)[number] | null>(null);
+  const [tradeKind, setTradeKind] = useState<JobWorkflowKind | null>(null);
+  const [serviceScope, setServiceScope] = useState<ServiceMaintenanceScope | null>(null);
+  const [projectTitle, setProjectTitle] = useState("");
 
+  /** Preselect only — user always sees step 1 (BUILD vs TRADE) first. */
   useEffect(() => {
-    if (step === 1 && (initialEngineType === "BUILD" || initialEngineType === "TRADE")) {
+    if (initialEngineType === "BUILD" || initialEngineType === "TRADE") {
       setEngineType(initialEngineType);
     }
-  }, [initialEngineType, step]);
-  const [workType, setWorkType] = useState<WorkType | null>(null);
-  const [businessMode, setBusinessMode] = useState<BusinessMode | null>(null);
+  }, [initialEngineType]);
+
+  const deriveWorkType = useCallback((): WorkType | null => {
+    if (!engineType) return null;
+    if (engineType === "BUILD") {
+      if (buildKind === "NEW_BUILD") return "NEW_BUILD";
+      if (buildKind === "RENOVATION") return "RENOVATION";
+      return null;
+    }
+    if (tradeKind === "SERVICE") return "REPAIR";
+    if (tradeKind === "STANDARD") return "REPAIR";
+    return "REPAIR";
+  }, [engineType, buildKind, tradeKind]);
 
   const completeWithCreationMode = useCallback(
     (creationMode: CreationMode) => {
       if (!engineType) return;
-      onComplete({ engineType, workType, businessMode, creationMode });
+      const wt = deriveWorkType();
+      const name = projectTitle.trim();
+      if (!name) return;
+      const jwk: JobWorkflowKind | null = engineType === "TRADE" ? tradeKind : null;
+      const sms: ServiceMaintenanceScope | null =
+        engineType === "TRADE" && tradeKind === "SERVICE" ? serviceScope : null;
+      onComplete({
+        engineType,
+        workType: wt,
+        businessMode: null,
+        creationMode,
+        jobWorkflowKind: jwk,
+        serviceMaintenanceScope: sms,
+        projectNameOrDescription: name,
+      });
     },
-    [engineType, workType, businessMode, onComplete]
+    [engineType, deriveWorkType, onComplete, projectTitle, serviceScope, tradeKind]
   );
 
-  const handleNext = () => {
-    if (step === 1 && engineType) {
-      setStep(2);
-    } else if (step === 2) {
-      setStep(3);
+  const goNext = () => {
+    if (step === 1 && engineType) setStep(2);
+    else if (step === 2) {
+      if (engineType === "BUILD") {
+        if (!buildKind) return;
+        setStep(4);
+      } else {
+        if (!tradeKind) return;
+        if (tradeKind === "SERVICE") setStep(3);
+        else setStep(4);
+      }
     } else if (step === 3) {
+      if (!serviceScope) return;
       setStep(4);
+    } else if (step === 4) {
+      if (!projectTitle.trim()) return;
+      setStep(5);
     }
   };
 
-  const handleBack = () => {
-    if (step > 1) setStep(step - 1);
-    else onCancel();
+  const goBack = () => {
+    if (step === 1) onCancel();
+    else if (step === 2) {
+      setStep(1);
+    } else if (step === 3) setStep(2);
+    else if (step === 4) {
+      if (engineType === "TRADE" && tradeKind === "SERVICE") setStep(3);
+      else setStep(2);
+    } else if (step === 5) setStep(4);
   };
 
   const canNext = () => {
     if (step === 1) return !!engineType;
-    return true;
+    if (step === 2) {
+      if (engineType === "BUILD") return !!buildKind;
+      return !!tradeKind;
+    }
+    if (step === 3) return !!serviceScope;
+    if (step === 4) return projectTitle.trim().length > 0;
+    return false;
   };
-
-  const nextEnabled = canNext();
 
   const getStepTitle = () => {
     if (step === 1) return t("createProject.wizard.step1Title");
-    if (step === 2 && engineType) return t(`createProject.wizard.step2Title.${engineType}`);
-    if (step === 3 && engineType) return t(`createProject.wizard.step3Title.${engineType}`);
+    if (step === 2 && engineType === "BUILD") return t("createProject.wizard.v2.buildKindTitle");
+    if (step === 2 && engineType === "TRADE") return t("createProject.wizard.v2.tradeKindTitle");
+    if (step === 3) return t("createProject.wizard.v2.serviceScopeTitle");
+    if (step === 4) return t("createProject.wizard.v2.nameStepTitle");
     return t("createProject.wizard.step4Title");
   };
 
   return (
     <View style={styles.wrapper}>
-        {step === 1 ? (
+      {step === 1 ? (
         <View style={styles.step1HeaderOnly}>
           <Text style={styles.stepHeadline}>{t("createProject.wizard.step1Headline")}</Text>
+          {initialEngineType === "BUILD" || initialEngineType === "TRADE" ? (
+            <Text style={styles.step1Recommended}>{t("createProject.wizard.step1RecommendedSubtitle")}</Text>
+          ) : null}
         </View>
       ) : (
         <Text style={styles.stepTitle}>{getStepTitle()}</Text>
       )}
-      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false}>
+      <ScrollView style={styles.scroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
         {step === 1 && (
           <View style={styles.engineCardsColumn}>
             {ENGINE_TYPES.map((type) => {
@@ -129,15 +193,6 @@ export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }:
                         <Text style={[styles.engineCardSubtitle, isActive && styles.engineCardSubtitleActive]} numberOfLines={2}>
                           {t(`createProject.wizard.engineCardLine.${type}`)}
                         </Text>
-                        <View style={styles.engineExampleChipsRow}>
-                          {([0, 1, 2] as const).map((i) => (
-                            <View key={i} style={styles.engineExampleChip}>
-                              <Text style={styles.engineExampleChipText} numberOfLines={1}>
-                                {t(`createProject.wizard.engineChip.${type}.${i}`)}
-                              </Text>
-                            </View>
-                          ))}
-                        </View>
                       </View>
                     </View>
                   </View>
@@ -147,20 +202,19 @@ export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }:
           </View>
         )}
 
-        {step === 2 && engineType && (
+        {step === 2 && engineType === "BUILD" && (
           <View style={styles.chipsRow}>
-            {(engineType === "BUILD" ? WORK_TYPES_BUILD : WORK_TYPES_TRADE).map((type) => {
-              const isActive = workType === type;
-              const keyPrefix = "createProject.wizard.workType";
+            {BUILD_KINDS.map((k) => {
+              const isActive = buildKind === k;
               return (
                 <TouchableOpacity
-                  key={type}
+                  key={k}
                   style={[styles.chip, isActive && styles.chipActive]}
-                  onPress={() => setWorkType(isActive ? null : type)}
+                  onPress={() => setBuildKind(isActive ? null : k)}
                   activeOpacity={0.8}
                 >
                   <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
-                    {t(`${keyPrefix}.${type}`)}
+                    {t(`createProject.wizard.v2.buildKind.${k}`)}
                   </Text>
                 </TouchableOpacity>
               );
@@ -168,19 +222,22 @@ export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }:
           </View>
         )}
 
-        {step === 3 && engineType && (
+        {step === 2 && engineType === "TRADE" && (
           <View style={styles.chipsRow}>
-            {BUSINESS_MODES.map((mode) => {
-              const isActive = businessMode === mode;
+            {(["STANDARD", "SERVICE"] as const).map((k) => {
+              const isActive = tradeKind === k;
               return (
                 <TouchableOpacity
-                  key={mode}
+                  key={k}
                   style={[styles.chip, isActive && styles.chipActive]}
-                  onPress={() => setBusinessMode(isActive ? null : mode)}
+                  onPress={() => {
+                    setTradeKind(isActive ? null : k);
+                    if (k === "STANDARD") setServiceScope(null);
+                  }}
                   activeOpacity={0.8}
                 >
                   <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
-                    {t(`createProject.wizard.businessMode.${engineType}.${mode}`)}
+                    {t(`createProject.wizard.v2.tradeKind.${k}`)}
                   </Text>
                 </TouchableOpacity>
               );
@@ -188,7 +245,43 @@ export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }:
           </View>
         )}
 
-        {step === 4 && engineType && (
+        {step === 3 && engineType === "TRADE" && tradeKind === "SERVICE" && (
+          <View style={styles.chipsRow}>
+            {(["PROPERTY", "EQUIPMENT"] as const).map((k) => {
+              const isActive = serviceScope === k;
+              return (
+                <TouchableOpacity
+                  key={k}
+                  style={[styles.chip, isActive && styles.chipActive]}
+                  onPress={() => setServiceScope(isActive ? null : k)}
+                  activeOpacity={0.8}
+                >
+                  <Text style={[styles.chipText, isActive && styles.chipTextActive]}>
+                    {t(`createProject.wizard.v2.serviceScope.${k}`)}
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+          </View>
+        )}
+
+        {step === 4 && (
+          <View style={styles.nameBlock}>
+            <Text style={styles.nameSubtitle}>{t("createProject.wizard.v2.nameStepSubtitle")}</Text>
+            <TextInput
+              style={styles.nameInput}
+              value={projectTitle}
+              onChangeText={setProjectTitle}
+              placeholder={t("createProject.wizard.v2.namePlaceholder")}
+              placeholderTextColor={colors.textMuted}
+              multiline
+              maxFontSizeMultiplier={1.35}
+              accessibilityLabel={t("createProject.wizard.v2.nameStepTitle")}
+            />
+          </View>
+        )}
+
+        {step === 5 && engineType && (
           <View style={styles.creationStep}>
             <Text style={styles.step4Lead}>{t(`createProject.wizard.step4Subtitle.${engineType}`)}</Text>
             <TouchableOpacity
@@ -201,7 +294,7 @@ export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }:
                 <Ionicons name="sparkles-outline" size={26} color={colors.primary} />
                 <Text style={styles.creationChoiceTitle}>{t("createProject.wizard.creationMode.AI")}</Text>
               </View>
-              <Text style={styles.creationChoiceHint} numberOfLines={2}>
+              <Text style={styles.creationChoiceHint} numberOfLines={3}>
                 {t(`createProject.wizard.creationModeAiHint.${engineType}`)}
               </Text>
             </TouchableOpacity>
@@ -215,11 +308,11 @@ export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }:
                 <Ionicons name="create-outline" size={24} color={colors.textMuted} />
                 <Text style={styles.creationChoiceTitle}>{t("createProject.wizard.creationMode.MANUAL")}</Text>
               </View>
-              <Text style={styles.creationChoiceHintMuted} numberOfLines={2}>
+              <Text style={styles.creationChoiceHintMuted} numberOfLines={3}>
                 {t(`createProject.wizard.creationModeManualHint.${engineType}`)}
               </Text>
             </TouchableOpacity>
-            {engineType === "BUILD" && locale === "sk" ? (
+            {engineType === "BUILD" ? (
               <TouchableOpacity
                 style={styles.creationChoiceCard}
                 onPress={() => completeWithCreationMode("TEMPLATE")}
@@ -237,15 +330,17 @@ export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }:
         )}
       </ScrollView>
 
-      <View style={[styles.buttons, step === 4 && styles.buttonsStep4Only]}>
-        <TouchableOpacity style={[styles.cancelBtn, step === 4 && styles.cancelBtnAlone]} onPress={handleBack}>
-          <Text style={styles.cancelBtnText}>{step === 1 ? t("projects.cancel") : t("projects.back")}</Text>
+      <View style={[styles.buttons, step === 5 && styles.buttonsStep4Only]}>
+        <TouchableOpacity style={[styles.cancelBtn, step === 5 && styles.cancelBtnAlone]} onPress={goBack}>
+          <Text style={styles.cancelBtnText}>
+            {step === 1 ? t("projects.cancel") : t("projects.back")}
+          </Text>
         </TouchableOpacity>
-        {step !== 4 ? (
+        {step !== 5 ? (
           <TouchableOpacity
-            style={[styles.nextBtn, !nextEnabled && styles.nextBtnDisabled, nextEnabled && styles.nextBtnReady]}
-            onPress={handleNext}
-            disabled={!nextEnabled}
+            style={[styles.nextBtn, !canNext() && styles.nextBtnDisabled, canNext() && styles.nextBtnReady]}
+            onPress={goNext}
+            disabled={!canNext()}
           >
             <Text style={styles.nextBtnText}>{t("projects.next")}</Text>
           </TouchableOpacity>
@@ -263,30 +358,17 @@ const styles = StyleSheet.create({
   step1HeaderOnly: {
     marginBottom: spacing.sm,
   },
-  step1HeaderRow: {
-    flexDirection: "row",
-    alignItems: "flex-start",
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  step1HeaderTextCol: {
-    flex: 1,
-    minWidth: 0,
-  },
-  step1HelpIcon: {
-    paddingTop: 2,
+  step1Recommended: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textMuted,
+    marginTop: spacing.xs,
   },
   stepHeadline: {
     fontSize: 18,
     fontWeight: "700",
     color: colors.text,
     marginBottom: spacing.xs,
-  },
-  stepSubtitle: {
-    fontSize: 14,
-    color: colors.textMuted,
-    marginBottom: spacing.md,
-    lineHeight: 20,
   },
   stepTitle: {
     fontSize: 16,
@@ -321,9 +403,7 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.22,
         shadowRadius: 8,
       },
-      android: {
-        elevation: 5,
-      },
+      android: { elevation: 5 },
       default: {},
     }),
   },
@@ -407,24 +487,6 @@ const styles = StyleSheet.create({
     color: colors.text,
     opacity: 0.88,
   },
-  engineExampleChipsRow: {
-    flexDirection: "row",
-    flexWrap: "wrap",
-    gap: 6,
-  },
-  engineExampleChip: {
-    paddingVertical: 3,
-    paddingHorizontal: 8,
-    borderRadius: 6,
-    backgroundColor: "rgba(0,0,0,0.04)",
-    borderWidth: 0,
-  },
-  engineExampleChipText: {
-    fontSize: 11,
-    fontWeight: "500",
-    color: colors.textMuted,
-    opacity: 0.82,
-  },
   chipsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
@@ -451,6 +513,26 @@ const styles = StyleSheet.create({
   chipTextActive: {
     color: colors.primary,
     fontWeight: "600",
+  },
+  nameBlock: {
+    marginBottom: spacing.md,
+  },
+  nameSubtitle: {
+    fontSize: 14,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
+    lineHeight: 20,
+  },
+  nameInput: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    fontSize: 16,
+    color: colors.text,
+    minHeight: 100,
+    textAlignVertical: "top",
   },
   creationStep: {
     gap: spacing.md,
@@ -539,9 +621,7 @@ const styles = StyleSheet.create({
         shadowOpacity: 0.28,
         shadowRadius: 5,
       },
-      android: {
-        elevation: 6,
-      },
+      android: { elevation: 6 },
       default: {},
     }),
   },

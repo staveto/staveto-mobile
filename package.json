@@ -1,6 +1,6 @@
 {
   "name": "mobile",
-  "version": "1.19.1",
+  "version": "1.19.2",
   "main": "index.ts",
   "expo": {
     "install": {
@@ -80,6 +80,7 @@
     "expo-speech-recognition": "^3.1.0",
     "expo-splash-screen": "~31.0.13",
     "expo-status-bar": "~3.0.9",
+    "expo-updates": "~29.0.16",
     "libphonenumber-js": "^1.12.36",
     "pako": "^2.1.0",
     "react": "19.1.0",

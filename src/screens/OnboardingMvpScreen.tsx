@@ -29,6 +29,7 @@ import { resolveTemplateIdForCountry } from "../utils/templateResolver";
 import * as userEquipmentService from "../services/userEquipment";
 import type { EquipmentCategory } from "../services/equipment";
 import { markFirstProjectPromptShown } from "../utils/firstProjectPrompt";
+import type { JobWorkflowKind, ServiceMaintenanceScope, WorkType } from "../lib/projectEnums";
 
 type Props = {
   onFinished: () => void;
@@ -38,8 +39,8 @@ type Props = {
 type Mode = PrimaryUsageMode;
 const PENDING_ONBOARDING_KEY = "pending_onboarding";
 
-/** Steps: 1=mode, 2=country, 3=name, 4=phone, 5=first project, 6=first equipment */
-type OnboardingStep = 1 | 2 | 3 | 4 | 5 | 6;
+/** Steps: 1=mode, 2=country, 3=name, 4=phone, 5=first project, 6=first equipment, 7=finish (finishOnboarding only here) */
+type OnboardingStep = 1 | 2 | 3 | 4 | 5 | 6 | 7;
 
 const EQ_CATEGORIES: { value: EquipmentCategory; icon: React.ComponentProps<typeof Ionicons>["name"] }[] = [
   { value: "tool", icon: "hammer-outline" },
@@ -102,6 +103,9 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
   const [projectName, setProjectName] = useState("");
   const [creatingProject, setCreatingProject] = useState(false);
   const createdProjectRef = useRef(false);
+  const [onboardBuildKind, setOnboardBuildKind] = useState<"NEW_BUILD" | "RENOVATION">("RENOVATION");
+  const [onboardTradeKind, setOnboardTradeKind] = useState<JobWorkflowKind>("STANDARD");
+  const [onboardServiceScope, setOnboardServiceScope] = useState<ServiceMaintenanceScope | null>(null);
 
   const [eqName, setEqName] = useState("");
   const [eqCategory, setEqCategory] = useState<EquipmentCategory>("tool");
@@ -260,6 +264,10 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
       setError(t("createProject.nameRequired"));
       return;
     }
+    if (mode === "trade" && onboardTradeKind === "SERVICE" && !onboardServiceScope) {
+      setError(t("onboardingMvp.errorSelectServiceScope"));
+      return;
+    }
     setCreatingProject(true);
     setError("");
     try {
@@ -267,14 +275,27 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
       const useTemplate = shouldUseCountryCatalogTemplate({ selectedType: projectType, creationMethod: "template" });
       const templateId = useTemplate ? resolveTemplateIdForCountry(primaryCountry) : "";
 
+      let workType: WorkType;
+      let jobWorkflowKind: JobWorkflowKind | undefined;
+      let serviceMaintenanceScope: ServiceMaintenanceScope | undefined;
+      if (projectType === "BUILD") {
+        workType = onboardBuildKind === "NEW_BUILD" ? "NEW_BUILD" : "RENOVATION";
+      } else {
+        jobWorkflowKind = onboardTradeKind;
+        workType = "REPAIR";
+        serviceMaintenanceScope =
+          onboardTradeKind === "SERVICE" && onboardServiceScope ? onboardServiceScope : undefined;
+      }
+
       const newProjectId = await createProjectFromTemplate({
         projectType,
         templateId,
         name: projectName.trim(),
         countryCode: primaryCountry.trim() || undefined,
-        workType: projectType === "BUILD" ? "RENOVATION" : "INSTALLATION",
-        businessMode: "DIRECT",
+        workType,
         creationMode: projectType === "BUILD" ? "TEMPLATE" : "MANUAL",
+        jobWorkflowKind,
+        serviceMaintenanceScope,
       });
       try {
         await AsyncStorage.setItem("@staveto:lastUsedProjectId", newProjectId);
@@ -294,9 +315,8 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
   };
 
   const onSkipEquipment = () => {
-    void (async () => {
-      await completeActivation();
-    })();
+    setError("");
+    setStep(7);
   };
 
   const onCreateEquipment = async () => {
@@ -317,7 +337,7 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
         status: "available",
       });
       createdEquipmentRef.current = true;
-      await completeActivation();
+      setStep(7);
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e ?? "");
       Alert.alert(t("common.error"), msg || t("onboardingMvp.errorSaveFailed"));
@@ -431,14 +451,14 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
             <TextInput
               style={styles.input}
               placeholder={t("onboardingMvp.placeholderFirstName")}
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
               value={firstName}
               onChangeText={setFirstName}
             />
             <TextInput
               style={styles.input}
               placeholder={t("onboardingMvp.placeholderLastName")}
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
               value={lastName}
               onChangeText={setLastName}
             />
@@ -470,7 +490,7 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
               <TextInput
                 style={[styles.input, styles.phoneInput]}
                 placeholder={t("onboardingMvp.placeholderPhone")}
-                placeholderTextColor={colors.textMuted}
+                placeholderTextColor={colors.inputPlaceholderOnLight}
                 value={phoneNational}
                 onChangeText={setPhoneNational}
                 keyboardType="phone-pad"
@@ -526,10 +546,78 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
           <>
             <Text style={styles.title}>{projectTitle}</Text>
             <Text style={styles.subtitle}>{t("onboardingMvp.stepProjectSubtitle")}</Text>
+            {mode === "build" ? (
+              <>
+                <Text style={styles.fieldLabel}>{t("onboardingMvp.projectKindLabelBuild")}</Text>
+                <View style={styles.chipRow}>
+                  {(["NEW_BUILD", "RENOVATION"] as const).map((k) => {
+                    const active = onboardBuildKind === k;
+                    return (
+                      <TouchableOpacity
+                        key={k}
+                        style={[styles.chip, active && styles.chipActive]}
+                        onPress={() => setOnboardBuildKind(k)}
+                      >
+                        <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={2}>
+                          {t(`createProject.wizard.v2.buildKind.${k}`)}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+              </>
+            ) : mode === "trade" ? (
+              <>
+                <Text style={styles.fieldLabel}>{t("onboardingMvp.projectKindLabelTrade")}</Text>
+                <View style={styles.chipRow}>
+                  {(["STANDARD", "SERVICE"] as const).map((k) => {
+                    const active = onboardTradeKind === k;
+                    return (
+                      <TouchableOpacity
+                        key={k}
+                        style={[styles.chip, active && styles.chipActive]}
+                        onPress={() => {
+                          setOnboardTradeKind(k);
+                          if (k === "STANDARD") setOnboardServiceScope(null);
+                        }}
+                      >
+                        <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={2}>
+                          {t(`createProject.wizard.v2.tradeKind.${k}`)}
+                        </Text>
+                      </TouchableOpacity>
+                    );
+                  })}
+                </View>
+                {onboardTradeKind === "SERVICE" ? (
+                  <>
+                    <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>
+                      {t("onboardingMvp.serviceScopeLabel")}
+                    </Text>
+                    <View style={styles.chipRow}>
+                      {(["PROPERTY", "EQUIPMENT"] as const).map((k) => {
+                        const active = onboardServiceScope === k;
+                        return (
+                          <TouchableOpacity
+                            key={k}
+                            style={[styles.chip, active && styles.chipActive]}
+                            onPress={() => setOnboardServiceScope(active ? null : k)}
+                          >
+                            <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={2}>
+                              {t(`createProject.wizard.v2.serviceScope.${k}`)}
+                            </Text>
+                          </TouchableOpacity>
+                        );
+                      })}
+                    </View>
+                  </>
+                ) : null}
+              </>
+            ) : null}
+            <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>{t("onboardingMvp.projectNameLabel")}</Text>
             <TextInput
               style={styles.input}
               placeholder={t("onboardingMvp.projectNamePlaceholder")}
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
               value={projectName}
               onChangeText={setProjectName}
             />
@@ -553,7 +641,7 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
             </TouchableOpacity>
           </>
         )
-      ) : (
+      ) : step === 6 ? (
         wrap(
           <>
             <Text style={styles.title}>{t("onboardingMvp.stepEquipmentTitle")}</Text>
@@ -561,7 +649,7 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
             <TextInput
               style={styles.input}
               placeholder={t("onboardingMvp.equipmentNamePlaceholder")}
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
               value={eqName}
               onChangeText={setEqName}
             />
@@ -586,21 +674,21 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
             <TextInput
               style={styles.input}
               placeholder={t("onboardingMvp.equipmentKindPlaceholder")}
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
               value={eqKind}
               onChangeText={setEqKind}
             />
             <TextInput
               style={styles.input}
               placeholder={t("onboardingMvp.equipmentCodePlaceholder")}
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
               value={eqCode}
               onChangeText={setEqCode}
             />
             <TextInput
               style={styles.input}
               placeholder={t("onboardingMvp.equipmentLocationPlaceholder")}
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
               value={eqLocation}
               onChangeText={setEqLocation}
             />
@@ -628,6 +716,24 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
             </TouchableOpacity>
           </>
         )
+      ) : (
+        wrap(
+          <>
+            <Text style={styles.title}>{t("onboardingMvp.stepFinishTitle")}</Text>
+            <Text style={styles.subtitle}>{t("onboardingMvp.stepFinishSubtitle")}</Text>
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            <TouchableOpacity
+              style={[styles.button, saving && styles.buttonDisabled]}
+              onPress={() => void completeActivation()}
+              disabled={saving}
+            >
+              {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("onboardingMvp.continueToApp")}</Text>}
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.textLinkBtn, { marginTop: spacing.md }]} onPress={() => { setError(""); setStep(6); }} disabled={saving}>
+              <Text style={styles.textLink}>{t("onboardingMvp.back")}</Text>
+            </TouchableOpacity>
+          </>
+        )
       )}
     </View>
   );
@@ -640,28 +746,34 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: "700",
-    color: colors.text,
+    color: colors.textOnDark,
     marginBottom: spacing.md,
     textAlign: "center",
   },
-  subtitle: { fontSize: 14, color: colors.textMuted, marginBottom: spacing.md, textAlign: "center", lineHeight: 20 },
+  subtitle: {
+    fontSize: 15,
+    color: colors.onboardingHelperOnDark,
+    marginBottom: spacing.md,
+    textAlign: "center",
+    lineHeight: 22,
+  },
   countryList: { maxHeight: 220, marginBottom: spacing.md },
   countryOption: {
-    backgroundColor: colors.card,
+    backgroundColor: colors.formPanel,
     borderRadius: radius,
     padding: spacing.md,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     marginBottom: spacing.xs,
   },
   countryOptionText: { color: colors.text, fontSize: 15 },
   options: { gap: spacing.sm, marginBottom: spacing.md },
   option: {
-    backgroundColor: colors.card,
+    backgroundColor: colors.formPanel,
     borderRadius: radius,
     padding: spacing.md,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
   },
   optionActive: {
     borderColor: colors.primary,
@@ -670,9 +782,9 @@ const styles = StyleSheet.create({
   optionText: { color: colors.text, fontSize: 15, textAlign: "center" },
   optionTextActive: { color: colors.primary, fontWeight: "600" },
   input: {
-    backgroundColor: colors.card,
+    backgroundColor: colors.formPanel,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     borderRadius: radius,
     padding: spacing.md,
     fontSize: 16,
@@ -688,9 +800,9 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.xs,
-    backgroundColor: colors.card,
+    backgroundColor: colors.formPanel,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     borderRadius: radius,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
@@ -713,7 +825,7 @@ const styles = StyleSheet.create({
   modalTitle: {
     fontSize: 18,
     fontWeight: "600",
-    color: colors.text,
+    color: colors.textOnDark,
     marginBottom: spacing.md,
     textAlign: "center",
   },
@@ -728,25 +840,25 @@ const styles = StyleSheet.create({
   buttonText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   actions: { flexDirection: "row", gap: spacing.sm, justifyContent: "space-between", flexWrap: "wrap" },
   secondaryBtn: {
-    backgroundColor: colors.card,
+    backgroundColor: colors.formPanel,
     padding: spacing.md,
     borderRadius: radius,
     alignItems: "center",
     flex: 1,
     minWidth: 100,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
   },
   secondaryBtnFull: {
-    backgroundColor: colors.card,
+    backgroundColor: colors.formPanel,
     padding: spacing.md,
     borderRadius: radius,
     alignItems: "center",
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
   },
   secondaryText: { color: colors.text },
-  fieldLabel: { fontSize: 13, fontWeight: "600", color: colors.textMuted, marginBottom: spacing.xs },
+  fieldLabel: { fontSize: 13, fontWeight: "600", color: colors.labelOnDark, marginBottom: spacing.xs },
   chipRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginBottom: spacing.md },
   chip: {
     flexDirection: "row",
@@ -756,8 +868,8 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.sm,
     borderRadius: radius,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
+    borderColor: colors.formPanelBorder,
+    backgroundColor: colors.formPanel,
     maxWidth: "48%",
   },
   chipActive: { borderColor: colors.primary, backgroundColor: colors.primary + "12" },

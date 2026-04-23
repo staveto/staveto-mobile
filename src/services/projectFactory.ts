@@ -11,7 +11,7 @@ import { getTemplatePhases, getTemplateTasks } from './templateService';
 import { FALLBACK_TEMPLATE_ID } from '../utils/templateResolver';
 import { createProjectCreatedNotification } from './notifications';
 import type { ActiveProjectStorageType } from '../lib/projectTypeModel';
-import type { WorkType, BusinessMode, CreationMode } from '../lib/projectEnums';
+import type { WorkType, BusinessMode, CreationMode, JobWorkflowKind, ServiceMaintenanceScope } from '../lib/projectEnums';
 
 export type PhaseStatus = 'completed' | 'active' | 'later';
 
@@ -35,6 +35,10 @@ export interface CreateProjectFromTemplateParams {
   workType?: WorkType | null;
   businessMode?: BusinessMode | null;
   creationMode?: CreationMode | null;
+  /** TRADE: standard vs service/maintenance (optional). */
+  jobWorkflowKind?: JobWorkflowKind | null;
+  /** When SERVICE: property vs equipment maintenance. */
+  serviceMaintenanceScope?: ServiceMaintenanceScope | null;
 }
 
 /**
@@ -139,7 +143,9 @@ export async function instantiateTemplate(
   if (params.workType) projectData.workType = params.workType;
   if (params.businessMode) projectData.businessMode = params.businessMode;
   if (params.creationMode) projectData.creationMode = params.creationMode;
-  
+  if (params.jobWorkflowKind) projectData.jobWorkflowKind = params.jobWorkflowKind;
+  if (params.serviceMaintenanceScope) projectData.serviceMaintenanceScope = params.serviceMaintenanceScope;
+
   // Final verification before write
   console.log(`[projectFactory] Final verification before Firestore write:`);
   console.log(`[projectFactory]   - projectData.ownerId: "${projectData.ownerId}"`);

@@ -15,6 +15,7 @@ import {
   TextInput,
   ActivityIndicator,
   FlatList,
+  Platform,
 } from "react-native";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation } from "@react-navigation/native";
@@ -151,6 +152,55 @@ export function AccountScreen() {
       await Linking.openURL(url);
     } else {
       Alert.alert(t("common.error"), t("account.linkOpenFailed"));
+    }
+  }, [t]);
+
+  const handleCheckForExpoUpdate = useCallback(async () => {
+    if (Platform.OS === "web") {
+      Alert.alert(t("account.checkForUpdates"), t("account.expoUpdatesWebNotSupported"));
+      return;
+    }
+    if (__DEV__) {
+      Alert.alert(t("account.checkForUpdates"), t("account.expoUpdatesDevOnly"));
+      return;
+    }
+    let Updates: typeof import("expo-updates");
+    try {
+      // eslint-disable-next-line @typescript-eslint/no-require-imports -- lazy load so old dev clients without native ExpoUpdates still boot
+      Updates = require("expo-updates");
+    } catch {
+      Alert.alert(t("account.checkForUpdates"), t("account.expoUpdatesRebuildRequired"));
+      return;
+    }
+    if (!Updates.isEnabled) {
+      Alert.alert(t("account.checkForUpdates"), t("account.expoUpdatesDisabled"));
+      return;
+    }
+    try {
+      const check = await Updates.checkForUpdateAsync();
+      if (check.isAvailable) {
+        Alert.alert(t("account.expoUpdatesAvailableTitle"), t("account.expoUpdatesAvailableBody"), [
+          { text: t("common.cancel"), style: "cancel" },
+          {
+            text: t("account.expoUpdatesDownload"),
+            style: "default",
+            onPress: () => {
+              void (async () => {
+                try {
+                  await Updates.fetchUpdateAsync();
+                  await Updates.reloadAsync();
+                } catch (e) {
+                  Alert.alert(t("common.error"), e instanceof Error ? e.message : String(e));
+                }
+              })();
+            },
+          },
+        ]);
+      } else {
+        Alert.alert(t("account.expoUpdatesUpToDateTitle"), t("account.expoUpdatesUpToDateBody"));
+      }
+    } catch (e) {
+      Alert.alert(t("common.error"), e instanceof Error ? e.message : String(e));
     }
   }, [t]);
 
@@ -659,6 +709,7 @@ export function AccountScreen() {
         <Row icon="people-outline" label={t("account.subprocessors")} onPress={() => openUrl(SUBPROCESSORS_URL)} />
         <Row icon="document-outline" label={t("account.privacyStatement")} onPress={() => openUrl(DPA_URL)} />
         <Row icon="list-outline" label={t("account.licenses")} onPress={() => Alert.alert(t("account.comingSoon"))} />
+        <Row icon="cloud-download-outline" label={t("account.checkForUpdates")} onPress={handleCheckForExpoUpdate} />
         <View style={[rowStyles.row, { borderBottomWidth: 0 }]}>
           <Ionicons name="phone-portrait-outline" size={22} color={colors.textMuted} style={rowStyles.icon} />
           <Text style={rowStyles.label}>{t("account.appVersion")}</Text>

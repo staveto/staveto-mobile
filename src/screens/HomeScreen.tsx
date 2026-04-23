@@ -555,23 +555,6 @@ export function HomeScreen() {
     });
   }, []);
 
-  /** Post-login onboarding may have created the first project — avoid duplicate "first project" modal. */
-  useEffect(() => {
-    let cancelled = false;
-    AsyncStorage.getItem("pending_onboarding").then((raw) => {
-      if (cancelled || !raw) return;
-      try {
-        const p = JSON.parse(raw) as { createdProject?: boolean };
-        if (p?.createdProject) void markFirstProjectPromptShown();
-      } catch {
-        /* ignore */
-      }
-    });
-    return () => {
-      cancelled = true;
-    };
-  }, []);
-
   const greetingName = user?.firstName ?? user?.name ?? onboardingFirstName ?? onboardingDisplayName ?? user?.email ?? t("home.userFallback");
 
   const formatLastActivity = useCallback(
@@ -617,6 +600,19 @@ export function HomeScreen() {
     if (loading || !dashboardData || dashboardData.projects.length > 0) return;
     let cancelled = false;
     (async () => {
+      try {
+        const raw = await AsyncStorage.getItem("pending_onboarding");
+        if (cancelled) return;
+        if (raw) {
+          const p = JSON.parse(raw) as { createdProject?: boolean };
+          if (p?.createdProject) {
+            await markFirstProjectPromptShown();
+            return;
+          }
+        }
+      } catch {
+        /* ignore */
+      }
       const shown = await hasShownFirstProjectPrompt();
       if (cancelled) return;
       if (!shown) {

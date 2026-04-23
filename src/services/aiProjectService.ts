@@ -53,6 +53,9 @@ type GenStructureReq = {
   workType?: string;
   documentStoragePaths?: string[];
   projectDetails?: string;
+  /** Forward-compatible; backend may ignore until deployed. */
+  jobWorkflowKind?: string;
+  serviceMaintenanceScope?: string;
 };
 
 type GenStructureRes = { plan: unknown; raw?: string };
@@ -252,6 +255,10 @@ export interface GenerateProjectStructureOptions {
   documentStoragePaths?: string[];
   /** User-provided details: roof type, area, floor count, etc. */
   projectDetails?: string;
+  /** TRADE: standard job vs service/maintenance — also folded into `projectDetails` for the model. */
+  jobWorkflowKind?: "STANDARD" | "SERVICE" | null;
+  /** When SERVICE: property vs equipment maintenance. */
+  serviceMaintenanceScope?: "PROPERTY" | "EQUIPMENT" | null;
 }
 
 export interface AiDraftDocument {
@@ -308,6 +315,15 @@ export async function generateProjectStructureWithAI(
     throw new Error(ERR_NOT_SIGNED_IN_SK);
   }
 
+  const workflowParts: string[] = [];
+  if (options?.jobWorkflowKind === "STANDARD" || options?.jobWorkflowKind === "SERVICE") {
+    workflowParts.push(`Job workflow: ${options.jobWorkflowKind}`);
+  }
+  if (options?.serviceMaintenanceScope === "PROPERTY" || options?.serviceMaintenanceScope === "EQUIPMENT") {
+    workflowParts.push(`Maintenance scope: ${options.serviceMaintenanceScope}`);
+  }
+  const mergedProjectDetails = [options?.projectDetails?.trim(), workflowParts.join("; ")].filter(Boolean).join(" | ");
+
   if (__DEV__) {
     console.log("[aiProject] Calling generateProjectStructure", {
       uid,
@@ -315,7 +331,7 @@ export async function generateProjectStructureWithAI(
       engineType: options?.engineType,
       workType: options?.workType,
       hasDocs: (options?.documentStoragePaths?.length ?? 0) > 0,
-      hasDetails: !!options?.projectDetails,
+      hasDetails: !!mergedProjectDetails,
     });
   }
 
@@ -330,7 +346,9 @@ export async function generateProjectStructureWithAI(
         documentStoragePaths: options?.documentStoragePaths?.length
           ? options.documentStoragePaths
           : undefined,
-        projectDetails: options?.projectDetails?.trim() || undefined,
+        projectDetails: mergedProjectDetails || undefined,
+        jobWorkflowKind: options?.jobWorkflowKind ?? undefined,
+        serviceMaintenanceScope: options?.serviceMaintenanceScope ?? undefined,
       },
       idToken
     );

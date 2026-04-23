@@ -16,6 +16,19 @@ module.exports = ({ config }) => {
     /** Musí byť zhodné s `app.json` – inak EAS/Android prepíše na New Arch a build môže padať (Reanimated/CMake). */
     newArchEnabled: false,
 
+    /**
+     * EAS Update / expo-updates: default ON_LOAD tries to download an OTA bundle on every cold start.
+     * If the device/emulator cannot reach Expo CDN (DNS, VPN, firewall, flaky Wi‑Fi), Android throws
+     * `java.io.IOException: Failed to download remote update` and the app dies before JS runs.
+     * ON_ERROR_RECOVERY skips that mandatory launch download; the embedded store build still runs.
+     * Publish OTA as today; users pick up updates after a store build or when we add an in-app check.
+     */
+    updates: {
+      ...(config.updates ?? {}),
+      checkAutomatically: "ON_ERROR_RECOVERY",
+      fallbackToCacheTimeout: 0,
+    },
+
     // explicit assets (istota)
     icon: "./assets/icon.png",
     splash: {

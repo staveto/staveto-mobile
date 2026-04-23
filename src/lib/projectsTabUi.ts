@@ -34,9 +34,20 @@ export function projectsTabJobKindChipLabel(t: Translate, filter: ProjectsTabTyp
   }
 }
 
+type CardJobKindSource = Pick<ProjectDoc, "projectType" | "jobWorkflowKind" | "serviceMaintenanceScope">;
+
 /** Readable job type on cards (not raw storage strings). */
-export function projectsTabCardJobTypeLabel(t: Translate, projectType?: ProjectDoc["projectType"]): string {
-  const active = getActiveProductProjectType({ projectType });
+export function projectsTabCardJobTypeLabel(t: Translate, project: CardJobKindSource): string {
+  const active = getActiveProductProjectType({ projectType: project.projectType });
+  if (active === "TRADE" && project.jobWorkflowKind === "SERVICE") {
+    if (project.serviceMaintenanceScope === "PROPERTY") {
+      return t("projectsTab.card.jobKind.propertyMaintenance");
+    }
+    if (project.serviceMaintenanceScope === "EQUIPMENT") {
+      return t("projectsTab.card.jobKind.equipmentMaintenance");
+    }
+    return t("projectsTab.card.jobKind.service");
+  }
   return active === "TRADE" ? t("projectsTab.card.jobKind.trade") : t("projectsTab.card.jobKind.construction");
 }
 

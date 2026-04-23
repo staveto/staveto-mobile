@@ -21,6 +21,10 @@ export const colors = {
   /** Section labels on dark backgrounds */
   labelOnDark: "#ffffff",
   labelMutedOnDark: "rgba(255,255,255,0.78)",
+  /** Subtitle / helper copy on dark onboarding shell (readable vs `textMuted` on blue) */
+  onboardingHelperOnDark: "rgba(255,255,255,0.88)",
+  /** Placeholder on light input rows (`formPanel` / `card`) — darker than body for legibility */
+  inputPlaceholderOnLight: "#5c6674",
   /** Inactive chip on dark (outline style) */
   chipOnDarkBg: "rgba(255,255,255,0.12)",
   chipOnDarkBorder: "rgba(255,255,255,0.38)",

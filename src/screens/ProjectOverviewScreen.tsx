@@ -160,7 +160,17 @@ export function ProjectOverviewScreen() {
     expandPhaseId: paramExpandPhaseId,
   } = routeParams;
   const projectId = paramProjectId ?? "";
-  const projectName = paramProjectName ?? "";
+  const paramProjectNameNorm = (paramProjectName ?? "").trim();
+  /** Header uses route param first; when missing (e.g. deep link from notifications), fill from getProject(). */
+  const [fetchedProjectName, setFetchedProjectName] = useState("");
+  const projectName = (fetchedProjectName || paramProjectNameNorm).trim();
+
+  useEffect(() => {
+    setFetchedProjectName("");
+  }, [projectId, paramProjectNameNorm]);
+
+  const routeProjectIdRef = useRef(projectId);
+  routeProjectIdRef.current = projectId;
 
   const [phases, setPhases] = useState<ProjectPhaseDoc[]>([]);
   const [tasks, setTasks] = useState<TaskDoc[]>([]);
@@ -490,6 +500,8 @@ export function ProjectOverviewScreen() {
       setLoading(true);
     }
     
+    const loadForProjectId = projectId;
+
     try {
       // DEBUG: Check auth state first
       const { auth: authInstance } = await import('../firebase');
@@ -523,8 +535,15 @@ export function ProjectOverviewScreen() {
         setProjectOwnerId(project.ownerId ?? null);
         setCoverImageUrl(project.coverImageUrl);
         setCoverImagePath(project.coverImagePath);
+        const nm = typeof project.name === "string" ? project.name.trim() : "";
+        if (routeProjectIdRef.current === loadForProjectId) {
+          setFetchedProjectName(nm);
+        }
       } else {
         console.warn(`[ProjectOverview] Project ${projectId} not found or no access - continuing without project metadata`);
+        if (routeProjectIdRef.current === loadForProjectId) {
+          setFetchedProjectName("");
+        }
       }
       
       // Load phases (only for BUILD projects), tasks, expenses, and BUILD-specific data
@@ -636,10 +655,18 @@ export function ProjectOverviewScreen() {
       }
       if (tk.length > 0) {
         console.log(`[ProjectOverview] Task IDs (first 5): ${tk.slice(0, 5).map((t: any) => t.id).join(', ')}`);
-        if (isBuildProject) {
-          const tasksWithPhase = tk.filter((t: any) => t.phaseId);
-          const tasksWithoutPhase = tk.filter((t: any) => !t.phaseId);
-          console.log(`[ProjectOverview] Tasks with phaseId: ${tasksWithPhase.length}, without phaseId: ${tasksWithoutPhase.length}`);
+        const tasksWithPhase = tk.filter((t: any) => !!t.phaseId);
+        const tasksWithoutPhase = tk.filter((t: any) => !t.phaseId);
+        console.log(
+          `[ProjectOverview] Tasks with phaseId: ${tasksWithPhase.length}, without phaseId: ${tasksWithoutPhase.length} (buildLike=${isBuildProject})`
+        );
+        if (__DEV__ && !isBuildProject && tk.length > 0) {
+          const phaseIdsOnTasks = [...new Set(tk.map((t: any) => t.phaseId).filter(Boolean))] as string[];
+          const unknownPhaseIds = phaseIdsOnTasks.filter((id) => !ph.some((p: any) => p.id === id));
+          console.log(
+            `[ProjectOverview][tradeTaskLayout] projectId=${projectId} projectType=${projectTypeForLoad} phasesLoaded=${ph.length} tasksTotal=${tk.length} distinctTaskPhaseIds=${phaseIdsOnTasks.length} phaseIdsNotInLoadedPhases=${unknownPhaseIds.length}`,
+            unknownPhaseIds.length ? { unknownPhaseIdsSample: unknownPhaseIds.slice(0, 5) } : {}
+          );
         }
       }
       
@@ -3832,9 +3859,18 @@ export function ProjectOverviewScreen() {
             )}
           </View>
         ) : isTradeOrMaintenance ? (
-          // For TRADE/MAINTENANCE: show tasks without phases (flat list)
+          // TRADE / RESIDENTIAL / job MAINTENANCE: flat list. AI (and templates) may set phaseId on tasks
+          // even when we do not load phases for non-BUILD — never hide those rows (count vs list mismatch).
           <>
-            {(projectType === 'MAINTENANCE' ? displayTasksForMaintenance : tasks).filter(t => !t.phaseId).map((task) => (
+            {(projectType === "MAINTENANCE" ? displayTasksForMaintenance : tasks)
+              .slice()
+              .sort((a, b) => {
+                const pa = a.phaseId ?? "";
+                const pb = b.phaseId ?? "";
+                if (pa !== pb) return pa.localeCompare(pb);
+                return (a.title || "").localeCompare(b.title || "");
+              })
+              .map((task) => (
               <View key={task.id} style={styles.taskRow}>
               <View style={styles.taskNameCell}>
                 <TouchableOpacity 

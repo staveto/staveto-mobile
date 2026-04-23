@@ -4,11 +4,12 @@
 $projectRoot = if ($PSScriptRoot) { Split-Path -Parent $PSScriptRoot } else { Get-Location }
 Set-Location $projectRoot
 
-# adb reverse so emulator's localhost:8081 -> host's 8081
+# adb reverse: emulator localhost -> host Metro (avoids LAN / 10.0.2.2 timeouts)
 $adb = "$env:LOCALAPPDATA\Android\Sdk\platform-tools\adb.exe"
 if (Test-Path $adb) {
     & $adb reverse tcp:8081 tcp:8081
-    Write-Host "[start-emulator] adb reverse tcp:8081 tcp:8081" -ForegroundColor Gray
+    & $adb reverse tcp:8082 tcp:8082
+    Write-Host "[start-emulator] adb reverse tcp:8081 + 8082 (emulator <-> host Metro)" -ForegroundColor Gray
 } else {
     Write-Host "[start-emulator] ADB not found - emulator may not connect. Install Android SDK." -ForegroundColor Yellow
 }

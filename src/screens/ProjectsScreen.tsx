@@ -467,6 +467,7 @@ export function ProjectsScreen() {
   const handleWizardComplete = useCallback(
     (result: WizardResult) => {
       setWizardResult(result);
+      setNewName(result.projectNameOrDescription.trim());
       setSelectedType(result.engineType === "BUILD" ? "BUILD" : "TRADE");
       if (result.creationMode === "AI" && (result.engineType === "BUILD" || result.engineType === "TRADE")) {
         setCreationPath("ai");
@@ -514,7 +515,7 @@ export function ProjectsScreen() {
 
   const onNext = async () => {
     if (newStep === 1) {
-      // Step 1 is now CreateProjectWizard - it calls handleWizardComplete which goes to step 2
+      // CreateProjectWizard step 1 always shows BUILD vs TRADE; primaryUsageMode only preselects.
       return;
     } else if (newStep === 2) {
       if (!newName.trim()) {
@@ -598,6 +599,8 @@ export function ProjectsScreen() {
         workType: wizardResult?.workType ?? undefined,
         businessMode: wizardResult?.businessMode ?? undefined,
         creationMode: wizardResult?.creationMode ?? undefined,
+        jobWorkflowKind: wizardResult?.jobWorkflowKind ?? undefined,
+        serviceMaintenanceScope: wizardResult?.serviceMaintenanceScope ?? undefined,
       });
       const { logProjectCreateSuccess } = await import("../services/analytics");
       logProjectCreateSuccess(selectedType, "projects");
@@ -1071,7 +1074,7 @@ export function ProjectsScreen() {
           }
           renderItem={({ item }) => {
             const hub = isLegacyMaintenanceEquipmentHub(item);
-            const typeLabel = projectsTabCardJobTypeLabel(t, item.projectType);
+            const typeLabel = projectsTabCardJobTypeLabel(t, item);
             const location = getLocationAnchor(item);
             const badgeColor = getBadgeColor(item);
             const progress = projectStats.get(item.id)?.progress ?? 0;
@@ -1167,7 +1170,7 @@ export function ProjectsScreen() {
                 <Text style={styles.archivedTitle}>{t("projects.archiveSection")}</Text>
                 {archivedProjects.map((item) => {
                   const hub = isLegacyMaintenanceEquipmentHub(item);
-                  const typeLabel = projectsTabCardJobTypeLabel(t, item.projectType);
+                  const typeLabel = projectsTabCardJobTypeLabel(t, item);
                   const location = getLocationAnchor(item);
                   const badgeColor = getBadgeColor(item);
                   const progress = projectStats.get(item.id)?.progress ?? 0;
@@ -1344,8 +1347,11 @@ export function ProjectsScreen() {
             {creationPath === "ai" ? (
               <View style={styles.stepOneBody}>
                 <CreateProjectAIFlow
-                  engineType={getProjectEngine(selectedType ?? undefined)}
+                  engineType={wizardResult?.engineType ?? getProjectEngine(selectedType ?? undefined)}
                   workType={wizardResult?.workType ?? undefined}
+                  initialBrief={wizardResult?.projectNameOrDescription?.trim() || undefined}
+                  jobWorkflowKind={wizardResult?.jobWorkflowKind ?? undefined}
+                  serviceMaintenanceScope={wizardResult?.serviceMaintenanceScope ?? undefined}
                   onCreated={(projectId) => {
                     closeNewModal();
                     load();

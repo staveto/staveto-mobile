@@ -58,6 +58,18 @@ export const WORK_TYPES_BUILD: WorkTypeBuild[] = ["NEW_BUILD", "RENOVATION", "IN
 export const WORK_TYPES_TRADE: WorkTypeTrade[] = ["INSTALLATION", "REPAIR", "RENOVATION", "DELIVERY"];
 export const MAINTENANCE_SCOPES: MaintenanceScope[] = ["FLEET", "MACHINERY", "PROPERTY", "EQUIPMENT"];
 
+/**
+ * TRADE-only: distinguishes a normal contractor job from service/maintenance work.
+ * Persisted on `projects.jobWorkflowKind` (optional; omit = treat as STANDARD for legacy docs).
+ */
+export type JobWorkflowKind = "STANDARD" | "SERVICE";
+
+/**
+ * When `jobWorkflowKind === SERVICE`: property vs equipment maintenance (not fleet/machinery in create wizard).
+ * Subset of MaintenanceScope — stored as `projects.serviceMaintenanceScope`.
+ */
+export type ServiceMaintenanceScope = "PROPERTY" | "EQUIPMENT";
+
 /** Business mode attribute */
 export type BusinessMode = "DIRECT" | "SUBCONTRACT" | "INTERNAL";
 

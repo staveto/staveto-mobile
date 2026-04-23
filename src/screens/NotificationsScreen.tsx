@@ -1,15 +1,12 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useRef, useState } from "react";
+import { View, Text, StyleSheet, ActivityIndicator, TouchableOpacity, Modal, Alert } from "react-native";
 import {
-  View,
-  Text,
   FlatList,
-  StyleSheet,
-  ActivityIndicator,
   RefreshControl,
-  TouchableOpacity,
-  Modal,
-  Alert,
-} from "react-native";
+  Swipeable,
+  RectButton,
+  TouchableOpacity as GHTouchableOpacity,
+} from "react-native-gesture-handler";
 import { showToast } from "../helpers/toast";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -26,6 +23,22 @@ import type { PendingInvite } from "../services/invites";
 import * as tasksService from "../services/tasks";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
 
+const NOTIF_ROW_DEBUG = typeof __DEV__ !== "undefined" && __DEV__;
+/** UX / persistence audit logs — dev only, minimal production noise. */
+const NOTIF_UX_DEBUG = typeof __DEV__ !== "undefined" && __DEV__;
+
+function notifRowLog(message: string, data?: Record<string, unknown>) {
+  if (!NOTIF_ROW_DEBUG) return;
+  if (data) console.log(`[NotificationsScreen:row] ${message}`, data);
+  else console.log(`[NotificationsScreen:row] ${message}`);
+}
+
+function notifUxLog(message: string, data?: Record<string, unknown>) {
+  if (!NOTIF_UX_DEBUG) return;
+  if (data) console.log(`[notifications:ux] ${message}`, data);
+  else console.log(`[notifications:ux] ${message}`);
+}
+
 export function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
@@ -40,6 +53,8 @@ export function NotificationsScreen() {
   const [refreshing, setRefreshing] = useState(false);
   const [filter, setFilter] = useState<"all" | "unread" | "today" | "overdue">("unread");
   const [showMenu, setShowMenu] = useState(false);
+  /** IDs we optimistically marked read this session — used to detect unread-after-reload regressions. */
+  const sessionMarkedReadIdsRef = useRef<Set<string>>(new Set());
 
   const loadNotifications = useCallback(async (isRefresh = false) => {
     if (!notificationUserId) {
@@ -64,6 +79,26 @@ export function NotificationsScreen() {
       ]);
       setNotifications(list);
       setPendingInvites(invites);
+      if (NOTIF_UX_DEBUG) {
+        const unreadIds = list.filter((n) => !hasMeaningfulReadAt(n.readAt)).map((n) => n.id);
+        notifUxLog("inbox_loaded", {
+          total: list.length,
+          unreadCount: unreadIds.length,
+          unreadIdsHead: unreadIds.slice(0, 12),
+        });
+        for (const id of Array.from(sessionMarkedReadIdsRef.current)) {
+          const row = list.find((n) => n.id === id);
+          if (!row) {
+            sessionMarkedReadIdsRef.current.delete(id);
+            continue;
+          }
+          if (!hasMeaningfulReadAt(row.readAt)) {
+            notifUxLog("read_state_regressed_after_fetch", { id });
+          } else {
+            sessionMarkedReadIdsRef.current.delete(id);
+          }
+        }
+      }
     } catch (error: any) {
       console.error("[NotificationsScreen] Error loading:", error);
       setNotifications([]);
@@ -91,23 +126,18 @@ export function NotificationsScreen() {
     async (notification: NotificationDoc) => {
       const readNow = new Date().toISOString();
       const prevReadAt = notification.readAt ?? null;
-      console.log("[notifications:diag] markAsRead before markNotificationAsRead", {
-        id: notification.id,
-        prevReadAt,
-      });
+      notifRowLog("markNotificationAsRead called", { id: notification.id, prevReadAt });
+      notifUxLog("mark_read_start", { id: notification.id, via: "swipe" });
+      if (NOTIF_UX_DEBUG) sessionMarkedReadIdsRef.current.add(notification.id);
       setNotifications((prev) =>
         prev.map((n) => (n.id === notification.id ? { ...n, readAt: readNow } : n))
       );
       try {
+        notifUxLog("mark_read_calling_service", { id: notification.id });
         const ok = await notificationsService.markNotificationAsRead(notification);
-        console.log("[notifications:diag] markAsRead after markNotificationAsRead", {
-          id: notification.id,
-          ok,
-        });
+        notifUxLog("mark_read_persist_result", { id: notification.id, ok });
         if (!ok) {
-          console.warn("[notifications:diag] markAsRead rollback (persist returned false)", {
-            id: notification.id,
-          });
+          if (NOTIF_UX_DEBUG) sessionMarkedReadIdsRef.current.delete(notification.id);
           showToast(t("common.error"));
           setNotifications((prev) =>
             prev.map((n) => (n.id === notification.id ? { ...n, readAt: prevReadAt } : n))
@@ -115,21 +145,17 @@ export function NotificationsScreen() {
         }
       } catch (error: any) {
         console.error("[NotificationsScreen] Error marking as read:", error);
-        console.warn("[notifications:diag] markAsRead rollback (catch)", {
-          id: notification.id,
-          err: String(error?.message ?? error),
-        });
+        if (NOTIF_UX_DEBUG) sessionMarkedReadIdsRef.current.delete(notification.id);
+        notifUxLog("mark_read_exception", { id: notification.id, err: String(error?.message ?? error) });
         setNotifications((prev) =>
           prev.map((n) => (n.id === notification.id ? { ...n, readAt: prevReadAt } : n))
         );
       } finally {
-        console.log("[notifications:diag] markAsRead finally refreshUnreadCount", {
-          id: notification.id,
-        });
+        notifUxLog("mark_read_badge_refresh", { id: notification.id });
         void refreshUnreadCount();
       }
     },
-    [refreshUnreadCount]
+    [refreshUnreadCount, t]
   );
 
   const handleMarkAllAsRead = useCallback(async () => {
@@ -275,10 +301,28 @@ export function NotificationsScreen() {
     return parts.join(" • ") || t("notifications.noDescription");
   };
 
-  /** Navigate to the related item (project, task, etc.). Also marks as read. */
+  /**
+   * Navigate to the related item (project, task, etc.). Does not change read state — use swipe to mark read.
+   * Exception: SYNC_ISSUE shows Alert only (no separate navigation target).
+   */
   const handleNavigateToNotification = useCallback(
     async (notification: NotificationDoc) => {
-      await markAsRead(notification);
+      notifRowLog("handleNavigateToNotification start", { id: notification.id, type: notification.type });
+      notifUxLog("tap_open_destination", {
+        id: notification.id,
+        type: notification.type,
+        note: "no_mark_as_read_on_tap",
+      });
+
+      const projectOverviewParams = (extra: Record<string, unknown> = {}) => {
+        if (!notification.projectId) return null;
+        const name = notification.projectName?.trim();
+        return {
+          projectId: notification.projectId,
+          ...(name ? { projectName: name } : {}),
+          ...extra,
+        };
+      };
 
       const taskIdForDetail =
         notification.taskId ?? (notification.meta?.taskId as string | undefined);
@@ -286,8 +330,9 @@ export function NotificationsScreen() {
       if (notification.type === "TASK_ASSIGNED" && notification.projectId) {
         if (!taskIdForDetail) {
           const parentNav = navigation.getParent();
-          if (parentNav) {
-            (parentNav as any).navigate("ProjectOverview", { projectId: notification.projectId });
+          const po = projectOverviewParams();
+          if (parentNav && po) {
+            (parentNav as any).navigate("ProjectOverview", po);
           }
           return;
         }
@@ -304,8 +349,9 @@ export function NotificationsScreen() {
           console.error("[NotificationsScreen] Error loading task for TASK_ASSIGNED:", error);
         }
         const parentNav = navigation.getParent();
-        if (parentNav) {
-          (parentNav as any).navigate("ProjectOverview", { projectId: notification.projectId });
+        const po = projectOverviewParams();
+        if (parentNav && po) {
+          (parentNav as any).navigate("ProjectOverview", po);
         }
         showToast("K projektu už nemáš prístup.");
         return;
@@ -356,25 +402,22 @@ export function NotificationsScreen() {
           return;
         }
         const parentNav = navigation.getParent();
-        if (parentNav) {
-          (parentNav as any).navigate("ProjectOverview", { projectId: notification.projectId });
+        const po = projectOverviewParams();
+        if (parentNav && po) {
+          (parentNav as any).navigate("ProjectOverview", po);
         }
       } else if (notification.type === "EXPENSE_ADDED" && notification.projectId && notification.expenseId) {
         // Navigate to root stack ProjectOverview screen
         const parentNav = navigation.getParent();
-        if (parentNav) {
-          (parentNav as any).navigate("ProjectOverview", {
-            projectId: notification.projectId,
-            openExpenseId: notification.expenseId,
-          });
+        const po = projectOverviewParams({ openExpenseId: notification.expenseId });
+        if (parentNav && po) {
+          (parentNav as any).navigate("ProjectOverview", po);
         }
       } else if (notification.type === "DIARY_ADDED" && notification.projectId) {
         const parentNav = navigation.getParent();
-        if (parentNav) {
-          (parentNav as any).navigate("ProjectOverview", {
-            projectId: notification.projectId,
-            openDiaryModal: true,
-          });
+        const po = projectOverviewParams({ openDiaryModal: true });
+        if (parentNav && po) {
+          (parentNav as any).navigate("ProjectOverview", po);
         }
       } else if (notification.type === "PROJECT_INVITED") {
         // Navigate to ProjectInvites to accept/decline
@@ -393,27 +436,56 @@ export function NotificationsScreen() {
       ) {
         // Navigate to root stack ProjectOverview screen
         const parentNav = navigation.getParent();
-        if (parentNav) {
-          (parentNav as any).navigate("ProjectOverview", {
-            projectId: notification.projectId,
-          });
+        const po = projectOverviewParams();
+        if (parentNav && po) {
+          (parentNav as any).navigate("ProjectOverview", po);
         }
       } else if (notification.type === "SYNC_ISSUE") {
+        /**
+         * Exception: SYNC_ISSUE has no in-app destination — show system alert only for this type.
+         * Do not use Alert for normal inbox read/mark; swipe marks read for SYNC_ISSUE like any other row.
+         */
         Alert.alert(t("notifications.syncErrorTitle"), notification.message || t("notifications.syncError"));
       }
+      notifRowLog("handleNavigateToNotification done", { id: notification.id });
     },
-    [navigation, markAsRead]
+    [navigation, t]
   );
 
-  /** Tap on card: mark as read only, no navigation. */
-  const handleMarkAsReadOnly = useCallback(
+  /** Tap: navigation only (read/unread via swipe). */
+  const onNotificationRowPress = useCallback(
     (notification: NotificationDoc) => {
-      if (!hasMeaningfulReadAt(notification.readAt)) {
-        markAsRead(notification);
-      }
+      notifRowLog("row tapped", { id: notification.id, type: notification.type });
+      notifUxLog("row_tapped", { id: notification.id, type: notification.type, action: "navigate" });
+      void handleNavigateToNotification(notification).catch((err) => {
+        notifRowLog("handleNavigateToNotification error", {
+          id: notification.id,
+          err: err instanceof Error ? err.message : String(err),
+        });
+        console.error("[NotificationsScreen] handleNavigateToNotification:", err);
+      });
     },
-    [markAsRead]
+    [handleNavigateToNotification]
   );
+
+  const renderNotificationRow = (n: NotificationDoc, index: number) => {
+    if (NOTIF_ROW_DEBUG && index < 8) {
+      notifRowLog("render notification row (sample)", { id: n.id, index });
+    }
+    return (
+      <NotificationInboxRow
+        notification={n}
+        index={index}
+        markAsRead={markAsRead}
+        onNavigatePress={onNotificationRowPress}
+        getNotificationTitle={getNotificationTitle}
+        getNotificationSubtitle={getNotificationSubtitle}
+        getNotificationIcon={getNotificationIcon}
+        formatRelativeTime={formatRelativeTime}
+        markReadLabel={t("notifications.markRead")}
+      />
+    );
+  };
 
   const isTodayNotification = (n: NotificationDoc) => {
     if (n.type === "TASK_DUE_TODAY") return true;
@@ -525,7 +597,7 @@ export function NotificationsScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
           }
-          renderItem={({ item }) =>
+          renderItem={({ item, index }) =>
             item.kind === "invite" ? (
               <TouchableOpacity
                 style={[styles.notificationCard, styles.notificationCardUnread]}
@@ -554,43 +626,7 @@ export function NotificationsScreen() {
                 </View>
               </TouchableOpacity>
             ) : (
-              <View
-                style={[
-                  styles.notificationCard,
-                  !hasMeaningfulReadAt(item.notification.readAt) && styles.notificationCardUnread,
-                ]}
-              >
-                <TouchableOpacity
-                  style={styles.cardContent}
-                  onPress={() => handleMarkAsReadOnly(item.notification)}
-                  activeOpacity={0.7}
-                >
-                  <View style={styles.iconContainer}>
-                    <Ionicons name={getNotificationIcon(item.notification.type)} size={52} color={colors.primary} />
-                  </View>
-                  <View style={styles.textContainer}>
-                    <Text style={styles.cardTitle} numberOfLines={1}>
-                      {getNotificationTitle(item.notification)}
-                    </Text>
-                    <Text style={styles.cardSubtitle} numberOfLines={2}>
-                      {getNotificationSubtitle(item.notification)}
-                    </Text>
-                  </View>
-                  <View style={styles.rightContainer}>
-                    {!hasMeaningfulReadAt(item.notification.readAt) && <View style={styles.unreadDot} />}
-                    <Text style={styles.timeText}>{formatRelativeTime(item.notification.createdAt)}</Text>
-                  </View>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={styles.chevronButton}
-                  onPress={() => handleNavigateToNotification(item.notification)}
-                  hitSlop={ICON_HIT_SLOP}
-                  accessibilityRole="button"
-                  accessibilityLabel="Open notification"
-                >
-                  <Ionicons name="chevron-forward" size={24} color={colors.primary} />
-                </TouchableOpacity>
-              </View>
+              renderNotificationRow(item.notification, index)
             )
           }
         />
@@ -609,42 +645,7 @@ export function NotificationsScreen() {
           refreshControl={
             <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
           }
-          renderItem={({ item }) => (
-            <View
-              style={[styles.notificationCard, !hasMeaningfulReadAt(item.readAt) && styles.notificationCardUnread]}
-            >
-              <TouchableOpacity
-                style={styles.cardContent}
-                onPress={() => handleMarkAsReadOnly(item)}
-                activeOpacity={0.7}
-              >
-                <View style={styles.iconContainer}>
-                  <Ionicons name={getNotificationIcon(item.type)} size={52} color={colors.primary} />
-                </View>
-                <View style={styles.textContainer}>
-                  <Text style={styles.cardTitle} numberOfLines={1}>
-                    {getNotificationTitle(item)}
-                  </Text>
-                  <Text style={styles.cardSubtitle} numberOfLines={2}>
-                    {getNotificationSubtitle(item)}
-                  </Text>
-                </View>
-                <View style={styles.rightContainer}>
-                  {!hasMeaningfulReadAt(item.readAt) && <View style={styles.unreadDot} />}
-                  <Text style={styles.timeText}>{formatRelativeTime(item.createdAt)}</Text>
-                </View>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={styles.chevronButton}
-                onPress={() => handleNavigateToNotification(item)}
-                hitSlop={ICON_HIT_SLOP}
-                accessibilityRole="button"
-                accessibilityLabel="Open notification"
-              >
-                <Ionicons name="chevron-forward" size={24} color={colors.primary} />
-              </TouchableOpacity>
-            </View>
-          )}
+          renderItem={({ item, index }) => renderNotificationRow(item, index)}
         />
       )}
 
@@ -727,7 +728,7 @@ const styles = StyleSheet.create({
   },
   notificationCard: {
     flexDirection: "row",
-    alignItems: "center",
+    alignItems: "stretch",
     backgroundColor: colors.card,
     borderRadius: radius,
     padding: spacing.md,
@@ -740,6 +741,12 @@ const styles = StyleSheet.create({
     borderColor: colors.primary,
     borderWidth: 2,
     backgroundColor: colors.primary + "15",
+  },
+  /** Single full-width row inside the card touchable (entire card is one touch target). */
+  cardRowInner: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
   },
   cardContent: {
     flex: 1,
@@ -773,6 +780,9 @@ const styles = StyleSheet.create({
   rightContainer: {
     alignItems: "flex-end",
     justifyContent: "center",
+  },
+  rowChevron: {
+    marginTop: spacing.xs,
   },
   chevronButton: {
     padding: spacing.sm,
@@ -824,4 +834,140 @@ const styles = StyleSheet.create({
     color: colors.text,
     fontWeight: "500",
   },
+  swipeRowOuter: {
+    marginBottom: spacing.md,
+    borderRadius: radius,
+  },
+  notificationCardNoListMargin: {
+    marginBottom: 0,
+  },
+  swipeMarkReadTrack: {
+    flex: 1,
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "stretch",
+  },
+  swipeMarkReadButton: {
+    width: 96,
+    justifyContent: "center",
+    alignItems: "center",
+    backgroundColor: colors.primary,
+  },
+  swipeMarkReadLabel: {
+    color: "#FFFFFF",
+    fontWeight: "700",
+    fontSize: 14,
+    textAlign: "center",
+    paddingHorizontal: spacing.xs,
+    maxWidth: 88,
+  },
 });
+
+type NotificationInboxRowProps = {
+  notification: NotificationDoc;
+  index: number;
+  markAsRead: (n: NotificationDoc) => Promise<void>;
+  onNavigatePress: (n: NotificationDoc) => void;
+  getNotificationTitle: (n: NotificationDoc) => string;
+  getNotificationSubtitle: (n: NotificationDoc) => string;
+  getNotificationIcon: (type: NotificationType) => React.ComponentProps<typeof Ionicons>["name"];
+  formatRelativeTime: (createdAt: unknown) => string;
+  markReadLabel: string;
+};
+
+function NotificationInboxRow({
+  notification: n,
+  index,
+  markAsRead,
+  onNavigatePress,
+  getNotificationTitle,
+  getNotificationSubtitle,
+  getNotificationIcon,
+  formatRelativeTime,
+  markReadLabel,
+}: NotificationInboxRowProps) {
+  if (NOTIF_ROW_DEBUG && index < 8) {
+    notifRowLog("render notification row (sample)", { id: n.id, index });
+  }
+  const unread = !hasMeaningfulReadAt(n.readAt);
+  const title = getNotificationTitle(n);
+
+  const cardInner = (
+    <View style={styles.cardRowInner}>
+      <View style={styles.iconContainer}>
+        <Ionicons name={getNotificationIcon(n.type)} size={52} color={colors.primary} />
+      </View>
+      <View style={styles.textContainer}>
+        <Text style={styles.cardTitle} numberOfLines={1}>
+          {title}
+        </Text>
+        <Text style={styles.cardSubtitle} numberOfLines={2}>
+          {getNotificationSubtitle(n)}
+        </Text>
+      </View>
+      <View style={styles.rightContainer}>
+        {unread && <View style={styles.unreadDot} />}
+        <Text style={styles.timeText}>{formatRelativeTime(n.createdAt)}</Text>
+        <Ionicons name="chevron-forward" size={22} color={colors.primary} style={styles.rowChevron} />
+      </View>
+    </View>
+  );
+
+  const markFromSwipe = (swipeable: InstanceType<typeof Swipeable> | null, source: "action_press" | "swipe_open") => {
+    notifUxLog("row_swiped_mark_read", { id: n.id, source });
+    void markAsRead(n).finally(() => {
+      swipeable?.close?.();
+    });
+  };
+
+  if (!unread) {
+    return (
+      <TouchableOpacity
+        style={styles.notificationCard}
+        onPress={() => onNavigatePress(n)}
+        activeOpacity={0.88}
+        accessibilityRole="button"
+        accessibilityLabel={title}
+      >
+        {cardInner}
+      </TouchableOpacity>
+    );
+  }
+
+  return (
+    <Swipeable
+      friction={2}
+      overshootRight={false}
+      containerStyle={styles.swipeRowOuter}
+      renderRightActions={(_progress, _dragX, swipeable) => (
+        <View style={styles.swipeMarkReadTrack}>
+          <RectButton
+            style={styles.swipeMarkReadButton}
+            onPress={() => markFromSwipe(swipeable, "action_press")}
+            accessibilityRole="button"
+            accessibilityLabel={markReadLabel}
+          >
+            <Text style={styles.swipeMarkReadLabel} numberOfLines={2} maxFontSizeMultiplier={1.2}>
+              {markReadLabel}
+            </Text>
+          </RectButton>
+        </View>
+      )}
+      onSwipeableOpen={(direction, swipeable) => {
+        if (direction === "right") {
+          markFromSwipe(swipeable, "swipe_open");
+        }
+      }}
+    >
+      <GHTouchableOpacity
+        style={[styles.notificationCard, styles.notificationCardUnread, styles.notificationCardNoListMargin]}
+        onPress={() => onNavigatePress(n)}
+        activeOpacity={0.88}
+        accessibilityRole="button"
+        accessibilityLabel={title}
+      >
+        {cardInner}
+      </GHTouchableOpacity>
+    </Swipeable>
+  );
+}

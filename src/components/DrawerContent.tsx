@@ -314,7 +314,10 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   return (
     <DrawerContentScrollView
       {...props}
-      contentContainerStyle={[styles.container, styles.contentContainer, { paddingTop: insets.top + spacing.lg, paddingBottom: bottomInset + spacing.lg }]}
+      contentContainerStyle={[
+        styles.container,
+        { paddingTop: insets.top + spacing.lg, paddingBottom: bottomInset + spacing.xl },
+      ]}
       scrollEnabled={true}
       keyboardShouldPersistTaps="handled"
       nestedScrollEnabled={true}
@@ -448,19 +451,13 @@ export function DrawerContent(props: DrawerContentComponentProps) {
           </TouchableOpacity>
         ))}
       </View>
-
-      <View style={[styles.spacer, { paddingBottom: bottomInset }]} />
     </DrawerContentScrollView>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
-    flexGrow: 1,
     backgroundColor: colors.background,
-  },
-  contentContainer: {
-    flex: 1,
   },
   header: {
     paddingHorizontal: spacing.lg,
@@ -558,10 +555,6 @@ const styles = StyleSheet.create({
   bottomSection: {
     paddingTop: spacing.xs,
     paddingBottom: spacing.md,
-  },
-  spacer: {
-    flex: 1,
-    minHeight: 24,
   },
   navRow: {
     flexDirection: "row",

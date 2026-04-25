@@ -2,16 +2,12 @@ import {
   collection,
   addDoc,
   query,
-  where,
-  getDocs,
   getDoc,
   deleteDoc,
   doc,
   updateDoc,
-  orderBy,
   serverTimestamp,
   Timestamp,
-  limit,
 } from "../lib/rnFirestore";
 import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
@@ -167,6 +163,17 @@ export function getCategoriesForProjectType(projectType: ProjectStorageType | st
   return PROBLEM_CATEGORIES_BY_PROJECT_TYPE[projectType] ?? DEFAULT_CATEGORIES;
 }
 
+function sortProblemsByCreatedAtDesc(list: ProblemDoc[]): ProblemDoc[] {
+  return [...list].sort((a, b) => {
+    const ta = new Date(a.createdAt).getTime();
+    const tb = new Date(b.createdAt).getTime();
+    if (Number.isNaN(ta) && Number.isNaN(tb)) return 0;
+    if (Number.isNaN(ta)) return 1;
+    if (Number.isNaN(tb)) return -1;
+    return tb - ta;
+  });
+}
+
 export async function listProblems(
   projectId: string,
   filters?: {
@@ -177,7 +184,8 @@ export async function listProblems(
   }
 ): Promise<ProblemDoc[]> {
   const c = collection(db, paths.projectProblems(projectId));
-  const q = query(c, orderBy("createdAt", "desc"));
+  /** No `orderBy("createdAt")` here: Firestore omits docs missing that field, so counts vs list diverged. */
+  const q = query(c);
   const snap = await getDocsSmart(q);
   let list = snap.docs
     .map((d) => {
@@ -189,6 +197,8 @@ export async function listProblems(
       }
     })
     .filter((p): p is ProblemDoc => p != null);
+
+  list = sortProblemsByCreatedAtDesc(list);
 
   if (filters?.status) {
     const statuses = Array.isArray(filters.status) ? filters.status : [filters.status];
@@ -207,12 +217,20 @@ export async function listProblems(
   return list;
 }
 
-/** Count problems with status open or in_progress (for badge) */
+/**
+ * Count problems shown as "open" on the project badge: open or in_progress, not archived.
+ * Uses the same document set as `listProblems` (no orderBy-only exclusion of legacy rows).
+ */
 export async function countOpenProblems(projectId: string): Promise<number> {
   const c = collection(db, paths.projectProblems(projectId));
-  const q = query(c, where("status", "in", ["open", "in_progress"]));
-  const snap = await getDocsSmart(q);
-  return snap.size;
+  const snap = await getDocsSmart(query(c));
+  let n = 0;
+  for (const d of snap.docs) {
+    const p = toDoc({ id: d.id, data: d.data.bind(d) });
+    if (!p || p.archivedAt) continue;
+    if (p.status === "open" || p.status === "in_progress") n += 1;
+  }
+  return n;
 }
 
 export async function getProblem(projectId: string, problemId: string): Promise<ProblemDoc | null> {

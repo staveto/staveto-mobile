@@ -16,6 +16,7 @@ import { useNavigation, useRoute } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
+import { useAuth } from "../context/AuthContext";
 import * as timeTracking from "../services/timeTracking";
 import type { TimeEntryDoc } from "../services/timeTracking";
 import { colors, radius, spacing } from "../theme";
@@ -43,6 +44,7 @@ export function ProjectTimeDetailScreen() {
   const route = useRoute();
   const insets = useSafeAreaInsets();
   const { t, locale } = useI18n();
+  const { user } = useAuth();
   const { projectId, projectName } = (route.params ?? {}) as RouteParams;
 
   const [entries, setEntries] = useState<TimeEntryDoc[]>([]);
@@ -74,7 +76,9 @@ export function ProjectTimeDetailScreen() {
         const from = new Date(now);
         from.setMonth(from.getMonth() - 24);
         const fromYmd = toLocalYmd(from);
-        const list = await timeTracking.listTimeEntriesByProject(projectId, fromYmd, toYmd);
+        const list = await timeTracking.listTimeEntriesByProject(projectId, fromYmd, toYmd, {
+          forUserId: user?.id,
+        });
         setEntries(list);
       } catch {
         setEntries([]);
@@ -83,7 +87,7 @@ export function ProjectTimeDetailScreen() {
         setRefreshing(false);
       }
     },
-    [projectId, toLocalYmd]
+    [projectId, toLocalYmd, user?.id]
   );
 
   useEffect(() => {

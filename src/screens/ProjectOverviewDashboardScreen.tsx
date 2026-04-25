@@ -132,7 +132,7 @@ export function ProjectOverviewDashboardScreen() {
             const access = await fetchProjectAccess(projectId, user.id, proj?.ownerId);
             if (access.isOwner || access.canWriteTime) {
               setCanSeeHours(true);
-              const mins = await timeTracking.getProjectTotalMinutes(projectId);
+              const mins = await timeTracking.getProjectTotalMinutes(projectId, user.id);
               setProjectHoursMinutes(mins);
             } else {
               setCanSeeHours(false);

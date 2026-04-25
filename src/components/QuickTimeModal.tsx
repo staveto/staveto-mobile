@@ -14,6 +14,7 @@ import {
 import { BottomSheetModal, BottomSheetBackdrop, BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, spacing } from "../theme";
 import { toYmd } from "../utils/date";
 import { formatElapsedHms } from "../utils/formatElapsedHms";
@@ -68,6 +69,7 @@ export function QuickTimeModal({
   const [projectSearch, setProjectSearch] = useState("");
   const [elapsedDisplay, setElapsedDisplay] = useState("");
   const rotateAnim = useRef(new Animated.Value(0)).current;
+  const insets = useSafeAreaInsets();
 
   const filteredProjects = React.useMemo(() => {
     const active = projects.filter((p) => !p.archivedAt);
@@ -86,6 +88,18 @@ export function QuickTimeModal({
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
   }, [activeTimer]);
+
+  const hadActiveTimerRef = useRef(false);
+  useEffect(() => {
+    if (activeTimer && !hadActiveTimerRef.current) {
+      hadActiveTimerRef.current = true;
+      const id = requestAnimationFrame(() => sheetRef.current?.snapToIndex(1));
+      return () => cancelAnimationFrame(id);
+    }
+    if (!activeTimer) {
+      hadActiveTimerRef.current = false;
+    }
+  }, [activeTimer, sheetRef]);
 
   useEffect(() => {
     if (!activeTimer) {
@@ -146,7 +160,7 @@ export function QuickTimeModal({
     } finally {
       setLoading(false);
     }
-  }, [onRefreshActiveTimer, onSaved, sheetRef]);
+  }, [activeTimer, onRefreshActiveTimer, onSaved, sheetRef]);
 
   const handleManualSave = useCallback(async () => {
     if (!selectedProject) {
@@ -186,20 +200,26 @@ export function QuickTimeModal({
     }
   }, [selectedProject, manualHours, manualMinutes, manualNote, manualDate, onSaved, sheetRef, t]);
 
-  const snapPoints = ["48%", "82%"];
+  /** Taller sheet when timer runs so Stop stays above gesture bar without hunting for scroll. */
+  const snapPoints = React.useMemo(() => (activeTimer ? (["68%", "92%"] as const) : (["48%", "82%"] as const)), [activeTimer]);
+  const scrollBottomPad = Math.max(insets.bottom, 20) + spacing.xl * 2;
 
   return (
     <BottomSheetModal
       ref={sheetRef}
       snapPoints={snapPoints}
       index={0}
+      bottomInset={insets.bottom}
       backdropComponent={(props) => (
         <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} />
       )}
       backgroundStyle={{ backgroundColor: SHEET_BG }}
       handleIndicatorStyle={{ backgroundColor: "rgba(255,255,255,0.5)" }}
     >
-      <BottomSheetScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
+      <BottomSheetScrollView
+        contentContainerStyle={[styles.content, { paddingBottom: scrollBottomPad }]}
+        keyboardShouldPersistTaps="handled"
+      >
         <Text style={styles.title}>{t("time.title")}</Text>
 
         {activeTimer ? (
@@ -429,7 +449,6 @@ export function QuickTimeModal({
 const styles = StyleSheet.create({
   content: {
     padding: spacing.lg,
-    paddingBottom: spacing.xl * 2,
   },
   title: {
     fontSize: 20,

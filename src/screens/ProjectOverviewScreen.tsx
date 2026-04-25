@@ -815,21 +815,6 @@ export function ProjectOverviewScreen() {
     access.canReadDocuments,
   ]);
   
-  const loadProjectHours = useCallback(async () => {
-    if (!projectId) return;
-    const allowed =
-      access.isOwner ||
-      access.canWriteTime ||
-      (access.isMember && access.sharedItems?.timeTracking !== false);
-    if (!allowed) return;
-    try {
-      const mins = await timeTracking.getProjectTotalMinutes(projectId);
-      setProjectHoursMinutes(mins);
-    } catch {
-      setProjectHoursMinutes(0);
-    }
-  }, [projectId, access.isOwner, access.canWriteTime, access.isMember, access.sharedItems?.timeTracking]);
-
   const toLocalYmd = useCallback((d: Date): string => {
     const y = d.getFullYear();
     const m = String(d.getMonth() + 1).padStart(2, "0");
@@ -918,6 +903,18 @@ export function ProjectOverviewScreen() {
       (access.isOwner ||
         access.canWriteTime ||
         (access.isMember && access.sharedItems?.timeTracking !== false));
+
+    console.log("[PTS 1] start", {
+      projectId,
+      userId: user?.id,
+      accessLoading: access.loading,
+      isOwner: access.isOwner,
+      routeOwnerMatch: isOwner,
+      canWriteTime: access.canWriteTime,
+      sharedTimeTracking: access.sharedItems?.timeTracking,
+      allowed,
+    });
+
     if (!allowed) {
       setProjectHoursMinutes(0);
       setProjectTodayMinutes(0);
@@ -928,16 +925,26 @@ export function ProjectOverviewScreen() {
     }
     setTimeCardLoading(true);
     try {
+      console.log("[PTS 2] before fetch");
+      const timeOpts = { forUserId: user?.id ?? undefined };
       const [at, totalMins] = await Promise.all([
         timeTracking.getActiveTimer().catch(() => null),
-        timeTracking.getProjectTotalMinutes(projectId).catch(() => 0),
+        timeTracking.getProjectTotalMinutes(projectId, user?.id ?? null).catch(() => 0),
       ]);
-      setActiveTimer(at);
-      setProjectHoursMinutes(totalMins);
 
       const todayYmd = toLocalYmd(new Date());
       const { fromYmd, toYmd } = localWeekRange();
-      const weekEntries = await timeTracking.listTimeEntriesByProject(projectId, fromYmd, toYmd).catch(() => []);
+      const weekEntries = await timeTracking
+        .listTimeEntriesByProject(projectId, fromYmd, toYmd, timeOpts)
+        .catch(() => []);
+
+      console.log("[PTS 3] fetch result", {
+        totalMins,
+        weekEntriesLength: weekEntries.length,
+        activeTimer: at,
+      });
+
+      setActiveTimer(at);
 
       const dayKeyForTimerEntry = (startedAt: string): string => {
         const d = new Date(startedAt);
@@ -958,14 +965,35 @@ export function ProjectOverviewScreen() {
           todaySum += mins;
         }
       }
+
+      console.log("[PTS 4] computed", {
+        todaySum,
+        weekSum,
+        totalMins,
+      });
+
+      const weekEntryCount = weekEntries.filter((e) => (e.durationMinutes ?? 0) > 0).length;
+
+      console.log("[PTS 5] setting state", {
+        today: todaySum,
+        week: weekSum,
+        total: totalMins,
+        weekEntryCount,
+        weekEntriesLength: weekEntries.length,
+      });
+
+      /** Set project time state in one phase after all reads (avoids stale total from racing requests). */
+      setProjectHoursMinutes(totalMins);
       setProjectWeekMinutes(weekSum);
       setProjectTodayMinutes(todaySum);
-      setProjectTimeWeekEntryCount(weekEntries.filter((e) => (e.durationMinutes ?? 0) > 0).length);
+      setProjectTimeWeekEntryCount(weekEntryCount);
     } finally {
       setTimeCardLoading(false);
     }
   }, [
     projectId,
+    user?.id,
+    isOwner,
     access.loading,
     access.isOwner,
     access.canWriteTime,
@@ -990,7 +1018,9 @@ export function ProjectOverviewScreen() {
     const fromYmd = toLocalYmd(from);
     setAccordionTimeLoading(true);
     try {
-      const list = await timeTracking.listTimeEntriesByProject(projectId, fromYmd, toYmd);
+      const list = await timeTracking.listTimeEntriesByProject(projectId, fromYmd, toYmd, {
+        forUserId: user?.id,
+      });
       setAccordionTimeEntries(list);
     } catch {
       setAccordionTimeEntries([]);
@@ -999,6 +1029,7 @@ export function ProjectOverviewScreen() {
     }
   }, [
     projectId,
+    user?.id,
     access.loading,
     access.isOwner,
     access.canWriteTime,
@@ -1011,10 +1042,9 @@ export function ProjectOverviewScreen() {
     load(true);
     loadActivity();
     loadWeather(true);
-    loadProjectHours();
     loadProjectTimeSummary();
     if (timeAccordionExpanded) void loadAccordionTimeEntries();
-  }, [load, loadActivity, loadWeather, loadProjectHours, loadProjectTimeSummary, timeAccordionExpanded, loadAccordionTimeEntries]);
+  }, [load, loadActivity, loadWeather, loadProjectTimeSummary, timeAccordionExpanded, loadAccordionTimeEntries]);
 
   useEffect(() => {
     if (!timeAccordionExpanded || !projectId) return;
@@ -1036,26 +1066,25 @@ export function ProjectOverviewScreen() {
 
   useEffect(() => {
     if (!projectId || access.loading) return;
-    const allowed =
-      access.isOwner ||
-      access.canWriteTime ||
-      (access.isMember && access.sharedItems?.timeTracking !== false);
-    if (allowed) loadProjectHours();
-    else setProjectHoursMinutes(0);
-  }, [
-    projectId,
-    access.loading,
-    access.isOwner,
-    access.canWriteTime,
-    access.isMember,
-    access.sharedItems?.timeTracking,
-    loadProjectHours,
-  ]);
-
-  useEffect(() => {
-    if (!projectId || access.loading) return;
     void loadProjectTimeSummary();
   }, [projectId, access.loading, loadProjectTimeSummary]);
+
+  useEffect(() => {
+    if (!canViewProjectTime || !timeAccordionExpanded) return;
+    console.log("[PTS-R] state after update (expanded)", {
+      projectTodayMinutes,
+      projectWeekMinutes,
+      projectHoursMinutes,
+      projectTimeWeekEntryCount,
+    });
+  }, [
+    canViewProjectTime,
+    timeAccordionExpanded,
+    projectTodayMinutes,
+    projectWeekMinutes,
+    projectHoursMinutes,
+    projectTimeWeekEntryCount,
+  ]);
 
   useEffect(() => {
     // Tick running timer display when the active timer belongs to this project
@@ -1078,6 +1107,30 @@ export function ProjectOverviewScreen() {
       });
       return () => {};
     }, [projectId, user?.id])
+  );
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!projectId || access.loading) return () => {};
+      const allowed =
+        access.isOwner ||
+        access.canWriteTime ||
+        (access.isMember && access.sharedItems?.timeTracking !== false);
+      if (!allowed) return () => {};
+      void loadProjectTimeSummary();
+      if (timeAccordionExpanded) void loadAccordionTimeEntries();
+      return () => {};
+    }, [
+      projectId,
+      access.loading,
+      access.isOwner,
+      access.canWriteTime,
+      access.isMember,
+      access.sharedItems?.timeTracking,
+      loadProjectTimeSummary,
+      loadAccordionTimeEntries,
+      timeAccordionExpanded,
+    ])
   );
 
   useEffect(() => {

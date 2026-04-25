@@ -39,6 +39,8 @@ export type ActiveTimer = {
   phaseNameSnapshot?: string | null;
   taskId?: string | null;
   taskTitleSnapshot?: string | null;
+  /** `projects[].ownerId` at start — used for offline permission + stop when Firestore member cache is empty. */
+  ownerIdSnapshot?: string | null;
 };
 
 export type TimeEntryDoc = {
@@ -74,32 +76,44 @@ function toIso(ts: unknown): string | undefined {
   return undefined;
 }
 
-async function ensureCanWriteTime(projectId: string, uid: string): Promise<void> {
-  const access = await fetchProjectAccess(projectId, uid);
-  if (!access.canWriteTime) {
-    throw new Error("Nemáte oprávnenie zapisovať hodiny do tohto projektu.");
-  }
+async function ensureCanWriteTime(projectId: string, uid: string, projectOwnerIdHint?: string | null): Promise<void> {
+  const access = await fetchProjectAccess(projectId, uid, projectOwnerIdHint ?? undefined);
+  if (access.canWriteTime) return;
+  /** Offline / empty cache: UI only lists projects the user may access; owner may write time without member doc in cache. */
+  if (projectOwnerIdHint && projectOwnerIdHint === uid) return;
+  throw new Error("Nemáte oprávnenie zapisovať hodiny do tohto projektu.");
 }
 
-async function readActiveTimerFromUserDoc(uid: string): Promise<ActiveTimer | null> {
+export type GetActiveTimerReadOpts = {
+  /** Use after writes when local cache can briefly miss `activeTimer`. */
+  source?: "default" | "server";
+};
+
+async function readActiveTimerFromUserDoc(uid: string, opts?: GetActiveTimerReadOpts): Promise<ActiveTimer | null> {
   const userRef = doc(db, paths.userDoc(uid));
-  const snap = await getDoc(userRef);
+  /** Always use DocumentReference.get — modular `getDoc(ref)` with RNFB ref can yield bad snapshots / TypeError on `.data()`. */
+  const snap = opts?.source === "server" ? await userRef.get({ source: "server" }) : await userRef.get();
+  if (!snap || typeof (snap as { data?: unknown }).data !== "function") return null;
   const data = snap.data();
-  const at = data?.activeTimer;
-  if (!at || typeof at !== "object") return null;
-  const startedAt = toIso(at.startedAt) ?? at.startedAt;
+  if (!data || typeof data !== "object") return null;
+  const at = (data as Record<string, unknown>).activeTimer;
+  if (at == null || typeof at !== "object" || Array.isArray(at)) return null;
+  const atMap = at as Record<string, unknown>;
+  const startedAt = toIso(atMap.startedAt);
   if (!startedAt) return null;
+  const ownerIdSnapshot = typeof atMap.ownerIdSnapshot === "string" ? atMap.ownerIdSnapshot : null;
   return {
-    projectId: at.projectId ?? "",
-    projectNameSnapshot: at.projectNameSnapshot ?? at.projectName ?? "",
+    projectId: (atMap.projectId as string) ?? "",
+    projectNameSnapshot: (atMap.projectNameSnapshot as string) ?? (atMap.projectName as string) ?? "",
     startedAt,
-    source: at.source ?? "home_quick_timer",
-    gpsStart: at.gpsStart ?? null,
-    reminderIds: Array.isArray(at.reminderIds) ? at.reminderIds : [],
-    phaseId: at.phaseId ?? null,
-    phaseNameSnapshot: at.phaseNameSnapshot ?? null,
-    taskId: at.taskId ?? null,
-    taskTitleSnapshot: at.taskTitleSnapshot ?? null,
+    source: (atMap.source as string) ?? "home_quick_timer",
+    gpsStart: (atMap.gpsStart as GpsPoint | null | undefined) ?? null,
+    reminderIds: Array.isArray(atMap.reminderIds) ? (atMap.reminderIds as string[]) : [],
+    phaseId: (atMap.phaseId as string | null | undefined) ?? null,
+    phaseNameSnapshot: (atMap.phaseNameSnapshot as string | null | undefined) ?? null,
+    taskId: (atMap.taskId as string | null | undefined) ?? null,
+    taskTitleSnapshot: (atMap.taskTitleSnapshot as string | null | undefined) ?? null,
+    ownerIdSnapshot,
   };
 }
 
@@ -107,11 +121,11 @@ async function readActiveTimerFromUserDoc(uid: string): Promise<ActiveTimer | nu
  * Get current user's active timer from users/{uid}.
  * On Firestore/network errors returns null (safe for flows that must not throw).
  */
-export async function getActiveTimer(): Promise<ActiveTimer | null> {
+export async function getActiveTimer(readOpts?: GetActiveTimerReadOpts): Promise<ActiveTimer | null> {
   const uid = auth.currentUser?.uid;
   if (!uid) return null;
   try {
-    return await readActiveTimerFromUserDoc(uid);
+    return await readActiveTimerFromUserDoc(uid, readOpts);
   } catch (err) {
     console.warn("[timeTracking] getActiveTimer error:", err);
     return null;
@@ -129,11 +143,14 @@ export type ActiveTimerRefreshResult =
  * @param explicitUid Prefer the signed-in user id from app context when Firebase
  * `auth.currentUser` can briefly lag behind after cold start.
  */
-export async function getActiveTimerRefreshResult(explicitUid?: string | null): Promise<ActiveTimerRefreshResult> {
+export async function getActiveTimerRefreshResult(
+  explicitUid?: string | null,
+  readOpts?: GetActiveTimerReadOpts
+): Promise<ActiveTimerRefreshResult> {
   const uid = explicitUid ?? auth.currentUser?.uid;
   if (!uid) return { ok: true, timer: null };
   try {
-    const timer = await readActiveTimerFromUserDoc(uid);
+    const timer = await readActiveTimerFromUserDoc(uid, readOpts);
     return { ok: true, timer };
   } catch (err) {
     console.warn("[timeTracking] getActiveTimerRefreshResult error:", err);
@@ -144,21 +161,40 @@ export async function getActiveTimerRefreshResult(explicitUid?: string | null): 
 /**
  * Start timer for project. Gets GPS if permission granted.
  */
-export async function startTimer(
-  projectId: string,
-  projectName: string,
-  opts?: { phaseId?: string | null; phaseNameSnapshot?: string | null; taskId?: string | null; taskTitleSnapshot?: string | null }
-): Promise<void> {
+export type StartTimerOpts = {
+  phaseId?: string | null;
+  phaseNameSnapshot?: string | null;
+  taskId?: string | null;
+  taskTitleSnapshot?: string | null;
+  /** `project.ownerId` from UI — enables offline start when Firestore project/member reads miss cache. */
+  projectOwnerId?: string | null;
+};
+
+export async function startTimer(projectId: string, projectName: string, opts?: StartTimerOpts): Promise<ActiveTimer> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Musíte byť prihlásený.");
   const existing = await getActiveTimer();
   if (existing) throw new Error("Časovač už beží. Najprv ho zastavte.");
-  await ensureCanWriteTime(projectId, uid);
+  await ensureCanWriteTime(projectId, uid, opts?.projectOwnerId ?? null);
 
-  const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
   await requestLocationPermission();
   const gpsStart = await getCurrentPositionSafe();
   const startedAt = new Date().toISOString();
+  const ownerIdSnapshot = opts?.projectOwnerId ?? null;
+
+  const activeTimerPayload: ActiveTimer = {
+    projectId,
+    projectNameSnapshot: projectName,
+    startedAt,
+    source: "home_quick_timer",
+    gpsStart: gpsStart ?? null,
+    reminderIds: [],
+    phaseId: opts?.phaseId ?? null,
+    phaseNameSnapshot: opts?.phaseNameSnapshot ?? null,
+    taskId: opts?.taskId ?? null,
+    taskTitleSnapshot: opts?.taskTitleSnapshot ?? null,
+    ownerIdSnapshot,
+  };
 
   const userRef = doc(db, paths.userDoc(uid));
   await updateDoc(userRef, {
@@ -173,27 +209,42 @@ export async function startTimer(
       phaseNameSnapshot: opts?.phaseNameSnapshot ?? null,
       taskId: opts?.taskId ?? null,
       taskTitleSnapshot: opts?.taskTitleSnapshot ?? null,
+      ownerIdSnapshot: ownerIdSnapshot ?? null,
     },
   });
 
-  await replaceRunningTimerNotification({
-    title: "Timer running",
-    projectName,
-    startedAtIso: startedAt,
-  });
+  try {
+    await replaceRunningTimerNotification({
+      title: "Timer running",
+      projectName,
+      startedAtIso: startedAt,
+    });
+  } catch (err) {
+    console.warn("[timeTracking] replaceRunningTimerNotification (offline OK):", err);
+  }
+
+  return activeTimerPayload;
 }
+
+export type StopTimerOpts = {
+  /** When Firestore read of `users/{uid}.activeTimer` fails, use the timer the UI already shows (same source of truth). */
+  knownActive?: ActiveTimer | null;
+};
 
 /**
  * Stop timer and create time entry.
  */
-export async function stopTimer(note?: string): Promise<TimeEntryDoc> {
+export async function stopTimer(note?: string, opts?: StopTimerOpts): Promise<TimeEntryDoc> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Musíte byť prihlásený.");
 
-  const active = await getActiveTimer();
+  let active = await getActiveTimer();
+  if (!active && opts?.knownActive) {
+    active = opts.knownActive;
+  }
   if (!active) throw new Error("Žiadny aktívny časovač.");
 
-  await ensureCanWriteTime(active.projectId, uid);
+  await ensureCanWriteTime(active.projectId, uid, active.ownerIdSnapshot ?? null);
 
   const endedAt = new Date().toISOString();
   const startDate = new Date(active.startedAt).getTime();
@@ -271,6 +322,7 @@ export type AddManualEntryParams = {
   phaseNameSnapshot?: string | null;
   taskId?: string | null;
   taskTitleSnapshot?: string | null;
+  projectOwnerId?: string | null;
 };
 
 /**
@@ -286,7 +338,7 @@ export async function addManualEntry(
 ): Promise<TimeEntryDoc> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Musíte byť prihlásený.");
-  await ensureCanWriteTime(projectId, uid);
+  await ensureCanWriteTime(projectId, uid, opts?.projectOwnerId ?? null);
 
   const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
   const startedAt = `${dateYmd}T00:00:00.000Z`;
@@ -339,7 +391,7 @@ export async function checkAutoStopOnAppOpen(): Promise<TimeEntryDoc | null> {
   const uid = auth.currentUser?.uid;
   if (!uid) return null;
 
-  await ensureCanWriteTime(active.projectId, uid);
+  await ensureCanWriteTime(active.projectId, uid, active.ownerIdSnapshot ?? null);
 
   const endedAt = new Date().toISOString();
   const durationMinutes = Math.round((new Date(endedAt).getTime() - new Date(active.startedAt).getTime()) / 60000);

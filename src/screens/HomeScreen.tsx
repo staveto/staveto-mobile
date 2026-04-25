@@ -64,6 +64,7 @@ import {
 import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
 import { readStoredPrimaryUsageMode } from "../lib/primaryUsageMode";
 import { showToast } from "../helpers/toast";
+import { formatElapsedHms } from "../utils/formatElapsedHms";
 
 // Conditional imports for image/document picker
 let ImagePicker: typeof import('expo-image-picker') | null = null;
@@ -84,16 +85,6 @@ function formatMinutesToHours(minutes: number): string {
 
 /** Success / running timer accent (FAB + panel). */
 const ACTIVE_TIMER_GREEN = "#22c55e";
-
-function formatElapsedHms(startedAtIso: string): string {
-  let ms = Date.now() - new Date(startedAtIso).getTime();
-  if (Number.isNaN(ms) || ms < 0) ms = 0;
-  const totalSec = Math.floor(ms / 1000);
-  const h = Math.floor(totalSec / 3600);
-  const m = Math.floor((totalSec % 3600) / 60);
-  const s = totalSec % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
-}
 
 const LAST_USED_PROJECT_KEY = "@staveto:lastUsedProjectId";
 const PROJECTS_FILTER_KEY = "projects_filter_v1";
@@ -440,9 +431,9 @@ export function HomeScreen() {
     calendarSheetRef.current?.present();
   }, []);
 
-  const refreshActiveTimer = useCallback(async () => {
+  const refreshActiveTimer = useCallback(async (readOpts?: timeTracking.GetActiveTimerReadOpts) => {
     if (!user?.id) return;
-    const r = await timeTracking.getActiveTimerRefreshResult(user.id);
+    const r = await timeTracking.getActiveTimerRefreshResult(user.id, readOpts);
     if (r.ok) {
       setActiveTimer(r.timer);
     }
@@ -858,7 +849,7 @@ export function HomeScreen() {
     if (!activeTimer) return;
     setHomeStopLoading(true);
     try {
-      await timeTracking.stopTimer();
+      await timeTracking.stopTimer(undefined, { knownActive: activeTimer });
       const r = await timeTracking.getActiveTimerRefreshResult(user?.id);
       if (r.ok) {
         setActiveTimer(r.timer);
@@ -1564,7 +1555,11 @@ export function HomeScreen() {
             }
           >
             <View style={[styles.homeTimerStatusBarIconWrap, activeTimer ? styles.homeTimerStatusBarIconWrapOn : null]}>
-              <Ionicons name={activeTimer ? "time" : "time-outline"} size={22} color={activeTimer ? "#fff" : "rgba(255,255,255,0.88)"} />
+              <Ionicons
+                name={activeTimer ? "time" : "time-outline"}
+                size={22}
+                color={activeTimer ? ACTIVE_TIMER_GREEN : "rgba(255,255,255,0.55)"}
+              />
               {activeTimer ? <View style={styles.homeTimerStatusBarLiveDot} /> : null}
             </View>
             <View style={styles.homeTimerStatusBarTextCol}>
@@ -1573,7 +1568,11 @@ export function HomeScreen() {
                   <Text style={styles.homeTimerStatusBarProject} numberOfLines={1} maxFontSizeMultiplier={1.2}>
                     {activeTimer.projectNameSnapshot || "—"}
                   </Text>
-                  <Text style={styles.homeTimerStatusBarHms} maxFontSizeMultiplier={1.25}>
+                  <Text
+                    key={timerTick}
+                    style={styles.homeTimerStatusBarHms}
+                    maxFontSizeMultiplier={1.25}
+                  >
                     {formatElapsedHms(activeTimer.startedAt)}
                   </Text>
                 </>
@@ -2195,7 +2194,7 @@ export function HomeScreen() {
             >
               {activeTimer ? (
                 <View style={styles.fabDockTimerActiveWrap}>
-                  <Ionicons name="time" size={24} color="#fff" />
+                  <Ionicons name="time" size={24} color={ACTIVE_TIMER_GREEN} />
                   <View style={styles.fabDockTimerBadgeDot} />
                 </View>
               ) : (
@@ -2621,7 +2620,10 @@ export function HomeScreen() {
         }
         activeTimer={activeTimer}
         onRefreshActiveTimer={refreshActiveTimer}
-        onTimerStarted={(name) => showToast(t("home.timerStartedFor", { name }))}
+        onTimerStarted={(name, timer) => {
+          setActiveTimer(timer);
+          showToast(t("home.timerStartedFor", { name }));
+        }}
         onSaved={() => {
           if (user?.id) {
             const now = new Date();
@@ -3803,25 +3805,27 @@ const styles = StyleSheet.create({
     width: 44,
     height: 44,
     borderRadius: 22,
-    backgroundColor: ACTIVE_TIMER_GREEN,
+    backgroundColor: "rgba(34,197,94,0.22)",
+    borderWidth: 2,
+    borderColor: ACTIVE_TIMER_GREEN,
     alignItems: "center",
     justifyContent: "center",
     shadowColor: ACTIVE_TIMER_GREEN,
     shadowOffset: { width: 0, height: 0 },
-    shadowOpacity: 0.45,
+    shadowOpacity: 0.35,
     shadowRadius: 6,
     elevation: 4,
   },
   fabDockTimerBadgeDot: {
     position: "absolute",
-    top: 3,
-    right: 3,
-    width: 9,
-    height: 9,
+    top: 2,
+    right: 2,
+    width: 10,
+    height: 10,
     borderRadius: 5,
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.12)",
+    backgroundColor: ACTIVE_TIMER_GREEN,
+    borderWidth: 2,
+    borderColor: "#fff",
   },
   homeTimerStatusBarWrap: {
     marginBottom: spacing.sm,
@@ -3852,18 +3856,20 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(255,255,255,0.12)",
   },
   homeTimerStatusBarIconWrapOn: {
-    backgroundColor: ACTIVE_TIMER_GREEN,
+    backgroundColor: "rgba(34,197,94,0.22)",
+    borderWidth: 2,
+    borderColor: ACTIVE_TIMER_GREEN,
   },
   homeTimerStatusBarLiveDot: {
     position: "absolute",
-    top: 4,
-    right: 4,
-    width: 8,
-    height: 8,
-    borderRadius: 4,
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: "rgba(0,0,0,0.15)",
+    top: 3,
+    right: 3,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: ACTIVE_TIMER_GREEN,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.95)",
   },
   homeTimerStatusBarTextCol: {
     flex: 1,

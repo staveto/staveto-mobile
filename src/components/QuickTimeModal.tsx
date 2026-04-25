@@ -16,13 +16,16 @@ import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { colors, spacing } from "../theme";
 import { toYmd } from "../utils/date";
+import { formatElapsedHms } from "../utils/formatElapsedHms";
 import * as timeTracking from "../services/timeTracking";
-import type { ActiveTimer } from "../services/timeTracking";
+import type { ActiveTimer, GetActiveTimerReadOpts } from "../services/timeTracking";
 import type { ProjectDoc } from "../services/projects";
 
 const SHEET_BG = "#1e2530";
 const SHEET_TEXT = "#ffffff";
 const SHEET_ACTION = "#7dd3fc";
+/** Matches home timer “running” accent. */
+const RUNNING_TIMER_GREEN = "#22c55e";
 
 /** Project-only: phase/task are always null in Firestore. */
 const NO_PHASE_TASK = {
@@ -32,21 +35,13 @@ const NO_PHASE_TASK = {
   taskTitleSnapshot: null as string | null,
 };
 
-function formatElapsed(startedAt: string): string {
-  const ms = Date.now() - new Date(startedAt).getTime();
-  const totalMinutes = Math.floor(ms / 60000);
-  const h = Math.floor(totalMinutes / 60);
-  const m = totalMinutes % 60;
-  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}`;
-}
-
 type Props = {
   sheetRef: React.RefObject<BottomSheetModal | null>;
   projects: ProjectDoc[];
   activeTimer: ActiveTimer | null;
-  onRefreshActiveTimer: () => void | Promise<void>;
-  /** Called after start succeeds, modal dismissed, and active timer refresh has been awaited. */
-  onTimerStarted?: (projectName: string) => void;
+  onRefreshActiveTimer: (readOpts?: GetActiveTimerReadOpts) => void | Promise<void>;
+  /** Called right after start succeeds with the timer snapshot (UI updates before Firestore read round-trip). */
+  onTimerStarted?: (projectName: string, timer: ActiveTimer) => void;
   onSaved?: () => void;
   t: (key: string, params?: Record<string, string>) => string;
 };
@@ -86,7 +81,7 @@ export function QuickTimeModal({
 
   useEffect(() => {
     if (!activeTimer) return;
-    const update = () => setElapsedDisplay(formatElapsed(activeTimer.startedAt));
+    const update = () => setElapsedDisplay(formatElapsedHms(activeTimer.startedAt));
     update();
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
@@ -116,15 +111,19 @@ export function QuickTimeModal({
     const projectName = selectedProject.name ?? "Project";
     setLoading(true);
     try {
-      await timeTracking.startTimer(selectedProject.id, projectName, NO_PHASE_TASK);
+      const timer = await timeTracking.startTimer(selectedProject.id, projectName, {
+        ...NO_PHASE_TASK,
+        projectOwnerId: selectedProject.ownerId ?? null,
+      });
+      onTimerStarted?.(projectName, timer);
+      /** Default (local) reads include pending writes — works offline; avoid server-only reads here. */
       for (let attempt = 0; attempt < 3; attempt++) {
         await Promise.resolve(onRefreshActiveTimer());
         if (attempt < 2) {
           await new Promise((resolve) => setTimeout(resolve, 200));
         }
       }
-      sheetRef.current?.dismiss();
-      onTimerStarted?.(projectName);
+      /** Leave sheet open so the running clock + Stop stay visible; user dismisses when done. */
     } catch (err) {
       Alert.alert(
         "Chyba",
@@ -138,7 +137,7 @@ export function QuickTimeModal({
   const handleStop = useCallback(async () => {
     setLoading(true);
     try {
-      await timeTracking.stopTimer();
+      await timeTracking.stopTimer(undefined, { knownActive: activeTimer ?? undefined });
       onRefreshActiveTimer();
       onSaved?.();
       sheetRef.current?.dismiss();
@@ -170,7 +169,7 @@ export function QuickTimeModal({
         dateYmd,
         totalMinutes,
         manualNote.trim() || undefined,
-        NO_PHASE_TASK
+        { ...NO_PHASE_TASK, projectOwnerId: selectedProject.ownerId ?? null }
       );
       onSaved?.();
       sheetRef.current?.dismiss();
@@ -298,7 +297,8 @@ export function QuickTimeModal({
               <View style={styles.trackingBox}>
                 <View style={styles.timerCircleWrap}>
                   <View style={styles.timerCircle}>
-                    <Text style={styles.elapsedText}>{elapsedDisplay || "00:00"}</Text>
+                    <Ionicons name="time-outline" size={22} color={RUNNING_TIMER_GREEN} style={styles.timerCircleWatchIcon} />
+                    <Text style={styles.elapsedText}>{elapsedDisplay || "00:00:00"}</Text>
                     <Animated.View
                       style={[
                         styles.timerRunningTrack,
@@ -605,16 +605,22 @@ const styles = StyleSheet.create({
     height: 140,
     borderRadius: 70,
     borderWidth: 3,
-    borderColor: "rgba(125,211,252,0.4)",
+    borderColor: "rgba(34,197,94,0.55)",
     alignItems: "center",
     justifyContent: "center",
     alignSelf: "center",
     overflow: "visible",
+    backgroundColor: "rgba(34,197,94,0.08)",
+  },
+  timerCircleWatchIcon: {
+    marginBottom: 4,
+    opacity: 0.95,
   },
   elapsedText: {
-    fontSize: 32,
-    fontWeight: "700",
-    color: SHEET_ACTION,
+    fontSize: 28,
+    fontWeight: "800",
+    color: RUNNING_TIMER_GREEN,
+    fontVariant: ["tabular-nums"],
   },
   timerRunningTrack: {
     position: "absolute",
@@ -629,7 +635,7 @@ const styles = StyleSheet.create({
     width: 10,
     height: 10,
     borderRadius: 5,
-    backgroundColor: SHEET_ACTION,
+    backgroundColor: RUNNING_TIMER_GREEN,
     marginTop: -5,
   },
   manualForm: {

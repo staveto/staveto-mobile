@@ -22,7 +22,7 @@ import firestore from "@react-native-firebase/firestore";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { getCurrentPositionSafe, requestLocationPermission, type GpsPoint } from "../lib/location";
-import { scheduleEvery2hReminder, cancelReminders } from "./timerReminders";
+import { cancelLegacyReminderIds, clearRunningTimerNotification, replaceRunningTimerNotification } from "./timerReminders";
 import { fetchProjectAccess } from "../hooks/useProjectAccess";
 import { createTimeTrackingStoppedNotification } from "./notifications";
 
@@ -81,35 +81,63 @@ async function ensureCanWriteTime(projectId: string, uid: string): Promise<void>
   }
 }
 
+async function readActiveTimerFromUserDoc(uid: string): Promise<ActiveTimer | null> {
+  const userRef = doc(db, paths.userDoc(uid));
+  const snap = await getDoc(userRef);
+  const data = snap.data();
+  const at = data?.activeTimer;
+  if (!at || typeof at !== "object") return null;
+  const startedAt = toIso(at.startedAt) ?? at.startedAt;
+  if (!startedAt) return null;
+  return {
+    projectId: at.projectId ?? "",
+    projectNameSnapshot: at.projectNameSnapshot ?? at.projectName ?? "",
+    startedAt,
+    source: at.source ?? "home_quick_timer",
+    gpsStart: at.gpsStart ?? null,
+    reminderIds: Array.isArray(at.reminderIds) ? at.reminderIds : [],
+    phaseId: at.phaseId ?? null,
+    phaseNameSnapshot: at.phaseNameSnapshot ?? null,
+    taskId: at.taskId ?? null,
+    taskTitleSnapshot: at.taskTitleSnapshot ?? null,
+  };
+}
+
 /**
  * Get current user's active timer from users/{uid}.
+ * On Firestore/network errors returns null (safe for flows that must not throw).
  */
 export async function getActiveTimer(): Promise<ActiveTimer | null> {
   const uid = auth.currentUser?.uid;
   if (!uid) return null;
   try {
-    const userRef = doc(db, paths.userDoc(uid));
-    const snap = await getDoc(userRef);
-    const data = snap.data();
-    const at = data?.activeTimer;
-    if (!at || typeof at !== "object") return null;
-    const startedAt = toIso(at.startedAt) ?? at.startedAt;
-    if (!startedAt) return null;
-    return {
-      projectId: at.projectId ?? "",
-      projectNameSnapshot: at.projectNameSnapshot ?? at.projectName ?? "",
-      startedAt,
-      source: at.source ?? "home_quick_timer",
-      gpsStart: at.gpsStart ?? null,
-      reminderIds: Array.isArray(at.reminderIds) ? at.reminderIds : [],
-      phaseId: at.phaseId ?? null,
-      phaseNameSnapshot: at.phaseNameSnapshot ?? null,
-      taskId: at.taskId ?? null,
-      taskTitleSnapshot: at.taskTitleSnapshot ?? null,
-    };
+    return await readActiveTimerFromUserDoc(uid);
   } catch (err) {
     console.warn("[timeTracking] getActiveTimer error:", err);
     return null;
+  }
+}
+
+export type ActiveTimerRefreshResult =
+  | { ok: true; timer: ActiveTimer | null }
+  | { ok: false };
+
+/**
+ * Same source of truth as {@link getActiveTimer}, but distinguishes fetch failure
+ * so UI can avoid clearing a known-good running state on transient errors.
+ *
+ * @param explicitUid Prefer the signed-in user id from app context when Firebase
+ * `auth.currentUser` can briefly lag behind after cold start.
+ */
+export async function getActiveTimerRefreshResult(explicitUid?: string | null): Promise<ActiveTimerRefreshResult> {
+  const uid = explicitUid ?? auth.currentUser?.uid;
+  if (!uid) return { ok: true, timer: null };
+  try {
+    const timer = await readActiveTimerFromUserDoc(uid);
+    return { ok: true, timer };
+  } catch (err) {
+    console.warn("[timeTracking] getActiveTimerRefreshResult error:", err);
+    return { ok: false };
   }
 }
 
@@ -132,8 +160,6 @@ export async function startTimer(
   const gpsStart = await getCurrentPositionSafe();
   const startedAt = new Date().toISOString();
 
-  const reminderIds = await scheduleEvery2hReminder(projectName);
-
   const userRef = doc(db, paths.userDoc(uid));
   await updateDoc(userRef, {
     activeTimer: {
@@ -142,12 +168,18 @@ export async function startTimer(
       startedAt,
       source: "home_quick_timer",
       gpsStart: gpsStart ?? null,
-      reminderIds,
+      reminderIds: [],
       phaseId: opts?.phaseId ?? null,
       phaseNameSnapshot: opts?.phaseNameSnapshot ?? null,
       taskId: opts?.taskId ?? null,
       taskTitleSnapshot: opts?.taskTitleSnapshot ?? null,
     },
+  });
+
+  await replaceRunningTimerNotification({
+    title: "Timer running",
+    projectName,
+    startedAtIso: startedAt,
   });
 }
 
@@ -179,7 +211,8 @@ export async function stopTimer(note?: string): Promise<TimeEntryDoc> {
     flags.lowAccuracy = true;
   }
 
-  await cancelReminders(active.reminderIds ?? []);
+  await cancelLegacyReminderIds(active.reminderIds ?? []);
+  await clearRunningTimerNotification();
 
   const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
 
@@ -303,8 +336,6 @@ export async function checkAutoStopOnAppOpen(): Promise<TimeEntryDoc | null> {
   const elapsedHours = elapsedMs / (60 * 60 * 1000);
   if (elapsedHours <= AUTO_STOP_HOURS) return null;
 
-  await cancelReminders(active.reminderIds ?? []);
-
   const uid = auth.currentUser?.uid;
   if (!uid) return null;
 
@@ -343,6 +374,9 @@ export async function checkAutoStopOnAppOpen(): Promise<TimeEntryDoc | null> {
     transaction.update(userRef, { activeTimer: firestore.FieldValue.delete() });
     return newEntryRef.id;
   });
+
+  await cancelLegacyReminderIds(active.reminderIds ?? []);
+  await clearRunningTimerNotification();
 
   return {
     id: entryId,

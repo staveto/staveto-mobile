@@ -2,7 +2,7 @@ import React from "react";
 import { View, Text, StyleSheet, TouchableOpacity } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, radius, spacing } from "../theme";
-import type { NotificationDoc } from "../services/notifications";
+import { hasMeaningfulReadAt, type NotificationDoc } from "../services/notifications";
 
 type Props = {
   notification: NotificationDoc;
@@ -18,7 +18,7 @@ const entityIcons: Record<string, React.ComponentProps<typeof Ionicons>["name"]>
 };
 
 export function NotificationRow({ notification, onPress, timeLabel }: Props) {
-  const isUnread = !notification.readAt;
+  const isUnread = !hasMeaningfulReadAt(notification.readAt);
   const iconName = (notification.entityType && entityIcons[notification.entityType]) ?? "notifications-outline";
   const displayTitle = notification.title ?? notification.message ?? "Notifikácia";
   const displayActor = notification.actorName ?? notification.fromUserName;

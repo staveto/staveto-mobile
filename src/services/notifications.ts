@@ -128,45 +128,99 @@ function normalizeDocData(raw: unknown): Record<string, unknown> {
   return {};
 }
 
-/** Normalize Firestore Timestamp, millis/seconds number, or plain {seconds|_seconds, nanoseconds}. */
-export function convertTimelikeToIso(ts: unknown): string | undefined {
-  if (ts == null) return undefined;
+function coerceFiniteNumber(v: unknown): number | null {
+  if (typeof v === "number" && Number.isFinite(v)) return v;
+  if (typeof v === "bigint") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (typeof v === "string" && v.trim() !== "") {
+    const n = Number(v);
+    return Number.isFinite(n) ? n : null;
+  }
+  if (v && typeof v === "object") {
+    const anyV = v as { toNumber?: () => unknown; toString?: () => unknown };
+    if (typeof anyV.toNumber === "function") {
+      const n = anyV.toNumber();
+      return typeof n === "number" && Number.isFinite(n) ? n : null;
+    }
+    // Long-like fallback
+    if (typeof anyV.toString === "function") {
+      const s = anyV.toString();
+      if (typeof s === "string" && s.trim() !== "") {
+        const n = Number(s);
+        return Number.isFinite(n) ? n : null;
+      }
+    }
+  }
+  return null;
+}
+
+/** Normalize Firestore Timestamp / RNFB Timestamp-like values into ISO string. Returns null when not parseable. */
+export function convertTimelikeToIso(ts: unknown): string | null {
+  if (ts == null) return null;
   try {
+    if (ts instanceof Date) {
+      return !Number.isNaN(ts.getTime()) ? ts.toISOString() : null;
+    }
+    if (typeof ts === "string") {
+      const s = ts.trim();
+      if (!s) return null;
+      const ms = Date.parse(s);
+      if (!Number.isFinite(ms)) return null;
+      return new Date(ms).toISOString();
+    }
     if (typeof ts === "number" && Number.isFinite(ts)) {
       const d0 = new Date(ts > 1e12 ? ts : ts * 1000);
-      return d0 instanceof Date && !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
+      return !Number.isNaN(d0.getTime()) ? d0.toISOString() : null;
     }
     if (ts instanceof Timestamp) {
       const d0 = ts.toDate();
-      return d0 instanceof Date && !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
-    }
-    if (typeof ts === "string" && ts.trim() !== "") {
-      return ts;
-    }
-    if (typeof ts === "object" && ts !== null && "toDate" in ts && typeof (ts as { toDate?: () => unknown }).toDate === "function") {
-      const d0 = (ts as { toDate: () => Date }).toDate();
-      return d0 instanceof Date && !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
+      return d0 instanceof Date && !Number.isNaN(d0.getTime()) ? d0.toISOString() : null;
     }
     if (typeof ts === "object" && ts !== null) {
-      const o = ts as { seconds?: unknown; _seconds?: unknown; nanoseconds?: unknown; _nanoseconds?: unknown };
-      const sec = o.seconds ?? o._seconds;
-      if (typeof sec === "number" && Number.isFinite(sec)) {
-        const nanoRaw = o.nanoseconds ?? o._nanoseconds ?? 0;
-        const nano = typeof nanoRaw === "number" && Number.isFinite(nanoRaw) ? nanoRaw : 0;
-        const d0 = new Date(sec * 1000 + nano / 1e6);
-        return !Number.isNaN(d0.getTime()) ? d0.toISOString() : undefined;
+      const anyTs = ts as {
+        toDate?: () => unknown;
+        toMillis?: () => unknown;
+        seconds?: unknown;
+        nanoseconds?: unknown;
+        _seconds?: unknown;
+        _nanoseconds?: unknown;
+      };
+      if (typeof anyTs.toDate === "function") {
+        const d0 = anyTs.toDate();
+        if (d0 instanceof Date && !Number.isNaN(d0.getTime())) return d0.toISOString();
+      }
+      if (typeof anyTs.toMillis === "function") {
+        const msV = anyTs.toMillis();
+        const msN = coerceFiniteNumber(msV);
+        if (msN != null) {
+          const d0 = new Date(msN);
+          return !Number.isNaN(d0.getTime()) ? d0.toISOString() : null;
+        }
+      }
+      const secN = coerceFiniteNumber(anyTs.seconds ?? anyTs._seconds);
+      if (secN != null) {
+        const nanoN = coerceFiniteNumber(anyTs.nanoseconds ?? anyTs._nanoseconds) ?? 0;
+        const d0 = new Date(secN * 1000 + nanoN / 1e6);
+        return !Number.isNaN(d0.getTime()) ? d0.toISOString() : null;
       }
     }
   } catch {
-    return undefined;
+    return null;
   }
-  return undefined;
+  return null;
 }
 
 /** True if Firestore `readAt` should be treated as read (handles Timestamp, ISO string, millis). */
 export function hasMeaningfulReadAt(raw: unknown): boolean {
-  const iso = convertTimelikeToIso(raw);
-  return !!iso && String(iso).trim() !== "";
+  if (typeof raw === "string") {
+    const s = raw.trim();
+    if (!s) return false;
+    const ms = Date.parse(s);
+    return Number.isFinite(ms);
+  }
+  return convertTimelikeToIso(raw) != null;
 }
 
 async function loadReadReceipts(): Promise<Record<string, string>> {
@@ -207,8 +261,9 @@ async function clearReadReceipt(notificationId: string): Promise<void> {
 function applyReadReceiptsToRemoteList(
   remote: NotificationDoc[],
   receipts: Record<string, string>
-): { list: NotificationDoc[]; receiptIdsToClear: string[] } {
+): { list: NotificationDoc[]; receiptIdsToClear: string[]; appliedIds: string[] } {
   const receiptIdsToClear: string[] = [];
+  const applied: string[] = [];
   const list = remote.map((n) => {
     const localIso = receipts[n.id];
     if (!localIso) return n;
@@ -216,10 +271,14 @@ function applyReadReceiptsToRemoteList(
       receiptIdsToClear.push(n.id);
       return n;
     }
+    applied.push(n.id);
     notifReadLog("applyReadReceipt overlay (remote unread, client read)", { id: n.id, localIso });
     return { ...n, readAt: localIso };
   });
-  return { list, receiptIdsToClear };
+  if (applied.length) {
+    console.log("[notifications][receipts] overlay_applied", { count: applied.length, idsHead: applied.slice(0, 20) });
+  }
+  return { list, receiptIdsToClear, appliedIds: applied };
 }
 
 function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): NotificationDoc {
@@ -509,8 +568,37 @@ export async function listNotifications(
     })
     .filter((n): n is NotificationDoc => n != null);
 
+  if (NOTIF_READ_DEBUG) {
+    const remoteUnread = remote.filter((n) => !hasMeaningfulReadAt(n.readAt)).map((n) => n.id);
+    const remoteRead = remote.filter((n) => hasMeaningfulReadAt(n.readAt)).map((n) => n.id);
+    console.log("[notifications][list] remote_loaded", {
+      total: remote.length,
+      readCount: remoteRead.length,
+      unreadCount: remoteUnread.length,
+      unreadIdsHead: remoteUnread.slice(0, 12),
+    });
+  }
+
+  // Dev self-check: prove converters work for ISO + seconds/nanos (runs once per JS session).
+  if (__DEV__ && !(globalThis as any).__stavetoNotifTsSelfCheckDone) {
+    (globalThis as any).__stavetoNotifTsSelfCheckDone = true;
+    const isoSample = "2026-04-25T14:24:13.128Z";
+    const tsSample = { seconds: 1777127100, nanoseconds: 344000000 };
+    console.log("[notifications][tsSelfCheck]", {
+      isoSample,
+      convertIso: convertTimelikeToIso(isoSample),
+      hasIso: hasMeaningfulReadAt(isoSample),
+      tsSample,
+      convertTs: convertTimelikeToIso(tsSample),
+      hasTs: hasMeaningfulReadAt(tsSample),
+    });
+  }
+
   const receipts = await loadReadReceipts();
-  const { list: remoteWithReceipts, receiptIdsToClear } = applyReadReceiptsToRemoteList(remote, receipts);
+  const { list: remoteWithReceipts, receiptIdsToClear, appliedIds: receiptAppliedIds } = applyReadReceiptsToRemoteList(
+    remote,
+    receipts
+  );
   for (const id of receiptIdsToClear) {
     await clearReadReceipt(id);
   }
@@ -526,11 +614,17 @@ export async function listNotifications(
       } catch {
         parsed = null;
       }
+      const rawReadAt = raw.readAt;
+      const rawCreatedAt = raw.createdAt;
+      const normReadAt = convertTimelikeToIso(rawReadAt) ?? null;
+      const normCreatedAt = convertTimelikeToIso(rawCreatedAt) ?? null;
       console.log("[notifications:debug]", {
         id: d.id,
-        rawCreatedAt: raw.createdAt,
+        rawCreatedAt,
+        normalizedCreatedAt: normCreatedAt,
         rawCreatedAtClient: raw.createdAtClient,
-        rawReadAt: raw.readAt,
+        rawReadAt,
+        normalizedReadAt: normReadAt,
         rawUpdatedAt: raw.updatedAt,
         parsedCreatedAt: parsed?.createdAt ?? null,
         createdAtSource: parsed?.createdAtSource ?? null,
@@ -542,9 +636,7 @@ export async function listNotifications(
   const local = await loadLocalNotifications();
   const merged = mergeRemoteAndLocalNotifications(remoteWithReceipts, local);
 
-  const receiptOverlayCount = remoteWithReceipts.filter(
-    (n, i) => hasMeaningfulReadAt(n.readAt) && !hasMeaningfulReadAt(remote[i]?.readAt)
-  ).length;
+  const receiptOverlayCount = receiptAppliedIds.length;
   notifReadLog("listNotifications after merge", {
     remoteCount: remote.length,
     receiptOverlayCount,
@@ -565,10 +657,17 @@ export async function listNotifications(
             : n
         );
   if (pendingSet.size > 0) {
-    console.log("[notifications:diag] listNotifications pending-read overlay", {
+    console.log("[notifications][pending] overlay_applied", {
       pendingCount: pendingSet.size,
       sampleIds: pendingAfterFlush.slice(0, 12),
     });
+  }
+
+  if (NOTIF_READ_DEBUG && pendingAfterFlush.length) {
+    const forcedIds = mergedWithPendingRead
+      .filter((n) => pendingSet.has(n.id) && hasMeaningfulReadAt(n.readAt))
+      .map((n) => n.id);
+    console.log("[notifications][list] pending_forced_read", { count: forcedIds.length, idsHead: forcedIds.slice(0, 20) });
   }
 
   if (__DEV__) {
@@ -596,6 +695,60 @@ export async function listNotifications(
       sessionUid,
       dropped: mergedWithPendingRead.length - inboxOnly.length,
     });
+  }
+
+  if (NOTIF_READ_DEBUG) {
+    const finalUnread = inboxOnly.filter((n) => !hasMeaningfulReadAt(n.readAt)).map((n) => n.id);
+    console.log("[notifications][list] final_unread", {
+      total: inboxOnly.length,
+      unreadCount: finalUnread.length,
+      unreadIdsHead: finalUnread.slice(0, 15),
+      receiptOverlayCount,
+      pendingOverlayCount: pendingAfterFlush.length,
+    });
+
+    const TRACE_IDS = new Set(["OFZIMopXmgtQ3p3KPWPO", "iLAf4UrU30nQ7r6vX9yJ"]);
+    for (const id of TRACE_IDS) {
+      const rawDoc = snap.docs.find((d) => d.id === id);
+      const rawData = rawDoc ? (rawDoc.data() as Record<string, unknown>) : null;
+      const rawReadAt = rawData ? rawData.readAt : undefined;
+      console.log("[notifications][trace][A] raw_remote", {
+        id,
+        rawReadAt: rawReadAt ?? "(absent)",
+        normalizedReadAt: convertTimelikeToIso(rawReadAt),
+        hasMeaningfulRaw: hasMeaningfulReadAt(rawReadAt),
+      });
+      const afterReceipts = remoteWithReceipts.find((n) => n.id === id);
+      console.log("[notifications][trace][B] after_receipts", {
+        id,
+        readAt: afterReceipts?.readAt ?? "(missing row)",
+        typeOfReadAt: afterReceipts ? typeof afterReceipts.readAt : "(n/a)",
+        hasMeaningful: afterReceipts ? hasMeaningfulReadAt(afterReceipts.readAt) : "(n/a)",
+        receiptApplied: receiptAppliedIds.includes(id),
+      });
+      const afterMerge = merged.find((n) => n.id === id);
+      console.log("[notifications][trace][C] after_merge", {
+        id,
+        readAt: afterMerge?.readAt ?? "(missing row)",
+        typeOfReadAt: afterMerge ? typeof afterMerge.readAt : "(n/a)",
+        hasMeaningful: afterMerge ? hasMeaningfulReadAt(afterMerge.readAt) : "(n/a)",
+      });
+      const afterPending = mergedWithPendingRead.find((n) => n.id === id);
+      console.log("[notifications][trace][D] after_pending", {
+        id,
+        readAt: afterPending?.readAt ?? "(missing row)",
+        typeOfReadAt: afterPending ? typeof afterPending.readAt : "(n/a)",
+        hasMeaningful: afterPending ? hasMeaningfulReadAt(afterPending.readAt) : "(n/a)",
+        pendingForced: pendingSet.has(id),
+      });
+      const finalRow = inboxOnly.find((n) => n.id === id);
+      console.log("[notifications][trace][E] final_returned", {
+        id,
+        readAt: finalRow?.readAt ?? "(missing row)",
+        typeOfReadAt: finalRow ? typeof finalRow.readAt : "(n/a)",
+        hasMeaningful: finalRow ? hasMeaningfulReadAt(finalRow.readAt) : "(n/a)",
+      });
+    }
   }
   return inboxOnly;
 }
@@ -663,6 +816,31 @@ export async function markNotificationAsRead(notification: NotificationDoc): Pro
   const ref = doc(db, "notifications", notification.id);
   notifReadLog("markNotificationAsRead start", { id: notification.id, readAtBefore });
 
+  /**
+   * Always record a local read receipt at the start of a read attempt.
+   * This bridges eventual consistency / stale snapshots even when the server write succeeds.
+   * Do NOT clear it on success; `listNotifications` will clear it once server returns a real readAt.
+   */
+  const readNow = new Date().toISOString();
+  let receiptRecorded = false;
+  try {
+    await recordReadReceipt(notification.id, readNow);
+    receiptRecorded = true;
+  } catch (receiptErr) {
+    notifReadLog("markNotificationAsRead recordReadReceipt failed (non-fatal)", {
+      id: notification.id,
+      err: receiptErr instanceof Error ? receiptErr.message : String(receiptErr),
+    });
+  }
+  if (NOTIF_READ_DEBUG) {
+    console.log("[notifications][markRead] receipt_recorded", {
+      id: notification.id,
+      readAtBefore,
+      readNow,
+      receiptRecorded,
+    });
+  }
+
   // Client may already show optimistic readAt while server still has null — must not skip the write.
   if (notification.readAt) {
     try {
@@ -676,10 +854,7 @@ export async function markNotificationAsRead(notification: NotificationDoc): Pro
             readAtBefore,
             readAtAfter,
           });
-          await clearReadReceipt(notification.id).catch(() => {});
-          console.log("[notifications:diag] markNotificationAsRead server already has readAt", {
-            id: notification.id,
-          });
+          console.log("[notifications][markRead] server_already_has_readAt", { id: notification.id, readAtAfter });
           return true;
         }
       }
@@ -694,45 +869,40 @@ export async function markNotificationAsRead(notification: NotificationDoc): Pro
   try {
     await persistReadAtOnNotificationDoc(ref, notification.id);
     notifReadLog("markNotificationAsRead remote write OK", { id: notification.id, readAtBefore });
-    console.log("[notifications:diag] markNotificationAsRead persisted", { id: notification.id });
-    await clearReadReceipt(notification.id).catch(() => {});
+    console.log("[notifications][markRead] remote_persist_ok", { id: notification.id, readAtBefore, receiptRecorded });
     return true;
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
-    const readNow = new Date().toISOString();
-    try {
-      await recordReadReceipt(notification.id, readNow);
-    } catch (receiptErr) {
-      notifReadLog("markNotificationAsRead recordReadReceipt failed", {
-        id: notification.id,
-        err: receiptErr instanceof Error ? receiptErr.message : String(receiptErr),
-      });
-    }
+    let queued = false;
     try {
       await queuePendingRead(notification.id, reason);
+      queued = true;
     } catch (queueErr) {
       notifReadLog("markNotificationAsRead queuePendingRead failed — caller may rollback UI", {
         id: notification.id,
         err: queueErr instanceof Error ? queueErr.message : String(queueErr),
       });
-      console.warn("[notifications:diag] markNotificationAsRead failed, NOT queued", {
+      console.warn("[notifications][markRead] remote_persist_failed_not_queued", {
         id: notification.id,
         reason,
-        queueErr: queueErr instanceof Error ? queueErr.message : String(queueErr),
+        receiptRecorded,
       });
-      return false;
+      // Only safe to claim "read" if we have a durable local receipt.
+      return receiptRecorded;
     }
     notifReadLog("markNotificationAsRead remote write FAILED — receipt + pending queue", {
       id: notification.id,
       readAtBefore,
       readAtAfterClient: readNow,
       remoteWriteOk: false,
-      queued: true,
+      queued,
       reason,
     });
-    console.warn("[notifications:diag] markNotificationAsRead failed, queued for retry", {
+    console.warn("[notifications][markRead] remote_persist_failed_queued", {
       id: notification.id,
       reason,
+      receiptRecorded,
+      queued,
     });
     return true;
   }
@@ -760,31 +930,45 @@ export async function markAllAsRead(userId: string, maxCount: number = USER_NOTI
   });
   if (unreadDocs.length === 0) return;
   const ids = unreadDocs.map((d) => d.id);
+
+  // Record receipts for all targeted IDs up-front (best effort).
+  const readNow = new Date().toISOString();
+  let receiptsRecorded = 0;
+  await Promise.all(
+    ids.map(async (id) => {
+      try {
+        await recordReadReceipt(id, readNow);
+        receiptsRecorded++;
+      } catch {
+        // best effort; do not fail the whole operation
+      }
+    })
+  );
+  console.log("[notifications][markAllRead] receipts_recorded", {
+    targeted: ids.length,
+    receiptsRecorded,
+    idsHead: ids.slice(0, 20),
+    readNow,
+  });
+
   const batch = writeBatch(db);
   unreadDocs.forEach((d) => {
     batch.set(d.ref, { readAt: serverTimestamp() }, { merge: true });
   });
   try {
     await batch.commit();
-    for (const id of ids) {
-      await clearReadReceipt(id).catch(() => {});
-    }
+    console.log("[notifications][markAllRead] remote_batch_ok", { targeted: ids.length, receiptsRecorded });
   } catch (e) {
-    const readNow = new Date().toISOString();
     const msg = e instanceof Error ? e.message : String(e);
     notifReadLog("markAllAsRead batch failed — recording receipts + queue", { count: ids.length, reason: msg });
     for (const id of ids) {
-      try {
-        await recordReadReceipt(id, readNow);
-      } catch {
-        /* best effort */
-      }
       try {
         await queuePendingRead(id, `markAllAsRead: ${msg}`);
       } catch {
         /* best effort */
       }
     }
+    console.warn("[notifications][markAllRead] remote_batch_failed_queued", { targeted: ids.length, receiptsRecorded, reason: msg });
     throw e;
   }
 }
@@ -878,6 +1062,7 @@ export async function markTaskNotificationsRead(userId: string, taskId: string):
     `task_${userId}_${taskId}_TASK_DUE_TODAY`,
     `task_${userId}_${taskId}_TASK_OVERDUE`,
   ];
+  const readNow = new Date().toISOString();
   for (const id of ids) {
     const ref = doc(db, "notifications", id);
     try {
@@ -886,16 +1071,18 @@ export async function markTaskNotificationsRead(userId: string, taskId: string):
         console.log("[notifications:diag] markTaskNotificationsRead skip (no doc)", { id });
         continue;
       }
+      // Receipt first: keep UI stable across reload even if next snapshot is stale.
+      try {
+        await recordReadReceipt(id, readNow);
+        console.log("[notifications][markTaskRead] receipt_recorded", { id, readNow });
+      } catch (e) {
+        console.warn("[notifications][markTaskRead] receipt_record_failed", { id, reason: e instanceof Error ? e.message : String(e) });
+      }
       await persistReadAtOnNotificationDoc(ref, id);
+      console.log("[notifications][markTaskRead] remote_persist_ok", { id });
     } catch (e) {
       const reason = e instanceof Error ? e.message : String(e);
       console.warn("[notifications:diag] markTaskNotificationsRead persist fail", { id, reason });
-      const readNow = new Date().toISOString();
-      try {
-        await recordReadReceipt(id, readNow);
-      } catch {
-        /* best effort */
-      }
       try {
         await queuePendingRead(id, `markTaskNotificationsRead: ${reason}`);
       } catch (queueErr) {

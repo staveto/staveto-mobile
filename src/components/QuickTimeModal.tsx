@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useRef, useState } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   ActivityIndicator,
   Platform,
   Animated,
+  ScrollView,
 } from "react-native";
 import { BottomSheetModal, BottomSheetBackdrop, BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
@@ -16,21 +17,20 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { colors, spacing } from "../theme";
 import { toYmd } from "../utils/date";
 import * as timeTracking from "../services/timeTracking";
-import * as projectsService from "../services/projects";
-import * as tasksService from "../services/tasks";
 import type { ActiveTimer } from "../services/timeTracking";
 import type { ProjectDoc } from "../services/projects";
-import type { ProjectPhaseDoc } from "../services/projects";
-import type { TaskDoc } from "../services/tasks";
-import { isBuildLikeStorageType } from "../lib/projectTypeModel";
-
-/** Virtual task option for "Administrativa na projekte" – not a real task, stored as taskTitleSnapshot only */
-const TASK_OPTION_ADMINISTRATION = "__administration__" as const;
-type TaskOption = TaskDoc | null | typeof TASK_OPTION_ADMINISTRATION;
 
 const SHEET_BG = "#1e2530";
 const SHEET_TEXT = "#ffffff";
 const SHEET_ACTION = "#7dd3fc";
+
+/** Project-only: phase/task are always null in Firestore. */
+const NO_PHASE_TASK = {
+  phaseId: null as string | null,
+  phaseNameSnapshot: null as string | null,
+  taskId: null as string | null,
+  taskTitleSnapshot: null as string | null,
+};
 
 function formatElapsed(startedAt: string): string {
   const ms = Date.now() - new Date(startedAt).getTime();
@@ -44,7 +44,9 @@ type Props = {
   sheetRef: React.RefObject<BottomSheetModal | null>;
   projects: ProjectDoc[];
   activeTimer: ActiveTimer | null;
-  onRefreshActiveTimer: () => void;
+  onRefreshActiveTimer: () => void | Promise<void>;
+  /** Called after start succeeds, modal dismissed, and active timer refresh has been awaited. */
+  onTimerStarted?: (projectName: string) => void;
   onSaved?: () => void;
   t: (key: string, params?: Record<string, string>) => string;
 };
@@ -54,15 +56,13 @@ export function QuickTimeModal({
   projects,
   activeTimer,
   onRefreshActiveTimer,
+  onTimerStarted,
   onSaved,
   t,
 }: Props) {
   const [selectedProject, setSelectedProject] = useState<ProjectDoc | null>(null);
-  const [selectedPhase, setSelectedPhase] = useState<ProjectPhaseDoc | null>(null);
-  const [selectedTask, setSelectedTask] = useState<TaskOption>(null);
-  const [phases, setPhases] = useState<ProjectPhaseDoc[]>([]);
-  const [tasks, setTasks] = useState<TaskDoc[]>([]);
-  const [loadingPhasesTasks, setLoadingPhasesTasks] = useState(false);
+  /** When true, show search + list (pick or change project). When false, show compact selected row + Change. */
+  const [pickingProject, setPickingProject] = useState(true);
   const [mode, setMode] = useState<"timer" | "manual">("timer");
   const [manualDate, setManualDate] = useState(new Date());
   const [manualHours, setManualHours] = useState("1");
@@ -74,40 +74,15 @@ export function QuickTimeModal({
   const [elapsedDisplay, setElapsedDisplay] = useState("");
   const rotateAnim = useRef(new Animated.Value(0)).current;
 
-  const isBuildOrManagement = isBuildLikeStorageType(selectedProject?.projectType);
+  const filteredProjects = React.useMemo(() => {
+    const active = projects.filter((p) => !p.archivedAt);
+    const q = projectSearch.trim().toLowerCase();
+    if (!q) return active;
+    return active.filter((p) => (p.name ?? "").toLowerCase().includes(q));
+  }, [projects, projectSearch]);
 
-  useEffect(() => {
-    if (!selectedProject?.id) {
-      setPhases([]);
-      setTasks([]);
-      setSelectedPhase(null);
-      setSelectedTask(null);
-      return;
-    }
-    setLoadingPhasesTasks(true);
-    (async () => {
-      try {
-        const [ph, tk] = await Promise.all([
-          isBuildOrManagement ? projectsService.listProjectPhases(selectedProject.id).catch(() => []) : Promise.resolve([]),
-          tasksService.listTasksByProject(selectedProject.id).catch(() => []),
-        ]);
-        setPhases(ph);
-        setTasks(tk.filter((t) => t.isActive !== false));
-        setSelectedPhase(null);
-        setSelectedTask(null);
-      } catch {
-        setPhases([]);
-        setTasks([]);
-      } finally {
-        setLoadingPhasesTasks(false);
-      }
-    })();
-  }, [selectedProject?.id, isBuildOrManagement]);
-
-  const tasksForPhase = useMemo(() => {
-    if (!selectedPhase) return tasks;
-    return tasks.filter((t) => t.phaseId === selectedPhase.id);
-  }, [tasks, selectedPhase]);
+  const showProjectPicker = !activeTimer && (!selectedProject || pickingProject);
+  const showSelectedProjectRow = !activeTimer && selectedProject && !pickingProject;
 
   useEffect(() => {
     if (!activeTimer) return;
@@ -133,27 +108,23 @@ export function QuickTimeModal({
     return () => anim.stop();
   }, [activeTimer, rotateAnim]);
 
-  const filteredProjects = React.useMemo(() => {
-    const active = projects.filter((p) => !p.archivedAt);
-    const q = projectSearch.trim().toLowerCase();
-    if (!q) return active;
-    return active.filter((p) => (p.name ?? "").toLowerCase().includes(q));
-  }, [projects, projectSearch]);
-
   const handleStart = useCallback(async () => {
     if (!selectedProject) {
       Alert.alert(t("time.errorNoProject"));
       return;
     }
+    const projectName = selectedProject.name ?? "Project";
     setLoading(true);
     try {
-      await timeTracking.startTimer(selectedProject.id, selectedProject.name ?? "Project", {
-        phaseId: selectedPhase?.id ?? null,
-        phaseNameSnapshot: selectedPhase?.name ?? null,
-        taskId: selectedTask && selectedTask !== TASK_OPTION_ADMINISTRATION ? selectedTask.id : null,
-        taskTitleSnapshot: selectedTask === TASK_OPTION_ADMINISTRATION ? t("time.projectAdministration") : (selectedTask && selectedTask !== TASK_OPTION_ADMINISTRATION ? selectedTask.title ?? null : null),
-      });
-      onRefreshActiveTimer();
+      await timeTracking.startTimer(selectedProject.id, projectName, NO_PHASE_TASK);
+      for (let attempt = 0; attempt < 3; attempt++) {
+        await Promise.resolve(onRefreshActiveTimer());
+        if (attempt < 2) {
+          await new Promise((resolve) => setTimeout(resolve, 200));
+        }
+      }
+      sheetRef.current?.dismiss();
+      onTimerStarted?.(projectName);
     } catch (err) {
       Alert.alert(
         "Chyba",
@@ -162,7 +133,7 @@ export function QuickTimeModal({
     } finally {
       setLoading(false);
     }
-  }, [selectedProject, selectedPhase, selectedTask, onRefreshActiveTimer, t]);
+  }, [selectedProject, onRefreshActiveTimer, onTimerStarted, sheetRef, t]);
 
   const handleStop = useCallback(async () => {
     setLoading(true);
@@ -199,12 +170,7 @@ export function QuickTimeModal({
         dateYmd,
         totalMinutes,
         manualNote.trim() || undefined,
-        {
-          phaseId: selectedPhase?.id ?? null,
-          phaseNameSnapshot: selectedPhase?.name ?? null,
-          taskId: selectedTask && selectedTask !== TASK_OPTION_ADMINISTRATION ? selectedTask.id : null,
-          taskTitleSnapshot: selectedTask === TASK_OPTION_ADMINISTRATION ? t("time.projectAdministration") : (selectedTask && selectedTask !== TASK_OPTION_ADMINISTRATION ? selectedTask.title ?? null : null),
-        }
+        NO_PHASE_TASK
       );
       onSaved?.();
       sheetRef.current?.dismiss();
@@ -219,9 +185,9 @@ export function QuickTimeModal({
     } finally {
       setLoading(false);
     }
-  }, [selectedProject, selectedPhase, selectedTask, manualHours, manualMinutes, manualNote, manualDate, onSaved, sheetRef, t]);
+  }, [selectedProject, manualHours, manualMinutes, manualNote, manualDate, onSaved, sheetRef, t]);
 
-  const snapPoints = ["55%", "85%"];
+  const snapPoints = ["48%", "82%"];
 
   return (
     <BottomSheetModal
@@ -234,25 +200,19 @@ export function QuickTimeModal({
       backgroundStyle={{ backgroundColor: SHEET_BG }}
       handleIndicatorStyle={{ backgroundColor: "rgba(255,255,255,0.5)" }}
     >
-      <BottomSheetScrollView contentContainerStyle={styles.content}>
+      <BottomSheetScrollView contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
         <Text style={styles.title}>{t("time.title")}</Text>
 
-        {/* Project picker – hidden when timer is running, show only selected project */}
         {activeTimer ? (
           <View style={styles.selectedProjectChip}>
             <Ionicons name="folder-open" size={18} color={SHEET_ACTION} />
-            <View style={{ flex: 1 }}>
-              <Text style={styles.selectedProjectName} numberOfLines={1}>
+            <View style={{ flex: 1, minWidth: 0 }}>
+              <Text style={styles.selectedProjectName} numberOfLines={2}>
                 {activeTimer.projectNameSnapshot}
               </Text>
-              {(activeTimer.phaseNameSnapshot || activeTimer.taskTitleSnapshot) && (
-                <Text style={styles.selectedProjectSub} numberOfLines={1}>
-                  {[activeTimer.phaseNameSnapshot, activeTimer.taskTitleSnapshot].filter(Boolean).join(" › ")}
-                </Text>
-              )}
             </View>
           </View>
-        ) : (
+        ) : showProjectPicker ? (
           <>
             <Text style={styles.label}>{t("time.selectProject")}</Text>
             <TextInput
@@ -262,7 +222,12 @@ export function QuickTimeModal({
               placeholder={t("time.searchProject")}
               placeholderTextColor="rgba(255,255,255,0.4)"
             />
-            <View style={styles.projectList}>
+            <ScrollView
+              style={styles.projectList}
+              nestedScrollEnabled
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+            >
               {filteredProjects.length === 0 ? (
                 <Text style={styles.projectEmpty}>{t("time.noProjectsMatch")}</Text>
               ) : (
@@ -272,7 +237,10 @@ export function QuickTimeModal({
                     <TouchableOpacity
                       key={p.id}
                       style={[styles.projectRow, isSelected && styles.projectRowSelected]}
-                      onPress={() => setSelectedProject(p)}
+                      onPress={() => {
+                        setSelectedProject(p);
+                        setPickingProject(false);
+                      }}
                       activeOpacity={0.7}
                     >
                       <View style={styles.projectRowContent}>
@@ -290,113 +258,37 @@ export function QuickTimeModal({
                   );
                 })
               )}
-            </View>
-
-            {/* Phase (optional) – len pre BUILD/MANAGEMENT */}
-            {selectedProject && isBuildOrManagement && (
-              <>
-                <Text style={styles.label}>{t("time.selectPhaseOptional")}</Text>
-                {loadingPhasesTasks ? (
-                  <ActivityIndicator size="small" color={SHEET_ACTION} style={{ marginBottom: spacing.md }} />
-                ) : (
-                  <View style={styles.optionList}>
-                    <TouchableOpacity
-                      style={[styles.optionRow, !selectedPhase && styles.optionRowSelected]}
-                      onPress={() => setSelectedPhase(null)}
-                    >
-                      <Text style={[styles.optionRowText, !selectedPhase && styles.optionRowTextSelected]}>
-                        {t("time.projectOnly")}
-                      </Text>
-                      {!selectedPhase && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
-                    </TouchableOpacity>
-                    {phases.map((ph) => {
-                      const isSelected = selectedPhase?.id === ph.id;
-                      return (
-                        <TouchableOpacity
-                          key={ph.id}
-                          style={[styles.optionRow, isSelected && styles.optionRowSelected]}
-                          onPress={() => {
-                            setSelectedPhase(ph);
-                            setSelectedTask(null);
-                          }}
-                        >
-                          <Text style={[styles.optionRowText, isSelected && styles.optionRowTextSelected]} numberOfLines={1}>
-                            {ph.name}
-                          </Text>
-                          {isSelected && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                )}
-              </>
-            )}
-
-            {/* Task (optional) – vždy zobrazené pri vybranom projekte */}
-            {selectedProject && (
-              <>
-                <Text style={styles.label}>{t("time.selectTaskOptional")}</Text>
-                {loadingPhasesTasks ? (
-                  <ActivityIndicator size="small" color={SHEET_ACTION} style={{ marginBottom: spacing.md }} />
-                ) : (
-                  <View style={styles.optionList}>
-                    <TouchableOpacity
-                      style={[styles.optionRow, selectedTask === null && styles.optionRowSelected]}
-                      onPress={() => setSelectedTask(null)}
-                    >
-                      <Text style={[styles.optionRowText, selectedTask === null && styles.optionRowTextSelected]}>
-                        {t("time.projectOnly")}
-                      </Text>
-                      {selectedTask === null && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.optionRow, selectedTask === TASK_OPTION_ADMINISTRATION && styles.optionRowSelected]}
-                      onPress={() => setSelectedTask(TASK_OPTION_ADMINISTRATION)}
-                    >
-                      <Text style={[styles.optionRowText, selectedTask === TASK_OPTION_ADMINISTRATION && styles.optionRowTextSelected]}>
-                        {t("time.projectAdministration")}
-                      </Text>
-                      {selectedTask === TASK_OPTION_ADMINISTRATION && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
-                    </TouchableOpacity>
-                    {tasksForPhase.map((tk) => {
-                      const isSelected = selectedTask && selectedTask !== TASK_OPTION_ADMINISTRATION && selectedTask.id === tk.id;
-                      return (
-                        <TouchableOpacity
-                          key={tk.id}
-                          style={[styles.optionRow, isSelected && styles.optionRowSelected]}
-                          onPress={() => setSelectedTask(tk)}
-                        >
-                          <Text style={[styles.optionRowText, isSelected && styles.optionRowTextSelected]} numberOfLines={1}>
-                            {tk.title || t("time.taskUntitled")}
-                          </Text>
-                          {isSelected && <Ionicons name="checkmark-circle" size={20} color={SHEET_ACTION} />}
-                        </TouchableOpacity>
-                      );
-                    })}
-                  </View>
-                )}
-              </>
-            )}
+            </ScrollView>
           </>
+        ) : (
+          <View style={styles.selectedProjectCard}>
+            <View style={styles.selectedProjectCardLeft}>
+              <Ionicons name="folder-open" size={20} color={SHEET_ACTION} />
+              <View style={{ flex: 1, minWidth: 0 }}>
+                <Text style={styles.selectedProjectLabel}>{t("time.selectedProject")}</Text>
+                <Text style={styles.selectedProjectName} numberOfLines={2}>
+                  {selectedProject?.name || "Project"}
+                </Text>
+              </View>
+            </View>
+            <TouchableOpacity onPress={() => setPickingProject(true)} hitSlop={{ top: 12, bottom: 12, left: 8, right: 8 }}>
+              <Text style={styles.changeLink}>{t("time.changeProject")}</Text>
+            </TouchableOpacity>
+          </View>
         )}
 
-        {/* Mode segment */}
         <View style={styles.segmentRow}>
           <TouchableOpacity
             style={[styles.segmentBtn, mode === "timer" && styles.segmentBtnActive]}
             onPress={() => setMode("timer")}
           >
-            <Text style={[styles.segmentText, mode === "timer" && styles.segmentTextActive]}>
-              {t("time.modeTimer")}
-            </Text>
+            <Text style={[styles.segmentText, mode === "timer" && styles.segmentTextActive]}>{t("time.modeTimer")}</Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.segmentBtn, mode === "manual" && styles.segmentBtnActive]}
             onPress={() => setMode("manual")}
           >
-            <Text style={[styles.segmentText, mode === "manual" && styles.segmentTextActive]}>
-              {t("time.modeManual")}
-            </Text>
+            <Text style={[styles.segmentText, mode === "manual" && styles.segmentTextActive]}>{t("time.modeManual")}</Text>
           </TouchableOpacity>
         </View>
 
@@ -426,11 +318,7 @@ export function QuickTimeModal({
                     </Animated.View>
                   </View>
                 </View>
-                <TouchableOpacity
-                  style={[styles.primaryBtn, styles.stopBtn]}
-                  onPress={handleStop}
-                  disabled={loading}
-                >
+                <TouchableOpacity style={[styles.primaryBtn, styles.stopBtn]} onPress={handleStop} disabled={loading}>
                   {loading ? (
                     <ActivityIndicator color="#fff" />
                   ) : (
@@ -442,29 +330,31 @@ export function QuickTimeModal({
                 </TouchableOpacity>
               </View>
             ) : (
-              <TouchableOpacity
-                style={styles.primaryBtn}
-                onPress={handleStart}
-                disabled={loading}
-              >
-                {loading ? (
-                  <ActivityIndicator color="#fff" />
-                ) : (
-                  <>
-                    <Ionicons name="play" size={20} color="#fff" />
-                    <Text style={styles.primaryBtnText}>{t("time.start")}</Text>
-                  </>
-                )}
-              </TouchableOpacity>
+              <>
+                {selectedProject ? (
+                  <Text style={styles.hintText}>{t("time.timerQuickHint")}</Text>
+                ) : null}
+                <TouchableOpacity
+                  style={[styles.primaryBtn, !selectedProject && styles.primaryBtnDisabled]}
+                  onPress={handleStart}
+                  disabled={loading || !selectedProject}
+                >
+                  {loading ? (
+                    <ActivityIndicator color="#fff" />
+                  ) : (
+                    <>
+                      <Ionicons name="play" size={20} color="#fff" />
+                      <Text style={styles.primaryBtnText}>{t("time.start")}</Text>
+                    </>
+                  )}
+                </TouchableOpacity>
+              </>
             )}
           </>
         ) : (
           <View style={styles.manualForm}>
             <Text style={styles.label}>{t("time.date")}</Text>
-            <TouchableOpacity
-              style={styles.dateBtn}
-              onPress={() => setShowDatePicker(true)}
-            >
+            <TouchableOpacity style={styles.dateBtn} onPress={() => setShowDatePicker(true)}>
               <Text style={styles.dateBtnText}>{toYmd(manualDate)}</Text>
               <Ionicons name="calendar-outline" size={20} color={SHEET_ACTION} />
             </TouchableOpacity>
@@ -516,9 +406,9 @@ export function QuickTimeModal({
             />
 
             <TouchableOpacity
-              style={styles.primaryBtn}
+              style={[styles.primaryBtn, !selectedProject && styles.primaryBtnDisabled]}
               onPress={handleManualSave}
-              disabled={loading}
+              disabled={loading || !selectedProject}
             >
               {loading ? (
                 <ActivityIndicator color="#fff" />
@@ -545,12 +435,18 @@ const styles = StyleSheet.create({
     fontSize: 20,
     fontWeight: "700",
     color: SHEET_TEXT,
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
   },
   label: {
     fontSize: 14,
     color: "rgba(255,255,255,0.8)",
     marginBottom: spacing.sm,
+  },
+  hintText: {
+    fontSize: 13,
+    color: "rgba(255,255,255,0.65)",
+    marginBottom: spacing.md,
+    lineHeight: 18,
   },
   searchInput: {
     backgroundColor: "rgba(255,255,255,0.1)",
@@ -572,18 +468,44 @@ const styles = StyleSheet.create({
     borderLeftWidth: 4,
     borderLeftColor: SHEET_ACTION,
   },
+  selectedProjectCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: spacing.md,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    backgroundColor: "rgba(125,211,252,0.12)",
+    borderRadius: 8,
+    marginBottom: spacing.lg,
+    borderWidth: 1,
+    borderColor: "rgba(125,211,252,0.35)",
+  },
+  selectedProjectCardLeft: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    minWidth: 0,
+  },
+  selectedProjectLabel: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.65)",
+    marginBottom: 2,
+  },
   selectedProjectName: {
     fontSize: 16,
     fontWeight: "600",
     color: SHEET_TEXT,
   },
-  selectedProjectSub: {
-    fontSize: 12,
-    color: "rgba(255,255,255,0.7)",
-    marginTop: 2,
+  changeLink: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: SHEET_ACTION,
   },
   projectList: {
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
+    maxHeight: 260,
   },
   projectRow: {
     flexDirection: "row",
@@ -623,35 +545,9 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
     textAlign: "center",
   },
-  optionList: {
-    marginBottom: spacing.md,
-  },
-  optionRow: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.md,
-    marginBottom: 2,
-    borderRadius: 6,
-    backgroundColor: "rgba(255,255,255,0.06)",
-  },
-  optionRowSelected: {
-    backgroundColor: "rgba(125,211,252,0.15)",
-    borderLeftWidth: 3,
-    borderLeftColor: SHEET_ACTION,
-  },
-  optionRowText: {
-    fontSize: 14,
-    color: "rgba(255,255,255,0.9)",
-    flex: 1,
-  },
-  optionRowTextSelected: {
-    fontWeight: "600",
-  },
   segmentRow: {
     flexDirection: "row",
-    marginBottom: spacing.lg,
+    marginBottom: spacing.md,
     backgroundColor: "rgba(255,255,255,0.1)",
     borderRadius: 8,
     padding: 4,
@@ -682,6 +578,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     borderRadius: 8,
     gap: spacing.sm,
+  },
+  primaryBtnDisabled: {
+    opacity: 0.45,
   },
   primaryBtnText: {
     fontSize: 16,

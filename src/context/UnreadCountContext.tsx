@@ -21,7 +21,11 @@ export function UnreadCountProvider({ children }: { children: React.ReactNode })
   const [loading, setLoading] = useState(true);
 
   const refresh = useCallback(async () => {
-    const uid = auth.currentUser?.uid ?? orgId;
+    /**
+     * Notification inbox identity must match Notifications screen:
+     * only the signed-in Firebase user (no orgId fallback).
+     */
+    const uid = auth()?.currentUser?.uid ?? null;
     if (!uid) {
       setCount(0);
       setLoading(false);
@@ -40,7 +44,7 @@ export function UnreadCountProvider({ children }: { children: React.ReactNode })
     } finally {
       setLoading(false);
     }
-  }, [orgId]); // orgId tracks login; getUnreadCount uses auth.currentUser?.uid ?? orgId inside refresh
+  }, [orgId]); // orgId keeps refresh in sync with login lifecycle (even though uid source is Firebase user only)
 
   useEffect(() => {
     refresh();

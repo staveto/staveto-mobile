@@ -15,6 +15,7 @@ import {
   ActionSheetIOS,
   Platform,
   Image,
+  AppState,
 } from "react-native";
 import { DrawerActions, TabActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -42,6 +43,7 @@ import { HomeCalendarSheet } from "../components/HomeCalendarSheet";
 import { QuickTimeModal } from "../components/QuickTimeModal";
 import { BottomSheetModal } from "@gorhom/bottom-sheet";
 import * as timeTracking from "../services/timeTracking";
+import * as timerReminders from "../services/timerReminders";
 import { openInMaps } from "../lib/maps";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
@@ -61,6 +63,7 @@ import {
 } from "../lib/projectTypeModel";
 import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
 import { readStoredPrimaryUsageMode } from "../lib/primaryUsageMode";
+import { showToast } from "../helpers/toast";
 
 // Conditional imports for image/document picker
 let ImagePicker: typeof import('expo-image-picker') | null = null;
@@ -77,6 +80,19 @@ function formatMinutesToHours(minutes: number): string {
   const h = Math.floor(minutes / 60);
   const m = minutes % 60;
   return m > 0 ? `${h}h ${m}min` : `${h}h`;
+}
+
+/** Success / running timer accent (FAB + panel). */
+const ACTIVE_TIMER_GREEN = "#22c55e";
+
+function formatElapsedHms(startedAtIso: string): string {
+  let ms = Date.now() - new Date(startedAtIso).getTime();
+  if (Number.isNaN(ms) || ms < 0) ms = 0;
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
 }
 
 const LAST_USED_PROJECT_KEY = "@staveto:lastUsedProjectId";
@@ -387,6 +403,7 @@ export function HomeScreen() {
   const [calendarRefreshTrigger, setCalendarRefreshTrigger] = useState(0);
   const [activeTimer, setActiveTimer] = useState<timeTracking.ActiveTimer | null>(null);
   const [timerTick, setTimerTick] = useState(0);
+  const [homeStopLoading, setHomeStopLoading] = useState(false);
   const [monthlyMinutes, setMonthlyMinutes] = useState<number>(0);
   const [showQuickNoteModal, setShowQuickNoteModal] = useState(false);
   const [pendingQuickNotesCount, setPendingQuickNotesCount] = useState(0);
@@ -423,14 +440,19 @@ export function HomeScreen() {
     calendarSheetRef.current?.present();
   }, []);
 
-  const openQuickTimeSheet = useCallback(() => {
-    quickTimeSheetRef.current?.present();
-  }, []);
-
   const refreshActiveTimer = useCallback(async () => {
-    const t = await timeTracking.getActiveTimer();
-    setActiveTimer(t);
-  }, []);
+    if (!user?.id) return;
+    const r = await timeTracking.getActiveTimerRefreshResult(user.id);
+    if (r.ok) {
+      setActiveTimer(r.timer);
+    }
+  }, [user?.id]);
+
+  const openQuickTimeSheet = useCallback(() => {
+    void refreshActiveTimer().finally(() => {
+      quickTimeSheetRef.current?.present();
+    });
+  }, [refreshActiveTimer]);
 
   useFocusEffect(
     useCallback(() => {
@@ -455,6 +477,39 @@ export function HomeScreen() {
     const interval = setInterval(() => setTimerTick((n) => n + 1), 1000);
     return () => clearInterval(interval);
   }, [activeTimer]);
+
+  useEffect(() => {
+    const sub = AppState.addEventListener("change", (next) => {
+      if (next === "active" && user?.id) {
+        void refreshActiveTimer();
+      }
+    });
+    return () => sub.remove();
+  }, [user?.id, refreshActiveTimer]);
+
+  /** One persistent Android notification: clear legacy 2h schedules, then refresh body on a light interval. */
+  useEffect(() => {
+    let intervalId: ReturnType<typeof setInterval> | undefined;
+    const run = async () => {
+      if (!activeTimer) {
+        await timerReminders.clearRunningTimerNotification();
+        return;
+      }
+      await timerReminders.cancelLegacyReminderIds(activeTimer.reminderIds ?? []);
+      const tick = () =>
+        timerReminders.replaceRunningTimerNotification({
+          title: t("time.timerRunning"),
+          projectName: activeTimer.projectNameSnapshot,
+          startedAtIso: activeTimer.startedAt,
+        });
+      void tick();
+      intervalId = setInterval(tick, 60_000);
+    };
+    void run();
+    return () => {
+      if (intervalId) clearInterval(intervalId);
+    };
+  }, [activeTimer, t]);
 
   const effectiveLayout = homeLayout ?? getDefaultLayout();
   const enabledSectionIds = useMemo(
@@ -798,6 +853,33 @@ export function HomeScreen() {
     loadDashboard(true);
     loadLiveActivity();
   }, [loadDashboard, loadLiveActivity]);
+
+  const handleHomeStopTimer = useCallback(async () => {
+    if (!activeTimer) return;
+    setHomeStopLoading(true);
+    try {
+      await timeTracking.stopTimer();
+      const r = await timeTracking.getActiveTimerRefreshResult(user?.id);
+      if (r.ok) {
+        setActiveTimer(r.timer);
+      } else {
+        setActiveTimer(null);
+      }
+      await loadDashboard(true);
+    } catch (err) {
+      Alert.alert(t("time.title"), err instanceof Error ? err.message : String(err));
+    } finally {
+      setHomeStopLoading(false);
+    }
+  }, [activeTimer, loadDashboard, t]);
+
+  const homeListExtraData = useMemo(
+    () =>
+      `${selectedTypeFilter}-${projectFilter}-${
+        activeTimer ? `tick-${timerTick}-${activeTimer.startedAt}-${activeTimer.projectId}` : "noTimer"
+      }`,
+    [selectedTypeFilter, projectFilter, activeTimer, timerTick]
+  );
 
   const showCoverSheet = useCallback(
     (project: ProjectDoc) => {
@@ -1465,10 +1547,87 @@ export function HomeScreen() {
         </Pressable>
       </View>
 
+      {user?.id ? (
+        <View style={[styles.homeTimerStatusBarWrap, { paddingHorizontal: spacing.lg }]}>
+          <TouchableOpacity
+            style={[
+              styles.homeTimerStatusBarInner,
+              activeTimer ? styles.homeTimerStatusBarInnerOn : styles.homeTimerStatusBarInnerOff,
+            ]}
+            onPress={openQuickTimeSheet}
+            activeOpacity={0.88}
+            accessibilityRole="button"
+            accessibilityLabel={
+              activeTimer
+                ? `${t("time.timerRunning")}: ${activeTimer.projectNameSnapshot}, ${formatElapsedHms(activeTimer.startedAt)}`
+                : t("home.timerStatusBarIdle")
+            }
+          >
+            <View style={[styles.homeTimerStatusBarIconWrap, activeTimer ? styles.homeTimerStatusBarIconWrapOn : null]}>
+              <Ionicons name={activeTimer ? "time" : "time-outline"} size={22} color={activeTimer ? "#fff" : "rgba(255,255,255,0.88)"} />
+              {activeTimer ? <View style={styles.homeTimerStatusBarLiveDot} /> : null}
+            </View>
+            <View style={styles.homeTimerStatusBarTextCol}>
+              {activeTimer ? (
+                <>
+                  <Text style={styles.homeTimerStatusBarProject} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                    {activeTimer.projectNameSnapshot || "—"}
+                  </Text>
+                  <Text style={styles.homeTimerStatusBarHms} maxFontSizeMultiplier={1.25}>
+                    {formatElapsedHms(activeTimer.startedAt)}
+                  </Text>
+                </>
+              ) : (
+                <Text style={styles.homeTimerStatusBarIdleText} maxFontSizeMultiplier={1.2}>
+                  {t("home.timerStatusBarIdle")}
+                </Text>
+              )}
+            </View>
+            <Ionicons name="chevron-forward" size={22} color="rgba(255,255,255,0.55)" />
+          </TouchableOpacity>
+          {activeTimer ? (
+            <View style={styles.homeTimerStatusBarActions}>
+              <TouchableOpacity
+                style={styles.homeTimerStatusBarLinkBtn}
+                onPress={() =>
+                  stackNav.navigate("ProjectTimeDetail", {
+                    projectId: activeTimer.projectId,
+                    projectName: activeTimer.projectNameSnapshot || undefined,
+                  })
+                }
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={t("time.openTime")}
+              >
+                <Text style={styles.homeTimerStatusBarLinkText} maxFontSizeMultiplier={1.15}>
+                  {t("time.openTime")}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.homeTimerStatusBarStopCompact, homeStopLoading ? styles.homeTimerStatusBarBtnDisabled : null]}
+                onPress={handleHomeStopTimer}
+                disabled={homeStopLoading}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={t("time.stop")}
+              >
+                {homeStopLoading ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.homeTimerStatusBarStopCompactText} maxFontSizeMultiplier={1.15}>
+                    {t("time.stop")}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
       <FlatList
         data={enabledSectionIds.has("other_projects") ? otherProjects : []}
         keyExtractor={(item) => item.id}
-        extraData={`${selectedTypeFilter}-${projectFilter}`}
+        extraData={homeListExtraData}
         contentContainerStyle={[styles.content, { paddingTop: spacing.sm, paddingBottom: insets.bottom + 100 }]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
@@ -2032,16 +2191,12 @@ export function HomeScreen() {
               onPress={openQuickTimeSheet}
               activeOpacity={0.75}
               accessibilityRole="button"
-              accessibilityLabel={t("time.title")}
+              accessibilityLabel={activeTimer ? `${t("time.timerRunning")}, ${formatElapsedHms(activeTimer.startedAt)}` : t("time.title")}
             >
               {activeTimer ? (
-                <View key={timerTick} style={styles.fabDockTimerCol}>
-                  <Text style={styles.fabDockTimerDigits}>
-                    {`${String(Math.floor((Date.now() - new Date(activeTimer.startedAt).getTime()) / 3600000)).padStart(2, "0")}:${String(
-                      Math.floor(((Date.now() - new Date(activeTimer.startedAt).getTime()) % 3600000) / 60000)
-                    ).padStart(2, "0")}`}
-                  </Text>
-                  <Ionicons name="stop-circle" size={18} color={colors.primary} />
+                <View style={styles.fabDockTimerActiveWrap}>
+                  <Ionicons name="time" size={24} color="#fff" />
+                  <View style={styles.fabDockTimerBadgeDot} />
                 </View>
               ) : (
                 <Ionicons name="time-outline" size={26} color={colors.primary} />
@@ -2466,6 +2621,7 @@ export function HomeScreen() {
         }
         activeTimer={activeTimer}
         onRefreshActiveTimer={refreshActiveTimer}
+        onTimerStarted={(name) => showToast(t("home.timerStartedFor", { name }))}
         onSaved={() => {
           if (user?.id) {
             const now = new Date();
@@ -3643,16 +3799,129 @@ const styles = StyleSheet.create({
     shadowRadius: 3,
     elevation: 2,
   },
-  fabDockTimerCol: {
+  fabDockTimerActiveWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: ACTIVE_TIMER_GREEN,
     alignItems: "center",
     justifyContent: "center",
-    gap: 2,
+    shadowColor: ACTIVE_TIMER_GREEN,
+    shadowOffset: { width: 0, height: 0 },
+    shadowOpacity: 0.45,
+    shadowRadius: 6,
+    elevation: 4,
   },
-  fabDockTimerDigits: {
-    fontSize: 11,
+  fabDockTimerBadgeDot: {
+    position: "absolute",
+    top: 3,
+    right: 3,
+    width: 9,
+    height: 9,
+    borderRadius: 5,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.12)",
+  },
+  homeTimerStatusBarWrap: {
+    marginBottom: spacing.sm,
+  },
+  homeTimerStatusBarInner: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+    borderWidth: 1,
+  },
+  homeTimerStatusBarInnerOff: {
+    backgroundColor: "rgba(255,255,255,0.1)",
+    borderColor: "rgba(255,255,255,0.28)",
+  },
+  homeTimerStatusBarInnerOn: {
+    backgroundColor: "rgba(34,197,94,0.16)",
+    borderColor: "rgba(34,197,94,0.55)",
+  },
+  homeTimerStatusBarIconWrap: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    alignItems: "center",
+    justifyContent: "center",
+    marginRight: spacing.sm,
+    backgroundColor: "rgba(255,255,255,0.12)",
+  },
+  homeTimerStatusBarIconWrapOn: {
+    backgroundColor: ACTIVE_TIMER_GREEN,
+  },
+  homeTimerStatusBarLiveDot: {
+    position: "absolute",
+    top: 4,
+    right: 4,
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+    backgroundColor: "#fff",
+    borderWidth: 1,
+    borderColor: "rgba(0,0,0,0.15)",
+  },
+  homeTimerStatusBarTextCol: {
+    flex: 1,
+    minWidth: 0,
+    marginRight: spacing.xs,
+  },
+  homeTimerStatusBarProject: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  homeTimerStatusBarHms: {
+    fontSize: 20,
     fontWeight: "800",
-    color: colors.primary,
+    color: ACTIVE_TIMER_GREEN,
     fontVariant: ["tabular-nums"],
+    marginTop: 2,
+  },
+  homeTimerStatusBarIdleText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.92)",
+    lineHeight: 20,
+  },
+  homeTimerStatusBarActions: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingLeft: spacing.xs,
+  },
+  homeTimerStatusBarLinkBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: spacing.sm,
+  },
+  homeTimerStatusBarLinkText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.92)",
+    textDecorationLine: "underline",
+  },
+  homeTimerStatusBarStopCompact: {
+    paddingVertical: 8,
+    paddingHorizontal: spacing.md,
+    borderRadius: 10,
+    backgroundColor: colors.error,
+    minWidth: 72,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  homeTimerStatusBarStopCompactText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  homeTimerStatusBarBtnDisabled: {
+    opacity: 0.65,
   },
   actionSheetOverlay: {
     flex: 1,

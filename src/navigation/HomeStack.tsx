@@ -3,6 +3,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { HomeScreen } from "../screens/HomeScreen";
 import { ExpensesKpiScreen } from "../screens/ExpensesKpiScreen";
 import { AttendanceReportScreen } from "../screens/AttendanceReportScreen";
+import { ProjectTimeDetailScreen } from "../screens/ProjectTimeDetailScreen";
 import { TimeDailyProtocolScreen } from "../screens/TimeDailyProtocolScreen";
 import { ProjectOverviewScreen } from "../screens/ProjectOverviewScreen";
 import { ProjectMembersScreen } from "../screens/ProjectMembersScreen";
@@ -20,6 +21,7 @@ export function HomeStack() {
       <Stack.Screen name="HomeMain" component={HomeScreen} />
       <Stack.Screen name="ExpensesKpiScreen" component={ExpensesKpiScreen} options={{ headerShown: false }} />
       <Stack.Screen name="AttendanceReportScreen" component={AttendanceReportScreen} options={{ headerShown: false }} />
+      <Stack.Screen name="ProjectTimeDetail" component={ProjectTimeDetailScreen} options={{ headerShown: false }} />
       <Stack.Screen name="TimeDailyProtocolScreen" component={TimeDailyProtocolScreen} options={{ headerShown: false }} />
       <Stack.Screen name="ProjectOverview" component={ProjectOverviewScreen} />
       <Stack.Screen name="ProjectMembers" component={ProjectMembersScreen} />

@@ -1,6 +1,6 @@
 {
   "name": "mobile",
-  "version": "1.19.2",
+  "version": "1.20.0",
   "main": "index.ts",
   "expo": {
     "install": {
@@ -16,6 +16,8 @@
     "start": "npm run ensure-logo && expo start",
     "android": "npm run ensure-logo && expo start --android",
     "dev:android": "node scripts/run-android.js",
+    "reinstall:android": "node scripts/reinstall-android.js",
+    "install:android:win": "cmd /c scripts\\build-android-windows.cmd",
     "run:android": "node scripts/run-android.js",
     "run:android:emulator": "node scripts/run-android.js",
     "start:emulator": "powershell -ExecutionPolicy Bypass -File ./scripts/start-emulator.ps1",

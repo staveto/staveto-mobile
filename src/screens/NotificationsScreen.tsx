@@ -43,8 +43,11 @@ export function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const { user, orgId } = useAuth();
-  /** Inbox is always scoped to the signed-in Firebase user (never mix org vs another uid). */
-  const notificationUserId = auth.currentUser?.uid ?? user?.id ?? orgId ?? null;
+  /**
+   * Inbox must be scoped strictly to the signed-in Firebase user.
+   * Do not fall back to orgId/user.id; that can mix identities during auth startup/races.
+   */
+  const notificationUserId = auth.currentUser?.uid ?? null;
   const { refresh: refreshUnreadCount, setCount: setUnreadCount } = useUnreadCountContext();
   const navigation = useNavigation();
   const [notifications, setNotifications] = useState<NotificationDoc[]>([]);
@@ -55,6 +58,8 @@ export function NotificationsScreen() {
   const [showMenu, setShowMenu] = useState(false);
   /** IDs we optimistically marked read this session — used to detect unread-after-reload regressions. */
   const sessionMarkedReadIdsRef = useRef<Set<string>>(new Set());
+  /** Prevent duplicate mark-as-read calls for same id (swipe open + button can both fire). */
+  const markReadInFlightRef = useRef<Set<string>>(new Set());
 
   const loadNotifications = useCallback(async (isRefresh = false) => {
     if (!notificationUserId) {
@@ -62,6 +67,13 @@ export function NotificationsScreen() {
       setRefreshing(false);
       setNotifications([]);
       setPendingInvites([]);
+      if (NOTIF_UX_DEBUG) {
+        notifUxLog("inbox_skipped_no_firebase_uid", {
+          note: "auth.currentUser not ready; not loading inbox",
+          hasUserCtx: !!user,
+          hasOrgId: !!orgId,
+        });
+      }
       return;
     }
     if (isRefresh) {
@@ -93,7 +105,7 @@ export function NotificationsScreen() {
             continue;
           }
           if (!hasMeaningfulReadAt(row.readAt)) {
-            notifUxLog("read_state_regressed_after_fetch", { id });
+            notifUxLog("read_state_regressed_after_fetch", { id, note: "row is unread after being marked read in-session" });
           } else {
             sessionMarkedReadIdsRef.current.delete(id);
           }
@@ -110,7 +122,7 @@ export function NotificationsScreen() {
         void refreshUnreadCount();
       }
     }
-  }, [notificationUserId, refreshUnreadCount]);
+  }, [notificationUserId, refreshUnreadCount, user, orgId]);
 
   const onRefresh = useCallback(() => {
     loadNotifications(true);
@@ -124,6 +136,11 @@ export function NotificationsScreen() {
 
   const markAsRead = useCallback(
     async (notification: NotificationDoc) => {
+      if (markReadInFlightRef.current.has(notification.id)) {
+        notifUxLog("mark_read_skipped_in_flight", { id: notification.id });
+        return;
+      }
+      markReadInFlightRef.current.add(notification.id);
       const readNow = new Date().toISOString();
       const prevReadAt = notification.readAt ?? null;
       notifRowLog("markNotificationAsRead called", { id: notification.id, prevReadAt });
@@ -151,6 +168,7 @@ export function NotificationsScreen() {
           prev.map((n) => (n.id === notification.id ? { ...n, readAt: prevReadAt } : n))
         );
       } finally {
+        markReadInFlightRef.current.delete(notification.id);
         notifUxLog("mark_read_badge_refresh", { id: notification.id });
         void refreshUnreadCount();
       }
@@ -159,7 +177,7 @@ export function NotificationsScreen() {
   );
 
   const handleMarkAllAsRead = useCallback(async () => {
-    const uid = auth.currentUser?.uid ?? orgId;
+    const uid = auth.currentUser?.uid ?? null;
     if (!uid) return;
     try {
       setUnreadCount(0);
@@ -177,7 +195,7 @@ export function NotificationsScreen() {
       await refreshUnreadCount();
       Alert.alert(t("common.error"), t("notifications.markAllReadFailed"));
     }
-  }, [orgId, refreshUnreadCount, setUnreadCount, t]);
+  }, [refreshUnreadCount, setUnreadCount, t]);
 
   // Safe date helpers (handle Timestamp, string, Date, null)
   const toDateSafe = (v: any): Date | null => {

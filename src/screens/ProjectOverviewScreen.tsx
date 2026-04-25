@@ -76,6 +76,7 @@ import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { exportProjectToCsv } from "../services/projectExport";
 import { exportProjectAsProtocol } from "../services/projectProtocolExport";
 import * as timeTracking from "../services/timeTracking";
+import { formatGpsShort, groupTimeEntriesByDay, mapsUrlForPoint, sumMinutes } from "../utils/timeEntryDisplay";
 import * as quickNotesService from "../services/quickNotes";
 import { updateTaskStatus } from "../services/taskService";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
@@ -184,6 +185,15 @@ export function ProjectOverviewScreen() {
   const [expandedProblems, setExpandedProblems] = useState(false);
   const [openProblemsCount, setOpenProblemsCount] = useState(0);
   const [projectHoursMinutes, setProjectHoursMinutes] = useState<number>(0);
+  const [projectTodayMinutes, setProjectTodayMinutes] = useState<number>(0);
+  const [projectWeekMinutes, setProjectWeekMinutes] = useState<number>(0);
+  const [activeTimer, setActiveTimer] = useState<timeTracking.ActiveTimer | null>(null);
+  const [timerTick, setTimerTick] = useState(0);
+  const [timeCardLoading, setTimeCardLoading] = useState(false);
+  const [timeStopLoading, setTimeStopLoading] = useState(false);
+  const [timeAccordionExpanded, setTimeAccordionExpanded] = useState(false);
+  const [accordionTimeEntries, setAccordionTimeEntries] = useState<timeTracking.TimeEntryDoc[]>([]);
+  const [accordionTimeLoading, setAccordionTimeLoading] = useState(false);
   const [expandedDocuments, setExpandedDocuments] = useState(false);
   const [showNewTask, setShowNewTask] = useState(false);
   const [showTaskDescriptionModal, setShowTaskDescriptionModal] = useState(false);
@@ -799,12 +809,167 @@ export function ProjectOverviewScreen() {
     }
   }, [projectId, access.isOwner, access.canWrite]);
 
+  const toLocalYmd = useCallback((d: Date): string => {
+    const y = d.getFullYear();
+    const m = String(d.getMonth() + 1).padStart(2, "0");
+    const day = String(d.getDate()).padStart(2, "0");
+    return `${y}-${m}-${day}`;
+  }, []);
+
+  const localWeekRange = useCallback((): { fromYmd: string; toYmd: string } => {
+    const now = new Date();
+    const day = now.getDay(); // 0 Sun ... 6 Sat
+    const diffToMon = (day + 6) % 7; // Mon=0
+    const start = new Date(now);
+    start.setHours(0, 0, 0, 0);
+    start.setDate(start.getDate() - diffToMon);
+    const end = new Date(start);
+    end.setDate(start.getDate() + 6);
+    return { fromYmd: toLocalYmd(start), toYmd: toLocalYmd(end) };
+  }, [toLocalYmd]);
+
+  const formatMinutes = useCallback(
+    (mins: number): string => {
+      const total = Math.max(0, Math.round(mins || 0));
+      const h = Math.floor(total / 60);
+      const m = total % 60;
+      return `${h} ${t("time.hoursShort")} ${String(m).padStart(2, "0")} ${t("time.minutesShort")}`;
+    },
+    [t]
+  );
+
+  const formatElapsedHms = useCallback((startedAtIso: string): string => {
+    const startMs = new Date(startedAtIso).getTime();
+    const diffMs = Date.now() - startMs;
+    const safe = Number.isFinite(diffMs) && diffMs > 0 ? diffMs : 0;
+    const totalSeconds = Math.floor(safe / 1000);
+    const h = Math.floor(totalSeconds / 3600);
+    const m = Math.floor((totalSeconds % 3600) / 60);
+    const s = totalSeconds % 60;
+    return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+  }, []);
+
+  const LOCALE_MAP_TIME: Record<string, string> = {
+    en: "en-GB",
+    de: "de-DE",
+    sk: "sk-SK",
+    cs: "cs-CZ",
+    es: "es-ES",
+    it: "it-IT",
+    pl: "pl-PL",
+  };
+  const todayYmdForLabels = useMemo(() => toLocalYmd(new Date()), [toLocalYmd]);
+  const yesterdayYmdForLabels = useMemo(() => {
+    const d = new Date();
+    d.setDate(d.getDate() - 1);
+    return toLocalYmd(d);
+  }, [toLocalYmd]);
+  const accordionGrouped = useMemo(
+    () => groupTimeEntriesByDay(accordionTimeEntries, toLocalYmd),
+    [accordionTimeEntries, toLocalYmd]
+  );
+  const dayLabelForAccordion = useCallback(
+    (ymd: string): string => {
+      if (ymd === todayYmdForLabels) return t("time.today");
+      if (ymd === yesterdayYmdForLabels) return t("projectOverview.yesterday");
+      const [y, m, d] = ymd.split("-").map(Number);
+      if (!y || !m || !d) return ymd;
+      const dt = new Date(y, m - 1, d);
+      const loc = LOCALE_MAP_TIME[locale] ?? "en-GB";
+      return dt.toLocaleDateString(loc, { weekday: "short", day: "numeric", month: "short" });
+    },
+    [todayYmdForLabels, yesterdayYmdForLabels, t, locale]
+  );
+  const formatEntryClock = useCallback(
+    (iso: string) => {
+      const d = new Date(iso);
+      if (!Number.isFinite(d.getTime())) return "—";
+      const loc = LOCALE_MAP_TIME[locale] ?? "en-GB";
+      return d.toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit" });
+    },
+    [locale]
+  );
+
+  const loadProjectTimeSummary = useCallback(async () => {
+    if (!projectId) return;
+    // Only show time metrics for owners/editors (same gating as existing total-hours block)
+    if (access.loading || (!access.isOwner && !access.canWrite)) {
+      setProjectHoursMinutes(0);
+      setProjectTodayMinutes(0);
+      setProjectWeekMinutes(0);
+      setActiveTimer(null);
+      return;
+    }
+    setTimeCardLoading(true);
+    try {
+      const [at, totalMins] = await Promise.all([
+        timeTracking.getActiveTimer().catch(() => null),
+        timeTracking.getProjectTotalMinutes(projectId).catch(() => 0),
+      ]);
+      setActiveTimer(at);
+      setProjectHoursMinutes(totalMins);
+
+      const todayYmd = toLocalYmd(new Date());
+      const { fromYmd, toYmd } = localWeekRange();
+      const weekEntries = await timeTracking.listTimeEntriesByProject(projectId, fromYmd, toYmd).catch(() => []);
+
+      const dayKeyForTimerEntry = (startedAt: string): string => {
+        const d = new Date(startedAt);
+        return toLocalYmd(d);
+      };
+
+      let todaySum = 0;
+      let weekSum = 0;
+      for (const e of weekEntries) {
+        const mins = e.durationMinutes ?? 0;
+        if (mins <= 0) continue;
+        const isManual = e.mode === "manual" && typeof e.date === "string" && e.date.length === 10;
+        const dayKey = isManual ? e.date! : dayKeyForTimerEntry(e.startedAt);
+        if (dayKey >= fromYmd && dayKey <= toYmd) {
+          weekSum += mins;
+        }
+        if (dayKey === todayYmd) {
+          todaySum += mins;
+        }
+      }
+      setProjectWeekMinutes(weekSum);
+      setProjectTodayMinutes(todaySum);
+    } finally {
+      setTimeCardLoading(false);
+    }
+  }, [projectId, access.loading, access.isOwner, access.canWrite, localWeekRange, toLocalYmd]);
+
+  const loadAccordionTimeEntries = useCallback(async () => {
+    if (!projectId || access.loading || (!access.isOwner && !access.canWrite)) return;
+    const now = new Date();
+    const toYmd = toLocalYmd(now);
+    const from = new Date(now);
+    from.setDate(from.getDate() - 90);
+    const fromYmd = toLocalYmd(from);
+    setAccordionTimeLoading(true);
+    try {
+      const list = await timeTracking.listTimeEntriesByProject(projectId, fromYmd, toYmd);
+      setAccordionTimeEntries(list);
+    } catch {
+      setAccordionTimeEntries([]);
+    } finally {
+      setAccordionTimeLoading(false);
+    }
+  }, [projectId, access.loading, access.isOwner, access.canWrite, toLocalYmd]);
+
   const onRefresh = useCallback(() => {
     load(true);
     loadActivity();
     loadWeather(true);
     loadProjectHours();
-  }, [load, loadActivity, loadWeather, loadProjectHours]);
+    loadProjectTimeSummary();
+    if (timeAccordionExpanded) void loadAccordionTimeEntries();
+  }, [load, loadActivity, loadWeather, loadProjectHours, loadProjectTimeSummary, timeAccordionExpanded, loadAccordionTimeEntries]);
+
+  useEffect(() => {
+    if (!timeAccordionExpanded || !projectId) return;
+    void loadAccordionTimeEntries();
+  }, [timeAccordionExpanded, projectId, loadAccordionTimeEntries]);
 
   useEffect(() => {
     if (!projectId || access.loading) return;
@@ -824,6 +989,18 @@ export function ProjectOverviewScreen() {
     if (access.isOwner || access.canWrite) loadProjectHours();
     else setProjectHoursMinutes(0);
   }, [projectId, access.loading, access.isOwner, access.canWrite, loadProjectHours]);
+
+  useEffect(() => {
+    if (!projectId || access.loading) return;
+    void loadProjectTimeSummary();
+  }, [projectId, access.loading, loadProjectTimeSummary]);
+
+  useEffect(() => {
+    // Tick running timer display when the active timer belongs to this project
+    if (!activeTimer || activeTimer.projectId !== projectId) return;
+    const interval = setInterval(() => setTimerTick((n) => n + 1), 1000);
+    return () => clearInterval(interval);
+  }, [activeTimer, projectId]);
 
   useFocusEffect(
     useCallback(() => {
@@ -3760,6 +3937,8 @@ export function ProjectOverviewScreen() {
           />
         }
       >
+        {/* Time section moved lower (see "Time summary" near Problems) */}
+
         {/* MAINTENANCE: Service plans section - same structure as Expenses/Diary for consistent sizing */}
         {projectType === 'MAINTENANCE' && (
           <View style={styles.expensesSection}>
@@ -4492,30 +4671,172 @@ export function ProjectOverviewScreen() {
           </View>
         )}
 
-        {/* Hours spent on project - only show if > 0 */}
-        {!access.loading && projectHoursMinutes > 0 && (access.isOwner || access.canWrite) && (
-          <View style={styles.expensesSection}>
-          <TouchableOpacity 
-            style={styles.expensesHeader}
-            onPress={() => (navigation as any).navigate("AttendanceReportScreen")}
-            activeOpacity={0.7}
-          >
-            <View style={styles.expensesHeaderLeft}>
-              <Ionicons 
-                name="time-outline" 
-                size={20} 
-                color={colors.text} 
-                style={{ marginRight: spacing.sm }}
-              />
-              <Text style={styles.expensesHeaderText}>{t("projectOverview.hoursSpentOnProject")}</Text>
-              <Text style={styles.expensesCount}>
-                ({Math.floor(projectHoursMinutes / 60)} {t("time.hoursShort")})
-              </Text>
+        {/* Time and location (accordion + slim timer when running on this project) */}
+        {!access.loading && (() => {
+          const isTimerRunningHere = !!activeTimer && activeTimer.projectId === projectId;
+          const hasMeaningfulTime = projectHoursMinutes > 0 || projectWeekMinutes > 0 || projectTodayMinutes > 0;
+          const shouldShowTime = isTimerRunningHere || hasMeaningfulTime;
+          if (!shouldShowTime) return null;
+
+          return (
+            <View>
+              {isTimerRunningHere ? (
+                <View style={[styles.timeSummarySection, styles.timeSlimAboveAccordion]}>
+                  <View style={[styles.timeTimerRow, styles.timeTimerRowInSlim]}>
+                    <View style={styles.timeTimerRowLeft}>
+                      <Text style={styles.timeTimerLabel}>{t("time.timerRunning")}</Text>
+                      <Text key={timerTick} style={styles.timeTimerElapsed}>
+                        {formatElapsedHms(activeTimer!.startedAt)}
+                      </Text>
+                    </View>
+                    <View style={styles.timeTimerButtons}>
+                      <TouchableOpacity
+                        style={[styles.timeTimerBtn, timeStopLoading && { opacity: 0.6 }]}
+                        disabled={timeStopLoading}
+                        onPress={async () => {
+                          setTimeStopLoading(true);
+                          try {
+                            await timeTracking.stopTimer();
+                          } catch (e: any) {
+                            Alert.alert(t("common.error"), e?.message || t("common.error"));
+                          } finally {
+                            setTimeStopLoading(false);
+                            await loadProjectTimeSummary();
+                            if (timeAccordionExpanded) await loadAccordionTimeEntries();
+                          }
+                        }}
+                        accessibilityRole="button"
+                        accessibilityLabel={t("time.stop")}
+                      >
+                        <Text style={styles.timeTimerBtnText}>{t("time.stop")}</Text>
+                      </TouchableOpacity>
+                      <TouchableOpacity
+                        style={styles.timeTimerBtnSecondary}
+                        onPress={() =>
+                          (navigation as any).navigate("ProjectTimeDetail", { projectId, projectName: projectName || undefined })
+                        }
+                        accessibilityRole="button"
+                        accessibilityLabel={t("time.openTime")}
+                      >
+                        <Text style={styles.timeTimerBtnSecondaryText}>{t("time.openTime")}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  </View>
+                </View>
+              ) : null}
+
+              <View style={styles.timeSummarySection}>
+                <TouchableOpacity
+                  style={styles.timeAccordionHeader}
+                  activeOpacity={0.7}
+                  onPress={() => {
+                    setTimeAccordionExpanded((ex) => {
+                      const next = !ex;
+                      if (next) setAccordionTimeLoading(true);
+                      else {
+                        setAccordionTimeLoading(false);
+                      }
+                      return next;
+                    });
+                  }}
+                >
+                  <View style={styles.timeSummaryHeaderLeft}>
+                    <Ionicons name="time-outline" size={18} color={colors.text} style={{ marginRight: spacing.sm }} />
+                    <Text style={styles.timeSummaryTitle}>{t("projectOverview.timeAndLocation")}</Text>
+                  </View>
+                  <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
+                    {timeCardLoading ? <ActivityIndicator size="small" color={colors.primary} /> : null}
+                    <Ionicons name={timeAccordionExpanded ? "chevron-up" : "chevron-down"} size={22} color={colors.textMuted} />
+                  </View>
+                </TouchableOpacity>
+
+                {!timeAccordionExpanded ? (
+                  <>
+                    {projectTodayMinutes > 0 ? (
+                      <View style={styles.timeSummaryRow}>
+                        <Text style={styles.timeSummaryLabel}>{t("time.today")}</Text>
+                        <Text style={styles.timeSummaryValue}>{formatMinutes(projectTodayMinutes)}</Text>
+                      </View>
+                    ) : null}
+                    <View style={styles.timeSummaryRow}>
+                      <Text style={styles.timeSummaryLabel}>{t("time.thisWeek")}</Text>
+                      <Text style={styles.timeSummaryValue}>{formatMinutes(projectWeekMinutes)}</Text>
+                    </View>
+                    <View style={styles.timeSummaryRow}>
+                      <Text style={styles.timeSummaryLabel}>{t("time.total")}</Text>
+                      <Text style={styles.timeSummaryValue}>{formatMinutes(projectHoursMinutes)}</Text>
+                    </View>
+                  </>
+                ) : accordionTimeLoading ? (
+                  <ActivityIndicator style={{ marginVertical: spacing.md }} color={colors.primary} />
+                ) : (
+                  <ScrollView style={styles.timeAccordionScroll} nestedScrollEnabled showsVerticalScrollIndicator>
+                    {accordionGrouped.map(({ dayKey, entries: dayEntries }) => (
+                      <View key={dayKey} style={styles.timeAccordionDayBlock}>
+                        <View style={styles.timeAccordionDayHeader}>
+                          <Text style={styles.timeAccordionDayTitle}>{dayLabelForAccordion(dayKey)}</Text>
+                          <Text style={styles.timeAccordionDayTotal}>{formatMinutes(sumMinutes(dayEntries))}</Text>
+                        </View>
+                        {dayEntries.map((e) => (
+                          <View key={e.id} style={styles.timeAccordionEntry}>
+                            <View style={styles.timeAccordionEntryTop}>
+                              <Text style={styles.timeAccordionEntryTime}>
+                                {formatEntryClock(e.startedAt)} – {formatEntryClock(e.endedAt)}
+                              </Text>
+                              <Text style={styles.timeAccordionEntryDur}>{formatMinutes(e.durationMinutes ?? 0)}</Text>
+                            </View>
+                            <Text style={styles.timeAccordionEntryMode}>
+                              {e.mode === "manual" ? t("time.modeManual") : t("time.modeTimer")}
+                            </Text>
+                            {e.note ? <Text style={styles.timeAccordionEntryNote}>{e.note}</Text> : null}
+                            {formatGpsShort(e.gpsStart) ? (
+                              <Text style={styles.timeAccordionLoc} selectable>
+                                {t("time.dailyProtocol.startLocation")}: {formatGpsShort(e.gpsStart)}
+                              </Text>
+                            ) : null}
+                            {formatGpsShort(e.gpsEnd) ? (
+                              <Text style={styles.timeAccordionLoc} selectable>
+                                {t("time.dailyProtocol.endLocation")}: {formatGpsShort(e.gpsEnd)}
+                              </Text>
+                            ) : null}
+                            {mapsUrlForPoint(e.gpsStart) ? (
+                              <TouchableOpacity onPress={() => Linking.openURL(mapsUrlForPoint(e.gpsStart)!)}>
+                                <Text style={styles.timeAccordionMapLink}>
+                                  {t("projectOverview.showOnMap")} — {t("time.dailyProtocol.startLocation")}
+                                </Text>
+                              </TouchableOpacity>
+                            ) : null}
+                            {mapsUrlForPoint(e.gpsEnd) ? (
+                              <TouchableOpacity onPress={() => Linking.openURL(mapsUrlForPoint(e.gpsEnd)!)}>
+                                <Text style={styles.timeAccordionMapLink}>
+                                  {t("projectOverview.showOnMap")} — {t("time.dailyProtocol.endLocation")}
+                                </Text>
+                              </TouchableOpacity>
+                            ) : null}
+                          </View>
+                        ))}
+                      </View>
+                    ))}
+                    {accordionGrouped.length === 0 ? (
+                      <Text style={styles.timeAccordionEmpty}>{t("projectOverview.timeDetailEmpty")}</Text>
+                    ) : null}
+                  </ScrollView>
+                )}
+
+                <TouchableOpacity
+                  style={styles.timeSummaryCta}
+                  onPress={() =>
+                    (navigation as any).navigate("ProjectTimeDetail", { projectId, projectName: projectName || undefined })
+                  }
+                  accessibilityRole="button"
+                  accessibilityLabel={t("projectOverview.viewAllProjectTime")}
+                >
+                  <Text style={styles.timeSummaryCtaText}>{t("projectOverview.viewAllProjectTime")} →</Text>
+                </TouchableOpacity>
+              </View>
             </View>
-            <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-          </TouchableOpacity>
-          </View>
-        )}
+          );
+        })()}
 
         {/* Problems Section - All project types */}
         {!access.loading && (
@@ -4901,6 +5222,8 @@ export function ProjectOverviewScreen() {
           </View>
         </View>
       </Modal>
+
+      {/* Time entry actions live in the dedicated time flow (not Project Overview) */}
 
       {/* Edit project modal */}
       <Modal visible={showEditModal} transparent animationType="fade">
@@ -7380,6 +7703,82 @@ const styles = StyleSheet.create({
     borderColor: colors.border,
     overflow: 'hidden',
   },
+  // Time (supporting summary) styles
+  timeSummarySection: {
+    marginHorizontal: spacing.md,
+    marginTop: spacing.md,
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+  },
+  timeSummaryHeader: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", marginBottom: spacing.sm },
+  timeSummaryHeaderLeft: { flexDirection: "row", alignItems: "center" },
+  timeSummaryTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
+  timeTimerRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingBottom: spacing.sm,
+    marginBottom: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: colors.border,
+    gap: spacing.sm,
+  },
+  timeTimerRowLeft: { flex: 1, minWidth: 0 },
+  timeTimerLabel: { fontSize: 12, fontWeight: "700", color: colors.primary },
+  timeTimerElapsed: { fontSize: 14, fontWeight: "800", color: colors.text, marginTop: 2 },
+  timeTimerButtons: { flexDirection: "row", alignItems: "center", gap: spacing.sm },
+  timeTimerBtn: { backgroundColor: colors.primary, paddingHorizontal: spacing.md, paddingVertical: spacing.xs, borderRadius: 999 },
+  timeTimerBtnText: { color: "#fff", fontWeight: "700" },
+  timeTimerBtnSecondary: {
+    backgroundColor: `${colors.primary}15`,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.xs,
+    borderRadius: 999,
+  },
+  timeTimerBtnSecondaryText: { color: colors.primary, fontWeight: "700" },
+  timeSummaryRow: { flexDirection: "row", alignItems: "center", justifyContent: "space-between", paddingVertical: 2 },
+  timeSummaryLabel: { fontSize: 13, color: colors.textMuted, fontWeight: "600" },
+  timeSummaryValue: { fontSize: 13, color: colors.text, fontWeight: "700" },
+  timeSummaryCta: { marginTop: spacing.sm, paddingTop: spacing.sm, borderTopWidth: 1, borderTopColor: colors.border },
+  timeSummaryCtaText: { color: colors.primary, fontWeight: "700" },
+  timeSlimAboveAccordion: {
+    marginBottom: spacing.sm,
+  },
+  timeTimerRowInSlim: {
+    borderBottomWidth: 0,
+    marginBottom: 0,
+    paddingBottom: 0,
+  },
+  timeAccordionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+  },
+  timeAccordionScroll: { maxHeight: 360 },
+  timeAccordionDayBlock: { marginBottom: spacing.md },
+  timeAccordionDayHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.xs },
+  timeAccordionDayTitle: { fontSize: 14, fontWeight: "700", color: colors.text },
+  timeAccordionDayTotal: { fontSize: 13, fontWeight: "700", color: colors.primary },
+  timeAccordionEntry: {
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+    paddingTop: spacing.sm,
+    paddingBottom: spacing.sm,
+  },
+  timeAccordionEntryTop: { flexDirection: "row", justifyContent: "space-between", alignItems: "center" },
+  timeAccordionEntryTime: { fontSize: 13, fontWeight: "600", color: colors.text, flex: 1, marginRight: spacing.sm },
+  timeAccordionEntryDur: { fontSize: 13, fontWeight: "700", color: colors.text },
+  timeAccordionEntryMode: { fontSize: 11, color: colors.textMuted, marginTop: 4 },
+  timeAccordionEntryNote: { fontSize: 12, color: colors.text, marginTop: spacing.xs },
+  timeAccordionLoc: { fontSize: 11, color: colors.textMuted, marginTop: 4 },
+  timeAccordionMapLink: { fontSize: 12, color: colors.primary, fontWeight: "600", marginTop: 4 },
+  timeAccordionEmpty: { fontSize: 13, color: colors.textMuted, paddingVertical: spacing.md, textAlign: "center" },
   expensesHeader: {
     flexDirection: 'row',
     alignItems: 'center',

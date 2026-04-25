@@ -18,6 +18,7 @@ import { TaskDetailScreen } from "../screens/TaskDetailScreen";
 import { ProjectOverviewScreen } from "../screens/ProjectOverviewScreen";
 import { ProjectOverviewDashboardScreen } from "../screens/ProjectOverviewDashboardScreen";
 import { AttendanceReportScreen } from "../screens/AttendanceReportScreen";
+import { ProjectTimeDetailScreen } from "../screens/ProjectTimeDetailScreen";
 import { ProjectMilestonesOverviewScreen } from "../screens/ProjectMilestonesOverviewScreen";
 import { ProjectDiaryOverviewScreen } from "../screens/ProjectDiaryOverviewScreen";
 import { ProjectPhotosScreen } from "../screens/ProjectPhotosScreen";
@@ -342,6 +343,11 @@ export function RootNavigator() {
       <Stack.Screen
         name="AttendanceReportScreen"
         component={AttendanceReportScreen}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="ProjectTimeDetail"
+        component={ProjectTimeDetailScreen}
         options={{ headerShown: false }}
       />
       <Stack.Screen

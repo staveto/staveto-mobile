@@ -76,7 +76,7 @@ import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { exportProjectToCsv } from "../services/projectExport";
 import { exportProjectAsProtocol } from "../services/projectProtocolExport";
 import * as timeTracking from "../services/timeTracking";
-import { formatGpsShort, groupTimeEntriesByDay, mapsUrlForPoint, sumMinutes } from "../utils/timeEntryDisplay";
+import { postDebugIngest } from "../lib/debugIngest";
 import * as quickNotesService from "../services/quickNotes";
 import { updateTaskStatus } from "../services/taskService";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
@@ -160,7 +160,8 @@ export function ProjectOverviewScreen() {
     expandExpensesSection: paramExpandExpensesSection,
     expandPhaseId: paramExpandPhaseId,
   } = routeParams;
-  const projectId = paramProjectId ?? "";
+  /** Strip zero-width / BOM; trim — mismatches Firestore `projectId` otherwise. */
+  const projectId = (paramProjectId ?? "").replace(/[\u200B-\u200D\uFEFF]/g, "").trim();
   const paramProjectNameNorm = (paramProjectName ?? "").trim();
   /** Header uses route param first; when missing (e.g. deep link from notifications), fill from getProject(). */
   const [fetchedProjectName, setFetchedProjectName] = useState("");
@@ -191,14 +192,13 @@ export function ProjectOverviewScreen() {
   const [timerTick, setTimerTick] = useState(0);
   const [timeCardLoading, setTimeCardLoading] = useState(false);
   const [timeStopLoading, setTimeStopLoading] = useState(false);
-  const [timeAccordionExpanded, setTimeAccordionExpanded] = useState(false);
-  const [accordionTimeEntries, setAccordionTimeEntries] = useState<timeTracking.TimeEntryDoc[]>([]);
-  const [accordionTimeLoading, setAccordionTimeLoading] = useState(false);
   /** Entries in current calendar week (for section header count, like expenses). */
   const [projectTimeWeekEntryCount, setProjectTimeWeekEntryCount] = useState(0);
   const [expandedDocuments, setExpandedDocuments] = useState(false);
   const [showNewTask, setShowNewTask] = useState(false);
   const [showTaskDescriptionModal, setShowTaskDescriptionModal] = useState(false);
+  /** Session-only dismiss for the post-create empty-state hero. Hides until next reload. */
+  const [emptyHeroDismissed, setEmptyHeroDismissed] = useState(false);
   const [newTitle, setNewTitle] = useState("");
   const [selectedPhaseId, setSelectedPhaseId] = useState<string | null>(null); // Phase for new task
   const [showNewPhaseModal, setShowNewPhaseModal] = useState(false);
@@ -855,47 +855,6 @@ export function ProjectOverviewScreen() {
     return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
   }, []);
 
-  const LOCALE_MAP_TIME: Record<string, string> = {
-    en: "en-GB",
-    de: "de-DE",
-    sk: "sk-SK",
-    cs: "cs-CZ",
-    es: "es-ES",
-    it: "it-IT",
-    pl: "pl-PL",
-  };
-  const todayYmdForLabels = useMemo(() => toLocalYmd(new Date()), [toLocalYmd]);
-  const yesterdayYmdForLabels = useMemo(() => {
-    const d = new Date();
-    d.setDate(d.getDate() - 1);
-    return toLocalYmd(d);
-  }, [toLocalYmd]);
-  const accordionGrouped = useMemo(
-    () => groupTimeEntriesByDay(accordionTimeEntries, toLocalYmd),
-    [accordionTimeEntries, toLocalYmd]
-  );
-  const dayLabelForAccordion = useCallback(
-    (ymd: string): string => {
-      if (ymd === todayYmdForLabels) return t("time.today");
-      if (ymd === yesterdayYmdForLabels) return t("projectOverview.yesterday");
-      const [y, m, d] = ymd.split("-").map(Number);
-      if (!y || !m || !d) return ymd;
-      const dt = new Date(y, m - 1, d);
-      const loc = LOCALE_MAP_TIME[locale] ?? "en-GB";
-      return dt.toLocaleDateString(loc, { weekday: "short", day: "numeric", month: "short" });
-    },
-    [todayYmdForLabels, yesterdayYmdForLabels, t, locale]
-  );
-  const formatEntryClock = useCallback(
-    (iso: string) => {
-      const d = new Date(iso);
-      if (!Number.isFinite(d.getTime())) return "—";
-      const loc = LOCALE_MAP_TIME[locale] ?? "en-GB";
-      return d.toLocaleTimeString(loc, { hour: "2-digit", minute: "2-digit" });
-    },
-    [locale]
-  );
-
   const loadProjectTimeSummary = useCallback(async () => {
     if (!projectId) return;
     const allowed =
@@ -916,6 +875,21 @@ export function ProjectOverviewScreen() {
     });
 
     if (!allowed) {
+      // #region agent log
+      postDebugIngest({
+        hypothesisId: "T1",
+        location: "ProjectOverviewScreen.tsx:loadProjectTimeSummary",
+        message: "pts_time_blocked_by_access",
+        data: {
+          projectIdLen: projectId.length,
+          accessLoading: access.loading,
+          isOwner: access.isOwner,
+          canWriteTime: access.canWriteTime,
+          isMember: access.isMember,
+          sharedTimeTracking: access.sharedItems?.timeTracking ?? null,
+        },
+      });
+      // #endregion
       setProjectHoursMinutes(0);
       setProjectTodayMinutes(0);
       setProjectWeekMinutes(0);
@@ -926,17 +900,63 @@ export function ProjectOverviewScreen() {
     setTimeCardLoading(true);
     try {
       console.log("[PTS 2] before fetch");
-      const timeOpts = { forUserId: user?.id ?? undefined };
-      const [at, totalMins] = await Promise.all([
+      const timeOpts = { forUserId: user?.id ?? auth.currentUser?.uid ?? undefined };
+      /** Avoid hanging forever on users/{uid} if Firestore get stalls. */
+      const ACTIVE_TIMER_MS = 8_000;
+      const at = await Promise.race([
         timeTracking.getActiveTimer().catch(() => null),
-        timeTracking.getProjectTotalMinutes(projectId, user?.id ?? null).catch(() => 0),
+        new Promise<null>((resolve) => setTimeout(() => resolve(null), ACTIVE_TIMER_MS)),
       ]);
 
+      /**
+       * One list for 24 months: same data as getProjectTotalMinutes + week slice in memory.
+       * Previously we ran two full listTimeEntriesByProject (24mo + week) — doubled reads and
+       * could leave timeCardLoading stuck for a long time on slow / retrying Firestore.
+       */
+      const now = new Date();
+      const toAllYmd = toLocalYmd(now);
+      const from24 = new Date(now);
+      from24.setMonth(from24.getMonth() - 24);
+      const fromAllYmd = toLocalYmd(from24);
+      /** Do not race the list to `[]` on timeout — that zeroed totals on slow Firestore while data existed. */
+      let allEntries: timeTracking.TimeEntryDoc[] = [];
+      try {
+        allEntries = await timeTracking.listTimeEntriesByProject(projectId, fromAllYmd, toAllYmd, timeOpts);
+      } catch (e) {
+        postDebugIngest({
+          hypothesisId: "T5",
+          location: "ProjectOverviewScreen.tsx:loadProjectTimeSummary",
+          message: "pts_all_range_list_rejected",
+          data: { err: e instanceof Error ? e.message : String(e) },
+        });
+        allEntries = [];
+      }
+
+      const totalMins = allEntries.reduce((sum, e) => sum + (e.durationMinutes ?? 0), 0);
       const todayYmd = toLocalYmd(new Date());
       const { fromYmd, toYmd } = localWeekRange();
-      const weekEntries = await timeTracking
-        .listTimeEntriesByProject(projectId, fromYmd, toYmd, timeOpts)
-        .catch(() => []);
+      const weekEntries = allEntries.filter((e) => {
+        const dk = timeTracking.entryCalendarDayYmd(e);
+        return !!dk && dk >= fromYmd && dk <= toYmd;
+      });
+
+      // #region agent log
+      postDebugIngest({
+        hypothesisId: "T4",
+        location: "ProjectOverviewScreen.tsx:loadProjectTimeSummary",
+        message: "pts_week_fetch_ok",
+        data: {
+          allEntriesLen: allEntries.length,
+          weekEntriesLen: weekEntries.length,
+          totalMins,
+          fromAllYmd,
+          toAllYmd,
+          fromYmd,
+          toYmd,
+          positiveDurCount: weekEntries.filter((e) => (e.durationMinutes ?? 0) > 0).length,
+        },
+      });
+      // #endregion
 
       console.log("[PTS 3] fetch result", {
         totalMins,
@@ -946,18 +966,13 @@ export function ProjectOverviewScreen() {
 
       setActiveTimer(at);
 
-      const dayKeyForTimerEntry = (startedAt: string): string => {
-        const d = new Date(startedAt);
-        return toLocalYmd(d);
-      };
-
       let todaySum = 0;
       let weekSum = 0;
       for (const e of weekEntries) {
         const mins = e.durationMinutes ?? 0;
         if (mins <= 0) continue;
-        const isManual = e.mode === "manual" && typeof e.date === "string" && e.date.length === 10;
-        const dayKey = isManual ? e.date! : dayKeyForTimerEntry(e.startedAt);
+        const dayKey = timeTracking.entryCalendarDayYmd(e);
+        if (!dayKey) continue;
         if (dayKey >= fromYmd && dayKey <= toYmd) {
           weekSum += mins;
         }
@@ -1003,53 +1018,12 @@ export function ProjectOverviewScreen() {
     toLocalYmd,
   ]);
 
-  const loadAccordionTimeEntries = useCallback(async () => {
-    const allowed =
-      !!projectId &&
-      !access.loading &&
-      (access.isOwner ||
-        access.canWriteTime ||
-        (access.isMember && access.sharedItems?.timeTracking !== false));
-    if (!allowed) return;
-    const now = new Date();
-    const toYmd = toLocalYmd(now);
-    const from = new Date(now);
-    from.setDate(from.getDate() - 90);
-    const fromYmd = toLocalYmd(from);
-    setAccordionTimeLoading(true);
-    try {
-      const list = await timeTracking.listTimeEntriesByProject(projectId, fromYmd, toYmd, {
-        forUserId: user?.id,
-      });
-      setAccordionTimeEntries(list);
-    } catch {
-      setAccordionTimeEntries([]);
-    } finally {
-      setAccordionTimeLoading(false);
-    }
-  }, [
-    projectId,
-    user?.id,
-    access.loading,
-    access.isOwner,
-    access.canWriteTime,
-    access.isMember,
-    access.sharedItems?.timeTracking,
-    toLocalYmd,
-  ]);
-
   const onRefresh = useCallback(() => {
     load(true);
     loadActivity();
     loadWeather(true);
     loadProjectTimeSummary();
-    if (timeAccordionExpanded) void loadAccordionTimeEntries();
-  }, [load, loadActivity, loadWeather, loadProjectTimeSummary, timeAccordionExpanded, loadAccordionTimeEntries]);
-
-  useEffect(() => {
-    if (!timeAccordionExpanded || !projectId) return;
-    void loadAccordionTimeEntries();
-  }, [timeAccordionExpanded, projectId, loadAccordionTimeEntries]);
+  }, [load, loadActivity, loadWeather, loadProjectTimeSummary]);
 
   useEffect(() => {
     if (!projectId || access.loading) return;
@@ -1070,8 +1044,8 @@ export function ProjectOverviewScreen() {
   }, [projectId, access.loading, loadProjectTimeSummary]);
 
   useEffect(() => {
-    if (!canViewProjectTime || !timeAccordionExpanded) return;
-    console.log("[PTS-R] state after update (expanded)", {
+    if (!canViewProjectTime) return;
+    console.log("[PTS-R] state after update", {
       projectTodayMinutes,
       projectWeekMinutes,
       projectHoursMinutes,
@@ -1079,7 +1053,6 @@ export function ProjectOverviewScreen() {
     });
   }, [
     canViewProjectTime,
-    timeAccordionExpanded,
     projectTodayMinutes,
     projectWeekMinutes,
     projectHoursMinutes,
@@ -1118,7 +1091,6 @@ export function ProjectOverviewScreen() {
         (access.isMember && access.sharedItems?.timeTracking !== false);
       if (!allowed) return () => {};
       void loadProjectTimeSummary();
-      if (timeAccordionExpanded) void loadAccordionTimeEntries();
       return () => {};
     }, [
       projectId,
@@ -1128,8 +1100,6 @@ export function ProjectOverviewScreen() {
       access.isMember,
       access.sharedItems?.timeTracking,
       loadProjectTimeSummary,
-      loadAccordionTimeEntries,
-      timeAccordionExpanded,
     ])
   );
 
@@ -4054,6 +4024,89 @@ export function ProjectOverviewScreen() {
       >
         {/* Time section moved lower (see "Time summary" near Problems) */}
 
+        {/*
+          Post-create empty-state hero. Shown for non-MAINTENANCE projects when
+          there is no meaningful content yet, so the user immediately sees
+          where to start. Auto-hides as soon as anything is added; can also be
+          dismissed for the current session.
+        */}
+        {projectType !== 'MAINTENANCE'
+          && !loading
+          && !emptyHeroDismissed
+          && tasks.length === 0
+          && expenses.length === 0
+          && diaryEntries.length === 0
+          && projectDocuments.length === 0
+          && (
+          <View style={styles.emptyHeroCard}>
+            <View style={styles.emptyHeroHeaderRow}>
+              <View style={styles.emptyHeroIconWrap}>
+                <Ionicons
+                  name={projectType === 'TRADE' ? 'briefcase-outline' : 'clipboard-outline'}
+                  size={22}
+                  color={colors.primary}
+                />
+              </View>
+              <View style={{ flex: 1 }}>
+                <Text style={styles.emptyHeroTitle}>
+                  {projectType === 'TRADE'
+                    ? t('projectOverview.emptyHero.titleTrade')
+                    : t('projectOverview.emptyHero.titleBuild')}
+                </Text>
+                <Text style={styles.emptyHeroSubtitle}>
+                  {t('projectOverview.emptyHero.subtitle')}
+                </Text>
+              </View>
+              <TouchableOpacity
+                onPress={() => setEmptyHeroDismissed(true)}
+                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                accessibilityRole="button"
+                accessibilityLabel={t('projectOverview.emptyHero.dismiss')}
+              >
+                <Ionicons name="close" size={18} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.emptyHeroActions}>
+              {access.canWrite ? (
+                <TouchableOpacity
+                  style={styles.emptyHeroBtn}
+                  onPress={() => setShowNewTask(true)}
+                  accessibilityRole="button"
+                >
+                  <Ionicons name="checkbox-outline" size={20} color={colors.primary} />
+                  <Text style={styles.emptyHeroBtnText}>{t('projectOverview.emptyHero.addTask')}</Text>
+                </TouchableOpacity>
+              ) : null}
+              {access.canWrite ? (
+                <TouchableOpacity
+                  style={styles.emptyHeroBtn}
+                  onPress={() => setShowExpenseModal(true)}
+                  accessibilityRole="button"
+                >
+                  <Ionicons name="cash-outline" size={20} color={colors.primary} />
+                  <Text style={styles.emptyHeroBtnText}>{t('projectOverview.emptyHero.addExpense')}</Text>
+                </TouchableOpacity>
+              ) : null}
+              <TouchableOpacity
+                style={styles.emptyHeroBtn}
+                onPress={() => (navigation as any).navigate('ProjectDiaryOverview', { projectId, projectName })}
+                accessibilityRole="button"
+              >
+                <Ionicons name="document-text-outline" size={20} color={colors.primary} />
+                <Text style={styles.emptyHeroBtnText}>{t('projectOverview.emptyHero.addNote')}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.emptyHeroBtn}
+                onPress={() => (navigation as any).navigate('ProjectPhotos', { projectId, projectName })}
+                accessibilityRole="button"
+              >
+                <Ionicons name="image-outline" size={20} color={colors.primary} />
+                <Text style={styles.emptyHeroBtnText}>{t('projectOverview.emptyHero.addPhoto')}</Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        )}
+
         {/* MAINTENANCE: Service plans section - same structure as Expenses/Diary for consistent sizing */}
         {projectType === 'MAINTENANCE' && (
           <View style={styles.expensesSection}>
@@ -4664,24 +4717,24 @@ export function ProjectOverviewScreen() {
       </View>
         )}
 
-        {/* Project time — same accordion pattern as expenses / diary */}
+        {/* Project time — header navigates to ProjectTimeDetail; summary always visible. */}
         {!access.loading && canViewProjectTime && (
           <View style={styles.expensesSection}>
             <TouchableOpacity
               style={styles.expensesHeader}
               activeOpacity={0.7}
-              onPress={() => {
-                setTimeAccordionExpanded((ex) => {
-                  const next = !ex;
-                  if (next) setAccordionTimeLoading(true);
-                  else setAccordionTimeLoading(false);
-                  return next;
-                });
-              }}
+              onPress={() =>
+                (navigation as any).navigate("ProjectTimeDetail", {
+                  projectId,
+                  projectName: projectName || undefined,
+                })
+              }
+              accessibilityRole="button"
+              accessibilityLabel={t("projectOverview.viewAllProjectTime")}
             >
               <View style={styles.expensesHeaderLeft}>
                 <Ionicons
-                  name={timeAccordionExpanded ? "chevron-down" : "chevron-forward"}
+                  name="chevron-forward"
                   size={20}
                   color={colors.text}
                   style={{ marginRight: spacing.sm }}
@@ -4707,143 +4760,84 @@ export function ProjectOverviewScreen() {
               </View>
             </TouchableOpacity>
 
-            {timeAccordionExpanded ? (
-              <View style={styles.expensesList}>
-                {isTimerRunningOnThisProject ? (
-                  <View
-                    style={[
-                      styles.timeTimerRow,
-                      styles.timeTimerRowInSlim,
-                      { paddingHorizontal: spacing.sm, paddingVertical: spacing.sm },
-                    ]}
-                  >
-                    <View style={styles.timeTimerRowLeft}>
-                      <Text style={styles.timeTimerLabel}>{t("time.timerRunning")}</Text>
-                      <Text key={timerTick} style={styles.timeTimerElapsed}>
-                        {formatElapsedHms(activeTimer!.startedAt)}
-                      </Text>
-                    </View>
-                    <View style={styles.timeTimerButtons}>
-                      <TouchableOpacity
-                        style={[styles.timeTimerBtn, timeStopLoading && { opacity: 0.6 }]}
-                        disabled={timeStopLoading}
-                        onPress={async () => {
-                          setTimeStopLoading(true);
-                          try {
-                            await timeTracking.stopTimer(undefined, { knownActive: activeTimer ?? undefined });
-                          } catch (e: any) {
-                            Alert.alert(t("common.error"), e?.message || t("common.error"));
-                          } finally {
-                            setTimeStopLoading(false);
-                            await loadProjectTimeSummary();
-                            if (timeAccordionExpanded) await loadAccordionTimeEntries();
-                          }
-                        }}
-                        accessibilityRole="button"
-                        accessibilityLabel={t("time.stop")}
-                      >
-                        <Text style={styles.timeTimerBtnText}>{t("time.stop")}</Text>
-                      </TouchableOpacity>
-                      <TouchableOpacity
-                        style={styles.timeTimerBtnSecondary}
-                        onPress={() =>
-                          (navigation as any).navigate("ProjectTimeDetail", {
-                            projectId,
-                            projectName: projectName || undefined,
-                          })
+            <View style={styles.expensesList}>
+              {isTimerRunningOnThisProject ? (
+                <View
+                  style={[
+                    styles.timeTimerRow,
+                    styles.timeTimerRowInSlim,
+                    { paddingHorizontal: spacing.sm, paddingVertical: spacing.sm },
+                  ]}
+                >
+                  <View style={styles.timeTimerRowLeft}>
+                    <Text style={styles.timeTimerLabel}>{t("time.timerRunning")}</Text>
+                    <Text key={timerTick} style={styles.timeTimerElapsed}>
+                      {formatElapsedHms(activeTimer!.startedAt)}
+                    </Text>
+                  </View>
+                  <View style={styles.timeTimerButtons}>
+                    <TouchableOpacity
+                      style={[styles.timeTimerBtn, timeStopLoading && { opacity: 0.6 }]}
+                      disabled={timeStopLoading}
+                      onPress={async () => {
+                        setTimeStopLoading(true);
+                        try {
+                          await timeTracking.stopTimer(undefined, { knownActive: activeTimer ?? undefined });
+                        } catch (e: any) {
+                          Alert.alert(t("common.error"), e?.message || t("common.error"));
+                        } finally {
+                          setTimeStopLoading(false);
+                          await loadProjectTimeSummary();
                         }
-                        accessibilityRole="button"
-                        accessibilityLabel={t("time.openTime")}
-                      >
-                        <Text style={styles.timeTimerBtnSecondaryText}>{t("time.openTime")}</Text>
-                      </TouchableOpacity>
-                    </View>
-                  </View>
-                ) : null}
-
-                <View style={{ paddingHorizontal: spacing.sm }}>
-                  <View style={styles.timeSummaryRow}>
-                    <Text style={styles.timeSummaryLabel}>{t("time.today")}</Text>
-                    <Text style={styles.timeSummaryValue}>{formatMinutes(projectTodayMinutes)}</Text>
-                  </View>
-                  <View style={styles.timeSummaryRow}>
-                    <Text style={styles.timeSummaryLabel}>{t("time.thisWeek")}</Text>
-                    <Text style={styles.timeSummaryValue}>{formatMinutes(projectWeekMinutes)}</Text>
-                  </View>
-                  <View style={styles.timeSummaryRow}>
-                    <Text style={styles.timeSummaryLabel}>{t("time.total")}</Text>
-                    <Text style={styles.timeSummaryValue}>{formatMinutes(projectHoursMinutes)}</Text>
+                      }}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("time.stop")}
+                    >
+                      <Text style={styles.timeTimerBtnText}>{t("time.stop")}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={styles.timeTimerBtnSecondary}
+                      onPress={() =>
+                        (navigation as any).navigate("ProjectTimeDetail", {
+                          projectId,
+                          projectName: projectName || undefined,
+                        })
+                      }
+                      accessibilityRole="button"
+                      accessibilityLabel={t("time.openTime")}
+                    >
+                      <Text style={styles.timeTimerBtnSecondaryText}>{t("time.openTime")}</Text>
+                    </TouchableOpacity>
                   </View>
                 </View>
+              ) : null}
 
-                {accordionTimeLoading ? (
-                  <ActivityIndicator style={{ marginVertical: spacing.md }} color={colors.primary} />
-                ) : (
-                  <ScrollView style={styles.timeAccordionScroll} nestedScrollEnabled showsVerticalScrollIndicator>
-                    {accordionGrouped.map(({ dayKey, entries: dayEntries }) => (
-                      <View key={dayKey} style={styles.timeAccordionDayBlock}>
-                        <View style={styles.timeAccordionDayHeader}>
-                          <Text style={styles.timeAccordionDayTitle}>{dayLabelForAccordion(dayKey)}</Text>
-                          <Text style={styles.timeAccordionDayTotal}>{formatMinutes(sumMinutes(dayEntries))}</Text>
-                        </View>
-                        {dayEntries.map((e) => (
-                          <View key={e.id} style={styles.timeAccordionEntry}>
-                            <View style={styles.timeAccordionEntryTop}>
-                              <Text style={styles.timeAccordionEntryTime}>
-                                {formatEntryClock(e.startedAt)} – {formatEntryClock(e.endedAt)}
-                              </Text>
-                              <Text style={styles.timeAccordionEntryDur}>{formatMinutes(e.durationMinutes ?? 0)}</Text>
-                            </View>
-                            <Text style={styles.timeAccordionEntryMode}>
-                              {e.mode === "manual" ? t("time.modeManual") : t("time.modeTimer")}
-                            </Text>
-                            {e.note ? <Text style={styles.timeAccordionEntryNote}>{e.note}</Text> : null}
-                            {formatGpsShort(e.gpsStart) ? (
-                              <Text style={styles.timeAccordionLoc} selectable>
-                                {t("time.dailyProtocol.startLocation")}: {formatGpsShort(e.gpsStart)}
-                              </Text>
-                            ) : null}
-                            {formatGpsShort(e.gpsEnd) ? (
-                              <Text style={styles.timeAccordionLoc} selectable>
-                                {t("time.dailyProtocol.endLocation")}: {formatGpsShort(e.gpsEnd)}
-                              </Text>
-                            ) : null}
-                            {mapsUrlForPoint(e.gpsStart) ? (
-                              <TouchableOpacity onPress={() => Linking.openURL(mapsUrlForPoint(e.gpsStart)!)}>
-                                <Text style={styles.timeAccordionMapLink}>
-                                  {t("projectOverview.showOnMap")} — {t("time.dailyProtocol.startLocation")}
-                                </Text>
-                              </TouchableOpacity>
-                            ) : null}
-                            {mapsUrlForPoint(e.gpsEnd) ? (
-                              <TouchableOpacity onPress={() => Linking.openURL(mapsUrlForPoint(e.gpsEnd)!)}>
-                                <Text style={styles.timeAccordionMapLink}>
-                                  {t("projectOverview.showOnMap")} — {t("time.dailyProtocol.endLocation")}
-                                </Text>
-                              </TouchableOpacity>
-                            ) : null}
-                          </View>
-                        ))}
-                      </View>
-                    ))}
-                    {accordionGrouped.length === 0 ? (
-                      <Text style={styles.timeAccordionEmpty}>{t("projectOverview.timeDetailEmpty")}</Text>
-                    ) : null}
-                  </ScrollView>
-                )}
-
-                <TouchableOpacity
-                  style={[styles.timeSummaryCta, { marginHorizontal: spacing.sm }]}
-                  onPress={() =>
-                    (navigation as any).navigate("ProjectTimeDetail", { projectId, projectName: projectName || undefined })
-                  }
-                  accessibilityRole="button"
-                  accessibilityLabel={t("projectOverview.viewAllProjectTime")}
-                >
-                  <Text style={styles.timeSummaryCtaText}>{t("projectOverview.viewAllProjectTime")} →</Text>
-                </TouchableOpacity>
-              </View>
-            ) : null}
+              <TouchableOpacity
+                activeOpacity={0.7}
+                style={{ paddingHorizontal: spacing.sm }}
+                onPress={() =>
+                  (navigation as any).navigate("ProjectTimeDetail", {
+                    projectId,
+                    projectName: projectName || undefined,
+                  })
+                }
+                accessibilityRole="button"
+                accessibilityLabel={t("projectOverview.viewAllProjectTime")}
+              >
+                <View style={styles.timeSummaryRow}>
+                  <Text style={styles.timeSummaryLabel}>{t("time.today")}</Text>
+                  <Text style={styles.timeSummaryValue}>{formatMinutes(projectTodayMinutes)}</Text>
+                </View>
+                <View style={styles.timeSummaryRow}>
+                  <Text style={styles.timeSummaryLabel}>{t("time.thisWeek")}</Text>
+                  <Text style={styles.timeSummaryValue}>{formatMinutes(projectWeekMinutes)}</Text>
+                </View>
+                <View style={styles.timeSummaryRow}>
+                  <Text style={styles.timeSummaryLabel}>{t("time.total")}</Text>
+                  <Text style={styles.timeSummaryValue}>{formatMinutes(projectHoursMinutes)}</Text>
+                </View>
+              </TouchableOpacity>
+            </View>
           </View>
         )}
 
@@ -6939,6 +6933,61 @@ const styles = StyleSheet.create({
   scrollContentContainer: { 
     paddingBottom: spacing.xl * 3,
     flexGrow: 1,
+  },
+  emptyHeroCard: {
+    marginHorizontal: spacing.md,
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+    borderRadius: 14,
+    backgroundColor: colors.primary + '12',
+    borderWidth: 1,
+    borderColor: colors.primary + '40',
+  },
+  emptyHeroHeaderRow: {
+    flexDirection: 'row',
+    alignItems: 'flex-start',
+    gap: spacing.sm,
+  },
+  emptyHeroIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: colors.primary + '22',
+    alignItems: 'center',
+    justifyContent: 'center',
+  },
+  emptyHeroTitle: {
+    fontSize: 16,
+    fontWeight: '700',
+    color: colors.text,
+  },
+  emptyHeroSubtitle: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  emptyHeroActions: {
+    flexDirection: 'row',
+    flexWrap: 'wrap',
+    gap: spacing.sm,
+    marginTop: spacing.md,
+  },
+  emptyHeroBtn: {
+    flexDirection: 'row',
+    alignItems: 'center',
+    gap: 6,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: 999,
+    backgroundColor: '#fff',
+    borderWidth: 1,
+    borderColor: colors.primary + '55',
+  },
+  emptyHeroBtnText: {
+    fontSize: 13,
+    fontWeight: '600',
+    color: colors.primary,
   },
   centered: { flex: 1, backgroundColor: colors.background, justifyContent: "center", alignItems: "center" },
   muted: { fontSize: 14, color: colors.textMuted },

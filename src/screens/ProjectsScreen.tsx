@@ -36,6 +36,7 @@ import type { ProjectDoc } from "../services/projects";
 import { colors, radius, spacing } from "../theme";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
 import { CloneProjectModal } from "../components/CloneProjectModal";
+import { CloneSourcePickerModal } from "../components/CloneSourcePickerModal";
 import { CreateProjectWizard, type WizardResult } from "../components/CreateProjectWizard";
 import { CreateProjectAIFlow } from "../components/CreateProjectAIFlow";
 import { isLegacyResidential } from "../lib/projectEnums";
@@ -161,6 +162,11 @@ export function ProjectsScreen() {
   const [showMenu, setShowMenu] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
   const [cloneSourceProject, setCloneSourceProject] = useState<Project | null>(null);
+  /** Wizard CLONE flow: name typed in step 4 — pre-fills the clone modal. */
+  const [clonePrefilledName, setClonePrefilledName] = useState<string>("");
+  /** Wizard CLONE flow: TRADE filters TRADE jobs, BUILD filters BUILD projects. */
+  const [showCloneSourcePicker, setShowCloneSourcePicker] = useState(false);
+  const [cloneSourcePickerEngine, setCloneSourcePickerEngine] = useState<"BUILD" | "TRADE" | null>(null);
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<ProjectsTabTypeFilter>("ALL");
   const [listStatusFilter, setListStatusFilter] = useState<ProjectsTabListStatus>("ALL");
@@ -467,8 +473,21 @@ export function ProjectsScreen() {
   const handleWizardComplete = useCallback(
     (result: WizardResult) => {
       setWizardResult(result);
-      setNewName(result.projectNameOrDescription.trim());
+      const trimmedName = result.projectNameOrDescription.trim();
+      setNewName(trimmedName);
       setSelectedType(result.engineType === "BUILD" ? "BUILD" : "TRADE");
+
+      if (result.creationMode === "CLONE") {
+        // CLONE flow: leave the wizard modal closed and open the source picker.
+        // The picker drives the existing CloneProjectModal with a prefilled name.
+        setClonePrefilledName(trimmedName);
+        setCloneSourcePickerEngine(result.engineType === "BUILD" ? "BUILD" : "TRADE");
+        setShowNew(false);
+        setShowCloneSourcePicker(true);
+        setError(null);
+        return;
+      }
+
       if (result.creationMode === "AI" && (result.engineType === "BUILD" || result.engineType === "TRADE")) {
         setCreationPath("ai");
         setCreationMethod("empty");
@@ -712,12 +731,36 @@ export function ProjectsScreen() {
     (newProjectId: string) => {
       setShowCloneModal(false);
       setCloneSourceProject(null);
+      setClonePrefilledName("");
       load();
       showToast(t("projects.cloneSuccess"));
       (navigation as any).navigate("ProjectOverview", { projectId: newProjectId });
     },
     [load, navigation, t, showToast]
   );
+
+  const onCloneSourcePickerClose = useCallback(() => {
+    setShowCloneSourcePicker(false);
+    setCloneSourcePickerEngine(null);
+    setClonePrefilledName("");
+    // Cancel the wizard flow entirely — user did not pick a source.
+    setNewStep(1);
+    setSelectedType(null);
+    setWizardResult(null);
+    setCreationMethod("template");
+    setCreationPath("manual");
+    setNewName("");
+    setNewAddress("");
+    resetTemplateSelectionState();
+    setError(null);
+  }, [resetTemplateSelectionState]);
+
+  const onCloneSourcePickerPick = useCallback((picked: Project) => {
+    setShowCloneSourcePicker(false);
+    setCloneSourcePickerEngine(null);
+    setCloneSourceProject(picked);
+    setShowCloneModal(true);
+  }, []);
 
   const onMenuArchive = async () => {
     if (!menuProject || !orgId) return;
@@ -1269,6 +1312,7 @@ export function ProjectsScreen() {
         onClose={() => {
           setShowCloneModal(false);
           setCloneSourceProject(null);
+          setClonePrefilledName("");
         }}
         sourceProjectId={cloneSourceProject?.id ?? ""}
         sourceProjectName={cloneSourceProject?.name ?? ""}
@@ -1279,7 +1323,17 @@ export function ProjectsScreen() {
         sourceAddressText={cloneSourceProject?.addressText}
         isOwner={!!cloneSourceProject?.ownerId && cloneSourceProject.ownerId === user?.id}
         onSuccess={onCloneSuccess}
+        prefilledNewName={clonePrefilledName || undefined}
       />
+      {cloneSourcePickerEngine ? (
+        <CloneSourcePickerModal
+          visible={showCloneSourcePicker}
+          engineType={cloneSourcePickerEngine}
+          projects={projects}
+          onClose={onCloneSourcePickerClose}
+          onPick={onCloneSourcePickerPick}
+        />
+      ) : null}
       <Modal visible={showMenu} transparent animationType="fade">
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={closeProjectMenu}>
           <View style={[styles.menuCard, { paddingBottom: menuBottomInset + spacing.md }]}>

@@ -20,14 +20,24 @@ import {
 import firestore from "@react-native-firebase/firestore";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
+import { safeFirestoreDocData } from "../lib/safeFirestoreDocData";
 import { getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { getCurrentPositionSafe, requestLocationPermission, type GpsPoint } from "../lib/location";
 import { cancelLegacyReminderIds, clearRunningTimerNotification, replaceRunningTimerNotification } from "./timerReminders";
 import { fetchProjectAccess } from "../hooks/useProjectAccess";
 import { createTimeTrackingStoppedNotification } from "./notifications";
+import { postDebugIngest } from "../lib/debugIngest";
 
 /** Project time reads: avoid cache-first on poor network (stale empty snapshot before server sync). */
 const TIME_ENTRIES_READ_OPTS: SmartReadOptions = { preferCacheWhenPoor: false };
+
+/**
+ * Always prefer server for time entry queries: persistent local cache can stay empty after
+ * first offline session and mask real rows until cleared; rules/index changes also need fresh data.
+ */
+async function getDocsTimeEntriesQuerySnap(queryRef: Parameters<typeof getDocsSmart>[0]) {
+  return await getDocsSmart(queryRef, { ...TIME_ENTRIES_READ_OPTS, forceServer: true });
+}
 
 const AUTO_STOP_HOURS = 12;
 
@@ -81,40 +91,65 @@ export type TimeEntryDoc = {
   updatedAt?: string;
 };
 
+/** Normalize common Firestore / CSV / UI date strings before `new Date(...)`. */
+function normalizeIsoLikeString(s: string): string {
+  const t = s.trim();
+  if (!t) return "";
+  if (/^\d{4}-\d{2}-\d{2}$/.test(t)) return `${t}T12:00:00.000Z`;
+  if (/^\d{4}-\d{2}-\d{2}\s+\d/.test(t)) return t.replace(/^(\d{4}-\d{2}-\d{2})\s+/, "$1T");
+  return t;
+}
+
 function toIso(ts: unknown): string | undefined {
   if (ts == null || ts === "") return undefined;
-  if (ts instanceof Timestamp) return ts.toDate().toISOString();
-  if (typeof ts === "string") return ts;
-  if (typeof ts === "number" && Number.isFinite(ts)) {
-    const d = new Date(ts);
-    return Number.isFinite(d.getTime()) ? d.toISOString() : undefined;
-  }
-  if (typeof ts === "object" && ts !== null && "toDate" in ts) {
-    const td = (ts as { toDate: () => Date }).toDate;
-    if (typeof td === "function") {
-      try {
-        const d = td.call(ts);
-        return Number.isFinite(d.getTime()) ? d.toISOString() : undefined;
-      } catch {
-        return undefined;
-      }
+  if (typeof ts === "object" && ts !== null && typeof (ts as { toDate?: unknown }).toDate === "function") {
+    try {
+      const d = (ts as { toDate: () => Date }).toDate();
+      return d instanceof Date && Number.isFinite(d.getTime()) ? d.toISOString() : undefined;
+    } catch {
+      /* fall through */
     }
   }
-  // REST / import / serialized Timestamp: { seconds, nanoseconds } or { _seconds, _nanoseconds }
+  if (ts instanceof Timestamp) {
+    try {
+      return ts.toDate().toISOString();
+    } catch {
+      return undefined;
+    }
+  }
+  if (typeof ts === "string") {
+    const raw = ts.trim();
+    if (!raw) return undefined;
+    const n = normalizeIsoLikeString(raw);
+    const d = new Date(n);
+    if (Number.isFinite(d.getTime())) return d.toISOString();
+    const d2 = new Date(raw);
+    return Number.isFinite(d2.getTime()) ? d2.toISOString() : undefined;
+  }
+  if (typeof ts === "number" && Number.isFinite(ts)) {
+    const ms = Math.abs(ts) < 1e12 ? ts * 1000 : ts;
+    const d = new Date(ms);
+    return Number.isFinite(d.getTime()) ? d.toISOString() : undefined;
+  }
   if (typeof ts === "object" && ts !== null) {
-    const o = ts as Record<string, unknown>;
+    const anyTs = ts as {
+      seconds?: unknown;
+      _seconds?: unknown;
+      nanoseconds?: unknown;
+      _nanoseconds?: unknown;
+    };
     const sec =
-      typeof o.seconds === "number"
-        ? o.seconds
-        : typeof o._seconds === "number"
-          ? o._seconds
+      typeof anyTs.seconds === "number"
+        ? anyTs.seconds
+        : typeof anyTs._seconds === "number"
+          ? anyTs._seconds
           : null;
     if (sec !== null && Number.isFinite(sec)) {
       const nano =
-        typeof o.nanoseconds === "number"
-          ? o.nanoseconds
-          : typeof o._nanoseconds === "number"
-            ? o._nanoseconds
+        typeof anyTs.nanoseconds === "number"
+          ? anyTs.nanoseconds
+          : typeof anyTs._nanoseconds === "number"
+            ? anyTs._nanoseconds
             : 0;
       const d = new Date(sec * 1000 + (Number(nano) || 0) / 1e6);
       return Number.isFinite(d.getTime()) ? d.toISOString() : undefined;
@@ -156,6 +191,16 @@ function coerceDurationMinutes(raw: unknown): number {
   }
   const n = Number(raw as number);
   return Number.isFinite(n) ? n : 0;
+}
+
+function coerceTimeEntryFlags(raw: unknown): TimeEntryDoc["flags"] | undefined {
+  if (raw == null || typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const o = raw as Record<string, unknown>;
+  const out: NonNullable<TimeEntryDoc["flags"]> = {};
+  if (o.reminded === true) out.reminded = true;
+  if (o.autoStopped === true) out.autoStopped = true;
+  if (o.lowAccuracy === true) out.lowAccuracy = true;
+  return Object.keys(out).length > 0 ? out : undefined;
 }
 
 async function ensureCanWriteTime(projectId: string, uid: string, projectOwnerIdHint?: string | null): Promise<void> {
@@ -255,9 +300,11 @@ export type StartTimerOpts = {
 export async function startTimer(projectId: string, projectName: string, opts?: StartTimerOpts): Promise<ActiveTimer> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Musíte byť prihlásený.");
+  const pid = projectId.trim();
+  if (!pid) throw new Error("Chýba ID projektu.");
   const existing = await getActiveTimer();
   if (existing) throw new Error("Časovač už beží. Najprv ho zastavte.");
-  await ensureCanWriteTime(projectId, uid, opts?.projectOwnerId ?? null);
+  await ensureCanWriteTime(pid, uid, opts?.projectOwnerId ?? null);
 
   await requestLocationPermission();
   const gpsStart = await getCurrentPositionSafe();
@@ -265,7 +312,7 @@ export async function startTimer(projectId: string, projectName: string, opts?: 
   const ownerIdSnapshot = opts?.projectOwnerId ?? null;
 
   const activeTimerPayload: ActiveTimer = {
-    projectId,
+    projectId: pid,
     projectNameSnapshot: projectName,
     startedAt,
     source: "home_quick_timer",
@@ -281,7 +328,7 @@ export async function startTimer(projectId: string, projectName: string, opts?: 
   const userRef = doc(db, paths.userDoc(uid));
   await updateDoc(userRef, {
     activeTimer: {
-      projectId,
+      projectId: pid,
       projectNameSnapshot: projectName,
       startedAt,
       source: "home_quick_timer",
@@ -326,7 +373,9 @@ export async function stopTimer(note?: string, opts?: StopTimerOpts): Promise<Ti
   }
   if (!active) throw new Error("Žiadny aktívny časovač.");
 
-  await ensureCanWriteTime(active.projectId, uid, active.ownerIdSnapshot ?? null);
+  const entryPid = (active.projectId ?? "").trim();
+  if (!entryPid) throw new Error("Aktívny časovač nemá platné ID projektu.");
+  await ensureCanWriteTime(entryPid, uid, active.ownerIdSnapshot ?? null);
 
   const endedAt = new Date().toISOString();
   const startDate = new Date(active.startedAt).getTime();
@@ -352,7 +401,7 @@ export async function stopTimer(note?: string, opts?: StopTimerOpts): Promise<Ti
   const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
 
   const entryData = {
-    projectId: active.projectId,
+    projectId: entryPid,
     projectNameSnapshot: active.projectNameSnapshot,
     userId: uid,
     userNameSnapshot: userName,
@@ -388,7 +437,7 @@ export async function stopTimer(note?: string, opts?: StopTimerOpts): Promise<Ti
   try {
     await createTimeTrackingStoppedNotification({
       userId: uid,
-      projectId: active.projectId,
+      projectId: entryPid,
       projectName: active.projectNameSnapshot,
       durationMinutes,
       timeEntryId: entryId,
@@ -426,14 +475,16 @@ export async function addManualEntry(
 ): Promise<TimeEntryDoc> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Musíte byť prihlásený.");
-  await ensureCanWriteTime(projectId, uid, opts?.projectOwnerId ?? null);
+  const pid = projectId.trim();
+  if (!pid) throw new Error("Chýba ID projektu.");
+  await ensureCanWriteTime(pid, uid, opts?.projectOwnerId ?? null);
 
   const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
-  const startedAt = `${dateYmd}T00:00:00.000Z`;
-  const endedAt = `${dateYmd}T00:00:00.000Z`;
+  const startedAt = ymdLocalStartToIso(dateYmd) ?? `${dateYmd}T00:00:00.000Z`;
+  const endedAt = startedAt;
 
   const entryData = {
-    projectId,
+    projectId: pid,
     projectNameSnapshot: projectName,
     userId: uid,
     userNameSnapshot: userName,
@@ -479,7 +530,9 @@ export async function checkAutoStopOnAppOpen(): Promise<TimeEntryDoc | null> {
   const uid = auth.currentUser?.uid;
   if (!uid) return null;
 
-  await ensureCanWriteTime(active.projectId, uid, active.ownerIdSnapshot ?? null);
+  const entryPid = (active.projectId ?? "").trim();
+  if (!entryPid) return null;
+  await ensureCanWriteTime(entryPid, uid, active.ownerIdSnapshot ?? null);
 
   const endedAt = new Date().toISOString();
   let durationMinutes = Math.round((new Date(endedAt).getTime() - new Date(active.startedAt).getTime()) / 60000);
@@ -487,7 +540,7 @@ export async function checkAutoStopOnAppOpen(): Promise<TimeEntryDoc | null> {
   const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
 
   const entryData = {
-    projectId: active.projectId,
+    projectId: entryPid,
     projectNameSnapshot: active.projectNameSnapshot,
     userId: uid,
     userNameSnapshot: userName,
@@ -547,8 +600,20 @@ function padCalendarYmd(ymd: string, deltaDays: number): string {
   return `${yy}-${mm}-${dd}`;
 }
 
+/** Local calendar `YYYY-MM-DD` → ISO instant (manual entries / parse backfill). */
+function ymdLocalStartToIso(ymd: string): string | undefined {
+  const parts = ymd.split("-").map((x) => parseInt(x, 10));
+  const y = parts[0];
+  const m = parts[1];
+  const d = parts[2];
+  if (!y || !m || !d) return undefined;
+  const dt = new Date(y, m - 1, d, 0, 0, 0, 0);
+  return Number.isFinite(dt.getTime()) ? dt.toISOString() : undefined;
+}
+
 function localCalendarYmdFromIso(iso: string): string {
-  const d = new Date(iso);
+  const n = normalizeIsoLikeString(iso);
+  const d = new Date(n || iso);
   if (!Number.isFinite(d.getTime())) return "";
   const y = d.getFullYear();
   const mo = String(d.getMonth() + 1).padStart(2, "0");
@@ -556,10 +621,38 @@ function localCalendarYmdFromIso(iso: string): string {
   return `${y}-${mo}-${day}`;
 }
 
+/** YYYY-MM-DD for grouping / range checks — aligned with project overview aggregation. */
+export function entryCalendarDayYmd(e: TimeEntryDoc): string {
+  const dateStr =
+    typeof e.date === "string" && /^\d{4}-\d{2}-\d{2}/.test(e.date.trim()) ? e.date.trim().slice(0, 10) : "";
+  const manualMode =
+    e.mode === "manual" || (typeof e.mode === "string" && e.mode.trim().toLowerCase() === "manual");
+  if (manualMode && dateStr) return dateStr;
+  const fromStarted = e.startedAt ? localCalendarYmdFromIso(e.startedAt) : "";
+  if (fromStarted) return fromStarted;
+  const fromEnded = e.endedAt ? localCalendarYmdFromIso(e.endedAt) : "";
+  if (fromEnded) return fromEnded;
+  if (e.createdAt) {
+    const y = localCalendarYmdFromIso(e.createdAt);
+    if (y) return y;
+  }
+  return dateStr;
+}
+
+function entrySortKeyMs(e: TimeEntryDoc): number {
+  if (e.startedAt) {
+    const n = normalizeIsoLikeString(e.startedAt);
+    const t = new Date(n || e.startedAt).getTime();
+    if (Number.isFinite(t) && t !== 0) return t;
+  }
+  const day = entryCalendarDayYmd(e);
+  if (day) return new Date(`${day}T12:00:00`).getTime();
+  return 0;
+}
+
 /** Manual: `date`; timer: local calendar day of `startedAt` — matches project overview aggregation. */
 function entryCalendarDayInRange(e: TimeEntryDoc, fromYmd: string, toYmd: string): boolean {
-  const isManual = e.mode === "manual" && typeof e.date === "string" && e.date.length === 10;
-  const dayKey = isManual ? e.date! : localCalendarYmdFromIso(e.startedAt);
+  const dayKey = entryCalendarDayYmd(e);
   if (!dayKey) {
     console.log("[PTS-RANGE] empty dayKey (entry excluded)", {
       id: e.id,
@@ -575,20 +668,47 @@ function entryCalendarDayInRange(e: TimeEntryDoc, fromYmd: string, toYmd: string
 }
 
 function sortEntriesByStartedDesc(a: TimeEntryDoc, b: TimeEntryDoc): number {
-  const ta = new Date(a.startedAt).getTime();
-  const tb = new Date(b.startedAt).getTime();
-  const sa = Number.isFinite(ta) ? ta : 0;
-  const sb = Number.isFinite(tb) ? tb : 0;
-  return sb - sa;
+  return entrySortKeyMs(b) - entrySortKeyMs(a);
+}
+
+/** Normalize project id from Firestore (string, trimmed, or DocumentReference path). */
+function coerceProjectIdFromFirestore(raw: unknown): string {
+  if (raw == null) return "";
+  if (typeof raw === "string") return raw.trim();
+  if (typeof raw === "object") {
+    const path = (raw as { path?: unknown }).path;
+    if (typeof path === "string" && path.length > 0) {
+      const prefix = "projects/";
+      return (path.startsWith(prefix) ? path.slice(prefix.length) : path.split("/").pop() ?? "").trim();
+    }
+  }
+  return String(raw).trim();
 }
 
 /** Parse Firestore doc to TimeEntryDoc. */
-function parseTimeEntryDoc(d: { id: string; data: () => Record<string, unknown> }): TimeEntryDoc {
-  const data = d.data();
-  const startedAt = toIso(data.startedAt) ?? (typeof data.startedAt === "string" ? data.startedAt : "");
-  const endedAt = toIso(data.endedAt) ?? (typeof data.endedAt === "string" ? data.endedAt : "");
+function parseTimeEntryDoc(d: { id: string; data: () => unknown }): TimeEntryDoc {
+  let raw: unknown;
+  try {
+    raw = typeof d.data === "function" ? d.data() : undefined;
+  } catch (e) {
+    if (__DEV__) console.warn("[timeTracking][parseTimeEntryDoc] data() threw", { id: d.id, err: e });
+    raw = undefined;
+  }
+  const data = safeFirestoreDocData(raw, `parseTimeEntryDoc:${d.id}`);
+  let startedAt = toIso(data.startedAt) ?? (typeof data.startedAt === "string" ? data.startedAt : "");
+  let endedAt = toIso(data.endedAt) ?? (typeof data.endedAt === "string" ? data.endedAt : "");
+  if (!startedAt && endedAt) {
+    startedAt = endedAt;
+  }
   const durationMinutes = coerceDurationMinutes(data.durationMinutes);
   const dateField = coerceManualDateYmd(data.date);
+  const modeRaw = data.mode;
+  const modeStr = typeof modeRaw === "string" ? modeRaw : typeof modeRaw === "number" ? String(modeRaw) : "";
+  const mode: "timer" | "manual" = modeStr.trim().toLowerCase() === "manual" ? "manual" : "timer";
+  if (!startedAt && dateField) {
+    startedAt = ymdLocalStartToIso(dateField) ?? `${dateField}T00:00:00.000Z`;
+    if (!endedAt) endedAt = startedAt;
+  }
   if (__DEV__) {
     const startedRaw = data.startedAt;
     if (!startedAt || (durationMinutes <= 0 && data.durationMinutes != null)) {
@@ -612,19 +732,19 @@ function parseTimeEntryDoc(d: { id: string; data: () => Record<string, unknown> 
   }
   return {
     id: d.id,
-    projectId: String((data.projectId as string) ?? "").trim(),
+    projectId: coerceProjectIdFromFirestore(data.projectId),
     projectNameSnapshot: (data.projectNameSnapshot as string) ?? "",
-    userId: (data.userId as string) ?? "",
+    userId: String((data.userId as string) ?? "").trim(),
     userNameSnapshot: (data.userNameSnapshot as string) ?? "",
     startedAt,
     endedAt,
     durationMinutes,
-    mode: (data.mode as "timer" | "manual") ?? "timer",
+    mode,
     date: dateField,
     note: (data.note as string) ?? undefined,
     gpsStart: data.gpsStart ?? null,
     gpsEnd: data.gpsEnd ?? null,
-    flags: data.flags ?? undefined,
+    flags: coerceTimeEntryFlags(data.flags),
     phaseId: (data.phaseId as string) ?? undefined,
     phaseNameSnapshot: (data.phaseNameSnapshot as string) ?? undefined,
     taskId: (data.taskId as string) ?? undefined,
@@ -639,28 +759,40 @@ function parseTimeEntryDoc(d: { id: string; data: () => Record<string, unknown> 
  * @param userId - Current user ID
  * @param fromYmd - Start date YYYY-MM-DD (inclusive)
  * @param toYmd - End date YYYY-MM-DD (inclusive)
+ * @param readOpts - optional higher `limit` when merging project slices from a wide user query
  */
 export async function listTimeEntries(
   userId: string,
   fromYmd: string,
-  toYmd: string
+  toYmd: string,
+  readOpts?: { limit?: number }
 ): Promise<TimeEntryDoc[]> {
   if (!userId) return [];
-  const fromIso = `${padCalendarYmd(fromYmd, -3)}T00:00:00.000Z`;
-  const endIso = `${padCalendarYmd(toYmd, 3)}T23:59:59.999Z`;
+  /**
+   * Do not range-filter `startedAt` in Firestore. Mixed Timestamp vs ISO string on documents
+   * makes server-side `>=` / `<=` against string bounds return empty; we already filter by
+   * local calendar day in memory (`entryCalendarDayInRange`).
+   */
+  const lim = Math.min(8000, Math.max(1, readOpts?.limit ?? 4000));
 
   const c = collection(db, paths.timeEntries());
-  const q = query(
-    c,
-    where("userId", "==", userId),
-    where("startedAt", ">=", fromIso),
-    where("startedAt", "<=", endIso),
-    orderBy("startedAt", "desc"),
-    limit(500)
-  );
+  const q = query(c, where("userId", "==", userId), orderBy("startedAt", "desc"), limit(lim));
   const snap = await getDocsSmart(q, TIME_ENTRIES_READ_OPTS);
-  return snap.docs
-    .map((d) => parseTimeEntryDoc({ id: d.id, data: d.data.bind(d) }))
+  const mapped: TimeEntryDoc[] = [];
+  for (const d of snap.docs) {
+    try {
+      mapped.push(parseTimeEntryDoc({ id: d.id, data: d.data.bind(d) }));
+    } catch (err) {
+      let rawLog: unknown;
+      try {
+        rawLog = typeof d.data === "function" ? d.data() : undefined;
+      } catch {
+        rawLog = "(data() threw)";
+      }
+      console.warn("[timeTracking][parse failed]", { id: d.id, err, raw: rawLog });
+    }
+  }
+  return mapped
     .filter((e) => entryCalendarDayInRange(e, fromYmd, toYmd))
     .sort(sortEntriesByStartedDesc);
 }
@@ -702,6 +834,20 @@ export type ListTimeEntriesByProjectOpts = {
   forUserId?: string | null;
 };
 
+/** Log helper for LTE instrumentation — must not throw on exotic Firestore payloads. */
+function ltePreviewRaw(raw: unknown): unknown {
+  if (raw == null) return raw;
+  const t = typeof raw;
+  if (t !== "object") return t;
+  if (Array.isArray(raw)) return { _type: "array", len: raw.length };
+  try {
+    const keys = Object.keys(raw as object);
+    return { _keys: keys.slice(0, 40), _keyCount: keys.length };
+  } catch (e) {
+    return { _objectKeysFailed: String(e), _ctor: (raw as { constructor?: { name?: string } })?.constructor?.name };
+  }
+}
+
 /**
  * List time entries for a single project within a date range (inclusive on local calendar days).
  * - Query by `projectId` (team view for owners/editors; rules-safe when allowed).
@@ -723,17 +869,93 @@ export async function listTimeEntriesByProject(
 
   let snapProjSize = 0;
   let snapSelfSize = 0;
+  let snapWideSize = 0;
 
   try {
+    console.log("[LTE] projectId branch: start", { pid, fromYmd, toYmd });
+    console.log("[LTE] projectId branch: before query()");
     const qProj = query(c, where("projectId", "==", pid), limit(MAX_TIME_ENTRIES_PER_PROJECT_READ));
-    const snapProj = await getDocsSmart(qProj, TIME_ENTRIES_READ_OPTS);
-    snapProjSize = snapProj.docs.length;
-    for (const d of snapProj.docs) {
-      const e = parseTimeEntryDoc({ id: d.id, data: d.data.bind(d) });
-      if (entryCalendarDayInRange(e, fromYmd, toYmd)) merged.set(e.id, e);
+    console.log("[LTE] projectId branch: before getDocsSmart");
+    const snapProj = await getDocsTimeEntriesQuerySnap(qProj);
+    console.log("[LTE] projectId branch: after getDocsSmart", {
+      snapNull: snapProj == null,
+      hasDocsProp: snapProj != null && typeof (snapProj as { docs?: unknown }).docs !== "undefined",
+    });
+    let docsProj: typeof snapProj.docs;
+    try {
+      docsProj = snapProj.docs;
+      console.log("[LTE] projectId branch: read snap.docs ok", { len: docsProj?.length });
+    } catch (e) {
+      console.warn("[LTE] projectId branch: read snapProj.docs threw", e);
+      throw e;
     }
+    try {
+      snapProjSize = docsProj.length;
+      console.log("[LTE] projectId branch: snapProjSize", snapProjSize);
+    } catch (e) {
+      console.warn("[LTE] projectId branch: snapProj.docs.length threw", e);
+      throw e;
+    }
+
+    console.log("[LTE BRANCH] before map projectId", docsProj.length);
+    let acceptedProj = 0;
+    let idxP = 0;
+    for (const d of docsProj) {
+      idxP += 1;
+      console.log("[LTE DOC] projectId iter start", { idxP, len: docsProj.length });
+      let docId = "(unknown)";
+      try {
+        docId = d.id;
+        console.log("[LTE DOC] before data()", docId);
+      } catch (e) {
+        console.warn("[LTE DOC] d.id threw", { idxP, err: e });
+        continue;
+      }
+      let raw: unknown;
+      try {
+        raw = d.data();
+        console.log("[LTE DOC] after data()", docId, ltePreviewRaw(raw));
+      } catch (err) {
+        console.warn("[LTE DOC] data() failed", { id: docId, err });
+        continue;
+      }
+      let parsed: TimeEntryDoc;
+      try {
+        console.log("[LTE DOC] before parse", docId);
+        parsed = parseTimeEntryDoc({ id: docId, data: () => raw });
+        console.log("[LTE DOC] after parse", docId, {
+          id: parsed.id,
+          mode: parsed.mode,
+          durationMinutes: parsed.durationMinutes,
+          startedAtHead: typeof parsed.startedAt === "string" ? parsed.startedAt.slice(0, 24) : parsed.startedAt,
+        });
+      } catch (err) {
+        console.warn("[LTE DOC] parse failed", { id: docId, err, raw: ltePreviewRaw(raw) });
+        continue;
+      }
+      try {
+        console.log("[LTE DOC] before range check", docId);
+        const inRange = entryCalendarDayInRange(parsed, fromYmd, toYmd);
+        console.log("[LTE DOC] after range check", docId, inRange);
+        if (inRange) {
+          merged.set(parsed.id, parsed);
+          acceptedProj += 1;
+        }
+      } catch (err) {
+        console.warn("[LTE DOC] range or merge failed", { id: docId, err });
+      }
+    }
+    console.log("[LTE BRANCH] after map projectId", { acceptedIntoMerge: acceptedProj, mergedSize: merged.size });
   } catch (err) {
-    if (__DEV__) console.warn("[timeTracking] listTimeEntriesByProject(projectId):", err);
+    console.warn("[timeTracking] listTimeEntriesByProject(projectId):", err);
+    // #region agent log
+    postDebugIngest({
+      hypothesisId: "T5-LTE",
+      location: "timeTracking.ts:listTimeEntriesByProject",
+      message: "projectId_query_branch_error",
+      data: { err: err instanceof Error ? err.message : String(err) },
+    });
+    // #endregion
   }
 
   if (uid) {
@@ -743,38 +965,215 @@ export async function listTimeEntriesByProject(
      * project's entries when the user has many timer rows elsewhere in the same window.
      */
     try {
+      console.log("[LTE] userId+projectId branch: start", { uid: uid.slice(0, 8) + "…", pid });
+      console.log("[LTE] userId+projectId branch: before query()");
       const qSelf = query(c, where("userId", "==", uid), where("projectId", "==", pid), limit(5000));
-      const snapSelf = await getDocsSmart(qSelf, TIME_ENTRIES_READ_OPTS);
-      snapSelfSize = snapSelf.docs.length;
-      for (const d of snapSelf.docs) {
-        const e = parseTimeEntryDoc({ id: d.id, data: d.data.bind(d) });
-        if (!entryCalendarDayInRange(e, fromYmd, toYmd)) continue;
-        merged.set(e.id, e);
-      }
-    } catch (err) {
-      if (__DEV__) console.warn("[timeTracking] listTimeEntriesByProject(userId+projectId):", err);
+      console.log("[LTE] userId+projectId branch: before getDocsSmart");
+      const snapSelf = await getDocsTimeEntriesQuerySnap(qSelf);
+      console.log("[LTE] userId+projectId branch: after getDocsSmart");
+      let docsSelf: typeof snapSelf.docs;
       try {
-        const fromIso = `${padCalendarYmd(fromYmd, -3)}T00:00:00.000Z`;
-        const endIso = `${padCalendarYmd(toYmd, 3)}T23:59:59.999Z`;
-        const qLegacy = query(
-          c,
-          where("userId", "==", uid),
-          where("startedAt", ">=", fromIso),
-          where("startedAt", "<=", endIso),
-          orderBy("startedAt", "desc"),
-          limit(2500)
-        );
-        const snapLegacy = await getDocsSmart(qLegacy, TIME_ENTRIES_READ_OPTS);
-        for (const d of snapLegacy.docs) {
-          const e = parseTimeEntryDoc({ id: d.id, data: d.data.bind(d) });
-          if (e.projectId !== pid) continue;
-          if (!entryCalendarDayInRange(e, fromYmd, toYmd)) continue;
-          merged.set(e.id, e);
+        docsSelf = snapSelf.docs;
+        console.log("[LTE] userId+projectId branch: read snap.docs ok", { len: docsSelf?.length });
+      } catch (e) {
+        console.warn("[LTE] userId+projectId branch: read snapSelf.docs threw", e);
+        throw e;
+      }
+      try {
+        snapSelfSize = docsSelf.length;
+        console.log("[LTE] userId+projectId branch: snapSelfSize", snapSelfSize);
+      } catch (e) {
+        console.warn("[LTE] userId+projectId branch: .docs.length threw", e);
+        throw e;
+      }
+
+      console.log("[LTE BRANCH] before map userId+projectId", docsSelf.length);
+      let acceptedSelf = 0;
+      let idxS = 0;
+      for (const d of docsSelf) {
+        idxS += 1;
+        console.log("[LTE DOC] userId+projectId iter start", { idxS, len: docsSelf.length });
+        let docId = "(unknown)";
+        try {
+          docId = d.id;
+          console.log("[LTE DOC] before data()", docId);
+        } catch (e) {
+          console.warn("[LTE DOC] d.id threw (self)", { idxS, err: e });
+          continue;
         }
+        let raw: unknown;
+        try {
+          raw = d.data();
+          console.log("[LTE DOC] after data()", docId, ltePreviewRaw(raw));
+        } catch (err) {
+          console.warn("[LTE DOC] data() failed (self)", { id: docId, err });
+          continue;
+        }
+        let parsed: TimeEntryDoc;
+        try {
+          console.log("[LTE DOC] before parse (self)", docId);
+          parsed = parseTimeEntryDoc({ id: docId, data: () => raw });
+          console.log("[LTE DOC] after parse (self)", docId, {
+            id: parsed.id,
+            mode: parsed.mode,
+            projectId: parsed.projectId,
+            durationMinutes: parsed.durationMinutes,
+          });
+        } catch (err) {
+          console.warn("[LTE DOC] parse failed (self)", { id: docId, err, raw: ltePreviewRaw(raw) });
+          continue;
+        }
+        try {
+          console.log("[LTE DOC] before range check (self)", docId);
+          const inRange = entryCalendarDayInRange(parsed, fromYmd, toYmd);
+          console.log("[LTE DOC] after range check (self)", docId, inRange);
+          if (inRange) {
+            merged.set(parsed.id, parsed);
+            acceptedSelf += 1;
+          }
+        } catch (err) {
+          console.warn("[LTE DOC] range or merge failed (self)", { id: docId, err });
+        }
+      }
+      console.log("[LTE BRANCH] after map userId+projectId", { acceptedIntoMerge: acceptedSelf, mergedSize: merged.size });
+    } catch (err) {
+      console.warn("[timeTracking] listTimeEntriesByProject(userId+projectId):", err);
+      // #region agent log
+      postDebugIngest({
+        hypothesisId: "T5-LTE",
+        location: "timeTracking.ts:listTimeEntriesByProject",
+        message: "userId_projectId_query_branch_error",
+        data: { err: err instanceof Error ? err.message : String(err) },
+      });
+      // #endregion
+      try {
+        console.log("[LTE] legacy userId+orderBy branch: start", { uid: uid.slice(0, 8) + "…", fromYmd, toYmd });
+        const qLegacy = query(c, where("userId", "==", uid), orderBy("startedAt", "desc"), limit(6000));
+        console.log("[LTE] legacy range branch: before getDocsSmart");
+        const snapLegacy = await getDocsTimeEntriesQuerySnap(qLegacy);
+        console.log("[LTE] legacy range branch: after getDocsSmart");
+        let docsLeg: typeof snapLegacy.docs;
+        try {
+          docsLeg = snapLegacy.docs;
+          console.log("[LTE] legacy range branch: read snap.docs ok", { len: docsLeg?.length });
+        } catch (e) {
+          console.warn("[LTE] legacy range branch: read snapLegacy.docs threw", e);
+          throw e;
+        }
+        console.log("[LTE BRANCH] before map legacy", docsLeg.length);
+        let acceptedLeg = 0;
+        let idxL = 0;
+        for (const d of docsLeg) {
+          idxL += 1;
+          console.log("[LTE DOC] legacy iter start", { idxL, len: docsLeg.length });
+          let docId = "(unknown)";
+          try {
+            docId = d.id;
+            console.log("[LTE DOC] before data() (legacy)", docId);
+          } catch (e) {
+            console.warn("[LTE DOC] d.id threw (legacy)", { idxL, err: e });
+            continue;
+          }
+          let raw: unknown;
+          try {
+            raw = d.data();
+            console.log("[LTE DOC] after data() (legacy)", docId, ltePreviewRaw(raw));
+          } catch (err) {
+            console.warn("[LTE DOC] data() failed (legacy)", { id: docId, err });
+            continue;
+          }
+          let parsed: TimeEntryDoc;
+          try {
+            console.log("[LTE DOC] before parse (legacy)", docId);
+            parsed = parseTimeEntryDoc({ id: docId, data: () => raw });
+            console.log("[LTE DOC] after parse (legacy)", docId, {
+              id: parsed.id,
+              projectId: parsed.projectId,
+              pidMatch: parsed.projectId === pid,
+            });
+          } catch (err) {
+            console.warn("[LTE DOC] parse failed (legacy)", { id: docId, err, raw: ltePreviewRaw(raw) });
+            continue;
+          }
+          try {
+            console.log("[LTE DOC] before projectId filter (legacy)", docId, { parsedPid: parsed.projectId, pid });
+            if (parsed.projectId !== pid) continue;
+            console.log("[LTE DOC] before range check (legacy)", docId);
+            const inRange = entryCalendarDayInRange(parsed, fromYmd, toYmd);
+            console.log("[LTE DOC] after range check (legacy)", docId, inRange);
+            if (inRange) {
+              merged.set(parsed.id, parsed);
+              acceptedLeg += 1;
+            }
+          } catch (err) {
+            console.warn("[LTE DOC] filter/range/merge failed (legacy)", { id: docId, err });
+          }
+        }
+        console.log("[LTE BRANCH] after map legacy", { acceptedIntoMerge: acceptedLeg, mergedSize: merged.size });
       } catch (err2) {
-        if (__DEV__) console.warn("[timeTracking] listTimeEntriesByProject(userId legacy range):", err2);
+        console.warn("[timeTracking] listTimeEntriesByProject(userId legacy range):", err2);
       }
     }
+  }
+
+  /**
+   * Last-resort A: `where userId == uid` only (single-field index). Filter project + calendar range in memory.
+   * Avoids missing composite index on userId+projectId and picks rows even when `startedAt` is missing from range queries.
+   */
+  let fallbackUserRangeCount = 0;
+  if (merged.size === 0 && uid) {
+    try {
+      const qWide = query(c, where("userId", "==", uid), limit(4000));
+      const snapW = await getDocsTimeEntriesQuerySnap(qWide);
+      snapWideSize = snapW.docs.length;
+      for (const d of snapW.docs) {
+        let raw: unknown;
+        try {
+          raw = d.data();
+        } catch {
+          continue;
+        }
+        let parsed: TimeEntryDoc;
+        try {
+          parsed = parseTimeEntryDoc({ id: d.id, data: () => raw });
+        } catch {
+          continue;
+        }
+        if (parsed.projectId !== pid) continue;
+        if (!entryCalendarDayInRange(parsed, fromYmd, toYmd)) continue;
+        merged.set(parsed.id, parsed);
+      }
+      if (__DEV__ && merged.size > 0) {
+        console.warn("[timeTracking] listTimeEntriesByProject: filled via userId-only wide query", {
+          snapWideSize,
+          merged: merged.size,
+        });
+      }
+    } catch (wideErr) {
+      console.warn("[timeTracking] listTimeEntriesByProject user-only wide query failed:", wideErr);
+    }
+
+    /**
+     * Last-resort B: own `userId` + `startedAt` window (needs userId+startedAt index), then this project.
+     */
+    if (merged.size === 0) {
+      try {
+        const byUser = await listTimeEntries(uid, fromYmd, toYmd, { limit: 3000 });
+        for (const e of byUser) {
+          if (e.projectId === pid) {
+            merged.set(e.id, e);
+          }
+        }
+        if (__DEV__ && merged.size > 0) {
+          console.warn("[timeTracking] listTimeEntriesByProject: filled via user+startedAt fallback", {
+            count: merged.size,
+          });
+        }
+      } catch (fbErr) {
+        console.warn("[timeTracking] listTimeEntriesByProject user-range fallback failed:", fbErr);
+      }
+    }
+    fallbackUserRangeCount = merged.size;
   }
 
   const list = Array.from(merged.values());
@@ -789,6 +1188,8 @@ export async function listTimeEntriesByProject(
       effectiveUid: uid ?? "(none)",
       snapProjSize,
       snapSelfSize,
+      snapWideSize,
+      fallbackUserRangeCount,
       mergedCount: list.length,
       sample: list.slice(0, 3).map((e) => ({
         id: e.id,
@@ -807,8 +1208,32 @@ export async function listTimeEntriesByProject(
     hasForUserId: !!(opts?.forUserId && String(opts.forUserId).trim()),
     snapProjSize,
     snapSelfSize,
+    snapWideSize,
     mergedCount: list.length,
   });
+  // #region agent log
+  postDebugIngest({
+    hypothesisId: "T2-T3",
+    location: "timeTracking.ts:listTimeEntriesByProject",
+    message: "lte_result",
+    data: {
+      pidLen: pid.length,
+      pidTail: pid.length > 6 ? pid.slice(-6) : pid,
+      fromYmd,
+      toYmd,
+      snapProjSize,
+      snapSelfSize,
+      snapWideSize,
+      mergedCount: list.length,
+      fallbackFill: fallbackUserRangeCount,
+      hasEffectiveUid: !!uid,
+      hasForUserIdOpt: !!(opts?.forUserId && String(opts.forUserId).trim()),
+      hasAuthUid: !!auth.currentUser?.uid,
+      firstEntryDur: list[0]?.durationMinutes ?? null,
+      firstEntryMode: list[0]?.mode ?? null,
+    },
+  });
+  // #endregion
   return list;
 }
 
@@ -840,7 +1265,7 @@ const IN_QUERY_CHUNK_SIZE = 10;
 /**
  * List time entries for multiple projects within a date range.
  * Uses Firestore "in" query in chunks (max 10 per chunk) for better performance.
- * Firestore index: composite on (projectId, startedAt) for "in" + range - Firestore will prompt if missing.
+ * Firestore index: composite on (projectId, startedAt) for `in` + orderBy; calendar range is applied in memory.
  */
 export async function listTimeEntriesForProjects(
   projectIds: string[],
@@ -848,8 +1273,6 @@ export async function listTimeEntriesForProjects(
   toYmd: string
 ): Promise<TimeEntryDoc[]> {
   if (!projectIds.length) return [];
-  const fromIso = `${padCalendarYmd(fromYmd, -3)}T00:00:00.000Z`;
-  const endIso = `${padCalendarYmd(toYmd, 3)}T23:59:59.999Z`;
 
   const c = collection(db, paths.timeEntries());
   const chunks: string[][] = [];
@@ -859,14 +1282,7 @@ export async function listTimeEntriesForProjects(
 
   const allDocs: { id: string; data: () => Record<string, unknown> }[] = [];
   for (const chunk of chunks) {
-    const q = query(
-      c,
-      where("projectId", "in", chunk),
-      where("startedAt", ">=", fromIso),
-      where("startedAt", "<=", endIso),
-      orderBy("startedAt", "desc"),
-      limit(500)
-    );
+    const q = query(c, where("projectId", "in", chunk), orderBy("startedAt", "desc"), limit(2500));
     const snap = await getDocsSmart(q, TIME_ENTRIES_READ_OPTS);
     allDocs.push(...snap.docs.map((d) => ({ id: d.id, data: d.data.bind(d) })));
   }
@@ -877,9 +1293,21 @@ export async function listTimeEntriesForProjects(
     seen.add(d.id);
     return true;
   });
-  return unique
-    .map((d) => parseTimeEntryDoc(d))
-    .filter((e) => entryCalendarDayInRange(e, fromYmd, toYmd));
+  const mapped: TimeEntryDoc[] = [];
+  for (const d of unique) {
+    try {
+      mapped.push(parseTimeEntryDoc(d));
+    } catch (err) {
+      let raw: unknown;
+      try {
+        raw = typeof d.data === "function" ? d.data() : undefined;
+      } catch {
+        raw = "(data() threw)";
+      }
+      console.warn("[timeTracking][parse failed]", { id: d.id, err, raw });
+    }
+  }
+  return mapped.filter((e) => entryCalendarDayInRange(e, fromYmd, toYmd));
 }
 
 /**

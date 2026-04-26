@@ -472,7 +472,7 @@ export function AccountScreen() {
         </TouchableOpacity>
         <Text style={styles.profileName}>{displayName}</Text>
         {loadingProfile ? (
-          <Text style={styles.profileHint}>Načítavam…</Text>
+          <Text style={styles.profileHint}>{t("loading.text")}</Text>
         ) : (
           <Text style={styles.profileHint}>
             {profileProfessionCode

@@ -105,6 +105,14 @@ service cloud.firestore {
     function canReadDocuments(projectId) {
       return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.documents == true) || (isMember(projectId) && !hasAccessDoc(projectId));
     }
+    /** Align with app `canViewProjectTime`: members may read team time when timeTracking is not turned off. */
+    function timeTrackingReadAllowed(projectId) {
+      return !hasAccessDoc(projectId)
+        || !("sharedItems" in access(projectId))
+        || !(access(projectId).sharedItems is map)
+        || !("timeTracking" in access(projectId).sharedItems)
+        || access(projectId).sharedItems.timeTracking != false;
+    }
     function canWriteAsEditor(projectId) {
       return isOwner(projectId)
         || (hasAccessDoc(projectId) && (access(projectId).permissionLevel == 'editor' || access(projectId).permissionLevel == 'admin'))
@@ -353,7 +361,11 @@ service cloud.firestore {
         && request.resource.data.userId == uid()
         && canWriteAsEditor(request.resource.data.projectId);
       allow read: if signedIn()
-        && (resource.data.userId == uid() || canWriteAsEditor(resource.data.projectId));
+        && (
+          resource.data.userId == uid()
+          || canWriteAsEditor(resource.data.projectId)
+          || (isMember(resource.data.projectId) && timeTrackingReadAllowed(resource.data.projectId))
+        );
       allow update, delete: if signedIn() && resource.data.userId == uid();
     }
 

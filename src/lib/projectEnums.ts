@@ -73,5 +73,12 @@ export type ServiceMaintenanceScope = "PROPERTY" | "EQUIPMENT";
 /** Business mode attribute */
 export type BusinessMode = "DIRECT" | "SUBCONTRACT" | "INTERNAL";
 
-/** Creation mode attribute */
-export type CreationMode = "AI" | "MANUAL" | "TEMPLATE";
+/**
+ * Creation mode attribute.
+ * - `AI` (Suggested steps): wizard delegates to `CreateProjectAIFlow` (BUILD: AI plan).
+ * - `MANUAL` (Quick start): empty workspace with the standard sections (To-do / Expenses / Notes).
+ * - `TEMPLATE`: BUILD-only national catalog template.
+ * - `CLONE`: reuse structure from an existing project the user can read; opens
+ *   the source picker → reuses the existing `CloneProjectModal` flow.
+ */
+export type CreationMode = "AI" | "MANUAL" | "TEMPLATE" | "CLONE";

@@ -52,7 +52,7 @@ export interface UserEquipmentDoc {
 function toIso(v: unknown): string {
   if (!v) return "";
   if (typeof v === "string") return v;
-  if (v && typeof v === "object" && "toDate" in v) {
+  if (typeof v === "object" && v !== null && typeof (v as { toDate?: unknown }).toDate === "function") {
     return (v as { toDate: () => Date }).toDate().toISOString();
   }
   return String(v);

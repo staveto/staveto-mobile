@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { interpolate, translations, LOCALE_NAMES } from "./translations";
+import { postDebugIngest } from "../lib/debugIngest";
 import type { Locale } from "./translations";
 
 const STORAGE_KEY = "staveto_locale";
@@ -37,8 +38,18 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     AsyncStorage.getItem(STORAGE_KEY).then((s) => {
-      if (s && (s === "en" || s === "de" || s === "sk" || s === "cs" || s === "es" || s === "it" || s === "pl")) {
-        setLocaleState(s);
+      const applied =
+        s && (s === "en" || s === "de" || s === "sk" || s === "cs" || s === "es" || s === "it" || s === "pl") ? s : null;
+      // #region agent log
+      postDebugIngest({
+        hypothesisId: "H3",
+        location: "I18nContext.tsx:AsyncStorage",
+        message: "persisted_locale_read",
+        data: { rawStorage: s ?? "(null)", appliedLocale: applied ?? "(default_en)" },
+      });
+      // #endregion
+      if (applied) {
+        setLocaleState(applied);
       }
       setLoaded(true);
     });

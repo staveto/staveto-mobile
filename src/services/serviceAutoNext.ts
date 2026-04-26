@@ -15,8 +15,10 @@ import type { TaskDoc } from './tasks';
 function toServiceRuleFromSnap(snap: { id: string; data: () => Record<string, unknown> }): ServiceRuleDoc {
   const d = snap.data();
   const toDate = (v: unknown) => {
-    if (!v) return '';
-    if (v && typeof v === 'object' && 'toDate' in v) return (v as { toDate: () => Date }).toDate().toISOString();
+    if (!v) return "";
+    if (typeof v === "object" && v !== null && typeof (v as { toDate?: unknown }).toDate === "function") {
+      return (v as { toDate: () => Date }).toDate().toISOString();
+    }
     return String(v);
   };
   return {

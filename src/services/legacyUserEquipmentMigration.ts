@@ -79,7 +79,7 @@ function buildNotesFromLegacy(eq: equipmentService.EquipmentDoc): string | null 
 
 function copyTimelikeField(v: unknown): unknown {
   if (v == null) return null;
-  if (typeof v === "object" && v !== null && "toDate" in v && typeof (v as { toDate: () => Date }).toDate === "function") {
+  if (typeof v === "object" && v !== null && typeof (v as { toDate?: unknown }).toDate === "function") {
     return v;
   }
   if (typeof v === "string" && /^\d{4}-\d{2}-\d{2}/.test(v)) {
@@ -91,7 +91,11 @@ function copyTimelikeField(v: unknown): unknown {
 
 function toTimestampNextDue(raw: Record<string, unknown>, fallbackIso: string): Timestamp {
   const v = raw.nextDueAt ?? fallbackIso;
-  if (v && typeof v === "object" && "toDate" in v && typeof (v as { toDate: () => Date }).toDate === "function") {
+  if (
+    v &&
+    typeof v === "object" &&
+    typeof (v as { toDate?: unknown }).toDate === "function"
+  ) {
     return Timestamp.fromDate((v as { toDate: () => Date }).toDate());
   }
   if (typeof v === "string" && v) {

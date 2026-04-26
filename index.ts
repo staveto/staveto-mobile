@@ -100,10 +100,23 @@ registerRootComponent(() => {
     }, []);
 
     if (!App) {
+      // #region agent log
+      try {
+        if (!(globalThis as { __dbgIdxPre?: boolean }).__dbgIdxPre) {
+          (globalThis as { __dbgIdxPre?: boolean }).__dbgIdxPre = true;
+          require("./src/lib/debugIngest").postDebugIngest({
+            hypothesisId: "H1",
+            location: "index.ts:Entry",
+            message: "pre_app_chunk_loading_ui",
+            data: { literalShown: "Loading…", branch: "!App" },
+          });
+        }
+      } catch {}
+      // #endregion
       const { View, ActivityIndicator, Text } = require("react-native");
       return React.createElement(View, {
         style: { flex: 1, backgroundColor: "#ffffff", justifyContent: "center", alignItems: "center" },
-      }, React.createElement(ActivityIndicator, { size: "large", color: "#e06737" }), React.createElement(Text, { style: { color: "#e06737", marginTop: 12, fontSize: 14, fontWeight: "600" } }, "Načítavam…"));
+      }, React.createElement(ActivityIndicator, { size: "large", color: "#e06737" }), React.createElement(Text, { style: { color: "#e06737", marginTop: 12, fontSize: 14, fontWeight: "600" } }, "Loading…"));
     }
     return React.createElement(I18nProvider, null, React.createElement(App));
   }

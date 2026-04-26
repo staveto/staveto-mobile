@@ -197,7 +197,7 @@ export function ProjectInvitesScreen() {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.loadingText}>{t("loading.text") || "Načítavam…"}</Text>
+        <Text style={styles.loadingText}>{t("loading.text")}</Text>
       </View>
     );
   }

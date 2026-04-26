@@ -143,7 +143,7 @@ export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }:
     if (step === 2 && engineType === "TRADE") return t("createProject.wizard.v2.tradeKindTitle");
     if (step === 3) return t("createProject.wizard.v2.serviceScopeTitle");
     if (step === 4) return t("createProject.wizard.v2.nameStepTitle");
-    return t("createProject.wizard.step4Title");
+    return t("createProject.wizard.howToStartTitle");
   };
 
   return (
@@ -283,35 +283,71 @@ export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }:
 
         {step === 5 && engineType && (
           <View style={styles.creationStep}>
-            <Text style={styles.step4Lead}>{t(`createProject.wizard.step4Subtitle.${engineType}`)}</Text>
+            {/* Quick start (MANUAL) — primary card, comes first because it's the safest default */}
             <TouchableOpacity
               style={[styles.creationChoiceCard, styles.creationChoiceCardPrimary]}
-              onPress={() => completeWithCreationMode("AI")}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-            >
-              <View style={styles.creationChoiceHeader}>
-                <Ionicons name="sparkles-outline" size={26} color={colors.primary} />
-                <Text style={styles.creationChoiceTitle}>{t("createProject.wizard.creationMode.AI")}</Text>
-              </View>
-              <Text style={styles.creationChoiceHint} numberOfLines={3}>
-                {t(`createProject.wizard.creationModeAiHint.${engineType}`)}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={styles.creationChoiceCard}
               onPress={() => completeWithCreationMode("MANUAL")}
               activeOpacity={0.85}
               accessibilityRole="button"
             >
               <View style={styles.creationChoiceHeader}>
-                <Ionicons name="create-outline" size={24} color={colors.textMuted} />
-                <Text style={styles.creationChoiceTitle}>{t("createProject.wizard.creationMode.MANUAL")}</Text>
+                <Ionicons name="flash-outline" size={26} color={colors.primary} />
+                <Text style={styles.creationChoiceTitle}>
+                  {t(`createProject.wizard.creationMode.MANUAL.${engineType}`)}
+                </Text>
               </View>
-              <Text style={styles.creationChoiceHintMuted} numberOfLines={3}>
-                {t(`createProject.wizard.creationModeManualHint.${engineType}`)}
+              <Text style={styles.creationChoiceHint}>
+                {t(`createProject.wizard.creationModeManualSubtitle.${engineType}`)}
+              </Text>
+              <View style={styles.bulletsRow}>
+                {[0, 1, 2].map((idx) => (
+                  <View key={idx} style={styles.bulletRow}>
+                    <Ionicons name="checkmark-circle" size={16} color={colors.primary} />
+                    <Text style={styles.bulletText}>
+                      {t(`createProject.wizard.manualBullets.${engineType}.${idx}`)}
+                    </Text>
+                  </View>
+                ))}
+              </View>
+            </TouchableOpacity>
+
+            {/* Suggested steps / AI plan */}
+            <TouchableOpacity
+              style={styles.creationChoiceCard}
+              onPress={() => completeWithCreationMode("AI")}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+            >
+              <View style={styles.creationChoiceHeader}>
+                <Ionicons name="sparkles-outline" size={24} color={colors.primary} />
+                <Text style={styles.creationChoiceTitle}>
+                  {t(`createProject.wizard.creationMode.AI.${engineType}`)}
+                </Text>
+              </View>
+              <Text style={styles.creationChoiceHintMuted}>
+                {t(`createProject.wizard.creationModeAiSubtitle.${engineType}`)}
               </Text>
             </TouchableOpacity>
+
+            {/* Copy from previous job/project — first-class option */}
+            <TouchableOpacity
+              style={styles.creationChoiceCard}
+              onPress={() => completeWithCreationMode("CLONE")}
+              activeOpacity={0.85}
+              accessibilityRole="button"
+            >
+              <View style={styles.creationChoiceHeader}>
+                <Ionicons name="copy-outline" size={24} color={colors.textMuted} />
+                <Text style={styles.creationChoiceTitle}>
+                  {t(`createProject.wizard.creationMode.CLONE.${engineType}`)}
+                </Text>
+              </View>
+              <Text style={styles.creationChoiceHintMuted}>
+                {t(`createProject.wizard.creationModeCloneSubtitle.${engineType}`)}
+              </Text>
+            </TouchableOpacity>
+
+            {/* National template — BUILD only */}
             {engineType === "BUILD" ? (
               <TouchableOpacity
                 style={styles.creationChoiceCard}
@@ -320,10 +356,14 @@ export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }:
                 accessibilityRole="button"
               >
                 <View style={styles.creationChoiceHeader}>
-                  <Ionicons name="copy-outline" size={22} color={colors.textMuted} />
-                  <Text style={styles.creationChoiceTitle}>{t("createProject.wizard.creationMode.TEMPLATE")}</Text>
+                  <Ionicons name="layers-outline" size={22} color={colors.textMuted} />
+                  <Text style={styles.creationChoiceTitle}>
+                    {t("createProject.wizard.creationMode.TEMPLATE.BUILD")}
+                  </Text>
                 </View>
-                <Text style={styles.creationChoiceHintMuted}>{t("createProject.wizard.creationModeTemplateHint")}</Text>
+                <Text style={styles.creationChoiceHintMuted}>
+                  {t("createProject.wizard.creationModeTemplateSubtitle")}
+                </Text>
               </TouchableOpacity>
             ) : null}
           </View>
@@ -580,6 +620,22 @@ const styles = StyleSheet.create({
     color: colors.textMuted,
     marginTop: spacing.sm,
     marginLeft: 22 + spacing.sm,
+  },
+  bulletsRow: {
+    marginTop: spacing.sm,
+    marginLeft: 22 + spacing.sm,
+    gap: 4,
+  },
+  bulletRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+  },
+  bulletText: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.text,
+    fontWeight: "500",
   },
   buttons: {
     flexDirection: "row",

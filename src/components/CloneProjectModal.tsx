@@ -36,6 +36,12 @@ type Props = {
   sourceAddressText?: string;
   isOwner: boolean;
   onSuccess: (newProjectId: string) => void;
+  /**
+   * Optional pre-filled new-project name. Used by the wizard CLONE flow so the
+   * user keeps the name they already typed in step 4 instead of falling back to
+   * the legacy `<source> (kópia)` placeholder.
+   */
+  prefilledNewName?: string;
 };
 
 export function CloneProjectModal({
@@ -50,9 +56,11 @@ export function CloneProjectModal({
   sourceAddressText = "",
   isOwner,
   onSuccess,
+  prefilledNewName,
 }: Props) {
   const { t, locale } = useI18n();
-  const [newName, setNewName] = useState(`${sourceProjectName} (kópia)`);
+  const initialName = (prefilledNewName?.trim() || `${sourceProjectName} (kópia)`).trim();
+  const [newName, setNewName] = useState(initialName);
   const [newCountry, setNewCountry] = useState(sourceCountryCode || "SK");
   const [newCity, setNewCity] = useState(sourceCity || "");
   const [newAddress, setNewAddress] = useState(sourceAddressText || "");
@@ -64,7 +72,8 @@ export function CloneProjectModal({
 
   useEffect(() => {
     if (visible) {
-      setNewName(`${sourceProjectName} (kópia)`);
+      const next = (prefilledNewName?.trim() || `${sourceProjectName} (kópia)`).trim();
+      setNewName(next);
       setNewCountry(sourceCountryCode || "SK");
       setNewCity(sourceCity || "");
       setNewAddress(sourceAddressText || "");
@@ -73,7 +82,7 @@ export function CloneProjectModal({
       setKeepTags(true);
       setError(null);
     }
-  }, [visible, sourceProjectName, sourceCountryCode, sourceCity, sourceAddressText]);
+  }, [visible, sourceProjectName, sourceCountryCode, sourceCity, sourceAddressText, prefilledNewName]);
 
   const handleClose = useCallback(() => {
     if (!submitting) {
@@ -208,6 +217,38 @@ export function CloneProjectModal({
           </View>
 
           <ScrollView style={styles.scrollContent} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
+          <View style={styles.copySummary}>
+            <View style={styles.copyColumn}>
+              <View style={styles.copyHeader}>
+                <Ionicons name="checkmark-circle" size={16} color="#27ae60" />
+                <Text style={[styles.copyHeaderText, styles.copyHeaderTextOk]}>
+                  {t("clone.willCopyTitle")}
+                </Text>
+              </View>
+              {(["structure", "sections", "tasks"] as const).map((key) => (
+                <View key={key} style={styles.copyRow}>
+                  <Ionicons name="checkmark" size={13} color="#27ae60" />
+                  <Text style={styles.copyRowText}>{t(`clone.willCopy.${key}`)}</Text>
+                </View>
+              ))}
+            </View>
+            <View style={styles.copyDivider} />
+            <View style={styles.copyColumn}>
+              <View style={styles.copyHeader}>
+                <Ionicons name="close-circle" size={16} color="#c0392b" />
+                <Text style={[styles.copyHeaderText, styles.copyHeaderTextNo]}>
+                  {t("clone.willNotCopyTitle")}
+                </Text>
+              </View>
+              {(["expenses", "photos", "notes", "dates", "activity"] as const).map((key) => (
+                <View key={key} style={styles.copyRow}>
+                  <Ionicons name="close" size={13} color="#c0392b" />
+                  <Text style={styles.copyRowText}>{t(`clone.wontCopy.${key}`)}</Text>
+                </View>
+              ))}
+            </View>
+          </View>
+
           <Text style={styles.label}>{t("projects.namePlaceholder")} *</Text>
           <TextInput
             style={styles.input}
@@ -360,8 +401,53 @@ const styles = StyleSheet.create({
     marginBottom: spacing.lg,
   },
   scrollContent: {
-    maxHeight: 320,
+    maxHeight: 360,
     marginBottom: spacing.sm,
+  },
+  copySummary: {
+    flexDirection: "row",
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+    gap: spacing.md,
+  },
+  copyColumn: {
+    flex: 1,
+    minWidth: 0,
+  },
+  copyDivider: {
+    width: 1,
+    backgroundColor: colors.border,
+  },
+  copyHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    marginBottom: spacing.xs,
+  },
+  copyHeaderText: {
+    fontSize: 13,
+    fontWeight: "700",
+  },
+  copyHeaderTextOk: {
+    color: "#27ae60",
+  },
+  copyHeaderTextNo: {
+    color: "#c0392b",
+  },
+  copyRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginVertical: 1,
+  },
+  copyRowText: {
+    fontSize: 12,
+    color: colors.text,
+    flex: 1,
   },
   countryRow: {
     marginBottom: spacing.lg,

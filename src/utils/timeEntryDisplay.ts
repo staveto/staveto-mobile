@@ -1,9 +1,10 @@
-import type { TimeEntryDoc } from "../services/timeTracking";
+import { entryCalendarDayYmd, type TimeEntryDoc } from "../services/timeTracking";
 import type { GpsPoint } from "../lib/location";
 
 export function localDayKeyForEntry(e: TimeEntryDoc, toLocalYmd: (d: Date) => string): string {
-  const isManual = e.mode === "manual" && typeof e.date === "string" && e.date.length === 10;
-  return isManual ? e.date! : toLocalYmd(new Date(e.startedAt));
+  const ymd = entryCalendarDayYmd(e);
+  if (ymd) return ymd;
+  return toLocalYmd(new Date(e.startedAt));
 }
 
 /** Newest day first; within a day, newest entry first. */

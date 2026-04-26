@@ -17,6 +17,7 @@ import {
 } from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
 import { getExtraEnv } from "../lib/env";
+import { safeFirestoreDocData } from "../lib/safeFirestoreDocData";
 
 export type NotificationType =
   | "TASK_ASSIGNED"
@@ -122,10 +123,7 @@ function normalizeNotificationType(raw: unknown): NotificationType {
 }
 
 function normalizeDocData(raw: unknown): Record<string, unknown> {
-  if (raw && typeof raw === "object" && !Array.isArray(raw)) {
-    return raw as Record<string, unknown>;
-  }
-  return {};
+  return safeFirestoreDocData(raw);
 }
 
 function coerceFiniteNumber(v: unknown): number | null {

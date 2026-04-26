@@ -56,3 +56,9 @@ functions/lib/
 functions/node_modules/
 functions/.env
 functions/.env.local
+
+# Local backups / debug artefacts (do not commit)
+*.bundle
+submit-*-debug.txt
+*.bak.png
+*.bak

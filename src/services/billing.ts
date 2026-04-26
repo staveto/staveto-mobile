@@ -66,6 +66,54 @@ function getApiKey(): string | null {
   return key ?? null;
 }
 
+/** Google Play Billing is missing on many emulators; RevenueCat logs ERROR → React Native LogBox blocks the UI. */
+function isAndroidBillingUnavailableSdkMessage(message: string): boolean {
+  if (Platform.OS !== "android") return false;
+  const t = String(message);
+  return (
+    t.includes("BILLING_UNAVAILABLE") ||
+    t.includes("Billing is not available in this device") ||
+    (t.includes("StoreProblemError") && t.toLowerCase().includes("billing"))
+  );
+}
+
+function installRevenueCatLogHandler(): void {
+  if (!Purchases || typeof (Purchases as any).setLogHandler !== "function") return;
+  const LOG_LEVEL = (Purchases as any).LOG_LEVEL as {
+    VERBOSE?: string;
+    DEBUG?: string;
+    INFO?: string;
+    WARN?: string;
+    ERROR?: string;
+  };
+  if (!LOG_LEVEL?.ERROR) return;
+  (Purchases as any).setLogHandler((logLevel: unknown, message: string) => {
+    const text = String(message ?? "");
+    const line = `[RevenueCat] ${text}`;
+    // Emulator / no Play Store: avoid console.error → React Native LogBox in dev.
+    if (__DEV__ && Platform.OS === "android" && isAndroidBillingUnavailableSdkMessage(text)) {
+      console.warn(line);
+      return;
+    }
+    switch (logLevel) {
+      case LOG_LEVEL.DEBUG:
+        console.debug(line);
+        break;
+      case LOG_LEVEL.INFO:
+        console.info(line);
+        break;
+      case LOG_LEVEL.WARN:
+        console.warn(line);
+        break;
+      case LOG_LEVEL.ERROR:
+        console.error(line);
+        break;
+      default:
+        console.log(line);
+    }
+  });
+}
+
 export async function configurePurchases(userId?: string | null): Promise<void> {
   if (!Purchases) {
     if (__DEV__) console.warn("[billing] react-native-purchases not installed or not available (use dev-client, not Expo Go)");
@@ -77,6 +125,7 @@ export async function configurePurchases(userId?: string | null): Promise<void> 
     return;
   }
   if (purchasesConfigured) {
+    installRevenueCatLogHandler();
     if (userId) {
       try {
         await Purchases.logIn(userId);
@@ -88,6 +137,7 @@ export async function configurePurchases(userId?: string | null): Promise<void> 
     return;
   }
   try {
+    installRevenueCatLogHandler();
     const LOG_LEVEL = (Purchases as any).LOG_LEVEL;
     if (__DEV__ && typeof (Purchases as any).setLogLevel === "function" && LOG_LEVEL?.DEBUG != null) {
       (Purchases as any).setLogLevel(LOG_LEVEL.DEBUG);
@@ -99,6 +149,8 @@ export async function configurePurchases(userId?: string | null): Promise<void> 
       // in emulator or when billing client isn't ready (common on Android emulator)
       shouldShowInAppMessagesAutomatically: false,
     });
+    // Native configure can replace the hybrid log sink; re-attach so ERROR logs don't hit LogBox.
+    installRevenueCatLogHandler();
     purchasesConfigured = true;
     if (__DEV__) console.log("[billing] RevenueCat configured");
   } catch (e) {

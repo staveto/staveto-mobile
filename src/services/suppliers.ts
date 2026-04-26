@@ -25,7 +25,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     if (!ts) return undefined;
     if (ts instanceof Timestamp) return ts.toDate().toISOString();
     if (typeof ts === "string") return ts;
-    if (typeof ts === "object" && ts !== null && "toDate" in ts) {
+    if (typeof ts === "object" && ts !== null && typeof (ts as { toDate?: unknown }).toDate === "function") {
       return (ts as { toDate: () => Date }).toDate().toISOString();
     }
     return undefined;

@@ -56,7 +56,8 @@ const NO_ACCESS: ProjectAccess = {
  * Single source of truth for project access permissions.
  * - Owner: full access (all sharedItems true, canWrite true)
  * - Member: reads membersByUid, applies sharedItems
- * - Missing/inactive membersByUid: no access (all false)
+ * - Legacy `members/{uid}` when membersByUid missing
+ * - `users/{uid}/projectRefs/{projectId}` or org membership (matches Firestore `isMember` / `canWriteAsEditor`)
  */
 export function useProjectAccess(projectId: string, projectOwnerId?: string | null): ProjectAccess {
   const { user } = useAuth();
@@ -147,6 +148,55 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
             return;
           }
         }
+
+        const orgId = (projectSnap.data()?.orgId as string | undefined)?.trim();
+        if (orgId) {
+          const orgMemRef = doc(db, "organizations", orgId, "members", uid);
+          const orgMemSnap = await getDocSmart(orgMemRef);
+          const oStatus = orgMemSnap.data()?.status ?? "";
+          if (orgMemSnap.exists() && (oStatus === "active" || !oStatus)) {
+            setAccess({
+              loading: false,
+              isOwner: false,
+              isMember: true,
+              permissionLevel: "editor",
+              sharedItems: ALL_TRUE,
+              sharedPhaseIds: [],
+              canReadTasks: true,
+              canReadPhases: true,
+              canReadExpenses: true,
+              canReadDiary: true,
+              canReadDocuments: true,
+              canWrite: true,
+              canWriteTime: true,
+            });
+            setLoading(false);
+            return;
+          }
+        }
+
+        const userProjectRefDoc = doc(db, "users", uid, "projectRefs", projectId);
+        const prefSnap = await getDocSmart(userProjectRefDoc);
+        if (prefSnap.exists()) {
+          setAccess({
+            loading: false,
+            isOwner: false,
+            isMember: true,
+            permissionLevel: "viewer",
+            sharedItems: ALL_TRUE,
+            sharedPhaseIds: [],
+            canReadTasks: true,
+            canReadPhases: true,
+            canReadExpenses: true,
+            canReadDiary: true,
+            canReadDocuments: true,
+            canWrite: false,
+            canWriteTime: false,
+          });
+          setLoading(false);
+          return;
+        }
+
         setAccess({ ...NO_ACCESS, loading: false });
         setLoading(false);
         return;
@@ -281,6 +331,51 @@ export async function fetchProjectAccess(
           };
         }
       }
+
+      const orgIdFetch = (projectSnap.data()?.orgId as string | undefined)?.trim();
+      if (orgIdFetch) {
+        const orgMemRefFetch = doc(db, "organizations", orgIdFetch, "members", uid);
+        const orgMemSnapFetch = await getDocSmart(orgMemRefFetch);
+        const oStatusFetch = orgMemSnapFetch.data()?.status ?? "";
+        if (orgMemSnapFetch.exists() && (oStatusFetch === "active" || !oStatusFetch)) {
+          return {
+            loading: false,
+            isOwner: false,
+            isMember: true,
+            permissionLevel: "editor",
+            sharedItems: ALL_TRUE,
+            sharedPhaseIds: [],
+            canReadTasks: true,
+            canReadPhases: true,
+            canReadExpenses: true,
+            canReadDiary: true,
+            canReadDocuments: true,
+            canWrite: true,
+            canWriteTime: true,
+          };
+        }
+      }
+
+      const userProjectRefDocFetch = doc(db, "users", uid, "projectRefs", projectId);
+      const prefSnapFetch = await getDocSmart(userProjectRefDocFetch);
+      if (prefSnapFetch.exists()) {
+        return {
+          loading: false,
+          isOwner: false,
+          isMember: true,
+          permissionLevel: "viewer",
+          sharedItems: ALL_TRUE,
+          sharedPhaseIds: [],
+          canReadTasks: true,
+          canReadPhases: true,
+          canReadExpenses: true,
+          canReadDiary: true,
+          canReadDocuments: true,
+          canWrite: false,
+          canWriteTime: false,
+        };
+      }
+
       return { ...NO_ACCESS, loading: false };
     }
 

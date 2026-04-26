@@ -9,6 +9,8 @@ import { colors } from "./src/theme";
 import * as SplashScreen from "expo-splash-screen";
 import Constants from "expo-constants";
 import { getExtraEnv, hasExtraEnv } from "./src/lib/env";
+import { useI18n } from "./src/i18n/I18nContext";
+import { postDebugIngest } from "./src/lib/debugIngest";
 
 const BOOT_TIMEOUT_MS = 8_000;
 
@@ -177,6 +179,7 @@ const DEBUG_TAP_COUNT = 5;
 const DEBUG_TAP_WINDOW_MS = 2000;
 
 function BootLoader({ children }: { children: React.ReactNode }) {
+  const { t, locale, loaded: i18nLoaded } = useI18n();
   const [state, setState] = useState<BootState>("booting");
   const [error, setError] = useState<string | null>(null);
   const [errorStep, setErrorStep] = useState<string | null>(null);
@@ -200,6 +203,19 @@ function BootLoader({ children }: { children: React.ReactNode }) {
       if (s && s.step !== "boot_complete") setLastBootStep(s);
     }).catch(() => {});
   }, []);
+
+  // #region agent log
+  useEffect(() => {
+    if (state !== "booting") return;
+    const loadingText = t("loading.text");
+    postDebugIngest({
+      hypothesisId: "H2",
+      location: "App.tsx:BootLoader",
+      message: "booting_overlay_i18n",
+      data: { locale, i18nLoaded, loadingText, state },
+    });
+  }, [state, locale, i18nLoaded, t]);
+  // #endregion
 
   useEffect(() => {
     if (showDebugOverlay && bootExceeded6s) {
@@ -383,7 +399,7 @@ function BootLoader({ children }: { children: React.ReactNode }) {
     return (
       <Pressable onPress={handleDebugTap} style={[styles.loading, styles.bootingScreen]}>
         <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.bootingText}>Načítavam…</Text>
+        <Text style={styles.bootingText}>{t("loading.text")}</Text>
         {showLastStep && (
           <View style={[styles.debugOverlay, { position: "absolute", bottom: 24 }]}>
             <Text style={[styles.debugText, { color: "#ff9" }]}>

@@ -154,16 +154,54 @@ export function firestoreTimestampFromDate(date: Date): FirebaseFirestore.Timest
 }
 
 let _TimestampClass: FirebaseFirestore.Timestamp | null = null;
-function getTimestampClass(): FirebaseFirestore.Timestamp {
-  if (!_TimestampClass) _TimestampClass = firestoreInstance().Timestamp;
-  return _TimestampClass;
+/**
+ * Resolve `Timestamp` lazily and tolerate RNFB v23 layouts where it lives only on the
+ * namespace (default export / `firebase.firestore`) and is missing on the firestore *instance*.
+ * Returning `undefined` here would make the surrounding Proxy throw
+ * `TypeError: Cannot convert undefined value to object` from `instanceof Timestamp` callers.
+ */
+function getTimestampClass(): FirebaseFirestore.Timestamp | undefined {
+  if (_TimestampClass) return _TimestampClass;
+  const fromNs = (firestoreDefault as unknown as { Timestamp?: FirebaseFirestore.Timestamp }).Timestamp;
+  if (fromNs) {
+    _TimestampClass = fromNs;
+    return _TimestampClass;
+  }
+  const fromRoot = (rnfbFirebase?.firestore as unknown as { Timestamp?: FirebaseFirestore.Timestamp } | undefined)
+    ?.Timestamp;
+  if (fromRoot) {
+    _TimestampClass = fromRoot;
+    return _TimestampClass;
+  }
+  try {
+    const onInstance = firestoreInstance().Timestamp;
+    if (onInstance) {
+      _TimestampClass = onInstance;
+      return _TimestampClass;
+    }
+  } catch {
+    /* firestore not ready yet */
+  }
+  return undefined;
 }
+/**
+ * `instanceof Timestamp` must never throw. Always return a defined object from `get`
+ * (empty stub when class isn't ready) and a safe `[Symbol.hasInstance]` that uses duck typing.
+ */
+const TIMESTAMP_HAS_INSTANCE = (value: unknown): boolean =>
+  typeof value === "object" && value !== null && typeof (value as { toDate?: unknown }).toDate === "function";
+
 export const Timestamp = new Proxy(function Timestamp() {} as unknown as FirebaseFirestore.Timestamp, {
   get(_, prop) {
-    return (getTimestampClass() as Record<string, unknown>)[prop as string];
+    if (prop === Symbol.hasInstance) return TIMESTAMP_HAS_INSTANCE;
+    const klass = getTimestampClass() as Record<string, unknown> | undefined;
+    if (!klass) return undefined;
+    return klass[prop as string];
   },
   construct(_target, args) {
-    return new (getTimestampClass() as unknown as new (...a: unknown[]) => FirebaseFirestore.Timestamp)(...args);
+    const klass = getTimestampClass();
+    if (!klass) throw new Error("Timestamp class not available yet");
+    return new (klass as unknown as new (...a: unknown[]) => FirebaseFirestore.Timestamp)(...args);
   },
 });
 

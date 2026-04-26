@@ -118,7 +118,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
   const raw = d.createdAt;
   if (raw) {
     if (typeof raw === "string") createdAt = raw;
-    else if (raw && typeof raw === "object" && "toDate" in raw) {
+    else if (raw && typeof raw === "object" && typeof (raw as { toDate?: unknown }).toDate === "function") {
       createdAt = (raw as { toDate: () => Date }).toDate().toISOString();
     }
   }

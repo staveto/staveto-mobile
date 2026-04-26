@@ -5,8 +5,10 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { colors, spacing } from "../../theme";
 import * as equipmentService from "../../services/equipment";
+import { useI18n } from "../../i18n/I18nContext";
 
 export function EquipmentLinkHandlerScreen() {
+  const { t } = useI18n();
   const route = useRoute();
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
@@ -49,17 +51,17 @@ export function EquipmentLinkHandlerScreen() {
       {status === "loading" && (
         <>
           <ActivityIndicator size="large" color={colors.primary} />
-          <Text style={styles.message}>Načítavam zariadenie...</Text>
+          <Text style={styles.message}>{t("equipmentLink.loading")}</Text>
         </>
       )}
       {(status === "not_found" || status === "error") && (
         <>
           <Ionicons name="alert-circle-outline" size={64} color={colors.textMuted} />
           <Text style={styles.message}>
-            {status === "not_found" ? "Zariadenie nebolo nájdené." : "Nastala chyba pri načítaní."}
+            {status === "not_found" ? t("equipmentLink.notFound") : t("equipmentLink.loadError")}
           </Text>
           <TouchableOpacity style={styles.backBtn} onPress={goBack}>
-            <Text style={styles.backBtnText}>Späť</Text>
+            <Text style={styles.backBtnText}>{t("common.back")}</Text>
           </TouchableOpacity>
         </>
       )}

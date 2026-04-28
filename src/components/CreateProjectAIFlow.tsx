@@ -83,6 +83,15 @@ function normalizeAiErrorMessage(message: string): string {
   return message.replace(/^\[internal\]\s*/i, "").replace(/\s*\[internal\]\s*/gi, " ").trim();
 }
 
+type UploadStatus = "local" | "uploading" | "uploaded" | "failed";
+
+type DraftAttachment = AiDraftDocument & {
+  id: string;
+  status: UploadStatus;
+  storagePath?: string;
+  errorCode?: string;
+};
+
 function getAiErrorMessage(code: string | undefined, message: string, t: (key: string) => string): string {
   const cleaned = normalizeAiErrorMessage(message);
   const codeLower = normalizeCallableErrorCode(code);
@@ -104,6 +113,27 @@ function getAiErrorMessage(code: string | undefined, message: string, t: (key: s
     return t("createProject.ai.error") || "AI nemohla vytvoriť plán. Skús znova alebo vytvor manuálne.";
   }
   return cleaned && cleaned.length < 120 ? cleaned : (t("createProject.ai.error") || "AI nemohla vytvoriť plán. Skús znova alebo vytvor manuálne.");
+}
+
+function mapStorageUploadErrorToMessage(
+  err: unknown,
+  t: (key: string) => string
+): { message: string; code: string } {
+  const e = err as { code?: string; message?: string };
+  const code = String(e?.code ?? "").toLowerCase();
+  const msg = String(e?.message ?? "");
+
+  const isUnauthorized = code.includes("unauthorized") || msg.toLowerCase().includes("permission-denied");
+  if (isUnauthorized) {
+    return { code: "storage/unauthorized", message: t("createProject.ai.uploadErrorUnauthorized") };
+  }
+  if (code.includes("canceled") || code.includes("cancelled")) {
+    return { code: "storage/canceled", message: t("createProject.ai.uploadErrorCanceled") };
+  }
+  if (msg.toLowerCase().includes("network") || msg.toLowerCase().includes("timeout")) {
+    return { code: code || "network", message: t("createProject.ai.uploadErrorNetwork") };
+  }
+  return { code: code || "unknown", message: t("createProject.ai.uploadErrorUnknown") };
 }
 
 function isWeakAiTitle(title: string): boolean {
@@ -216,7 +246,8 @@ export function CreateProjectAIFlow({
 
   const [step, setStep] = useState<Step>("brief");
   const [brief, setBrief] = useState("");
-  const [documents, setDocuments] = useState<AiDraftDocument[]>([]);
+  const [documents, setDocuments] = useState<DraftAttachment[]>([]);
+  const [draftId, setDraftId] = useState<string | null>(null);
   const [roofType, setRoofType] = useState("");
   const [areaM2, setAreaM2] = useState("");
   const [floorCount, setFloorCount] = useState("");
@@ -228,6 +259,7 @@ export function CreateProjectAIFlow({
   const [error, setError] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingDocs, setUploadingDocs] = useState(false);
+  const [showOptionalDetails, setShowOptionalDetails] = useState(false);
 
   useEffect(() => {
     const seed = initialBrief?.trim();
@@ -264,10 +296,12 @@ export function CreateProjectAIFlow({
         quality: 0.8,
       });
       if (!result.canceled && result.assets?.length) {
-        const newDocs = result.assets.map((asset, i) => ({
+        const newDocs: DraftAttachment[] = result.assets.map((asset, i) => ({
+          id: `img_${Date.now()}_${Math.random().toString(36).slice(2, 9)}_${i}`,
           localUri: asset.uri,
           fileName: asset.fileName ?? `foto_${Date.now()}_${i}.jpg`,
           mimeType: asset.mimeType ?? "image/jpeg",
+          status: "local",
         }));
         setDocuments((prev) => [...prev, ...newDocs]);
       }
@@ -291,7 +325,16 @@ export function CreateProjectAIFlow({
       if (!result?.canceled && asset?.uri) {
         const mimeType = asset.mimeType ?? "application/pdf";
         const fileName = asset.name ?? `dokument_${Date.now()}.pdf`;
-        setDocuments((prev) => [...prev, { localUri: asset.uri, fileName, mimeType }]);
+        setDocuments((prev) => [
+          ...prev,
+          {
+            id: `doc_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+            localUri: asset.uri,
+            fileName,
+            mimeType,
+            status: "local",
+          },
+        ]);
       }
     } catch (err) {
       console.error("[CreateProjectAIFlow] Document pick error:", err);
@@ -299,8 +342,40 @@ export function CreateProjectAIFlow({
     }
   };
 
-  const removeDocument = (index: number) => {
-    setDocuments((prev) => prev.filter((_, i) => i !== index));
+  const removeDocument = (id: string) => {
+    setDocuments((prev) => prev.filter((d) => d.id !== id));
+  };
+
+  const ensureDraftId = (): string => {
+    if (draftId) return draftId;
+    const created = `draft_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
+    setDraftId(created);
+    return created;
+  };
+
+  const uploadSingleDoc = async (doc: DraftAttachment): Promise<DraftAttachment> => {
+    if (doc.status === "uploaded" && doc.storagePath) return doc;
+    const effectiveDraftId = ensureDraftId();
+    setDocuments((prev) =>
+      prev.map((d) => (d.id === doc.id ? { ...d, status: "uploading", errorCode: undefined } : d))
+    );
+    try {
+      const path = await uploadAiDraftDocument(
+        { localUri: doc.localUri, fileName: doc.fileName, mimeType: doc.mimeType },
+        effectiveDraftId
+      );
+      const updated: DraftAttachment = { ...doc, status: "uploaded", storagePath: path, errorCode: undefined };
+      setDocuments((prev) => prev.map((d) => (d.id === doc.id ? updated : d)));
+      return updated;
+    } catch (e) {
+      const mapped = mapStorageUploadErrorToMessage(e, t);
+      if (__DEV__) {
+        console.warn("[CreateProjectAIFlow] upload failed", { code: mapped.code, fileName: doc.fileName });
+      }
+      const failed: DraftAttachment = { ...doc, status: "failed", errorCode: mapped.code };
+      setDocuments((prev) => prev.map((d) => (d.id === doc.id ? failed : d)));
+      return failed;
+    }
   };
 
   const runGeneration = async () => {
@@ -317,10 +392,17 @@ export function CreateProjectAIFlow({
       let documentStoragePaths: string[] = [];
       if (documents.length > 0) {
         setUploadingDocs(true);
-        const draftId = `draft_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-        for (const doc of documents) {
-          const path = await uploadAiDraftDocument(doc, draftId);
-          documentStoragePaths.push(path);
+        const toUpload = documents.filter((d) => d.status !== "uploaded");
+        const alreadyUploaded = documents.filter((d) => d.status === "uploaded" && !!d.storagePath);
+
+        for (const d of toUpload) {
+          const updated = await uploadSingleDoc(d);
+          if (updated.status === "uploaded" && updated.storagePath) {
+            documentStoragePaths.push(updated.storagePath);
+          }
+        }
+        for (const d of alreadyUploaded) {
+          if (d.storagePath) documentStoragePaths.push(d.storagePath);
         }
         setUploadingDocs(false);
       }
@@ -376,10 +458,16 @@ export function CreateProjectAIFlow({
       let documentStoragePaths: string[] = [];
       if (documents.length > 0) {
         setUploadingDocs(true);
-        const draftId = `draft_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`;
-        for (const doc of documents) {
-          const path = await uploadAiDraftDocument(doc, draftId);
-          documentStoragePaths.push(path);
+        const toUpload = documents.filter((d) => d.status !== "uploaded");
+        const alreadyUploaded = documents.filter((d) => d.status === "uploaded" && !!d.storagePath);
+        for (const d of toUpload) {
+          const updated = await uploadSingleDoc(d);
+          if (updated.status === "uploaded" && updated.storagePath) {
+            documentStoragePaths.push(updated.storagePath);
+          }
+        }
+        for (const d of alreadyUploaded) {
+          if (d.storagePath) documentStoragePaths.push(d.storagePath);
         }
         setUploadingDocs(false);
       }
@@ -475,15 +563,22 @@ export function CreateProjectAIFlow({
   }
 
   if (step === "brief") {
+    const failedUploadsCount = documents.filter((d) => d.status === "failed").length;
+    const hasAnyAttachments = documents.length > 0;
+
     return (
       <KeyboardAvoidingView
         behavior={Platform.OS === "ios" ? "padding" : undefined}
         style={styles.container}
       >
         <ScrollView style={styles.briefScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
-          <Text style={styles.question}>
-            {isTradeAi ? t("createProject.ai.questionTrade") : t("createProject.ai.question")}
+          <Text style={styles.title}>{t("createProject.ai.title")}</Text>
+          <Text style={styles.subtitle}>{t("createProject.ai.subtitle")}</Text>
+
+          <Text style={styles.mainLabel}>
+            {isTradeAi ? t("createProject.ai.mainLabelTrade") : t("createProject.ai.mainLabel")}
           </Text>
+          <Text style={styles.mainHelper}>{t("createProject.ai.mainHelper")}</Text>
           {initialBrief?.trim() ? (
             <Text style={styles.briefPrefilledHint}>{t("createProject.ai.briefPrefilledHint")}</Text>
           ) : null}
@@ -494,81 +589,96 @@ export function CreateProjectAIFlow({
               setBrief(text);
               setError(null);
             }}
-            placeholder={isTradeAi ? t("createProject.ai.placeholderTrade") : t("createProject.ai.placeholder")}
+            placeholder={isTradeAi ? t("createProject.ai.mainPlaceholderTrade") : t("createProject.ai.mainPlaceholder")}
             placeholderTextColor={colors.textMuted}
             multiline
             numberOfLines={4}
             editable={true}
           />
-          {isTradeAi ? (
-            <>
-              <Text style={styles.sectionLabel}>{t("createProject.ai.tradeOptionalSection")}</Text>
-              <Text style={styles.tradeFieldLabel}>{t("createProject.ai.tradeLocationLabel")}</Text>
-              <TextInput
-                style={styles.tradeFieldInput}
-                value={tradeLocation}
-                onChangeText={setTradeLocation}
-                placeholder={t("createProject.ai.tradeLocationPlaceholder")}
-                placeholderTextColor={colors.textMuted}
-              />
-              <Text style={styles.tradeFieldLabel}>{t("createProject.ai.tradeClientLabel")}</Text>
-              <TextInput
-                style={styles.tradeFieldInput}
-                value={tradeClientObject}
-                onChangeText={setTradeClientObject}
-                placeholder={t("createProject.ai.tradeClientPlaceholder")}
-                placeholderTextColor={colors.textMuted}
-              />
-              <Text style={styles.tradeFieldLabel}>{t("createProject.ai.tradeNotesLabel")}</Text>
-              <TextInput
-                style={[styles.tradeFieldInput, styles.tradeNotesInput]}
-                value={tradeNotes}
-                onChangeText={setTradeNotes}
-                placeholder={t("createProject.ai.tradeNotesPlaceholder")}
-                placeholderTextColor={colors.textMuted}
-                multiline
-                textAlignVertical="top"
-              />
-            </>
-          ) : (
-            <>
-              <Text style={styles.sectionLabel}>{t("createProject.ai.buildDetailsSection")}</Text>
-              <View style={styles.basicFieldsRow}>
-                <View style={styles.basicField}>
-                  <Text style={styles.basicFieldLabel}>{t("createProject.ai.roofType")}</Text>
-                  <TextInput
-                    style={styles.basicFieldInput}
-                    value={roofType}
-                    onChangeText={setRoofType}
-                    placeholder={t("createProject.ai.roofTypePlaceholder")}
-                    placeholderTextColor={colors.textMuted}
-                  />
-                </View>
-                <View style={styles.basicField}>
-                  <Text style={styles.basicFieldLabel}>{t("createProject.ai.areaM2")}</Text>
-                  <TextInput
-                    style={styles.basicFieldInput}
-                    value={areaM2}
-                    onChangeText={setAreaM2}
-                    placeholder={t("createProject.ai.areaPlaceholder")}
-                    placeholderTextColor={colors.textMuted}
-                    keyboardType="numeric"
-                  />
-                </View>
-                <View style={styles.basicField}>
-                  <Text style={styles.basicFieldLabel}>{t("createProject.ai.floorCount")}</Text>
-                  <TextInput
-                    style={styles.basicFieldInput}
-                    value={floorCount}
-                    onChangeText={setFloorCount}
-                    placeholder={t("createProject.ai.floorPlaceholder")}
-                    placeholderTextColor={colors.textMuted}
-                    keyboardType="numeric"
-                  />
+          <TouchableOpacity
+            style={styles.optionalToggle}
+            onPress={() => setShowOptionalDetails((v) => !v)}
+            activeOpacity={0.85}
+          >
+            <Text style={styles.optionalToggleText}>
+              {isTradeAi ? t("createProject.ai.tradeOptionalSection") : t("createProject.ai.buildDetailsSection")}
+            </Text>
+            <Ionicons
+              name={showOptionalDetails ? "chevron-up" : "chevron-down"}
+              size={18}
+              color={colors.textMuted}
+            />
+          </TouchableOpacity>
+
+          {showOptionalDetails ? (
+            isTradeAi ? (
+              <View style={styles.optionalCard}>
+                <Text style={styles.tradeFieldLabel}>{t("createProject.ai.tradeLocationLabel")}</Text>
+                <TextInput
+                  style={styles.tradeFieldInput}
+                  value={tradeLocation}
+                  onChangeText={setTradeLocation}
+                  placeholder={t("createProject.ai.tradeLocationPlaceholder")}
+                  placeholderTextColor={colors.textMuted}
+                />
+                <Text style={styles.tradeFieldLabel}>{t("createProject.ai.tradeClientLabel")}</Text>
+                <TextInput
+                  style={styles.tradeFieldInput}
+                  value={tradeClientObject}
+                  onChangeText={setTradeClientObject}
+                  placeholder={t("createProject.ai.tradeClientPlaceholder")}
+                  placeholderTextColor={colors.textMuted}
+                />
+                <Text style={styles.tradeFieldLabel}>{t("createProject.ai.tradeNotesLabel")}</Text>
+                <TextInput
+                  style={[styles.tradeFieldInput, styles.tradeNotesInput]}
+                  value={tradeNotes}
+                  onChangeText={setTradeNotes}
+                  placeholder={t("createProject.ai.tradeNotesPlaceholder")}
+                  placeholderTextColor={colors.textMuted}
+                  multiline
+                  textAlignVertical="top"
+                />
+              </View>
+            ) : (
+              <View style={styles.optionalCard}>
+                <View style={styles.basicFieldsRow}>
+                  <View style={styles.basicField}>
+                    <Text style={styles.basicFieldLabel}>{t("createProject.ai.roofType")}</Text>
+                    <TextInput
+                      style={styles.basicFieldInput}
+                      value={roofType}
+                      onChangeText={setRoofType}
+                      placeholder={t("createProject.ai.roofTypePlaceholder")}
+                      placeholderTextColor={colors.textMuted}
+                    />
+                  </View>
+                  <View style={styles.basicField}>
+                    <Text style={styles.basicFieldLabel}>{t("createProject.ai.areaM2")}</Text>
+                    <TextInput
+                      style={styles.basicFieldInput}
+                      value={areaM2}
+                      onChangeText={setAreaM2}
+                      placeholder={t("createProject.ai.areaPlaceholder")}
+                      placeholderTextColor={colors.textMuted}
+                      keyboardType="numeric"
+                    />
+                  </View>
+                  <View style={styles.basicField}>
+                    <Text style={styles.basicFieldLabel}>{t("createProject.ai.floorCount")}</Text>
+                    <TextInput
+                      style={styles.basicFieldInput}
+                      value={floorCount}
+                      onChangeText={setFloorCount}
+                      placeholder={t("createProject.ai.floorPlaceholder")}
+                      placeholderTextColor={colors.textMuted}
+                      keyboardType="numeric"
+                    />
+                  </View>
                 </View>
               </View>
-            </>
-          )}
+            )
+          ) : null}
           <View style={styles.attachSection}>
             <Text style={styles.attachSectionTitle}>
               {isTradeAi ? t("createProject.ai.attachTitleTrade") : t("createProject.ai.attachTitle")}
@@ -591,28 +701,100 @@ export function CreateProjectAIFlow({
               </TouchableOpacity>
             </View>
           </View>
-          {documents.length > 0 && (
+          {hasAnyAttachments ? (
             <View style={styles.docList}>
-              {documents.map((doc, i) => {
+              {documents.map((doc) => {
                 const isImage = (doc.mimeType ?? "").startsWith("image/");
+                const statusIcon =
+                  doc.status === "uploaded"
+                    ? "checkmark-circle"
+                    : doc.status === "failed"
+                      ? "alert-circle"
+                      : doc.status === "uploading"
+                        ? "cloud-upload-outline"
+                        : "time-outline";
+                const statusColor =
+                  doc.status === "uploaded"
+                    ? colors.success ?? "#2e7d32"
+                    : doc.status === "failed"
+                      ? "#c62828"
+                      : colors.textMuted;
+
+                const statusText =
+                  doc.status === "uploaded"
+                    ? t("createProject.ai.uploadStatusUploaded")
+                    : doc.status === "uploading"
+                      ? t("createProject.ai.uploadStatusUploading")
+                      : doc.status === "failed"
+                        ? t("createProject.ai.uploadStatusFailed")
+                        : t("createProject.ai.uploadStatusPending");
+
+                const humanErr =
+                  doc.status === "failed"
+                    ? mapStorageUploadErrorToMessage({ code: doc.errorCode }, t).message
+                    : null;
+
                 return (
-                  <View key={i} style={styles.docItem}>
+                  <View key={doc.id} style={styles.docItem}>
                     <Ionicons
                       name={isImage ? "image-outline" : "document-text-outline"}
                       size={18}
                       color={colors.primary}
                     />
-                    <Text style={styles.docName} numberOfLines={1}>
-                      {doc.fileName}
-                    </Text>
-                    <TouchableOpacity onPress={() => removeDocument(i)} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-                      <Ionicons name="close-circle" size={22} color={colors.textMuted} />
-                    </TouchableOpacity>
+                    <View style={styles.docMain}>
+                      <Text style={styles.docName} numberOfLines={1}>
+                        {doc.fileName}
+                      </Text>
+                      <View style={styles.docMetaRow}>
+                        <Ionicons name={statusIcon as any} size={14} color={statusColor} />
+                        <Text style={[styles.docStatusText, doc.status === "failed" && styles.docStatusTextError]}>
+                          {statusText}
+                        </Text>
+                      </View>
+                      {humanErr ? <Text style={styles.docErrorText}>{humanErr}</Text> : null}
+                    </View>
+
+                    {doc.status === "failed" ? (
+                      <View style={styles.docActions}>
+                        <TouchableOpacity
+                          onPress={() => uploadSingleDoc(doc)}
+                          style={styles.docActionBtn}
+                          activeOpacity={0.85}
+                        >
+                          <Text style={styles.docActionText}>{t("createProject.ai.retry")}</Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          onPress={() => removeDocument(doc.id)}
+                          style={styles.docActionBtn}
+                          activeOpacity={0.85}
+                        >
+                          <Text style={styles.docActionText}>{t("createProject.ai.remove")}</Text>
+                        </TouchableOpacity>
+                      </View>
+                    ) : (
+                      <TouchableOpacity
+                        onPress={() => removeDocument(doc.id)}
+                        hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                        disabled={doc.status === "uploading"}
+                      >
+                        <Ionicons name="close-circle" size={22} color={colors.textMuted} />
+                      </TouchableOpacity>
+                    )}
                   </View>
                 );
               })}
             </View>
-          )}
+          ) : null}
+
+          <View style={styles.aiInfoBox}>
+            <Ionicons name="information-circle-outline" size={18} color={colors.textMuted} />
+            <Text style={styles.aiInfoText}>{t("createProject.ai.disclaimer")}</Text>
+          </View>
+
+          {failedUploadsCount > 0 ? (
+            <Text style={styles.attachNonBlockingHint}>{t("createProject.ai.attachNonBlockingHint")}</Text>
+          ) : null}
+
           {error ? <Text style={styles.errorText}>{error}</Text> : null}
           <View style={styles.actions}>
             <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={runGeneration}>
@@ -788,12 +970,30 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: spacing.xl,
   },
-  question: {
-    fontSize: 15,
-    fontWeight: "600",
+  title: {
+    fontSize: 20,
+    fontWeight: "700",
     color: colors.text,
-    marginBottom: spacing.sm,
+    marginBottom: 4,
+  },
+  subtitle: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginBottom: spacing.md,
+    lineHeight: 18,
+  },
+  mainLabel: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: 4,
     lineHeight: 22,
+  },
+  mainHelper: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
+    lineHeight: 18,
   },
   briefPrefilledHint: {
     fontSize: 13,
@@ -816,18 +1016,31 @@ const styles = StyleSheet.create({
   briefScroll: {
     flex: 1,
   },
-  sectionLabel: {
-    fontSize: 14,
-    fontWeight: "600",
-    color: colors.text,
-    marginBottom: spacing.sm,
-    marginTop: spacing.sm,
+  optionalToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  optionalToggleText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.textMuted,
+  },
+  optionalCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
   },
   basicFieldsRow: {
     flexDirection: "row",
     flexWrap: "wrap",
     gap: spacing.sm,
-    marginBottom: spacing.md,
+    marginBottom: 0,
   },
   basicField: {
     flex: 1,
@@ -871,7 +1084,7 @@ const styles = StyleSheet.create({
     textAlignVertical: "top",
   },
   attachSection: {
-    backgroundColor: colors.background,
+    backgroundColor: colors.card,
     borderRadius: radius,
     padding: spacing.md,
     marginBottom: spacing.md,
@@ -902,7 +1115,7 @@ const styles = StyleSheet.create({
     width: 56,
     height: 56,
     borderRadius: 12,
-    backgroundColor: colors.primary + "14",
+    backgroundColor: colors.primary + "10",
     alignItems: "center",
     justifyContent: "center",
     marginBottom: spacing.xs,
@@ -921,12 +1134,79 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     gap: spacing.sm,
-    paddingVertical: spacing.xs,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  docMain: {
+    flex: 1,
+    minWidth: 0,
   },
   docName: {
-    flex: 1,
     fontSize: 13,
     color: colors.text,
+    marginBottom: 2,
+  },
+  docMetaRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+  },
+  docStatusText: {
+    fontSize: 12,
+    color: colors.textMuted,
+  },
+  docStatusTextError: {
+    color: "#c62828",
+  },
+  docErrorText: {
+    marginTop: 4,
+    fontSize: 12,
+    color: "#c62828",
+    lineHeight: 16,
+  },
+  docActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    alignItems: "center",
+  },
+  docActionBtn: {
+    paddingVertical: 6,
+    paddingHorizontal: 10,
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.background,
+  },
+  docActionText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  aiInfoBox: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    padding: spacing.md,
+    backgroundColor: colors.background,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.sm,
+  },
+  aiInfoText: {
+    flex: 1,
+    fontSize: 13,
+    color: colors.textMuted,
+    lineHeight: 18,
+  },
+  attachNonBlockingHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
+    lineHeight: 16,
   },
   generatingText: {
     marginTop: spacing.md,

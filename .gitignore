@@ -29,6 +29,9 @@ yarn-error.*
 # Cursor / local IDE logs (do not commit)
 .cursor/
 
+# EAS build logs (local)
+.eas-build-*.log
+
 # Windows folder metadata
 desktop.ini
 

@@ -104,11 +104,6 @@ service firebase.storage {
         && request.resource.size < 10 * 1024 * 1024;
     }
 
-    // Deny all other paths (must come after specific matches)
-    match /{allPaths=**} {
-      allow read, write: if false;
-    }
-
     // User profile photos
     match /users/{userId}/profile/{fileName} {
       allow read: if signedIn() && uid() == userId;
@@ -121,6 +116,11 @@ service firebase.storage {
       allow read: if signedIn() && uid() == userId;
       allow write: if signedIn() && uid() == userId
         && request.resource.size < 20 * 1024 * 1024; // Max 20MB per document
+    }
+
+    // Deny all other paths (must come after specific matches)
+    match /{allPaths=**} {
+      allow read, write: if false;
     }
   }
 }

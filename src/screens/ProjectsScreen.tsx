@@ -142,11 +142,11 @@ export function ProjectsScreen() {
   const [newStep, setNewStep] = useState<1 | 2 | 3>(1);
   const [selectedType, setSelectedType] = useState<ProjectCreationType | null>(null);
   const [wizardResult, setWizardResult] = useState<WizardResult | null>(null);
-  const [creationMethod, setCreationMethod] = useState<CreationMethod>("template");
+  const [creationMethod, setCreationMethod] = useState<CreationMethod>("empty");
   const [creationPath, setCreationPath] = useState<"ai" | "manual">("manual");
   const [newName, setNewName] = useState("");
   const [newAddress, setNewAddress] = useState("");
-  const [newCountry, setNewCountry] = useState<string>("SK");
+  const [newCountry, setNewCountry] = useState<string>("");
   const [newCity, setNewCity] = useState("");
   const [newNote, setNewNote] = useState("");
   const [templateId, setTemplateId] = useState<string>("");
@@ -155,6 +155,7 @@ export function ProjectsScreen() {
   const [loadingPhases, setLoadingPhases] = useState(false);
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [showManualOptional, setShowManualOptional] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [editProject, setEditProject] = useState<Project | null>(null);
   const [editName, setEditName] = useState("");
@@ -444,7 +445,7 @@ export function ProjectsScreen() {
         setNewStep(1);
         setSelectedType(null);
         setWizardResult(null);
-        setCreationMethod("template");
+        setCreationMethod("empty");
         setCreationPath("manual");
         setNewName("");
         resetTemplateSelectionState();
@@ -457,17 +458,18 @@ export function ProjectsScreen() {
   const closeNewModal = () => {
     setShowNew(false);
     setNewStep(1);
-    setNewCountry("SK");
+    setNewCountry("");
     setNewCity("");
     setNewNote("");
     setSelectedType(null);
     setWizardResult(null);
-    setCreationMethod("template");
+    setCreationMethod("empty");
     setCreationPath("manual");
     setNewName("");
     setNewAddress("");
     resetTemplateSelectionState();
     setError(null);
+    setShowManualOptional(false);
   };
 
   const handleWizardComplete = useCallback(
@@ -492,12 +494,9 @@ export function ProjectsScreen() {
         setCreationPath("ai");
         setCreationMethod("empty");
       } else {
-        setCreationMethod(result.creationMode === "TEMPLATE" ? "template" : "empty");
-        if (result.creationMode === "TEMPLATE" && result.engineType === "BUILD") {
-          setCreationMethod("template");
-        } else if (result.creationMode === "MANUAL") {
-          setCreationMethod("empty");
-        }
+        // Manual fallback: always create empty project (templates are not exposed in UI)
+        setCreationPath("manual");
+        setCreationMethod("empty");
       }
       setError(null);
       setNewStep(2);
@@ -506,31 +505,9 @@ export function ProjectsScreen() {
   );
 
   useEffect(() => {
-    if (
-      selectedType === "BUILD" &&
-      newStep === 2 &&
-      creationMethod === "template" &&
-      !loadingPhases &&
-      (!templatePhases.length || templateId !== resolveTemplateIdForCountry(newCountry?.trim() || undefined))
-    ) {
-      loadTemplatePhasesForCountry(newCountry?.trim() || undefined);
-      return;
-    }
-
-    if (selectedType !== "BUILD" || creationMethod === "empty") {
-      resetTemplateSelectionState();
-    }
-  }, [
-    selectedType,
-    newStep,
-    creationMethod,
-    newCountry,
-    loadingPhases,
-    templatePhases.length,
-    templateId,
-    loadTemplatePhasesForCountry,
-    resetTemplateSelectionState,
-  ]);
+    // Templates are no longer exposed in create flow — keep manual create empty and clear any template state.
+    resetTemplateSelectionState();
+  }, [resetTemplateSelectionState]);
 
   const onNext = async () => {
     if (newStep === 1) {
@@ -543,15 +520,19 @@ export function ProjectsScreen() {
       }
 
       setError(null);
-      setNewStep(3);
+      await onCreate();
     }
   };
 
   const onBack = () => {
     if (newStep === 2) {
+      // If user came from AI-first flow, go back to AI screen.
+      if (creationPath === "manual" && wizardResult?.creationMode === "AI") {
+        setCreationPath("ai");
+        setError(null);
+        return;
+      }
       setNewStep(1);
-      setSelectedType(null);
-      setWizardResult(null);
       setError(null);
     } else if (newStep === 3) {
       setNewStep(2);
@@ -586,20 +567,16 @@ export function ProjectsScreen() {
     setSubmitting(true);
     
     try {
-      const shouldUseTemplate = shouldUseCountryCatalogTemplate({ selectedType, creationMethod });
-      const countryCodeForCreate = newCountry.trim() || undefined;
-      const finalTemplateId = shouldUseTemplate
-        ? resolveTemplateIdForCountry(countryCodeForCreate)
-        : "";
+      const shouldUseTemplate = false; // templates are hidden from create flow
+      const countryCodeForCreate = undefined;
+      const finalTemplateId = "";
 
       console.log(
         `[ProjectsScreen] Creating project: type="${selectedType}", name="${newName.trim()}", templateId="${finalTemplateId}"`
       );
       
       // Prepare phase customizations array
-      const customizationsArray = shouldUseTemplate && phaseCustomizations.size > 0
-        ? Array.from(phaseCustomizations.values())
-        : undefined;
+      const customizationsArray = undefined;
       
       console.log(`[ProjectsScreen] Phase customizations:`, customizationsArray);
       
@@ -747,7 +724,7 @@ export function ProjectsScreen() {
     setNewStep(1);
     setSelectedType(null);
     setWizardResult(null);
-    setCreationMethod("template");
+    setCreationMethod("empty");
     setCreationPath("manual");
     setNewName("");
     setNewAddress("");
@@ -1390,13 +1367,17 @@ export function ProjectsScreen() {
       </Modal>
       <Modal visible={showNew} transparent animationType="slide">
         <KeyboardAvoidingView
-          style={[styles.modalOverlay, (creationPath === "ai" || newStep === 1) && styles.modalOverlayHero]}
+          style={[styles.modalOverlay, (creationPath === "ai" || newStep === 1 || (creationPath === "manual" && newStep === 2)) && styles.modalOverlayHero]}
           behavior="padding"
           keyboardVerticalOffset={0}
         >
-          <View style={[styles.modal, (creationPath === "ai" || newStep === 1) && styles.modalHero, (creationPath === "ai" || newStep === 1) && { height: heroModalHeight }]}>
+          <View style={[styles.modal, (creationPath === "ai" || newStep === 1 || (creationPath === "manual" && newStep === 2)) && styles.modalHero, (creationPath === "ai" || newStep === 1 || (creationPath === "manual" && newStep === 2)) && { height: heroModalHeight }]}>
             <Text style={styles.modalTitle}>
-              {creationPath === "ai" ? t("createProject.ai.title") : t("projects.modalTitle")}
+              {creationPath === "ai"
+                ? t("createProject.ai.title")
+                : creationPath === "manual" && newStep === 2
+                  ? t("createProject.manualEmpty.title")
+                  : t("projects.modalTitle")}
             </Text>
             {creationPath === "ai" ? (
               <View style={styles.stepOneBody}>
@@ -1416,15 +1397,6 @@ export function ProjectsScreen() {
                     setCreationMethod("empty");
                     setNewStep(2);
                   }}
-                  onUseTemplate={
-                    wizardResult?.engineType === "BUILD"
-                      ? () => {
-                          setCreationPath("manual");
-                          setCreationMethod("template");
-                          setNewStep(2);
-                        }
-                      : undefined
-                  }
                   onCancel={closeNewModal}
                 />
               </View>
@@ -1451,171 +1423,87 @@ export function ProjectsScreen() {
               >
               {newStep === 2 ? (
               <>
+                    <Text style={styles.manualSubtitle}>{t("createProject.manualEmpty.subtitle")}</Text>
+
                     <Text style={styles.modalLabel}>{t("projects.namePlaceholder")} *</Text>
                     <TextInput
-                      style={styles.inputWhite}
+                      style={styles.manualInput}
                       value={newName}
                       onChangeText={(text) => {
                         setNewName(text);
                         setError(null);
                       }}
                       placeholder={t("projects.namePlaceholder")}
-                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
+                      placeholderTextColor={colors.textMuted}
                       editable={!submitting}
                       autoFocus={true}
                     />
-                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.country")}</Text>
-                    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={{ marginBottom: spacing.sm }}>
-                      {COUNTRY_CODES.slice(0, 12).map((code) => (
-                        <TouchableOpacity
-                          key={code}
-                          style={[styles.countryChip, newCountry === code && styles.countryChipActive]}
-                          onPress={() => {
-                            setNewCountry(code);
-                            if (
-                              selectedType === "BUILD" &&
-                              creationMethod === "template"
-                            ) {
-                              resetTemplateSelectionState();
-                            }
+
+                    <TouchableOpacity
+                      style={styles.manualOptionalToggle}
+                      onPress={() => setShowManualOptional((v) => !v)}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={styles.manualOptionalToggleText}>{t("createProject.manualEmpty.optionalDetails")}</Text>
+                      <Ionicons
+                        name={showManualOptional ? "chevron-up" : "chevron-down"}
+                        size={18}
+                        color={colors.textMuted}
+                      />
+                    </TouchableOpacity>
+
+                    {showManualOptional ? (
+                      <View style={styles.manualOptionalCard}>
+                        <Text style={styles.modalLabel}>{t("projects.city")}</Text>
+                        <TextInput
+                          style={styles.manualInput}
+                          value={newCity}
+                          onChangeText={(text) => {
+                            setNewCity(text);
+                            setError(null);
                           }}
-                        >
-                          <Text style={[styles.countryChipText, newCountry === code && styles.countryChipTextActive]}>
-                            {getLocalizedCountryName(code, locale)}
-                          </Text>
-                        </TouchableOpacity>
-                      ))}
-                    </ScrollView>
-                    <Text style={[styles.modalLabel, { marginTop: spacing.xs }]}>{t("projects.city")}</Text>
-                    <TextInput
-                      style={styles.inputWhite}
-                      value={newCity}
-                      onChangeText={(text) => { setNewCity(text); setError(null); }}
-                      placeholder={t("projects.cityPlaceholder")}
-                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
-                      editable={!submitting}
-                    />
-                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("projects.address")}</Text>
-                    <TextInput
-                      style={styles.inputWhite}
-                      value={newAddress}
-                      onChangeText={(text) => {
-                        setNewAddress(text);
-                        setError(null);
-                      }}
-                      placeholder={t("createProject.addressPlaceholder")}
-                      placeholderTextColor="rgba(255, 255, 255, 0.7)"
-                      editable={!submitting}
-                    />
+                          placeholder={t("projects.cityPlaceholder")}
+                          placeholderTextColor={colors.textMuted}
+                          editable={!submitting}
+                        />
 
-                {selectedType === "BUILD" && (
-                  <>
-                    <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("createProject.howToStart")}</Text>
-                    <View style={styles.templateChoiceColumn}>
-                      <TouchableOpacity
-                        style={[styles.templateChoiceCard, creationMethod === "template" && styles.templateChoiceCardActive]}
-                        onPress={() => {
-                          setCreationMethod("template");
-                          setError(null);
-                        }}
-                      >
-                        <View style={styles.templateChoiceHeader}>
-                          <Ionicons
-                            name={creationMethod === "template" ? "radio-button-on" : "radio-button-off"}
-                            size={18}
-                            color={creationMethod === "template" ? colors.primary : colors.textMuted}
-                          />
-                          <Text style={[styles.templateChoiceText, creationMethod === "template" && styles.templateChoiceTextActive]}>
-                            {t("createProject.method.template.title", { country: newCountry || "SK" })}
-                          </Text>
+                        <Text style={[styles.modalLabel, { marginTop: spacing.xs }]}>{t("projects.address")}</Text>
+                        <TextInput
+                          style={styles.manualInput}
+                          value={newAddress}
+                          onChangeText={(text) => {
+                            setNewAddress(text);
+                            setError(null);
+                          }}
+                          placeholder={t("createProject.addressPlaceholder")}
+                          placeholderTextColor={colors.textMuted}
+                          editable={!submitting}
+                        />
+
+                        <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("createProject.manualEmpty.projectType")}</Text>
+                        <View style={styles.manualTypeRow}>
+                          <TouchableOpacity
+                            style={[styles.manualTypeChip, selectedType === "TRADE" && styles.manualTypeChipActive]}
+                            onPress={() => setSelectedType("TRADE")}
+                            activeOpacity={0.85}
+                          >
+                            <Text style={[styles.manualTypeChipText, selectedType === "TRADE" && styles.manualTypeChipTextActive]}>
+                              {t("projectType.TRADE")}
+                            </Text>
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={[styles.manualTypeChip, selectedType === "BUILD" && styles.manualTypeChipActive]}
+                            onPress={() => setSelectedType("BUILD")}
+                            activeOpacity={0.85}
+                          >
+                            <Text style={[styles.manualTypeChipText, selectedType === "BUILD" && styles.manualTypeChipTextActive]}>
+                              {t("projectType.BUILD")}
+                            </Text>
+                          </TouchableOpacity>
                         </View>
-                        <Text style={styles.templateChoiceSubtext}>{t("createProject.method.template.helper")}</Text>
-                      </TouchableOpacity>
-
-                      <TouchableOpacity
-                        style={[styles.templateChoiceCard, creationMethod === "empty" && styles.templateChoiceCardActive]}
-                        onPress={() => {
-                          setCreationMethod("empty");
-                          setError(null);
-                        }}
-                      >
-                        <View style={styles.templateChoiceHeader}>
-                          <Ionicons
-                            name={creationMethod === "empty" ? "radio-button-on" : "radio-button-off"}
-                            size={18}
-                            color={creationMethod === "empty" ? colors.primary : colors.textMuted}
-                          />
-                          <Text style={[styles.templateChoiceText, creationMethod === "empty" && styles.templateChoiceTextActive]}>
-                            {t("createProject.method.empty.title")}
-                          </Text>
-                        </View>
-                        <Text style={styles.templateChoiceSubtext}>{t("createProject.method.empty.helper")}</Text>
-                      </TouchableOpacity>
-                    </View>
-
-                    {creationMethod === "template" && (
-                      <View style={styles.templatePreview}>
-                        {loadingPhases ? (
-                          <ActivityIndicator color={colors.primary} size="small" />
-                        ) : (
-                          <Ionicons name="layers-outline" size={16} color={colors.textMuted} />
-                        )}
-                        <Text style={styles.templatePreviewText}>
-                          {templatePhases.length > 0
-                            ? t("createProject.templatePreview", { count: templatePhases.length.toString() })
-                            : t("createProject.templatePreviewGeneric")}
-                        </Text>
                       </View>
-                    )}
-                  </>
-                )}
+                    ) : null}
 
-                {/* Error message */}
-                {error && (
-                  <View style={styles.errorContainer}>
-                    <Text style={styles.errorText}>{error}</Text>
-                  </View>
-                )}
-              </>
-              ) : (
-              <>
-                <Text style={styles.modalLabel}>{t("createProject.summaryTitle")}</Text>
-                <View style={styles.summaryContainer}>
-                  <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>{t("projects.namePlaceholder")}:</Text>
-                    <Text style={styles.summaryValue}>{newName}</Text>
-                  </View>
-                  <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>{t("createProject.summaryYouSelected")}</Text>
-                    <Text style={styles.summaryValue}>{getCreateFlowTypeTitle(selectedType)}</Text>
-                  </View>
-                  <View style={styles.summaryRow}>
-                    <Text style={styles.summaryLabel}>{t("createProject.summaryStructure")}</Text>
-                    <Text style={styles.summaryValue}>
-                      {selectedType === "BUILD"
-                        ? t("createProject.structureWithPhases")
-                        : t("createProject.structureNoPhases")}
-                    </Text>
-                  </View>
-                  {newAddress.trim() ? (
-                    <View style={styles.summaryRow}>
-                      <Text style={styles.summaryLabel}>{t("projects.address")}:</Text>
-                      <Text style={styles.summaryValue}>{newAddress.trim()}</Text>
-                    </View>
-                  ) : null}
-                  {selectedType === "BUILD" && (
-                    <View style={styles.summaryRow}>
-                      <Text style={styles.summaryLabel}>{t("createProject.howToStart")}</Text>
-                      <Text style={styles.summaryValue}>
-                        {creationMethod === "template"
-                          ? t("createProject.method.template.short")
-                          : t("createProject.method.empty.short")}
-                      </Text>
-                    </View>
-                  )}
-                </View>
-                {renderContainsChecklist()}
-                
                 {/* Error message */}
                 {error && (
                   <View style={styles.errorContainer}>
@@ -1627,37 +1515,16 @@ export function ProjectsScreen() {
               </ScrollView>
             )}
             
-            {/* AI flow má vlastné tlačidlá; krok 1 = wizard; krok 2+ len manuálny tok */}
-            {creationPath === "ai" ? null : newStep === 1 ? null : newStep === 2 ? (
+            {/* AI flow má vlastné tlačidlá; wizard (step 1) má vlastné; manual fallback (step 2) má Back + Create */}
+            {creationPath === "manual" && newStep === 2 ? (
               <View style={styles.modalButtons}>
-                <TouchableOpacity 
-                  style={styles.modalCancel} 
-                  onPress={onBack}
-                  disabled={submitting || loadingPhases}
-                >
+                <TouchableOpacity style={styles.modalCancel} onPress={onBack} disabled={submitting}>
                   <Text style={styles.modalCancelText}>{t("projects.back")}</Text>
                 </TouchableOpacity>
                 <TouchableOpacity
                   style={[styles.modalOk, (!newName.trim() || submitting) && styles.modalOkDisabled]}
                   onPress={onNext}
                   disabled={!newName.trim() || submitting}
-                >
-                  <Text style={styles.modalOkText}>{t("projects.next")}</Text>
-                </TouchableOpacity>
-              </View>
-            ) : (
-              <View style={styles.modalButtons}>
-                <TouchableOpacity 
-                  style={styles.modalCancel} 
-                  onPress={onBack}
-                  disabled={submitting}
-                >
-                  <Text style={styles.modalCancelText}>{t("projects.back")}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalOk, submitting && styles.modalOkDisabled]}
-                  onPress={onCreate}
-                  disabled={submitting}
                 >
                   {submitting ? (
                     <ActivityIndicator size="small" color="#fff" />
@@ -1666,7 +1533,7 @@ export function ProjectsScreen() {
                   )}
                 </TouchableOpacity>
               </View>
-            )}
+            ) : null}
           </View>
         </KeyboardAvoidingView>
       </Modal>
@@ -2097,6 +1964,68 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "#fff",
     marginBottom: spacing.md,
+  },
+  manualSubtitle: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textMuted,
+    marginBottom: spacing.md,
+  },
+  manualInput: {
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius,
+    padding: spacing.md,
+    fontSize: 16,
+    color: colors.text,
+    marginBottom: spacing.md,
+  },
+  manualOptionalToggle: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  manualOptionalToggleText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.textMuted,
+  },
+  manualOptionalCard: {
+    backgroundColor: colors.background,
+    borderWidth: 1,
+    borderColor: colors.border,
+    borderRadius: radius,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  manualTypeRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.sm,
+    marginTop: spacing.xs,
+  },
+  manualTypeChip: {
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: 999,
+    backgroundColor: colors.card,
+    borderWidth: 1,
+    borderColor: colors.border,
+  },
+  manualTypeChipActive: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary + "10",
+  },
+  manualTypeChipText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  manualTypeChipTextActive: {
+    color: colors.primary,
   },
   modalButtons: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", gap: spacing.md },
   modalCancel: { padding: spacing.sm },

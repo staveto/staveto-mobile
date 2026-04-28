@@ -347,25 +347,6 @@ export function CreateProjectWizard({ onComplete, onCancel, initialEngineType }:
               </Text>
             </TouchableOpacity>
 
-            {/* National template — BUILD only */}
-            {engineType === "BUILD" ? (
-              <TouchableOpacity
-                style={styles.creationChoiceCard}
-                onPress={() => completeWithCreationMode("TEMPLATE")}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-              >
-                <View style={styles.creationChoiceHeader}>
-                  <Ionicons name="layers-outline" size={22} color={colors.textMuted} />
-                  <Text style={styles.creationChoiceTitle}>
-                    {t("createProject.wizard.creationMode.TEMPLATE.BUILD")}
-                  </Text>
-                </View>
-                <Text style={styles.creationChoiceHintMuted}>
-                  {t("createProject.wizard.creationModeTemplateSubtitle")}
-                </Text>
-              </TouchableOpacity>
-            ) : null}
           </View>
         )}
       </ScrollView>

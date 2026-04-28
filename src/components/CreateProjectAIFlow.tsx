@@ -55,8 +55,6 @@ type Step = "brief" | "preview" | "generating";
 type Props = {
   onCreated: (projectId: string) => void;
   onManual: () => void;
-  /** BUILD catalog path — skip AI and use country template (phases). */
-  onUseTemplate?: () => void;
   onCancel: () => void;
   /** Context from wizard: Bau/Aufträge + work type (Neubau, Renovierung, etc.) */
   engineType?: ProjectEngineType;
@@ -231,7 +229,6 @@ function mergeAiProjectDetails(
 export function CreateProjectAIFlow({
   onCreated,
   onManual,
-  onUseTemplate,
   onCancel,
   engineType,
   workType,
@@ -787,7 +784,7 @@ export function CreateProjectAIFlow({
           ) : null}
 
           <View style={styles.aiInfoBox}>
-            <Ionicons name="information-circle-outline" size={18} color={colors.textMuted} />
+            <Ionicons name="information-circle-outline" size={18} color={styles.aiInfoIcon.color} style={styles.aiInfoIcon} />
             <Text style={styles.aiInfoText}>{t("createProject.ai.disclaimer")}</Text>
           </View>
 
@@ -811,18 +808,6 @@ export function CreateProjectAIFlow({
                 <Ionicons name="create-outline" size={18} color={colors.primary} />
                 <Text style={styles.btnSecondaryText}>{t("createProject.ai.manual")}</Text>
               </TouchableOpacity>
-              {onUseTemplate ? (
-                <TouchableOpacity
-                  style={[styles.btn, styles.btnSecondary, styles.secondaryActionBtn, narrowActions && styles.btnFullWidth]}
-                  onPress={() => {
-                    setError(null);
-                    onUseTemplate();
-                  }}
-                >
-                  <Ionicons name="layers-outline" size={18} color={colors.primary} />
-                  <Text style={styles.btnSecondaryText}>{t("createProject.ai.useTemplate")}</Text>
-                </TouchableOpacity>
-              ) : null}
             </View>
           </View>
           <TouchableOpacity style={styles.cancelBtn} onPress={onCancel}>
@@ -898,17 +883,6 @@ export function CreateProjectAIFlow({
             >
               <Text style={styles.btnSecondaryText}>{t("createProject.ai.manual")}</Text>
             </TouchableOpacity>
-            {onUseTemplate ? (
-              <TouchableOpacity
-                style={[styles.btn, styles.btnSecondary, styles.previewFallbackBtn, narrowActions && styles.btnFullWidth]}
-                onPress={() => {
-                  setError(null);
-                  onUseTemplate();
-                }}
-              >
-                <Text style={styles.btnSecondaryText}>{t("createProject.ai.useTemplate")}</Text>
-              </TouchableOpacity>
-            ) : null}
           </View>
         ) : null}
 
@@ -1189,18 +1163,25 @@ const styles = StyleSheet.create({
   aiInfoBox: {
     flexDirection: "row",
     gap: spacing.sm,
-    padding: spacing.md,
-    backgroundColor: colors.background,
+    padding: 16,
+    backgroundColor: "#EEF4FF",
     borderRadius: radius,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "#C9D8F2",
     marginBottom: spacing.sm,
+    alignItems: "flex-start",
+  },
+  aiInfoIcon: {
+    color: "#173B74",
+    marginTop: 1,
   },
   aiInfoText: {
     flex: 1,
-    fontSize: 13,
-    color: colors.textMuted,
-    lineHeight: 18,
+    fontSize: 14,
+    color: "#173B74",
+    lineHeight: 20,
+    fontWeight: "500",
+    textAlign: "left",
   },
   attachNonBlockingHint: {
     fontSize: 12,

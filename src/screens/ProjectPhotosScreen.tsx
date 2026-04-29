@@ -52,7 +52,7 @@ export function ProjectPhotosScreen() {
       else setLoading(true);
       try {
         const atts = await attachmentsService.listAttachments(projectId);
-        const imageAtts = atts.filter((a) => a.fileType === "image");
+        const imageAtts = attachmentsService.attachmentsForProjectPhotoGallery(atts);
         setPhotos(imageAtts);
 
         const urlMap = new Map<string, string>();

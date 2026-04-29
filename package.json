@@ -1,6 +1,6 @@
 {
   "name": "mobile",
-  "version": "1.21.2",
+  "version": "1.21.4",
   "main": "index.ts",
   "expo": {
     "install": {
@@ -62,6 +62,7 @@
     "date-fns": "^4.1.0",
     "expo": "~54.0.32",
     "expo-apple-authentication": "~8.0.8",
+    "expo-application": "~7.0.8",
     "expo-av": "~16.0.8",
     "expo-build-properties": "~1.0.10",
     "expo-camera": "~17.0.10",
@@ -72,6 +73,7 @@
     "expo-device": "^55.0.9",
     "expo-document-picker": "~14.0.8",
     "expo-file-system": "~19.0.21",
+    "expo-image-manipulator": "~14.0.8",
     "expo-image-picker": "~17.0.10",
     "expo-localization": "~17.0.3",
     "expo-location": "~19.0.8",

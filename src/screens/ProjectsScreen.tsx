@@ -28,24 +28,15 @@ import * as projectsService from "../services/projects";
 import * as projectMembersService from "../services/projectMembers";
 import * as tasksService from "../services/tasks";
 import * as projectCoverService from "../services/projectCover";
-import * as projectFactory from "../services/projectFactory";
-import * as templateService from "../services/templateService";
-import type { PhaseCustomization } from "../services/projectFactory";
-import type { CatalogPhase } from "../lib/types";
 import type { ProjectDoc } from "../services/projects";
 import { colors, radius, spacing } from "../theme";
 import { ProjectBadgesRow } from "../components/ProjectBadgesRow";
 import { CloneProjectModal } from "../components/CloneProjectModal";
-import { CloneSourcePickerModal } from "../components/CloneSourcePickerModal";
-import { CreateProjectWizard, type WizardResult } from "../components/CreateProjectWizard";
-import { CreateProjectAIFlow } from "../components/CreateProjectAIFlow";
+import { UnifiedProjectCreationFlow } from "../components/UnifiedProjectCreationFlow";
 import { isLegacyResidential } from "../lib/projectEnums";
 import {
-  isBuildLikeStorageType,
   getActiveProductProjectType,
-  getProjectEngine,
   matchesProjectsTabTypeFilter,
-  shouldUseCountryCatalogTemplate,
   isSoloOwnerProjectRow,
   isSharedOrCollaborativeProjectRow,
   isProjectShownOnProjectsJobsTab,
@@ -61,10 +52,10 @@ import {
   type ProjectsTabListStatus,
   type ProjectsTabTypeFilter,
 } from "../lib/projectsTabUi";
-import { readStoredPrimaryUsageMode, primaryUsageToDefaultEngine } from "../lib/primaryUsageMode";
+import { readStoredPrimaryUsageMode } from "../lib/primaryUsageMode";
+import type { InternalProjectHints } from "../services/projectCreationService";
 import { openInMaps } from "../lib/maps";
 import { COUNTRY_CODES, getLocalizedCountryName } from "../utils/countries";
-import { resolveTemplateIdForCountry, FALLBACK_TEMPLATE_ID } from "../utils/templateResolver";
 import { getCallable, auth } from "../firebase";
 import { showToast } from "../helpers/toast";
 import { runLegacyProjectTypeBackfillOncePerSession } from "../services/projectTypeBackfill";
@@ -112,9 +103,6 @@ function formatCreatedAt(isoStr?: string): string {
   }
 }
 
-type ProjectCreationType = "BUILD" | "TRADE";
-type CreationMethod = "template" | "empty";
-
 function getProjectInitials(name: string): string {
   const words = name.trim().split(/\s+/).filter(Boolean);
   if (words.length === 0) return "PR";
@@ -139,23 +127,10 @@ export function ProjectsScreen() {
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
   const [showNew, setShowNew] = useState(false);
-  const [newStep, setNewStep] = useState<1 | 2 | 3>(1);
-  const [selectedType, setSelectedType] = useState<ProjectCreationType | null>(null);
-  const [wizardResult, setWizardResult] = useState<WizardResult | null>(null);
-  const [creationMethod, setCreationMethod] = useState<CreationMethod>("empty");
-  const [creationPath, setCreationPath] = useState<"ai" | "manual">("manual");
-  const [newName, setNewName] = useState("");
-  const [newAddress, setNewAddress] = useState("");
-  const [newCountry, setNewCountry] = useState<string>("");
-  const [newCity, setNewCity] = useState("");
-  const [newNote, setNewNote] = useState("");
-  const [templateId, setTemplateId] = useState<string>("");
-  const [templatePhases, setTemplatePhases] = useState<CatalogPhase[]>([]);
-  const [phaseCustomizations, setPhaseCustomizations] = useState<Map<string, PhaseCustomization>>(new Map());
-  const [loadingPhases, setLoadingPhases] = useState(false);
+  const [createFlowKey, setCreateFlowKey] = useState(0);
+  const [createInternalHints, setCreateInternalHints] = useState<InternalProjectHints>({});
   const [submitting, setSubmitting] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [showManualOptional, setShowManualOptional] = useState(false);
   const [showEdit, setShowEdit] = useState(false);
   const [editProject, setEditProject] = useState<Project | null>(null);
   const [editName, setEditName] = useState("");
@@ -163,17 +138,9 @@ export function ProjectsScreen() {
   const [showMenu, setShowMenu] = useState(false);
   const [showCloneModal, setShowCloneModal] = useState(false);
   const [cloneSourceProject, setCloneSourceProject] = useState<Project | null>(null);
-  /** Wizard CLONE flow: name typed in step 4 — pre-fills the clone modal. */
-  const [clonePrefilledName, setClonePrefilledName] = useState<string>("");
-  /** Wizard CLONE flow: TRADE filters TRADE jobs, BUILD filters BUILD projects. */
-  const [showCloneSourcePicker, setShowCloneSourcePicker] = useState(false);
-  const [cloneSourcePickerEngine, setCloneSourcePickerEngine] = useState<"BUILD" | "TRADE" | null>(null);
   const [projectFilter, setProjectFilter] = useState<ProjectFilter>("all");
   const [selectedTypeFilter, setSelectedTypeFilter] = useState<ProjectsTabTypeFilter>("ALL");
   const [listStatusFilter, setListStatusFilter] = useState<ProjectsTabListStatus>("ALL");
-  const [wizardInitialEngine, setWizardInitialEngine] = useState<"BUILD" | "TRADE" | null>(null);
-  /** Remount wizard when opening create so step state does not leak between sessions. */
-  const [wizardModalKey, setWizardModalKey] = useState(0);
   const [projectStats, setProjectStats] = useState<Map<string, { progress: number }>>(new Map());
   const { width: windowWidth, height: windowHeight } = useWindowDimensions();
   const insets = useSafeAreaInsets();
@@ -185,77 +152,6 @@ export function ProjectsScreen() {
     heroModalHeightRef.current = null;
   }
   const heroModalHeight = heroModalHeightRef.current ?? Math.min(Math.max(Math.round(windowHeight * 0.86), 520), windowHeight - spacing.md);
-
-  const resetTemplateSelectionState = useCallback(() => {
-    setTemplateId("");
-    setTemplatePhases([]);
-    setPhaseCustomizations(new Map());
-    setLoadingPhases(false);
-  }, []);
-
-  const loadTemplatePhasesForCountry = useCallback(async (countryCode: string | undefined) => {
-    const templateIdToLoad = resolveTemplateIdForCountry(countryCode);
-    setTemplateId(templateIdToLoad);
-    setLoadingPhases(true);
-    try {
-      const phases = await templateService.getTemplatePhases(templateIdToLoad);
-      setTemplatePhases(phases);
-
-      const customizations = new Map<string, PhaseCustomization>();
-      phases.forEach((phase) => {
-        customizations.set(phase.id, {
-          phaseId: phase.id,
-          enabled: true,
-          status: "active",
-        });
-      });
-      setPhaseCustomizations(customizations);
-    } catch (e) {
-      console.warn("[ProjectsScreen] Could not load template", templateIdToLoad, e);
-      if (templateIdToLoad !== FALLBACK_TEMPLATE_ID) {
-        try {
-          const fallbackPhases = await templateService.getTemplatePhases(FALLBACK_TEMPLATE_ID);
-          setTemplateId(templateIdToLoad);
-          setTemplatePhases(fallbackPhases);
-          const customizations = new Map<string, PhaseCustomization>();
-          fallbackPhases.forEach((phase) => {
-            customizations.set(phase.id, {
-              phaseId: phase.id,
-              enabled: true,
-              status: "active",
-            });
-          });
-          setPhaseCustomizations(customizations);
-        } catch (fbErr) {
-          console.warn("[ProjectsScreen] Fallback template also failed:", fbErr);
-          setTemplatePhases([]);
-          setPhaseCustomizations(new Map());
-        }
-      } else {
-        setTemplatePhases([]);
-        setPhaseCustomizations(new Map());
-      }
-    } finally {
-      setLoadingPhases(false);
-    }
-  }, []);
-
-  const getCreateFlowTypeTitle = useCallback(
-    (type: ProjectCreationType | null) => {
-      if (!type) return "";
-      const i18nKey = type === "BUILD" ? "MANAGEMENT" : "TRADE";
-      return t(`createProject.type.${i18nKey}.title`);
-    },
-    [t]
-  );
-
-  const getContainsItems = useCallback((type: ProjectCreationType | null) => {
-    const items = ["tasks", "expenses", "diary"];
-    if (isBuildLikeStorageType(type)) {
-      items.push("phases", "documents");
-    }
-    return items;
-  }, []);
 
   const getThumbTint = useCallback((project: ProjectDoc) => {
     if (isLegacyMaintenanceEquipmentHub(project)) return "#7dcea022";
@@ -296,12 +192,6 @@ export function ProjectsScreen() {
   }, []);
 
   useEffect(() => {
-    readStoredPrimaryUsageMode().then((m) => {
-      setWizardInitialEngine(primaryUsageToDefaultEngine(m));
-    });
-  }, []);
-
-  useEffect(() => {
     AsyncStorage.getItem(LIST_STATUS_KEY).then((saved) => {
       if (saved === "ALL" || saved === "ACTIVE" || saved === "COMPLETED" || saved === "ARCHIVED") {
         setListStatusFilter(saved);
@@ -338,10 +228,10 @@ export function ProjectsScreen() {
   }, []);
 
   const openCreateProject = useCallback(() => {
-    readStoredPrimaryUsageMode().then((m) => {
-      setWizardInitialEngine(primaryUsageToDefaultEngine(m));
+    void readStoredPrimaryUsageMode().then((m) => {
+      setCreateInternalHints({ primaryUsageMode: m });
     });
-    setWizardModalKey((k) => k + 1);
+    setCreateFlowKey((k) => k + 1);
     setShowNew(true);
   }, []);
 
@@ -437,223 +327,46 @@ export function ProjectsScreen() {
     useCallback(() => {
       load(false);
       if ((route.params as { openNew?: boolean })?.openNew) {
-        readStoredPrimaryUsageMode().then((m) => {
-          setWizardInitialEngine(primaryUsageToDefaultEngine(m));
+        void readStoredPrimaryUsageMode().then((m) => {
+          setCreateInternalHints({ primaryUsageMode: m });
         });
-        setWizardModalKey((k) => k + 1);
+        setCreateFlowKey((k) => k + 1);
         setShowNew(true);
-        setNewStep(1);
-        setSelectedType(null);
-        setWizardResult(null);
-        setCreationMethod("empty");
-        setCreationPath("manual");
-        setNewName("");
-        resetTemplateSelectionState();
         setError(null);
         (navigation as { setParams?: (params: Record<string, unknown>) => void }).setParams?.({ openNew: false });
       }
-    }, [load, navigation, resetTemplateSelectionState, route.params])
+    }, [load, navigation, route.params])
   );
 
   const closeNewModal = () => {
     setShowNew(false);
-    setNewStep(1);
-    setNewCountry("");
-    setNewCity("");
-    setNewNote("");
-    setSelectedType(null);
-    setWizardResult(null);
-    setCreationMethod("empty");
-    setCreationPath("manual");
-    setNewName("");
-    setNewAddress("");
-    resetTemplateSelectionState();
     setError(null);
-    setShowManualOptional(false);
   };
 
-  const handleWizardComplete = useCallback(
-    (result: WizardResult) => {
-      setWizardResult(result);
-      const trimmedName = result.projectNameOrDescription.trim();
-      setNewName(trimmedName);
-      setSelectedType(result.engineType === "BUILD" ? "BUILD" : "TRADE");
-
-      if (result.creationMode === "CLONE") {
-        // CLONE flow: leave the wizard modal closed and open the source picker.
-        // The picker drives the existing CloneProjectModal with a prefilled name.
-        setClonePrefilledName(trimmedName);
-        setCloneSourcePickerEngine(result.engineType === "BUILD" ? "BUILD" : "TRADE");
-        setShowNew(false);
-        setShowCloneSourcePicker(true);
-        setError(null);
+  const handleUnifiedCreationSuccess = useCallback(
+    async (payload: import("../components/UnifiedProjectCreationFlow").UnifiedProjectCreationSuccess) => {
+      if (!orgId) {
+        showError(t("createProject.notSignedIn"));
         return;
       }
-
-      if (result.creationMode === "AI" && (result.engineType === "BUILD" || result.engineType === "TRADE")) {
-        setCreationPath("ai");
-        setCreationMethod("empty");
-      } else {
-        // Manual fallback: always create empty project (templates are not exposed in UI)
-        setCreationPath("manual");
-        setCreationMethod("empty");
+      try {
+        await AsyncStorage.setItem("@staveto:lastUsedProjectId", payload.projectId);
+      } catch {
+        /* ignore */
       }
-      setError(null);
-      setNewStep(2);
-    },
-    []
-  );
-
-  useEffect(() => {
-    // Templates are no longer exposed in create flow — keep manual create empty and clear any template state.
-    resetTemplateSelectionState();
-  }, [resetTemplateSelectionState]);
-
-  const onNext = async () => {
-    if (newStep === 1) {
-      // CreateProjectWizard step 1 always shows BUILD vs TRADE; primaryUsageMode only preselects.
-      return;
-    } else if (newStep === 2) {
-      if (!newName.trim()) {
-        setError(t("createProject.nameRequired"));
-        return;
-      }
-
-      setError(null);
-      await onCreate();
-    }
-  };
-
-  const onBack = () => {
-    if (newStep === 2) {
-      // If user came from AI-first flow, go back to AI screen.
-      if (creationPath === "manual" && wizardResult?.creationMode === "AI") {
-        setCreationPath("ai");
-        setError(null);
-        return;
-      }
-      setNewStep(1);
-      setError(null);
-    } else if (newStep === 3) {
-      setNewStep(2);
-      setError(null);
-    } else {
-      closeNewModal();
-    }
-  };
-
-  const onCreate = async () => {
-    // Validácia
-    if (!orgId) {
-      const errorMsg = t("createProject.notSignedIn");
-      setError(errorMsg);
-      showError(errorMsg);
-      return;
-    }
-    
-    if (!selectedType) {
-      const errorMsg = t("createProject.selectTypeRequired");
-      setError(errorMsg);
-      return;
-    }
-    
-    if (!newName.trim()) {
-      const errorMsg = t("createProject.nameRequired");
-      setError(errorMsg);
-      return;
-    }
-    
-    setError(null);
-    setSubmitting(true);
-    
-    try {
-      const shouldUseTemplate = false; // templates are hidden from create flow
-      const countryCodeForCreate = undefined;
-      const finalTemplateId = "";
-
-      console.log(
-        `[ProjectsScreen] Creating project: type="${selectedType}", name="${newName.trim()}", templateId="${finalTemplateId}"`
-      );
-      
-      // Prepare phase customizations array
-      const customizationsArray = undefined;
-      
-      console.log(`[ProjectsScreen] Phase customizations:`, customizationsArray);
-      
-      // Vytvor projekt - ownerId sa automaticky použije z auth.currentUser.uid v projectFactory
-      const addressTextForCreate = newAddress.trim() || undefined;
-      const cityForCreate = newCity.trim() || undefined;
-
-      await projectFactory.createProjectFromTemplate({
-        projectType: selectedType,
-        templateId: finalTemplateId,
-        name: newName.trim(),
-        addressText: addressTextForCreate,
-        countryCode: countryCodeForCreate,
-        city: cityForCreate,
-        phaseCustomizations: customizationsArray,
-        workType: wizardResult?.workType ?? undefined,
-        businessMode: wizardResult?.businessMode ?? undefined,
-        creationMode: wizardResult?.creationMode ?? undefined,
-        jobWorkflowKind: wizardResult?.jobWorkflowKind ?? undefined,
-        serviceMaintenanceScope: wizardResult?.serviceMaintenanceScope ?? undefined,
-      });
       const { logProjectCreateSuccess } = await import("../services/analytics");
-      logProjectCreateSuccess(selectedType, "projects");
-      console.log(`${selectedType} project created successfully`);
+      logProjectCreateSuccess(payload.internalProjectType, "projects");
       closeNewModal();
       load();
+      (navigation as { navigate: (name: string, params: object) => void }).navigate("ProjectOverview", {
+        projectId: payload.projectId,
+      });
       const { trackPaywallEvent, checkAndShowPaywall } = await import("../services/paywallTrigger");
       await trackPaywallEvent("project_created");
       await checkAndShowPaywall(user?.billing, navigation, "project_created");
-    } catch (e: unknown) {
-      console.error('Error creating project:', e);
-      const error = e as { code?: string; message?: string };
-      const errorCode = error.code;
-      const errorMessage = error.message || 'Neznáma chyba';
-      
-      // Detailed error message with location
-      let userMessage = '';
-      if (errorCode === "permission-denied") {
-        // Parse error message to find where it failed
-        if (errorMessage.includes('projects/') && errorMessage.includes('/phases')) {
-          userMessage = `❌ Chyba: Nemáte oprávnenie vytvoriť fázy projektu.\n\nKde: projects/{projectId}/phases\nSkontrolujte Firestore rules.`;
-        } else if (errorMessage.includes('projects/') && errorMessage.includes('/tasks')) {
-          userMessage = `❌ Chyba: Nemáte oprávnenie vytvoriť úlohy projektu.\n\nKde: projects/{projectId}/tasks\nSkontrolujte Firestore rules.`;
-        } else if (errorMessage.includes('documents/projects/') || errorMessage.includes('projekt documents')) {
-          userMessage = `❌ Chyba: Nemáte oprávnenie vytvoriť projekt.\n\nKde: projects/{projectId}\nSkontrolujte Firestore rules a či ste prihlásený.`;
-        } else {
-          userMessage = `❌ Chyba: Nemáte oprávnenie vytvoriť projekt.\n\n${errorMessage}\n\nSkontrolujte Firestore rules.`;
-        }
-      } else if (errorCode === "not-found") {
-        userMessage = `⚠️ Template nebol nájdený. Projekt sa vytvorí bez šablóny.\n\n${errorMessage}`;
-      } else if (errorMessage.includes('template') || errorMessage.includes('šablón')) {
-        userMessage = `⚠️ Chyba pri načítaní šablóny:\n\n${errorMessage}`;
-      } else {
-        userMessage = `❌ Chyba: ${errorMessage}`;
-      }
-      
-      setError(userMessage);
-      showError(userMessage);
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const renderContainsChecklist = () => {
-    const items = getContainsItems(selectedType);
-    return (
-      <View style={styles.containsSection}>
-        <Text style={styles.containsTitle}>{t("createProject.containsTitle")}</Text>
-        {items.map((itemKey) => (
-          <View key={itemKey} style={styles.containsItem}>
-            <Ionicons name="checkmark-circle-outline" size={16} color={colors.primary} />
-            <Text style={styles.containsItemText}>{t(`createProject.contains.${itemKey}`)}</Text>
-          </View>
-        ))}
-      </View>
-    );
-  };
+    },
+    [load, navigation, orgId, t, user?.billing]
+  );
 
   const openProjectMenu = (item: Project) => {
     setMenuProject(item);
@@ -708,36 +421,12 @@ export function ProjectsScreen() {
     (newProjectId: string) => {
       setShowCloneModal(false);
       setCloneSourceProject(null);
-      setClonePrefilledName("");
       load();
       showToast(t("projects.cloneSuccess"));
       (navigation as any).navigate("ProjectOverview", { projectId: newProjectId });
     },
     [load, navigation, t, showToast]
   );
-
-  const onCloneSourcePickerClose = useCallback(() => {
-    setShowCloneSourcePicker(false);
-    setCloneSourcePickerEngine(null);
-    setClonePrefilledName("");
-    // Cancel the wizard flow entirely — user did not pick a source.
-    setNewStep(1);
-    setSelectedType(null);
-    setWizardResult(null);
-    setCreationMethod("empty");
-    setCreationPath("manual");
-    setNewName("");
-    setNewAddress("");
-    resetTemplateSelectionState();
-    setError(null);
-  }, [resetTemplateSelectionState]);
-
-  const onCloneSourcePickerPick = useCallback((picked: Project) => {
-    setShowCloneSourcePicker(false);
-    setCloneSourcePickerEngine(null);
-    setCloneSourceProject(picked);
-    setShowCloneModal(true);
-  }, []);
 
   const onMenuArchive = async () => {
     if (!menuProject || !orgId) return;
@@ -1289,7 +978,6 @@ export function ProjectsScreen() {
         onClose={() => {
           setShowCloneModal(false);
           setCloneSourceProject(null);
-          setClonePrefilledName("");
         }}
         sourceProjectId={cloneSourceProject?.id ?? ""}
         sourceProjectName={cloneSourceProject?.name ?? ""}
@@ -1300,17 +988,7 @@ export function ProjectsScreen() {
         sourceAddressText={cloneSourceProject?.addressText}
         isOwner={!!cloneSourceProject?.ownerId && cloneSourceProject.ownerId === user?.id}
         onSuccess={onCloneSuccess}
-        prefilledNewName={clonePrefilledName || undefined}
       />
-      {cloneSourcePickerEngine ? (
-        <CloneSourcePickerModal
-          visible={showCloneSourcePicker}
-          engineType={cloneSourcePickerEngine}
-          projects={projects}
-          onClose={onCloneSourcePickerClose}
-          onPick={onCloneSourcePickerPick}
-        />
-      ) : null}
       <Modal visible={showMenu} transparent animationType="fade">
         <TouchableOpacity style={styles.menuOverlay} activeOpacity={1} onPress={closeProjectMenu}>
           <View style={[styles.menuCard, { paddingBottom: menuBottomInset + spacing.md }]}>
@@ -1367,171 +1045,39 @@ export function ProjectsScreen() {
       </Modal>
       <Modal visible={showNew} transparent animationType="slide">
         <KeyboardAvoidingView
-          style={[styles.modalOverlay, (creationPath === "ai" || newStep === 1 || (creationPath === "manual" && newStep === 2)) && styles.modalOverlayHero]}
+          style={[styles.modalOverlay, styles.modalOverlayHero]}
           behavior="padding"
           keyboardVerticalOffset={0}
         >
-          <View style={[styles.modal, (creationPath === "ai" || newStep === 1 || (creationPath === "manual" && newStep === 2)) && styles.modalHero, (creationPath === "ai" || newStep === 1 || (creationPath === "manual" && newStep === 2)) && { height: heroModalHeight }]}>
-            <Text style={styles.modalTitle}>
-              {creationPath === "ai"
-                ? t("createProject.ai.title")
-                : creationPath === "manual" && newStep === 2
-                  ? t("createProject.manualEmpty.title")
-                  : t("projects.modalTitle")}
-            </Text>
-            {creationPath === "ai" ? (
-              <View style={styles.stepOneBody}>
-                <CreateProjectAIFlow
-                  engineType={wizardResult?.engineType ?? getProjectEngine(selectedType ?? undefined)}
-                  workType={wizardResult?.workType ?? undefined}
-                  initialBrief={wizardResult?.projectNameOrDescription?.trim() || undefined}
-                  jobWorkflowKind={wizardResult?.jobWorkflowKind ?? undefined}
-                  serviceMaintenanceScope={wizardResult?.serviceMaintenanceScope ?? undefined}
-                  onCreated={(projectId) => {
-                    closeNewModal();
-                    load();
-                    navigation.navigate("ProjectOverview", { projectId });
-                  }}
-                  onManual={() => {
-                    setCreationPath("manual");
-                    setCreationMethod("empty");
-                    setNewStep(2);
-                  }}
-                  onCancel={closeNewModal}
-                />
-              </View>
-            ) : newStep === 1 ? (
-              <View style={styles.stepOneBody}>
-                <CreateProjectWizard
-                  key={wizardModalKey}
-                  initialEngineType={wizardInitialEngine ?? undefined}
-                  onComplete={handleWizardComplete}
-                  onCancel={closeNewModal}
-                />
-                {error && (
-                  <View style={styles.errorContainer}>
-                    <Text style={styles.errorText}>{error}</Text>
-                  </View>
-                )}
-              </View>
-            ) : (
-              <ScrollView 
-                style={styles.modalContent}
-                showsVerticalScrollIndicator={true}
-                scrollEnabled={true}
-                keyboardShouldPersistTaps="handled"
+          <View style={[styles.modal, styles.modalHero, { height: heroModalHeight, paddingTop: spacing.sm }]}>
+            <View style={styles.createModalHeader}>
+              <Text style={[styles.modalTitle, { flex: 1, textAlign: "left", marginBottom: 0 }]}>{t("projects.modalTitle")}</Text>
+              <TouchableOpacity
+                onPress={closeNewModal}
+                hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
+                accessibilityRole="button"
+                accessibilityLabel={t("projects.cancel")}
               >
-              {newStep === 2 ? (
-              <>
-                    <Text style={styles.manualSubtitle}>{t("createProject.manualEmpty.subtitle")}</Text>
-
-                    <Text style={styles.modalLabel}>{t("projects.namePlaceholder")} *</Text>
-                    <TextInput
-                      style={styles.manualInput}
-                      value={newName}
-                      onChangeText={(text) => {
-                        setNewName(text);
-                        setError(null);
-                      }}
-                      placeholder={t("projects.namePlaceholder")}
-                      placeholderTextColor={colors.textMuted}
-                      editable={!submitting}
-                      autoFocus={true}
-                    />
-
-                    <TouchableOpacity
-                      style={styles.manualOptionalToggle}
-                      onPress={() => setShowManualOptional((v) => !v)}
-                      activeOpacity={0.85}
-                    >
-                      <Text style={styles.manualOptionalToggleText}>{t("createProject.manualEmpty.optionalDetails")}</Text>
-                      <Ionicons
-                        name={showManualOptional ? "chevron-up" : "chevron-down"}
-                        size={18}
-                        color={colors.textMuted}
-                      />
-                    </TouchableOpacity>
-
-                    {showManualOptional ? (
-                      <View style={styles.manualOptionalCard}>
-                        <Text style={styles.modalLabel}>{t("projects.city")}</Text>
-                        <TextInput
-                          style={styles.manualInput}
-                          value={newCity}
-                          onChangeText={(text) => {
-                            setNewCity(text);
-                            setError(null);
-                          }}
-                          placeholder={t("projects.cityPlaceholder")}
-                          placeholderTextColor={colors.textMuted}
-                          editable={!submitting}
-                        />
-
-                        <Text style={[styles.modalLabel, { marginTop: spacing.xs }]}>{t("projects.address")}</Text>
-                        <TextInput
-                          style={styles.manualInput}
-                          value={newAddress}
-                          onChangeText={(text) => {
-                            setNewAddress(text);
-                            setError(null);
-                          }}
-                          placeholder={t("createProject.addressPlaceholder")}
-                          placeholderTextColor={colors.textMuted}
-                          editable={!submitting}
-                        />
-
-                        <Text style={[styles.modalLabel, { marginTop: spacing.md }]}>{t("createProject.manualEmpty.projectType")}</Text>
-                        <View style={styles.manualTypeRow}>
-                          <TouchableOpacity
-                            style={[styles.manualTypeChip, selectedType === "TRADE" && styles.manualTypeChipActive]}
-                            onPress={() => setSelectedType("TRADE")}
-                            activeOpacity={0.85}
-                          >
-                            <Text style={[styles.manualTypeChipText, selectedType === "TRADE" && styles.manualTypeChipTextActive]}>
-                              {t("projectType.TRADE")}
-                            </Text>
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={[styles.manualTypeChip, selectedType === "BUILD" && styles.manualTypeChipActive]}
-                            onPress={() => setSelectedType("BUILD")}
-                            activeOpacity={0.85}
-                          >
-                            <Text style={[styles.manualTypeChipText, selectedType === "BUILD" && styles.manualTypeChipTextActive]}>
-                              {t("projectType.BUILD")}
-                            </Text>
-                          </TouchableOpacity>
-                        </View>
-                      </View>
-                    ) : null}
-
-                {/* Error message */}
-                {error && (
-                  <View style={styles.errorContainer}>
-                    <Text style={styles.errorText}>{error}</Text>
-                  </View>
-                )}
-              </>
-              )}
-              </ScrollView>
+                <Ionicons name="close" size={26} color={colors.text} />
+              </TouchableOpacity>
+            </View>
+            {!orgId ? (
+              <Text style={{ color: colors.text, padding: spacing.md }}>{t("createProject.notSignedIn")}</Text>
+            ) : (
+              <View style={{ flex: 1, minHeight: 200 }}>
+                <UnifiedProjectCreationFlow
+                  key={createFlowKey}
+                  variant="inApp"
+                  existingProjects={projects}
+                  internalHints={createInternalHints}
+                  submitting={submitting}
+                  onSuccess={handleUnifiedCreationSuccess}
+                />
+              </View>
             )}
-            
-            {/* AI flow má vlastné tlačidlá; wizard (step 1) má vlastné; manual fallback (step 2) má Back + Create */}
-            {creationPath === "manual" && newStep === 2 ? (
-              <View style={styles.modalButtons}>
-                <TouchableOpacity style={styles.modalCancel} onPress={onBack} disabled={submitting}>
-                  <Text style={styles.modalCancelText}>{t("projects.back")}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.modalOk, (!newName.trim() || submitting) && styles.modalOkDisabled]}
-                  onPress={onNext}
-                  disabled={!newName.trim() || submitting}
-                >
-                  {submitting ? (
-                    <ActivityIndicator size="small" color="#fff" />
-                  ) : (
-                    <Text style={styles.modalOkText}>{t("createProject.createButton")}</Text>
-                  )}
-                </TouchableOpacity>
+            {error ? (
+              <View style={styles.errorContainer}>
+                <Text style={styles.errorText}>{error}</Text>
               </View>
             ) : null}
           </View>
@@ -1911,6 +1457,14 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.sm,
   },
   modalTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.sm },
+  createModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.xs,
+    gap: spacing.sm,
+  },
   modalLabel: { fontSize: 14, color: colors.textMuted, marginBottom: spacing.sm },
   createHeader: {
     fontSize: 18,

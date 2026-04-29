@@ -9,8 +9,16 @@ import type { FirebaseAuthTypes } from "@react-native-firebase/auth";
 import { getApp } from "@react-native-firebase/app";
 import {
   validateAiProjectPlan,
+  type AiPhase,
   type AiProjectPlan,
+  type AiTask,
 } from "../lib/aiProjectSchema";
+
+/** Firebase HTTPS callable names used by AI project flows. */
+export type AiCallableName =
+  | "generateProjectStructure"
+  | "createProjectFromAiPlan"
+  | "refineGeneratedProjectNode";
 import { createProjectCreatedNotification } from "./notifications";
 import { getStorage, getAuth, getFunctionsInstance } from "../firebase";
 import { getExtraEnv } from "../lib/env";
@@ -66,6 +74,8 @@ type CreateFromPlanReq = {
   addressText?: string;
   countryCode?: string;
   city?: string;
+  /** Friendly reference stored as Firestore `referenceNumber`. */
+  projectNumber?: string;
 };
 
 type CreateFromPlanRes = { projectId: string };
@@ -80,13 +90,13 @@ type CallableWireError = {
  * HTTPS URL for Firebase callable (same project as {@link getApp}).
  * Optional env override for staging / emulator.
  */
-function getCallableHttpUrl(
-  functionName: "generateProjectStructure" | "createProjectFromAiPlan"
-): string {
+function getCallableHttpUrl(functionName: AiCallableName): string {
   const envKey =
     functionName === "generateProjectStructure"
       ? "EXPO_PUBLIC_AI_GENERATE_PROJECT_URL"
-      : "EXPO_PUBLIC_AI_CREATE_PROJECT_URL";
+      : functionName === "createProjectFromAiPlan"
+        ? "EXPO_PUBLIC_AI_CREATE_PROJECT_URL"
+        : "EXPO_PUBLIC_AI_REFINE_PROJECT_NODE_URL";
   const override = getExtraEnv(envKey);
   if (override?.trim()) {
     if (__DEV__) {
@@ -100,8 +110,31 @@ function getCallableHttpUrl(
 
 function mapCallableWireError(errBody: CallableWireError): Error & { code?: string; details?: unknown } {
   const st = String(errBody.status ?? "INTERNAL");
-  const msg = String(errBody.message ?? st);
-  const e = new Error(msg) as Error & { code?: string; details?: unknown };
+  let msg = String(errBody.message ?? st).trim();
+  const details = errBody.details;
+  if (details !== undefined && details !== null) {
+    let detailStr = "";
+    if (typeof details === "string") {
+      detailStr = details.trim();
+    } else if (typeof details === "object") {
+      const d = details as Record<string, unknown>;
+      if (typeof d.message === "string") detailStr = String(d.message).trim();
+      else detailStr = JSON.stringify(details);
+    }
+    detailStr = detailStr.slice(0, 420).trim();
+    if (detailStr) {
+      const short = detailStr.slice(0, Math.min(48, detailStr.length));
+      const dup =
+        msg.includes(short) ||
+        (msg.length < 12 && detailStr.toLowerCase().includes(msg.toLowerCase()));
+      if (!dup) {
+        const joiner = msg.endsWith(":") || msg.endsWith(".") ? " " : ": ";
+        msg = `${msg}${joiner}${detailStr}`;
+      }
+    }
+  }
+  const merged = msg.length > 620 ? `${msg.slice(0, 617)}…` : msg;
+  const e = new Error(merged) as Error & { code?: string; details?: unknown };
   const normalized = st.toUpperCase().replace(/-/g, "_");
   e.code =
     normalized === "UNAUTHENTICATED"
@@ -119,7 +152,7 @@ function mapCallableWireError(errBody: CallableWireError): Error & { code?: stri
  * cloudfunctions.net → *.run.app; default fetch would drop the Bearer header on redirect → 401 HTML.
  */
 async function postFirebaseCallable<TReq, TRes>(
-  functionName: "generateProjectStructure" | "createProjectFromAiPlan",
+  functionName: AiCallableName,
   data: TReq,
   idToken: string
 ): Promise<TRes> {
@@ -195,7 +228,7 @@ async function postFirebaseCallable<TReq, TRes>(
 
 /** Native SDK (handles endpoint + redirects internally). Used when HTTP path fails. */
 async function nativeHttpsCallable<TReq, TRes>(
-  functionName: "generateProjectStructure" | "createProjectFromAiPlan",
+  functionName: AiCallableName,
   payload: TReq
 ): Promise<TRes> {
   const fns = getFunctionsInstance();
@@ -212,7 +245,7 @@ async function nativeHttpsCallable<TReq, TRes>(
 }
 
 async function invokeAiCallable<TReq, TRes>(
-  functionName: "generateProjectStructure" | "createProjectFromAiPlan",
+  functionName: AiCallableName,
   payload: TReq,
   idToken: string
 ): Promise<TRes> {
@@ -220,14 +253,17 @@ async function invokeAiCallable<TReq, TRes>(
     return await postFirebaseCallable<TReq, TRes>(functionName, payload, idToken);
   } catch (e) {
     const msg = String((e as Error)?.message ?? e ?? "");
+    const code = normalizeCallableErrorCode((e as { code?: string })?.code);
+    /** Gen2 callable URL na cloudfunctions.net môže vrátiť 404/NOT_FOUND; SDK vyrieši správny endpoint. */
     const retryNative =
       msg.includes("401") ||
       msg.includes("neplatná odpoveď") ||
       msg.includes("príliš veľa presmerovaní") ||
-      msg.includes("Cloud Run");
+      msg.includes("Cloud Run") ||
+      code === "not-found";
     if (!retryNative) throw e;
     if (__DEV__) {
-      console.warn("[aiProject] HTTP callable failed, trying native httpsCallable:", msg.slice(0, 120));
+      console.warn("[aiProject] HTTP callable failed, trying native httpsCallable:", code || msg.slice(0, 120));
     }
     return nativeHttpsCallable<TReq, TRes>(functionName, payload);
   }
@@ -325,14 +361,18 @@ export async function generateProjectStructureWithAI(
   const mergedProjectDetails = [options?.projectDetails?.trim(), workflowParts.join("; ")].filter(Boolean).join(" | ");
 
   if (__DEV__) {
-    console.log("[aiProject] Calling generateProjectStructure", {
+    const snapshot = {
       uid,
       briefLen: brief.length,
-      engineType: options?.engineType,
-      workType: options?.workType,
-      hasDocs: (options?.documentStoragePaths?.length ?? 0) > 0,
-      hasDetails: !!mergedProjectDetails,
-    });
+      engineType: options?.engineType ?? null,
+      workType: options?.workType ?? null,
+      docPathsCount: options?.documentStoragePaths?.length ?? 0,
+      projectDetailsLen: mergedProjectDetails.length,
+      jobWorkflowKind: options?.jobWorkflowKind ?? null,
+      serviceMaintenanceScope: options?.serviceMaintenanceScope ?? null,
+    };
+    console.log("[aiProject] Calling generateProjectStructure", snapshot);
+    console.log("[aiProject] generate payload snapshot", JSON.stringify(snapshot));
   }
 
   let data: GenStructureRes;
@@ -388,6 +428,7 @@ export interface CreateProjectFromAiPlanParams {
   addressText?: string;
   countryCode?: string;
   city?: string;
+  projectNumber?: string;
 }
 
 /**
@@ -412,6 +453,7 @@ export async function createProjectFromAiPlan(
     throw new Error(ERR_NOT_SIGNED_IN_SK);
   }
 
+  const pn = params.projectNumber?.trim();
   const resultData = await invokeAiCallable<CreateFromPlanReq, CreateFromPlanRes>(
     "createProjectFromAiPlan",
     {
@@ -420,6 +462,7 @@ export async function createProjectFromAiPlan(
       addressText: params.addressText?.trim() || undefined,
       countryCode: params.countryCode?.trim() || undefined,
       city: params.city?.trim() || undefined,
+      projectNumber: pn ? pn.slice(0, 120) : undefined,
     },
     idToken
   );
@@ -443,4 +486,85 @@ export async function createProjectFromAiPlan(
   }
 
   return projectId;
+}
+
+export type RefineGeneratedNodeResult =
+  | { kind: "phase"; phase: AiPhase }
+  | { kind: "task"; task: AiTask };
+
+type RefineNodeCallableReq = {
+  projectBrief: string;
+  draftSummary?: string;
+  nodeKind: "phase" | "task";
+  phaseIndex: number;
+  taskIndex?: number;
+  currentPhaseJson?: unknown;
+  currentTaskJson?: unknown;
+  userChangeRequest: string;
+  extraContext?: string;
+};
+
+/**
+ * Refines a single phase or task via backend AI without regenerating the full draft.
+ */
+export async function refineGeneratedProjectNodeCall(params: {
+  projectBrief: string;
+  draftSummary?: string;
+  nodeKind: "phase" | "task";
+  phaseIndex: number;
+  taskIndex?: number;
+  currentPhase?: AiPhase;
+  currentTask?: AiTask;
+  userChangeRequest: string;
+  extraContext?: string;
+}): Promise<RefineGeneratedNodeResult> {
+  const user = await resolveUserForAiCalls();
+  let idToken: string;
+  try {
+    idToken = await user.getIdToken(true);
+  } catch (e) {
+    if (__DEV__) console.warn("[aiProject] getIdToken refine:", e);
+    throw new Error(ERR_NOT_SIGNED_IN_SK);
+  }
+
+  const payload: RefineNodeCallableReq = {
+    projectBrief: params.projectBrief.trim(),
+    draftSummary: params.draftSummary?.trim().slice(0, 400) || undefined,
+    nodeKind: params.nodeKind,
+    phaseIndex: params.phaseIndex,
+    taskIndex: params.taskIndex,
+    currentPhaseJson: params.currentPhase,
+    currentTaskJson: params.currentTask,
+    userChangeRequest: params.userChangeRequest.trim(),
+    extraContext: params.extraContext?.trim().slice(0, 600) || undefined,
+  };
+
+  if (__DEV__) {
+    console.log(
+      "[aiProject] refine payload snapshot",
+      JSON.stringify({
+        nodeKind: payload.nodeKind,
+        phaseIndex: payload.phaseIndex,
+        taskIndex: payload.taskIndex ?? null,
+        briefLen: payload.projectBrief.length,
+        feedbackLen: payload.userChangeRequest.length,
+      })
+    );
+  }
+
+  try {
+    return await invokeAiCallable<RefineNodeCallableReq, RefineGeneratedNodeResult>(
+      "refineGeneratedProjectNode",
+      payload,
+      idToken
+    );
+  } catch (e: unknown) {
+    const err = e as { code?: string; message?: string };
+    devLogAiFailure("callable", {
+      phase: "refineGeneratedProjectNode",
+      code: normalizeCallableErrorCode(err?.code) || err?.code,
+      message: typeof err?.message === "string" ? err.message.slice(0, 240) : String(err),
+    });
+    throw e;
+  }
 }

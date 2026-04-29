@@ -241,7 +241,7 @@ export async function exportProjectAsProtocol(
       attachmentsService.listAttachments(projectId).catch(() => []),
     ]);
 
-    const imageAttachments = attachments.filter((a) => a.fileType === "image");
+    const imageAttachments = attachmentsService.attachmentsForProjectPhotoGallery(attachments);
     const photoUrls: string[] = [];
     for (const att of imageAttachments) {
       try {

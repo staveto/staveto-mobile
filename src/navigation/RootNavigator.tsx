@@ -58,6 +58,7 @@ function ProblemDetailScreenWithSuspense(props: object) {
 }
 import { AppDrawer } from "./AppDrawer";
 import { OfflineBanner } from "../components/OfflineBanner";
+import { StoreUpdateGate } from "../components/StoreUpdateGate";
 import { colors, spacing } from "../theme";
 import { getFirestore, db } from "../firebase";
 import { doc, getDoc } from "../lib/rnFirestore";
@@ -254,6 +255,7 @@ export function RootNavigator() {
   if (!token) {
     return (
       <Stack.Navigator
+        key={onboardingDone ? "signed-out-intro-done" : "signed-out-intro-pending"}
         screenOptions={{ headerShown: false }}
         initialRouteName={onboardingDone ? "Login" : "OnboardingIntro"}
       >
@@ -303,6 +305,7 @@ export function RootNavigator() {
 
   return (
     <View style={{ flex: 1 }}>
+      <StoreUpdateGate enabled />
       <QuickActionsSetup />
       <OfflineBanner />
       <Stack.Navigator

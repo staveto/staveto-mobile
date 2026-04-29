@@ -22,6 +22,8 @@ export type ExtractInvoiceDataFromStorageResponse = {
   total?: number | null;
   /** Server-side extraction diagnostics (Firebase logs mirror this). */
   extractionLog?: Record<string, unknown>;
+  /** Server-side expense enrichment (additive; deterministic + optional Gemini). */
+  expenseExtraction?: Record<string, unknown>;
   /** Only when using full OcrResult-style responses */
   status?: "success" | "failed" | "limit";
   cooldownSeconds?: number;

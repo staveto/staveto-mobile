@@ -33,7 +33,7 @@ import { colors, radius, spacing } from "../theme";
 export function LoginScreen() {
   const navigation = useNavigation();
   const { t } = useI18n();
-  const { login } = useAuth();
+  const { login, resetIntroOnboarding } = useAuth();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -215,6 +215,17 @@ export function LoginScreen() {
       >
         <Text style={styles.linkText}>{t("login.noAccount")}</Text>
       </TouchableOpacity>
+      {__DEV__ ? (
+        <TouchableOpacity
+          style={styles.devIntroReset}
+          onPress={() => {
+            void resetIntroOnboarding();
+          }}
+          accessibilityLabel="Reset onboarding intro (dev)"
+        >
+          <Text style={styles.devIntroResetText}>Dev: znova úvodný onboarding</Text>
+        </TouchableOpacity>
+      ) : null}
 
       <Modal visible={showForgotPassword} transparent animationType="fade">
         <TouchableOpacity style={styles.modalOverlay} activeOpacity={1} onPress={() => setShowForgotPassword(false)}>
@@ -498,5 +509,16 @@ const styles = StyleSheet.create({
   },
   appleBtnText: { color: "#fff", fontSize: 16, fontWeight: "600" },
   link: { marginTop: spacing.lg, alignItems: "center" },
+  devIntroReset: {
+    marginTop: spacing.md,
+    alignSelf: "center",
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+  },
+  devIntroResetText: {
+    fontSize: 13,
+    color: colors.textMuted,
+    textDecorationLine: "underline",
+  },
   linkText: { color: colors.primary, fontSize: 14 },
 });

@@ -39,6 +39,13 @@ function notifUxLog(message: string, data?: Record<string, unknown>) {
   else console.log(`[notifications:ux] ${message}`);
 }
 
+/** Swipeable divides drag by `friction` before threshold checks — values >1 require noticeably longer swipes (bad vs FlatList). */
+const SWIPEABLE_ROW_GESTURE_PROPS = {
+  friction: 1 as const,
+  /** Lets slight diagonal motion activate swipe before vertical scroll fails the pan. */
+  failOffsetY: [-28, 28] as [number, number],
+};
+
 export function NotificationsScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
@@ -954,7 +961,7 @@ function NotificationInboxRow({
 
   return (
     <Swipeable
-      friction={2}
+      {...SWIPEABLE_ROW_GESTURE_PROPS}
       overshootRight={false}
       containerStyle={styles.swipeRowOuter}
       renderRightActions={(_progress, _dragX, swipeable) => (

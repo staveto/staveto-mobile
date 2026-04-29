@@ -23,13 +23,10 @@ import { updateUserProfileFromOnboarding } from "../services/auth";
 import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
 import { persistPrimaryUsageMode } from "../lib/primaryUsageMode";
 import { COUNTRY_CODES, getCountryCallingCode, getDeviceTimezone, getDeviceRegionCode, getLocalizedCountryName } from "../utils/countries";
-import { createProjectFromTemplate } from "../services/projectFactory";
-import { shouldUseCountryCatalogTemplate } from "../lib/projectTypeModel";
-import { resolveTemplateIdForCountry } from "../utils/templateResolver";
 import * as userEquipmentService from "../services/userEquipment";
 import type { EquipmentCategory } from "../services/equipment";
 import { markFirstProjectPromptShown } from "../utils/firstProjectPrompt";
-import type { JobWorkflowKind, ServiceMaintenanceScope, WorkType } from "../lib/projectEnums";
+import { UnifiedProjectCreationFlow } from "../components/UnifiedProjectCreationFlow";
 
 type Props = {
   onFinished: () => void;
@@ -100,12 +97,7 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
   const [saving, setSaving] = useState(false);
   const [error, setError] = useState("");
 
-  const [projectName, setProjectName] = useState("");
-  const [creatingProject, setCreatingProject] = useState(false);
   const createdProjectRef = useRef(false);
-  const [onboardBuildKind, setOnboardBuildKind] = useState<"NEW_BUILD" | "RENOVATION">("RENOVATION");
-  const [onboardTradeKind, setOnboardTradeKind] = useState<JobWorkflowKind>("STANDARD");
-  const [onboardServiceScope, setOnboardServiceScope] = useState<ServiceMaintenanceScope | null>(null);
 
   const [eqName, setEqName] = useState("");
   const [eqCategory, setEqCategory] = useState<EquipmentCategory>("tool");
@@ -258,62 +250,6 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
     setStep(6);
   };
 
-  const onCreateProject = async () => {
-    if (!mode || !user?.id) return;
-    if (!projectName.trim()) {
-      setError(t("createProject.nameRequired"));
-      return;
-    }
-    if (mode === "trade" && onboardTradeKind === "SERVICE" && !onboardServiceScope) {
-      setError(t("onboardingMvp.errorSelectServiceScope"));
-      return;
-    }
-    setCreatingProject(true);
-    setError("");
-    try {
-      const projectType = mode === "build" ? "BUILD" : "TRADE";
-      const useTemplate = shouldUseCountryCatalogTemplate({ selectedType: projectType, creationMethod: "template" });
-      const templateId = useTemplate ? resolveTemplateIdForCountry(primaryCountry) : "";
-
-      let workType: WorkType;
-      let jobWorkflowKind: JobWorkflowKind | undefined;
-      let serviceMaintenanceScope: ServiceMaintenanceScope | undefined;
-      if (projectType === "BUILD") {
-        workType = onboardBuildKind === "NEW_BUILD" ? "NEW_BUILD" : "RENOVATION";
-      } else {
-        jobWorkflowKind = onboardTradeKind;
-        workType = "REPAIR";
-        serviceMaintenanceScope =
-          onboardTradeKind === "SERVICE" && onboardServiceScope ? onboardServiceScope : undefined;
-      }
-
-      const newProjectId = await createProjectFromTemplate({
-        projectType,
-        templateId,
-        name: projectName.trim(),
-        countryCode: primaryCountry.trim() || undefined,
-        workType,
-        creationMode: projectType === "BUILD" ? "TEMPLATE" : "MANUAL",
-        jobWorkflowKind,
-        serviceMaintenanceScope,
-      });
-      try {
-        await AsyncStorage.setItem("@staveto:lastUsedProjectId", newProjectId);
-      } catch {
-        /* ignore */
-      }
-      createdProjectRef.current = true;
-      await markFirstProjectPromptShown();
-      setProjectName("");
-      setStep(6);
-    } catch (e) {
-      const msg = e instanceof Error ? e.message : String(e ?? "");
-      Alert.alert(t("common.error"), msg || t("onboardingMvp.errorSaveFailed"));
-    } finally {
-      setCreatingProject(false);
-    }
-  };
-
   const onSkipEquipment = () => {
     setError("");
     setStep(7);
@@ -345,11 +281,6 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
       setCreatingEquipment(false);
     }
   };
-
-  const projectTitle =
-    mode === "trade" ? t("onboardingMvp.stepProjectTitleTrade") : t("onboardingMvp.stepProjectTitleBuild");
-  const projectPrimaryLabel =
-    mode === "trade" ? t("onboardingMvp.createJobCta") : t("onboardingMvp.createProjectCta");
 
   const wrap = (body: React.ReactNode) => (
     <KeyboardAvoidingView
@@ -542,105 +473,45 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
           </>
         )
       ) : step === 5 ? (
-        wrap(
-          <>
-            <Text style={styles.title}>{projectTitle}</Text>
+        <KeyboardAvoidingView
+          style={styles.flex}
+          behavior={Platform.OS === "ios" ? "padding" : undefined}
+          keyboardVerticalOffset={insets.top + 24}
+        >
+          <View style={[styles.flex, { paddingHorizontal: spacing.md, paddingBottom: insets.bottom + spacing.md }]}>
+            <Text style={styles.title}>{t("onboardingMvp.stepProjectTitleUnified")}</Text>
             <Text style={styles.subtitle}>{t("onboardingMvp.stepProjectSubtitle")}</Text>
-            {mode === "build" ? (
-              <>
-                <Text style={styles.fieldLabel}>{t("onboardingMvp.projectKindLabelBuild")}</Text>
-                <View style={styles.chipRow}>
-                  {(["NEW_BUILD", "RENOVATION"] as const).map((k) => {
-                    const active = onboardBuildKind === k;
-                    return (
-                      <TouchableOpacity
-                        key={k}
-                        style={[styles.chip, active && styles.chipActive]}
-                        onPress={() => setOnboardBuildKind(k)}
-                      >
-                        <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={2}>
-                          {t(`createProject.wizard.v2.buildKind.${k}`)}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-              </>
-            ) : mode === "trade" ? (
-              <>
-                <Text style={styles.fieldLabel}>{t("onboardingMvp.projectKindLabelTrade")}</Text>
-                <View style={styles.chipRow}>
-                  {(["STANDARD", "SERVICE"] as const).map((k) => {
-                    const active = onboardTradeKind === k;
-                    return (
-                      <TouchableOpacity
-                        key={k}
-                        style={[styles.chip, active && styles.chipActive]}
-                        onPress={() => {
-                          setOnboardTradeKind(k);
-                          if (k === "STANDARD") setOnboardServiceScope(null);
-                        }}
-                      >
-                        <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={2}>
-                          {t(`createProject.wizard.v2.tradeKind.${k}`)}
-                        </Text>
-                      </TouchableOpacity>
-                    );
-                  })}
-                </View>
-                {onboardTradeKind === "SERVICE" ? (
-                  <>
-                    <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>
-                      {t("onboardingMvp.serviceScopeLabel")}
-                    </Text>
-                    <View style={styles.chipRow}>
-                      {(["PROPERTY", "EQUIPMENT"] as const).map((k) => {
-                        const active = onboardServiceScope === k;
-                        return (
-                          <TouchableOpacity
-                            key={k}
-                            style={[styles.chip, active && styles.chipActive]}
-                            onPress={() => setOnboardServiceScope(active ? null : k)}
-                          >
-                            <Text style={[styles.chipText, active && styles.chipTextActive]} numberOfLines={2}>
-                              {t(`createProject.wizard.v2.serviceScope.${k}`)}
-                            </Text>
-                          </TouchableOpacity>
-                        );
-                      })}
-                    </View>
-                  </>
-                ) : null}
-              </>
-            ) : null}
-            <Text style={[styles.fieldLabel, { marginTop: spacing.md }]}>{t("onboardingMvp.projectNameLabel")}</Text>
-            <TextInput
-              style={styles.input}
-              placeholder={t("onboardingMvp.projectNamePlaceholder")}
-              placeholderTextColor={colors.inputPlaceholderOnLight}
-              value={projectName}
-              onChangeText={setProjectName}
-            />
-            {error ? <Text style={styles.error}>{error}</Text> : null}
-            <TouchableOpacity
-              style={[styles.button, creatingProject && styles.buttonDisabled]}
-              onPress={() => void onCreateProject()}
-              disabled={creatingProject}
-            >
-              {creatingProject ? (
-                <ActivityIndicator color="#fff" />
-              ) : (
-                <Text style={styles.buttonText}>{projectPrimaryLabel}</Text>
-              )}
-            </TouchableOpacity>
-            <TouchableOpacity style={[styles.secondaryBtnFull, { marginTop: spacing.md }]} onPress={onSkipProject} disabled={creatingProject}>
+            <View style={{ flex: 1, minHeight: 420 }}>
+              <UnifiedProjectCreationFlow
+                variant="onboarding"
+                existingProjects={[]}
+                internalHints={{ countryCode: primaryCountry, primaryUsageMode: mode }}
+                onSuccess={async ({ projectId }) => {
+                  try {
+                    await AsyncStorage.setItem("@staveto:lastUsedProjectId", projectId);
+                  } catch {
+                    /* ignore */
+                  }
+                  createdProjectRef.current = true;
+                  await markFirstProjectPromptShown();
+                  setStep(6);
+                }}
+              />
+            </View>
+            <TouchableOpacity style={[styles.secondaryBtnFull, { marginTop: spacing.md }]} onPress={onSkipProject}>
               <Text style={styles.secondaryText}>{t("onboardingMvp.skipForNow")}</Text>
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.textLinkBtn, { marginTop: spacing.md }]} onPress={() => { setError(""); setStep(4); }} disabled={creatingProject}>
+            <TouchableOpacity
+              style={[styles.textLinkBtn, { marginTop: spacing.md }]}
+              onPress={() => {
+                setError("");
+                setStep(4);
+              }}
+            >
               <Text style={styles.textLink}>{t("onboardingMvp.back")}</Text>
             </TouchableOpacity>
-          </>
-        )
+          </View>
+        </KeyboardAvoidingView>
       ) : step === 6 ? (
         wrap(
           <>

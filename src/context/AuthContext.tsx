@@ -47,6 +47,8 @@ type AuthContextValue = AuthState & {
   logout: () => Promise<void>;
   loadFromStorage: () => Promise<void>;
   finishOnboarding: () => Promise<void>;
+  /** Vymaže lokálny „intro dokončený“ flag — pri odhlásení znova uvidíš OnboardingEvolution (karusel pred loginom). */
+  resetIntroOnboarding: () => Promise<void>;
   refreshUser: () => Promise<void>;
 };
 
@@ -239,6 +241,15 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     setState((s) => ({ ...s, onboardingDone: true, onboardingLoaded: true }));
   };
 
+  const resetIntroOnboarding = async () => {
+    try {
+      await AsyncStorage.removeItem(ONBOARDING_KEY);
+    } catch {
+      /* ignore */
+    }
+    setState((s) => ({ ...s, onboardingDone: false, onboardingLoaded: true }));
+  };
+
   const refreshUser = async () => {
     const fbUser = getAuth()?.currentUser ?? null;
     if (!fbUser) return;
@@ -270,7 +281,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   return (
     <AuthContext.Provider
-      value={{ ...state, login, register, logout, loadFromStorage, finishOnboarding, refreshUser }}
+      value={{ ...state, login, register, logout, loadFromStorage, finishOnboarding, resetIntroOnboarding, refreshUser }}
     >
       {children}
     </AuthContext.Provider>

@@ -169,6 +169,7 @@ function attachEnrichment(
     extractionSource: source,
     parsedInvoice,
     parsedDocument: result.parsedDocument,
+    expenseExtraction: result.expenseExtraction,
   };
 }
 
@@ -532,6 +533,9 @@ async function finalizeCloudOcrResponse(
       console.warn("[invoiceOCR] Failed to create project event:", eventError);
     }
   }
+  const expenseExtractionLegacy = (ocrResult as Record<string, unknown>).expenseExtraction;
+  const expenseExtraction =
+    isPlainObject(expenseExtractionLegacy) ? expenseExtractionLegacy : undefined;
   return {
     status: ocrResult.status,
     parsed,
@@ -541,6 +545,7 @@ async function finalizeCloudOcrResponse(
     extractionSource: ocrResult.extractionSource,
     parsedDocument: document ?? undefined,
     parsedInvoice: ocrResult.parsedInvoice,
+    ...(expenseExtraction ? { expenseExtraction } : {}),
   };
 }
 

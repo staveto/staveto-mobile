@@ -29,6 +29,8 @@ export type TaskDoc = {
   title: string;
   status: string;
   phaseId?: string | null; // Only BUILD projects have phaseId, TRADE/MAINTENANCE have null or undefined
+  /** Denormalized phase name from AI / wizard (grouping fallback when phase docs missing). */
+  phaseTitle?: string | null;
   order?: number;
   trade?: string;
   priority?: string;
@@ -70,6 +72,10 @@ function toDoc(
     title: (d.title as string) ?? "",
     status: (d.status as string) ?? "OPEN",
     phaseId: (d.phaseId as string | null | undefined) ?? undefined,
+    phaseTitle:
+      typeof d.phaseTitle === "string" && d.phaseTitle.trim() !== ""
+        ? (d.phaseTitle as string).trim()
+        : undefined,
     order: d.order as number | undefined,
     trade: d.trade as string | undefined,
     priority: d.priority as string | undefined,
@@ -125,7 +131,14 @@ export async function createTask(
   ownerId: string,
   projectId: string,
   title: string,
-  opts?: { phaseId?: string | null; order?: number; trade?: string; dueDate?: string }
+  opts?: {
+    phaseId?: string | null;
+    /** Match denormalized label on AI-created tasks; keeps phase grouping consistent. */
+    phaseTitle?: string | null;
+    order?: number;
+    trade?: string;
+    dueDate?: string;
+  }
 ): Promise<TaskDoc> {
   // Check subscription limit before creating task
   const currentUser = auth.currentUser;
@@ -226,13 +239,29 @@ export async function createTask(
     }
   }
   
+  const phaseIdVal = opts?.phaseId ?? null;
+  const rawPhaseTitle = opts?.phaseTitle;
+  /** Omit key when phased task created without title lookup — matches AI docs that always set both. */
+  const phaseTitleWrite =
+    rawPhaseTitle !== undefined
+      ? {
+          phaseTitle:
+            typeof rawPhaseTitle === "string" && rawPhaseTitle.trim()
+              ? rawPhaseTitle.trim()
+              : null,
+        }
+      : phaseIdVal
+        ? {}
+        : { phaseTitle: null };
+
   const c = collection(db, paths.projectTasks(projectId));
   let ref;
   try {
     ref = await addDoc(c, {
       ownerId,
       projectId, // Required: reference to parent project
-      phaseId: opts?.phaseId ?? null, // null for TRADE/MAINTENANCE, string for BUILD
+      phaseId: phaseIdVal, // null for TRADE/MAINTENANCE, string for BUILD
+      ...phaseTitleWrite,
       order: order,
       title: title.trim(),
       trade: opts?.trade ?? null,
@@ -284,12 +313,18 @@ export async function createTask(
     console.warn("[tasks] Failed to create task_created event:", error);
   }
 
+  const phaseTitleReturn =
+    typeof rawPhaseTitle === "string" && rawPhaseTitle.trim()
+      ? rawPhaseTitle.trim()
+      : undefined;
+
   return {
     id: ref.id,
     projectId,
     title: title.trim(),
     status: "OPEN",
     phaseId: opts?.phaseId,
+    phaseTitle: phaseTitleReturn,
     order: order,
     trade: opts?.trade,
     dueDate: opts?.dueDate,
@@ -702,11 +737,13 @@ export async function reorderTask(
 
 /**
  * Move a task to a different phase
+ * @param opts.phaseTitle — Denormalized phase label (required when phase docs are synthetic-only).
  */
 export async function moveTaskToPhase(
   projectId: string,
   taskId: string,
-  newPhaseId: string | null
+  newPhaseId: string | null,
+  opts?: { phaseTitle?: string | null }
 ): Promise<void> {
   const taskRef = doc(db, paths.projectTask(projectId, taskId));
   const taskSnap = await getDocSmart(taskRef);
@@ -745,14 +782,30 @@ export async function moveTaskToPhase(
     newOrder = maxOrder + 1;
   }
   
-  // Update task with new phaseId and order
+  let phaseTitleOut: string | null = null;
+  if (newPhaseId === null) {
+    phaseTitleOut = null;
+  } else if (opts?.phaseTitle !== undefined) {
+    phaseTitleOut = opts.phaseTitle?.trim() ? opts.phaseTitle.trim() : null;
+  } else {
+    try {
+      const pref = doc(db, paths.projectPhase(projectId, newPhaseId));
+      const ps = await getDocSmart(pref);
+      const nm = ps.exists() ? String((ps.data() as { name?: string })?.name ?? "").trim() : "";
+      phaseTitleOut = nm || null;
+    } catch {
+      phaseTitleOut = null;
+    }
+  }
+
   await updateDoc(taskRef, {
     phaseId: newPhaseId,
     order: newOrder,
     updatedAt: serverTimestamp(),
+    phaseTitle: phaseTitleOut,
   });
-  
-  console.log(`[tasks] Moved task ${taskId} to phase ${newPhaseId || 'null'} with order ${newOrder}`);
+
+  console.log(`[tasks] Moved task ${taskId} to phase ${newPhaseId || "null"} with order ${newOrder}`);
 }
 
 /**

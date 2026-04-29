@@ -104,6 +104,8 @@ export type ProjectDoc = {
   jobWorkflowKind?: JobWorkflowKind | null;
   /** When jobWorkflowKind is SERVICE: property vs equipment maintenance. */
   serviceMaintenanceScope?: ServiceMaintenanceScope | null;
+  /** User-entered friendly job reference (optional). */
+  referenceNumber?: string;
 };
 
 export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
@@ -154,6 +156,10 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     jobWorkflowKind: jwk === "STANDARD" || jwk === "SERVICE" ? jwk : undefined,
     serviceMaintenanceScope:
       sms === "PROPERTY" || sms === "EQUIPMENT" ? sms : undefined,
+    referenceNumber:
+      typeof d.referenceNumber === "string" && d.referenceNumber.trim() !== ""
+        ? (d.referenceNumber as string).trim()
+        : undefined,
   };
 }
 

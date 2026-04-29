@@ -5,6 +5,7 @@
 AI agent na vytváranie projektov volá Firebase Cloud Functions:
 - `generateProjectStructure` – generuje plán z popisu
 - `createProjectFromAiPlan` – vytvorí projekt, fázy a úlohy
+- `refineGeneratedProjectNode` – prepracovanie jednej fázy / úlohy v náhľade (bez celkovej regenerácie)
 
 ## 1. Backend (Firebase Functions)
 
@@ -28,7 +29,7 @@ GOOGLE_GENERATIVE_AI_API_KEY=your_key_here
 ```bash
 cd functions
 npm install
-firebase deploy --only functions:generateProjectStructure,functions:createProjectFromAiPlan
+firebase deploy --only functions:generateProjectStructure,functions:createProjectFromAiPlan,functions:refineGeneratedProjectNode
 ```
 
 Po deployi skopíruj URL z výstupu (napr. `https://europe-west1-staveto-mvp-5f251.cloudfunctions.net/generateProjectStructure`).
@@ -40,6 +41,8 @@ Pridaj do `.env`:
 ```
 EXPO_PUBLIC_AI_GENERATE_PROJECT_URL=https://europe-west1-TVOJ_PROJECT.cloudfunctions.net/generateProjectStructure
 EXPO_PUBLIC_AI_CREATE_PROJECT_URL=https://europe-west1-TVOJ_PROJECT.cloudfunctions.net/createProjectFromAiPlan
+# Voliteľné – ak HTTP callable vracia NOT_FOUND pri refine, nastav explicitne:
+# EXPO_PUBLIC_AI_REFINE_PROJECT_NODE_URL=https://europe-west1-TVOJ_PROJECT.cloudfunctions.net/refineGeneratedProjectNode
 ```
 
 Nahraď `TVOJ_PROJECT` skutočným Firebase project ID.

@@ -3,8 +3,19 @@ import { getStorage, db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { AttachmentMetadata, AttachmentKind } from "../lib/attachmentTypes";
 import { addProjectEvent } from "./projectEvents";
+import { compressImageForUpload } from "../utils/imageCompress";
 
 export type AttachmentDoc = AttachmentMetadata;
+
+/** True when attachment is tied to an expense (receipt scan) — excluded from project photo highlights. */
+export function attachmentLinkedToExpense(att: Pick<AttachmentDoc, "expenseId">): boolean {
+  return typeof att.expenseId === "string" && att.expenseId.trim().length > 0;
+}
+
+/** Task/diary/site photos — not receipt images from expenses. */
+export function attachmentsForProjectPhotoGallery(atts: AttachmentDoc[]): AttachmentDoc[] {
+  return atts.filter((a) => a.fileType === "image" && !attachmentLinkedToExpense(a));
+}
 
 function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): AttachmentDoc | null {
   let d: Record<string, unknown>;
@@ -92,8 +103,23 @@ export async function uploadAttachment(
     throw error;
   }
 
-  // Read file as blob
-  const response = await fetch(options.localUri);
+  let uploadUri = options.localUri;
+  let uploadMime = options.mimeType;
+  let uploadFileName = options.fileName;
+
+  if (options.kind === "image") {
+    try {
+      const prepared = await compressImageForUpload(options.localUri, options.fileName, options.mimeType);
+      uploadUri = prepared.uri;
+      uploadMime = prepared.mimeType;
+      uploadFileName = prepared.fileName;
+    } catch (e) {
+      console.warn("[attachments] Image compress failed, uploading original:", e);
+    }
+  }
+
+  // Read file as blob (post-compression size when applicable)
+  const response = await fetch(uploadUri);
   const blob = await response.blob();
   const fileSize = blob.size;
 
@@ -101,7 +127,7 @@ export async function uploadAttachment(
   const attachmentId = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
   
   // Storage path: projects/{projectId}/attachments/{attachmentId}/{fileName}
-  const storagePath = `projects/${projectId}/attachments/${attachmentId}/${options.fileName}`;
+  const storagePath = `projects/${projectId}/attachments/${attachmentId}/${uploadFileName}`;
   const storageInstance = getStorage();
   if (!storageInstance) throw new Error('Firebase Storage nie je dostupný.');
   const storageRef = storageInstance.ref(storagePath);
@@ -113,7 +139,7 @@ export async function uploadAttachment(
   console.log(`[attachments] File size: ${(fileSize / 1024).toFixed(2)} KB`);
   
   try {
-    await storageRef.putFile(options.localUri, { contentType: options.mimeType });
+    await storageRef.putFile(uploadUri, { contentType: uploadMime });
     console.log(`[attachments] ✅ Upload successful: ${storagePath}`);
   } catch (error: any) {
     const code = String(error?.code ?? "").toLowerCase();
@@ -138,10 +164,10 @@ export async function uploadAttachment(
     taskId: options.taskId ?? null,
     phaseId: options.phaseId ?? null,
     expenseId: options.expenseId ?? null,
-    fileName: options.fileName,
+    fileName: uploadFileName,
     fileType: options.kind,
-    contentType: options.mimeType,
-    mimeType: options.mimeType,
+    contentType: uploadMime,
+    mimeType: uploadMime,
     size: fileSize,
     storagePath: finalFilePath,
     filePath: finalFilePath,
@@ -156,11 +182,11 @@ export async function uploadAttachment(
   console.log(`[attachments] Created metadata doc: ${refDoc.id}`);
 
   try {
-    const eventType = options.mimeType?.startsWith("image/") ? "photo_added" : "document_added";
+    const eventType = uploadMime?.startsWith("image/") ? "photo_added" : "document_added";
     await addProjectEvent(
       projectId,
       eventType,
-      { fileName: options.fileName },
+      { fileName: uploadFileName },
       { kind: "attachment", id: refDoc.id }
     );
   } catch (error) {
@@ -173,9 +199,9 @@ export async function uploadAttachment(
     taskId: options.taskId,
     phaseId: options.phaseId,
     expenseId: options.expenseId,
-    fileName: options.fileName,
+    fileName: uploadFileName,
     fileType: options.kind,
-    contentType: options.mimeType,
+    contentType: uploadMime,
     size: fileSize,
     storagePath: finalFilePath,
     uploadedBy: currentUser.uid,

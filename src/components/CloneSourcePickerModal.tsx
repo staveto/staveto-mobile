@@ -29,8 +29,8 @@ import {
 
 type Props = {
   visible: boolean;
-  /** TRADE shows only TRADE jobs; BUILD shows only BUILD projects. */
-  engineType: "BUILD" | "TRADE";
+  /** TRADE shows only TRADE jobs; BUILD only BUILD; ALL shows both product types. */
+  engineType: "BUILD" | "TRADE" | "ALL";
   /** Already loaded projects from `ProjectsScreen` — avoids a second network read. */
   projects: ProjectDoc[];
   onClose: () => void;
@@ -46,7 +46,12 @@ export function CloneSourcePickerModal({ visible, engineType, projects, onClose,
     return projects.filter((p) => {
       if (!p.projectType || !isKnownStorageType(p.projectType)) return false;
       if (isLegacyMaintenanceEquipmentHub(p)) return false;
-      if (getActiveProductProjectType(p) !== engineType) return false;
+      const active = getActiveProductProjectType(p);
+      if (engineType === "ALL") {
+        if (active !== "BUILD" && active !== "TRADE") return false;
+      } else if (active !== engineType) {
+        return false;
+      }
       if (templatesOnly && !p.isTemplate) return false;
       const q = search.trim().toLowerCase();
       if (q && !p.name.toLowerCase().includes(q)) return false;
@@ -54,8 +59,18 @@ export function CloneSourcePickerModal({ visible, engineType, projects, onClose,
     });
   }, [projects, engineType, templatesOnly, search]);
 
-  const titleKey = engineType === "BUILD" ? "cloneSourcePicker.title.BUILD" : "cloneSourcePicker.title.TRADE";
-  const emptyKey = engineType === "BUILD" ? "cloneSourcePicker.empty.BUILD" : "cloneSourcePicker.empty.TRADE";
+  const titleKey =
+    engineType === "ALL"
+      ? "cloneSourcePicker.title.ALL"
+      : engineType === "BUILD"
+        ? "cloneSourcePicker.title.BUILD"
+        : "cloneSourcePicker.title.TRADE";
+  const emptyKey =
+    engineType === "ALL"
+      ? "cloneSourcePicker.empty.ALL"
+      : engineType === "BUILD"
+        ? "cloneSourcePicker.empty.BUILD"
+        : "cloneSourcePicker.empty.TRADE";
 
   return (
     <Modal visible={visible} transparent animationType="slide" onRequestClose={onClose}>

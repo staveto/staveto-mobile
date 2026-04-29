@@ -63,6 +63,8 @@ export type ExpenseDoc = {
   ocrTotalAmount?: number | null;
   ocrVatAmount?: number | null;
   ocrCurrency?: string;
+  /** Structured OCR audit (parsed snapshot, enrichment meta, truncated raw text). */
+  ocrAuditSnapshot?: Record<string, unknown>;
   createdAt?: string;
   updatedAt?: string;
   /** Travel (Jazda A→B) fields when category is TRAVEL */
@@ -111,6 +113,10 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Ex
     ocrTotalAmount: (d.ocrTotalAmount as number | null) ?? undefined,
     ocrVatAmount: (d.ocrVatAmount as number | null) ?? undefined,
     ocrCurrency: (d.ocrCurrency as string) ?? undefined,
+    ocrAuditSnapshot:
+      d.ocrAuditSnapshot != null && typeof d.ocrAuditSnapshot === "object" && !Array.isArray(d.ocrAuditSnapshot)
+        ? (d.ocrAuditSnapshot as Record<string, unknown>)
+        : undefined,
     createdAt: firestoreValueToIsoString(d.createdAt),
     updatedAt: firestoreValueToIsoString(d.updatedAt),
     travel: parseTravel(d.travel),
@@ -1022,6 +1028,7 @@ export async function updateExpense(
     ocrVatAmount?: number | null;
     ocrCurrency?: string | null;
     travel?: TravelExpenseData;
+    ocrAuditSnapshot?: Record<string, unknown> | null;
   }
 ): Promise<void> {
   const ref = doc(db, paths.projectExpense(projectId, expenseId));
@@ -1060,6 +1067,9 @@ export async function updateExpense(
   if (data.travel !== undefined) {
     updateData.travel =
       data.travel == null ? null : normalizedTravelForFirestore(data.travel);
+  }
+  if (data.ocrAuditSnapshot !== undefined) {
+    updateData.ocrAuditSnapshot = data.ocrAuditSnapshot ?? null;
   }
 
   for (const k of Object.keys(updateData)) {

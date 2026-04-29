@@ -108,7 +108,7 @@ function normalizePhoneE164(input: string): string | null {
 export function AccountScreen() {
   const navigation = useNavigation();
   const { t, locale, setLocale, localeNames } = useI18n();
-  const { user, orgId, token, logout, refreshUser } = useAuth();
+  const { user, orgId, token, logout, refreshUser, resetIntroOnboarding } = useAuth();
   const [showAway, setShowAway] = useState(false);
   const [doNotDisturb, setDoNotDisturb] = useState(false);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
@@ -394,6 +394,28 @@ export function AccountScreen() {
     },
     [user?.id]
   );
+
+  /** Odhlásenie + zmazaný lokálny flag úvodného onboardingu → pri štarte znova karusel pred loginom (iba __DEV__). */
+  const restartIntroOnboardingForDev = useCallback(() => {
+    Alert.alert(
+      "Úvodný onboarding (carousel)",
+      "Vymaže uložený stav úvodného návodu a odhlási ťa. Po ďalšom štarte aplikácie uvidíš karusel pred prihlásením.",
+      [
+        { text: "Zrušiť", style: "cancel" },
+        {
+          text: "Odhlásiť a pripraviť",
+          onPress: async () => {
+            try {
+              await resetIntroOnboarding();
+              await logout();
+            } catch (e) {
+              console.warn("[account] restartIntroOnboardingForDev:", e);
+            }
+          },
+        },
+      ]
+    );
+  }, [logout, resetIntroOnboarding]);
 
   const pickProfilePhoto = useCallback(async () => {
     if (!user?.id) return;
@@ -750,6 +772,12 @@ export function AccountScreen() {
           {debugMessage ? <Text style={styles.debugOutput}>{debugMessage}</Text> : null}
         </View>
       )}
+
+      {__DEV__ ? (
+        <TouchableOpacity style={styles.devIntroOnboardingBtn} onPress={restartIntroOnboardingForDev}>
+          <Text style={styles.devIntroOnboardingBtnText}>Dev: úvodný onboarding (carousel)</Text>
+        </TouchableOpacity>
+      ) : null}
 
       <TouchableOpacity style={styles.logoutBtn} onPress={logout}>
         <Text style={styles.logoutBtnText}>{t("account.logout")}</Text>
@@ -1111,6 +1139,16 @@ const styles = StyleSheet.create({
     padding: 8,
     borderRadius: 8,
   },
+  devIntroOnboardingBtn: {
+    marginTop: spacing.md,
+    padding: spacing.md,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    alignItems: "center",
+    backgroundColor: "transparent",
+  },
+  devIntroOnboardingBtnText: { color: colors.primary, fontWeight: "600", fontSize: 14 },
   logoutBtn: {
     marginTop: spacing.lg,
     padding: spacing.md,

@@ -7,6 +7,7 @@ import * as expensesService from "../services/expenses";
 import { parseMoneyToNumber } from "../helpers/parseMoney";
 import type { OcrParsed, OcrStatus } from "../services/invoiceOCR";
 import { colors, radius, spacing } from "../theme";
+import { isPlainObject } from "../utils/isPlainObject";
 
 type RouteParams = {
   projectId: string;
@@ -20,7 +21,46 @@ type RouteParams = {
   defaultCurrency?: string;
   attachmentId?: string;
   storagePath?: string;
+  expenseExtraction?: Record<string, unknown>;
+  /** Server-truncated OCR plain text for audit (Firebase expense doc). */
+  ocrRawTextTruncated?: string;
 };
+
+function parseReviewFieldIds(expenseExtraction?: Record<string, unknown>): string[] {
+  const raw = expenseExtraction?.reviewFieldIds;
+  return Array.isArray(raw) ? raw.filter((x): x is string => typeof x === "string") : [];
+}
+
+function buildOcrAuditSnapshot(params: RouteParams, parsed: OcrParsed | null): Record<string, unknown> | null {
+  const ee = params.expenseExtraction;
+  const audit: Record<string, unknown> =
+    ee && isPlainObject(ee)
+      ? {
+          enrichmentVersion: ee.enrichmentVersion,
+          legacyParserVersion: ee.legacyParserVersion,
+          inferredCountry: ee.inferredCountry,
+          countryConfidence: ee.countryConfidence,
+          countrySignals: ee.countrySignals,
+          candidateTotals: ee.candidateTotals,
+          validationFlags: ee.validationFlags,
+          lowConfidenceReasons: ee.lowConfidenceReasons,
+          geminiUsed: ee.geminiUsed,
+          geminiSkippedReason: ee.geminiSkippedReason,
+          fieldConfidence: ee.fieldConfidence,
+          evidenceHints: ee.evidenceHints,
+          documentTypeGuess: ee.documentTypeGuess,
+          reviewFieldIds: ee.reviewFieldIds,
+          normalized: ee.normalized,
+        }
+      : {};
+  audit.parsedFieldsSnapshot = parsed;
+  if (params.ocrRawTextTruncated != null && params.ocrRawTextTruncated.length > 0) {
+    audit.rawOcrTextTruncated = params.ocrRawTextTruncated;
+    audit.rawOcrTextTruncatedLen = params.ocrRawTextTruncated.length;
+  }
+  const keys = Object.keys(audit).filter((k) => audit[k] !== undefined);
+  return keys.length ? audit : null;
+}
 
 function toNumber(value: string): number | null {
   const normalized = value.replace(",", ".").trim();
@@ -51,6 +91,10 @@ export function ExpenseReviewScreen() {
   }
 
   const parsed = params?.parsed ?? null;
+  const reviewFieldIds = useMemo(() => parseReviewFieldIds(params.expenseExtraction), [params.expenseExtraction]);
+
+  const inputNeedsReview = (fieldId: string) => reviewFieldIds.includes(fieldId);
+
   const ocr = parsed as Record<string, unknown> | null;
   const amountCandidate = ocr?.totalAmount ?? ocr?.total ?? ocr?.grandTotal ?? ocr?.amount ?? ocr?.sum ?? ocr?.amountCents;
   const isCents = amountCandidate === ocr?.amountCents;
@@ -98,6 +142,7 @@ export function ExpenseReviewScreen() {
     try {
       const resolvedCurrency = params.parsed?.currency ?? params.defaultCurrency ?? "EUR";
       const effectiveCurrency = resolvedCurrency === "UNKNOWN" ? "EUR" : resolvedCurrency;
+      const ocrAuditSnapshot = buildOcrAuditSnapshot(params, parsed);
       await expensesService.updateExpense(params.projectId, params.expenseId, {
         title: title.trim(),
         amount: amountNum,
@@ -112,6 +157,7 @@ export function ExpenseReviewScreen() {
         ocrTotalAmount: amountNum,
         ocrVatAmount: toNumber(vatAmount),
         ocrCurrency: effectiveCurrency,
+        ...(ocrAuditSnapshot ? { ocrAuditSnapshot } : {}),
       });
       Alert.alert(t("common.success"), t("projectOverview.expenseUpdated"));
       (navigation as { goBack: () => void }).goBack();
@@ -128,7 +174,16 @@ export function ExpenseReviewScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Kontrola údajov z faktúry</Text>
+      <Text style={styles.title}>{t("expense.invoiceReviewTitle")}</Text>
+      {reviewFieldIds.length > 0 ? (
+        <Text style={styles.reviewBanner}>{t("expense.reviewLowConfidenceBanner")}</Text>
+      ) : null}
+      {inputNeedsReview("country") ? (
+        <Text style={styles.countryHint}>{t("expense.reviewCountryHint")}</Text>
+      ) : null}
+      {inputNeedsReview("supplierTaxId") ? (
+        <Text style={styles.countryHint}>{t("expense.reviewSupplierTaxHint")}</Text>
+      ) : null}
       {statusMessage ? <Text style={styles.statusMessage}>{statusMessage}</Text> : null}
       {debugMatched != null && (
         <Text style={styles.debugMatched} numberOfLines={2}>
@@ -142,7 +197,7 @@ export function ExpenseReviewScreen() {
 
       <Text style={styles.label}>{t("expense.amount") || "Suma (EUR) *"}</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, inputNeedsReview("totalAmount") && styles.inputNeedsReview]}
         value={amount}
         onChangeText={setAmount}
         keyboardType="decimal-pad"
@@ -150,27 +205,32 @@ export function ExpenseReviewScreen() {
       />
 
       <Text style={styles.label}>{t("projectOverview.expenseDatePlaceholder") || "Dátum (YYYY-MM-DD)"}</Text>
-      <TextInput style={styles.input} value={date} onChangeText={setDate} placeholderTextColor={colors.textMuted} />
+      <TextInput
+        style={[styles.input, inputNeedsReview("issueDate") && styles.inputNeedsReview]}
+        value={date}
+        onChangeText={setDate}
+        placeholderTextColor={colors.textMuted}
+      />
 
       <Text style={styles.label}>{t("expense.supplierName") || "Meno dodávateľa"}</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, inputNeedsReview("supplierName") && styles.inputNeedsReview]}
         value={supplierName}
         onChangeText={setSupplierName}
         placeholderTextColor={colors.textMuted}
       />
 
-      <Text style={styles.label}>Číslo faktúry</Text>
+      <Text style={styles.label}>{t("expense.invoiceNumberShort")}</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, inputNeedsReview("invoiceNumber") && styles.inputNeedsReview]}
         value={invoiceNumber}
         onChangeText={setInvoiceNumber}
         placeholderTextColor={colors.textMuted}
       />
 
-      <Text style={styles.label}>DPH (voliteľné)</Text>
+      <Text style={styles.label}>{t("expense.vatOptionalShort")}</Text>
       <TextInput
-        style={styles.input}
+        style={[styles.input, inputNeedsReview("vatAmount") && styles.inputNeedsReview]}
         value={vatAmount}
         onChangeText={setVatAmount}
         keyboardType="decimal-pad"
@@ -191,6 +251,23 @@ export function ExpenseReviewScreen() {
 
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
+  reviewBanner: {
+    fontSize: 13,
+    color: colors.labelOnDark,
+    backgroundColor: "rgba(224,103,55,0.15)",
+    padding: spacing.sm,
+    borderRadius: radius / 2,
+    marginBottom: spacing.md,
+  },
+  countryHint: {
+    fontSize: 13,
+    color: colors.labelMutedOnDark,
+    marginBottom: spacing.sm,
+  },
+  inputNeedsReview: {
+    borderWidth: 2,
+    borderColor: colors.primary,
+  },
   centered: { justifyContent: "center", alignItems: "center", padding: spacing.xl },
   noAccessTitle: { fontSize: 18, fontWeight: "600", color: colors.text, marginBottom: spacing.sm },
   noAccessText: { fontSize: 14, color: colors.textMuted, textAlign: "center", marginBottom: spacing.lg },

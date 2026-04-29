@@ -33,7 +33,8 @@ Write-Host ""
 Write-Host "GOOGLE_GENERATIVE_AI_API_KEY must be set in Firebase:" -ForegroundColor Yellow
 Write-Host "  firebase functions:secrets:set GOOGLE_GENERATIVE_AI_API_KEY" -ForegroundColor White
 Write-Host "  (Get key from https://aistudio.google.com/app/apikey)" -ForegroundColor Gray
-Write-Host "  Then redeploy: firebase deploy --only functions:generateProjectStructure,functions:createProjectFromAiPlan" -ForegroundColor Gray
+Write-Host "  Then redeploy (include refine for „Prepracovať úlohu“):" -ForegroundColor Gray
+Write-Host "  firebase deploy --only functions:generateProjectStructure,functions:createProjectFromAiPlan,functions:refineGeneratedProjectNode" -ForegroundColor Gray
 
 # 4. Check .env
 $envPath = Join-Path $projectRoot "mobile\.env"
@@ -58,7 +59,7 @@ Write-Host ""
 Write-Host "To deploy AI functions:" -ForegroundColor Cyan
 Write-Host "  cd functions" -ForegroundColor White
 Write-Host "  npm run build" -ForegroundColor White
-Write-Host "  firebase deploy --only functions:generateProjectStructure,functions:createProjectFromAiPlan" -ForegroundColor White
+Write-Host "  firebase deploy --only functions:generateProjectStructure,functions:createProjectFromAiPlan,functions:refineGeneratedProjectNode" -ForegroundColor White
 Write-Host ""
 Write-Host "After deploy, copy the function URLs from the output into .env" -ForegroundColor Gray
 Write-Host ""

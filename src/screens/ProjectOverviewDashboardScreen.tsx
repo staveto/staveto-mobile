@@ -108,7 +108,7 @@ export function ProjectOverviewDashboardScreen() {
         setExpenses(exp);
         setAttachments(atts);
 
-        const imageAtts = atts.filter((a) => a.fileType === "image").slice(0, 6);
+        const imageAtts = attachmentsService.attachmentsForProjectPhotoGallery(atts).slice(0, 6);
         const urlMap = new Map<string, string>();
         const onlineStatus = { isOffline, isPoorNetwork };
         for (const a of imageAtts) {
@@ -204,7 +204,7 @@ export function ProjectOverviewDashboardScreen() {
       (a, b) => new Date(b.date).getTime() - new Date(a.date).getTime()
     ).slice(0, 2);
 
-    const imageAtts = attachments.filter((a) => a.fileType === "image");
+    const imageAtts = attachmentsService.attachmentsForProjectPhotoGallery(attachments);
     const lastPhotos = imageAtts.slice(0, 6);
 
     let expensesTotal = 0;

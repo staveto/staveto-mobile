@@ -28,4 +28,6 @@ export type OcrResult = {
   parsedInvoice?: ParsedInvoiceData;
   /** Universal document model (candidates, document type, multilingual fields). */
   parsedDocument?: ParsedDocumentData;
+  /** Cloud `mergeExpenseEnhancement` payload — review hints, validation, Gemini flags. */
+  expenseExtraction?: Record<string, unknown>;
 };

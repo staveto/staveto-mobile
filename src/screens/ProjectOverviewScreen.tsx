@@ -111,6 +111,20 @@ import {
 
 const DONE_COLOR = "#2e7d32";
 
+/** Synthetic phase row id when tasks carry denormalized {@link TaskDoc.phaseTitle} but no phaseId. */
+const PHASE_TITLE_GROUP_PREFIX = "phase_title:";
+function phaseTitleGroupKey(title: string): string {
+  return `${PHASE_TITLE_GROUP_PREFIX}${encodeURIComponent(title.trim())}`;
+}
+function parsePhaseTitleGroupKey(key: string): string | null {
+  if (!key.startsWith(PHASE_TITLE_GROUP_PREFIX)) return null;
+  try {
+    return decodeURIComponent(key.slice(PHASE_TITLE_GROUP_PREFIX.length));
+  } catch {
+    return null;
+  }
+}
+
 /** Foto faktúry alebo PDF – po výbere sa spustí automatické OCR */
 function isExpenseOcrAttachmentKind(
   kind: "image" | "pdf" | "document" | undefined | null
@@ -176,6 +190,48 @@ export function ProjectOverviewScreen() {
 
   const [phases, setPhases] = useState<ProjectPhaseDoc[]>([]);
   const [tasks, setTasks] = useState<TaskDoc[]>([]);
+  /** Persisted phases plus placeholders: orphan phaseIds, or phase_title:* rows from {@link TaskDoc.phaseTitle}. */
+  const phasesForUi = useMemo(() => {
+    const persistedPhaseById = new Map(phases.map((p) => [p.id, p]));
+    const synthetic: ProjectPhaseDoc[] = [];
+
+    const taskPhaseIdsSorted = [...new Set(tasks.map((tk) => tk.phaseId).filter(Boolean) as string[])].sort((a, b) =>
+      a.localeCompare(b)
+    );
+    taskPhaseIdsSorted
+      .filter((id) => !persistedPhaseById.has(id))
+      .forEach((id, idx) => {
+        synthetic.push({
+          id,
+          name: t("projectOverview.phaseSyntheticLabel", { index: String(idx + 1) }),
+          order: 1_000_000 + idx,
+        });
+      });
+
+    const titleKeysSorted = [
+      ...new Set(
+        tasks
+          .filter((tk) => !tk.phaseId?.trim() && tk.phaseTitle?.trim())
+          .map((tk) => phaseTitleGroupKey(tk.phaseTitle!.trim()))
+      ),
+    ].sort((a, b) => a.localeCompare(b));
+
+    titleKeysSorted.forEach((key, idx) => {
+      if (persistedPhaseById.has(key)) return;
+      const label = parsePhaseTitleGroupKey(key) ?? key;
+      synthetic.push({
+        id: key,
+        name: label,
+        order: 2_000_000 + idx,
+      });
+    });
+
+    return [...phases, ...synthetic].sort((a, b) => a.order - b.order);
+  }, [phases, tasks, t]);
+  const hasPhaseLinksOnTasks = useMemo(
+    () => tasks.some((tk) => !!(tk.phaseId?.trim() || tk.phaseTitle?.trim())),
+    [tasks]
+  );
   const [expenses, setExpenses] = useState<ExpenseDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -320,6 +376,20 @@ export function ProjectOverviewScreen() {
       (access.isMember && access.sharedItems?.timeTracking !== false)
     );
   }, [access.loading, access.isOwner, access.canWriteTime, access.isMember, access.sharedItems?.timeTracking]);
+
+  /** Align with Firestore `tasks` delete/update: editors with tasks or phases sharing (same as „Pridať úlohu“). */
+  const canMutateTasks = useMemo(() => {
+    if (access.loading) return false;
+    if (!access.canWrite) return false;
+    if (access.isOwner) return true;
+    return access.sharedItems.tasks === true || access.sharedItems.phases === true;
+  }, [
+    access.loading,
+    access.canWrite,
+    access.isOwner,
+    access.sharedItems.tasks,
+    access.sharedItems.phases,
+  ]);
 
   const isTimerRunningOnThisProject = useMemo(
     () => !!activeTimer && activeTimer.projectId === projectId,
@@ -572,9 +642,10 @@ export function ProjectOverviewScreen() {
         }
       }
       
-      // Load phases (only for BUILD projects), tasks, expenses, and BUILD-specific data
+      // Load phases for BUILD-like projects, AI-generated plans, and TRADE (Remeselník jobs persist phases + phaseId on tasks).
       const projectTypeForLoad = project?.projectType || projectType;
       const isBuildProject = isBuildLikeStorageType(projectTypeForLoad);
+      const isAiGeneratedPlan = project?.templateId === "ai-generated";
       
       // If useProjectAccess failed (e.g. first getDoc timed out) but getProject succeeded,
       // still load subcollections when the loaded project shows this user is the owner.
@@ -594,8 +665,9 @@ export function ProjectOverviewScreen() {
       console.log(`[ProjectOverview] Loading data for projectType="${projectTypeForLoad}", isProjectOwner=${isProjectOwner}, canRead: phases=${canReadPhases}, tasks=${canReadTasks}, expenses=${canReadExpenses}, diary=${canReadDiary}, documents=${canReadDocuments}...`);
       const loadPromises: Promise<any>[] = [];
       
-      // Only load phases for BUILD projects when canReadPhases
-      if (isBuildProject && canReadPhases) {
+      const shouldLoadProjectPhases =
+        (isBuildProject || isAiGeneratedPlan || projectTypeForLoad === "TRADE") && canReadPhases;
+      if (shouldLoadProjectPhases) {
         loadPromises.push(
           projectsService.listProjectPhases(projectId).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading phases:`, error);
@@ -696,11 +768,10 @@ export function ProjectOverviewScreen() {
         }
       }
       
-      // Only set phases for BUILD projects
-      if (isBuildProject) {
+      if (isBuildProject || isAiGeneratedPlan || projectTypeForLoad === "TRADE") {
         setPhases(ph || []);
       } else {
-        setPhases([]); // TRADE/MAINTENANCE have no phases
+        setPhases([]);
       }
       setTasks(tk || []);
       setExpenses(exp || []);
@@ -1127,8 +1198,8 @@ export function ProjectOverviewScreen() {
 
   // Expand phase when navigating from milestone click (ProjectOverviewDashboard)
   useEffect(() => {
-    if (!paramExpandPhaseId || phases.length === 0) return;
-    const phaseExists = phases.some((p) => p.id === paramExpandPhaseId);
+    if (!paramExpandPhaseId || phasesForUi.length === 0) return;
+    const phaseExists = phasesForUi.some((p) => p.id === paramExpandPhaseId);
     if (phaseExists) {
       setExpandedPhases((prev) => {
         const next = new Map(prev);
@@ -1137,7 +1208,7 @@ export function ProjectOverviewScreen() {
         return next;
       });
     }
-  }, [paramExpandPhaseId, phases]);
+  }, [paramExpandPhaseId, phasesForUi]);
 
   useEffect(() => {
     if (!paramOpenExpenseId || !projectId) return;
@@ -1252,9 +1323,17 @@ export function ProjectOverviewScreen() {
     
     setSubmitting(true);
     try {
-      // For BUILD projects: use selectedPhaseId, for TRADE/MAINTENANCE: don't set phaseId
-      const taskPhaseId = isBuildProject ? (selectedPhaseId || undefined) : undefined;
-      
+      // BUILD + AI wizard plans persist phases on TRADE jobs — attach new tasks to selected phase when applicable.
+      const wantsPhaseOnCreatedTask =
+        isBuildLikeStorageType(projectType) ||
+        templateId === "ai-generated" ||
+        hasPhaseLinksOnTasks;
+      const taskPhaseId = wantsPhaseOnCreatedTask ? (selectedPhaseId || undefined) : undefined;
+      const selectedPhaseMeta = taskPhaseId
+        ? phasesForUi.find((p) => p.id === taskPhaseId)
+        : undefined;
+      const taskPhaseTitle = selectedPhaseMeta?.name?.trim() ? selectedPhaseMeta.name.trim() : undefined;
+
       // Determine task title: use text or "Hlasová nahrávka" if voice recording
       const taskTitle = newTitle.trim() || (recordingUri ? t("projectOverview.voiceRecording") : "");
       
@@ -1262,6 +1341,7 @@ export function ProjectOverviewScreen() {
       
       const taskDoc = await tasksService.createTask(orgId, projectId, taskTitle, {
         phaseId: taskPhaseId,
+        phaseTitle: taskPhaseTitle,
         dueDate: newTaskDueDate.trim() || undefined,
         // order will be auto-calculated (max + 1) in createTask function
       });
@@ -1457,7 +1537,7 @@ export function ProjectOverviewScreen() {
   };
 
   const handleEditTask = (task: TaskDoc) => {
-    if (!isOwner) {
+    if (!canMutateTasks) {
       Alert.alert(t("common.error"), t("projectOverview.noPermission"));
       return;
     }
@@ -1493,7 +1573,7 @@ export function ProjectOverviewScreen() {
   };
 
   const handleDeleteTask = async (task: TaskDoc) => {
-    if (!isOwner) {
+    if (!canMutateTasks) {
       Alert.alert(t("common.error"), t("projectOverview.noPermission"));
       return;
     }
@@ -1813,7 +1893,7 @@ export function ProjectOverviewScreen() {
   };
 
   const handleMoveTask = (task: TaskDoc) => {
-    if (!isOwner) {
+    if (!canMutateTasks) {
       Alert.alert(t("common.error"), t("projectOverview.noPermission"));
       return;
     }
@@ -1821,15 +1901,17 @@ export function ProjectOverviewScreen() {
     setShowMoveTaskModal(true);
   };
 
-  const handleMoveTaskToPhase = async (targetPhaseId: string | null) => {
-    if (!isOwner) {
+  const handleMoveTaskToPhase = async (targetPhaseId: string | null, phaseDisplayName?: string) => {
+    if (!canMutateTasks) {
       Alert.alert(t("common.error"), t("projectOverview.noPermission"));
       return;
     }
     if (!projectId || !movingTask) return;
     
     try {
-      await moveTaskToPhase(projectId, movingTask.id, targetPhaseId);
+      await moveTaskToPhase(projectId, movingTask.id, targetPhaseId, {
+        phaseTitle: targetPhaseId === null ? null : phaseDisplayName,
+      });
       
       // Reload data
       await load(true);
@@ -2524,6 +2606,10 @@ export function ProjectOverviewScreen() {
     defaultCurrency?: string;
     attachmentId?: string;
     storagePath?: string;
+    /** Cloud enrichment — review hints, validation flags (additive). */
+    expenseExtraction?: Record<string, unknown>;
+    /** Truncated OCR plain text for audit (avoid huge navigation payloads). */
+    ocrRawTextTruncated?: string;
   }) => {
     (navigation as { navigate: (name: string, params?: unknown) => void }).navigate("ExpenseReview", params);
   };
@@ -2611,6 +2697,8 @@ export function ProjectOverviewScreen() {
         ...input,
         status: result.status,
         parsed: result.parsed,
+        expenseExtraction: result.expenseExtraction,
+        ocrRawTextTruncated: result.rawText?.slice(0, 12_000),
       });
     } catch (error) {
       if (ocrRequestIdRef.current !== requestId) return;
@@ -2990,7 +3078,7 @@ export function ProjectOverviewScreen() {
 
   const shareDiaryEntry = async (entry: DiaryEntryDoc) => {
     try {
-      const phaseName = entry.phaseId ? phases.find(p => p.id === entry.phaseId)?.name : null;
+      const phaseName = entry.phaseId ? phasesForUi.find((p) => p.id === entry.phaseId)?.name : null;
       
       let shareText = `Update z projektu: ${projectName}\n\n`;
       shareText += `Dátum: ${formatDate(entry.date)}\n`;
@@ -3746,34 +3834,47 @@ export function ProjectOverviewScreen() {
     );
   };
 
-  // Structure: build-like = phased; trade-like + maintenance = flat tasks (see `projectTypeModel`).
-  const isBuildProject = isBuildLikeStorageType(projectType);
+  // Structure: BUILD (and MANAGEMENT build-like) = phased; plain TRADE/MAINTENANCE = flat unless tasks carry phaseId or AI template.
   const isTradeOrMaintenance = projectOverviewIsTradeOrMaintenanceFlatTasks(projectType);
   const supportsDiary = projectOverviewLoadsDiary(projectType);
-  
-  // Group tasks by phase (only for BUILD projects)
+  /** Show phased layout when BUILD-like, AI template, or TRADE tasks reference phases (persisted or synthetic rows). */
+  const showPhaseGroupedTasks =
+    isBuildLikeStorageType(projectType) ||
+    templateId === "ai-generated" ||
+    (isTradeOrMaintenance && hasPhaseLinksOnTasks);
+  const tradeFlatNoPhaseUi =
+    isTradeOrMaintenance && templateId !== "ai-generated" && !hasPhaseLinksOnTasks;
+  /** AI template but nothing phase-shaped — fall back to flat list (tasks truly have no phaseId). */
+  const aiPlanFallbackFlat =
+    templateId === "ai-generated" &&
+    phases.length === 0 &&
+    tasks.length > 0 &&
+    !hasPhaseLinksOnTasks;
+  const renderTradeLikeFlatRows = tradeFlatNoPhaseUi || aiPlanFallbackFlat;
+
   const tasksByPhase = new Map<string, TaskDoc[]>();
   const phaseOrder: string[] = [];
-  
-  if (isBuildProject) {
-    // For BUILD: group tasks by phaseId
+
+  if (showPhaseGroupedTasks) {
     tasks.forEach((tk) => {
-      // Include tasks with phaseId
-      if (tk.phaseId) {
-        if (!tasksByPhase.has(tk.phaseId)) tasksByPhase.set(tk.phaseId, []);
-        tasksByPhase.get(tk.phaseId)!.push(tk);
+      let bucket: string | null = tk.phaseId?.trim() || null;
+      if (!bucket && tk.phaseTitle?.trim()) {
+        bucket = phaseTitleGroupKey(tk.phaseTitle.trim());
       }
-      // Tasks without phaseId will be shown in a separate section
+      if (!bucket) return;
+      if (!tasksByPhase.has(bucket)) tasksByPhase.set(bucket, []);
+      tasksByPhase.get(bucket)!.push(tk);
     });
-    // Set phase order from loaded phases
-    phaseOrder.push(...(phases.map((p) => p.id)));
-  } else {
-    // For TRADE/MAINTENANCE: tasks don't have phases, just keep them in a flat list
-    // We'll render them directly without phase grouping
+    phaseOrder.push(...phasesForUi.map((p) => p.id));
+    const orphanPhaseIdsOnTasks = [...tasksByPhase.keys()].filter((id) => !phaseOrder.includes(id)).sort((a, b) =>
+      a.localeCompare(b)
+    );
+    phaseOrder.push(...orphanPhaseIdsOnTasks);
   }
-  
-  // Get tasks without phaseId for BUILD projects
-  const tasksWithoutPhase = isBuildProject ? tasks.filter(t => !t.phaseId) : [];
+
+  const tasksWithoutPhase = showPhaseGroupedTasks
+    ? tasks.filter((t) => !t.phaseId?.trim() && !t.phaseTitle?.trim())
+    : [];
   
   // MAINTENANCE: filter tasks by type (service vs all)
   const maintenanceTasks = projectType === 'MAINTENANCE' 
@@ -3788,8 +3889,10 @@ export function ProjectOverviewScreen() {
     return m;
   }, [equipmentList]);
   
-  console.log(`[ProjectOverview] Render: projectType="${projectType}", isBuildProject=${isBuildProject}, phases.length=${phases.length}, tasks.length=${tasks.length}, phaseOrder.length=${phaseOrder.length}`);
-  if (phases.length > 0) {
+  console.log(
+    `[ProjectOverview] Render: projectType="${projectType}", templateId="${templateId}", showPhaseGroupedTasks=${showPhaseGroupedTasks}, phases.length=${phases.length}, phasesForUi=${phasesForUi.length}, tasks.length=${tasks.length}, phaseOrder.length=${phaseOrder.length}`
+  );
+  if (phasesForUi.length > 0) {
     console.log(`[ProjectOverview] Phase order: ${phaseOrder.join(', ')}`);
   }
 
@@ -4183,7 +4286,9 @@ export function ProjectOverviewScreen() {
           </View>
           {loading ? (
             <ActivityIndicator color={colors.primary} style={styles.loader} />
-          ) : (projectType === 'MAINTENANCE' ? displayTasksForMaintenance.length : tasks.length) === 0 && (isTradeOrMaintenance || phases.length === 0) ? (
+          ) : (projectType === 'MAINTENANCE' ? displayTasksForMaintenance.length : tasks.length) === 0 &&
+            ((!showPhaseGroupedTasks && isTradeOrMaintenance) ||
+              (showPhaseGroupedTasks && phasesForUi.length === 0 && !hasPhaseLinksOnTasks)) ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.empty}>
               {isTradeOrMaintenance 
@@ -4205,9 +4310,8 @@ export function ProjectOverviewScreen() {
               </TouchableOpacity>
             )}
           </View>
-        ) : isTradeOrMaintenance ? (
-          // TRADE / RESIDENTIAL / job MAINTENANCE: flat list. AI (and templates) may set phaseId on tasks
-          // even when we do not load phases for non-BUILD — never hide those rows (count vs list mismatch).
+        ) : renderTradeLikeFlatRows ? (
+          // Plain TRADE / MAINTENANCE (non–AI wizard): flat list. AI-generated plans use phased layout below when phases load.
           <>
             {(projectType === "MAINTENANCE" ? displayTasksForMaintenance : tasks)
               .slice()
@@ -4259,7 +4363,7 @@ export function ProjectOverviewScreen() {
                   )}
                 </TouchableOpacity>
               </View>
-              {isOwner ? (
+              {canMutateTasks ? (
                 <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
                   <Ionicons name="person-outline" size={18} color={colors.textMuted} />
                   <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
@@ -4270,7 +4374,7 @@ export function ProjectOverviewScreen() {
                   <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
                 </View>
               )}
-              {isOwner ? (
+              {canMutateTasks ? (
                 <>
                   <TouchableOpacity
                     style={styles.attachmentButton}
@@ -4284,6 +4388,14 @@ export function ProjectOverviewScreen() {
                     />
                   </TouchableOpacity>
                   <TouchableOpacity
+                    style={styles.phaseActionButton}
+                    onPress={() => handleDeleteTask(task)}
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                    accessibilityLabel={t("projectOverview.deleteTask")}
+                  >
+                    <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
+                  </TouchableOpacity>
+                  <TouchableOpacity
                     style={styles.taskMenuButton}
                     onPress={() => showTaskActionsMenu(task, false)}
                     hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -4295,7 +4407,7 @@ export function ProjectOverviewScreen() {
               </View>
             ))}
           </>
-        ) : phases.length === 0 ? (
+        ) : phasesForUi.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.empty}>{t("projectOverview.noPhases") || "Projekt nemá žiadne fázy."}</Text>
             <Text style={styles.emptySubtext}>{t("projectOverview.addPhaseHint") || "Môžeš pridať fázy neskôr."}</Text>
@@ -4328,8 +4440,9 @@ export function ProjectOverviewScreen() {
             {/* For BUILD projects: show phases with tasks */}
             {phaseOrder.map((phaseKey) => {
               const phaseTasks = tasksByPhase.get(phaseKey) ?? [];
-              const phase = phases.find((p) => p.id === phaseKey);
-              
+              const phase = phasesForUi.find((p) => p.id === phaseKey);
+              const phaseExistsInFirestore = phases.some((p) => p.id === phaseKey);
+
               // Show phase (even if it has no tasks - make it clickable)
               if (phase) {
                 const expanded = expandedPhases.get(phaseKey) ?? false; // Default collapsed
@@ -4381,26 +4494,30 @@ export function ProjectOverviewScreen() {
                           >
                             <Ionicons name="share-outline" size={18} color={colors.primary} />
                           </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.phaseActionButton}
-                            onPress={(e) => {
-                              e.stopPropagation();
-                              handleEditPhase(phase);
-                            }}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                          >
-                            <Ionicons name="create-outline" size={18} color={colors.textMuted} />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.phaseActionButton}
-                            onPress={(e) => {
-                              e.stopPropagation();
-                              handleDeletePhase(phase);
-                            }}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                          >
-                            <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
-                          </TouchableOpacity>
+                          {phaseExistsInFirestore ? (
+                            <>
+                              <TouchableOpacity
+                                style={styles.phaseActionButton}
+                                onPress={(e) => {
+                                  e.stopPropagation();
+                                  handleEditPhase(phase);
+                                }}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                              >
+                                <Ionicons name="create-outline" size={18} color={colors.textMuted} />
+                              </TouchableOpacity>
+                              <TouchableOpacity
+                                style={styles.phaseActionButton}
+                                onPress={(e) => {
+                                  e.stopPropagation();
+                                  handleDeletePhase(phase);
+                                }}
+                                hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                              >
+                                <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
+                              </TouchableOpacity>
+                            </>
+                          ) : null}
                         </View>
                       ) : null}
                     </View>
@@ -4455,7 +4572,7 @@ export function ProjectOverviewScreen() {
                                   )}
                                 </TouchableOpacity>
                               </View>
-                              {isOwner ? (
+                              {canMutateTasks ? (
                                 <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
                                   <Ionicons name="person-outline" size={18} color={colors.textMuted} />
                                   <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
@@ -4466,7 +4583,7 @@ export function ProjectOverviewScreen() {
                                   <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
                                 </View>
                               )}
-                              {isOwner ? (
+                              {canMutateTasks ? (
                                 <>
                                   <TouchableOpacity
                                     style={styles.attachmentButton}
@@ -4478,6 +4595,14 @@ export function ProjectOverviewScreen() {
                                       size={20} 
                                       color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
                                     />
+                                  </TouchableOpacity>
+                                  <TouchableOpacity
+                                    style={styles.phaseActionButton}
+                                    onPress={() => handleDeleteTask(task)}
+                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                    accessibilityLabel={t("projectOverview.deleteTask")}
+                                  >
+                                    <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
                                   </TouchableOpacity>
                                   <TouchableOpacity
                                     style={styles.taskMenuButton}
@@ -4550,7 +4675,7 @@ export function ProjectOverviewScreen() {
                           )}
                         </TouchableOpacity>
                       </View>
-                      {isOwner ? (
+                      {canMutateTasks ? (
                         <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
                           <Ionicons name="person-outline" size={18} color={colors.textMuted} />
                           <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
@@ -4561,7 +4686,7 @@ export function ProjectOverviewScreen() {
                           <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
                         </View>
                       )}
-                      {isOwner ? (
+                      {canMutateTasks ? (
                         <>
                           <TouchableOpacity
                             style={styles.attachmentButton}
@@ -4573,6 +4698,14 @@ export function ProjectOverviewScreen() {
                               size={20} 
                               color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
                             />
+                          </TouchableOpacity>
+                          <TouchableOpacity
+                            style={styles.phaseActionButton}
+                            onPress={() => handleDeleteTask(task)}
+                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                            accessibilityLabel={t("projectOverview.deleteTask")}
+                          >
+                            <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
                           </TouchableOpacity>
                           <TouchableOpacity
                             style={styles.taskMenuButton}
@@ -6198,7 +6331,7 @@ export function ProjectOverviewScreen() {
                     </View>
                   )}
                   {viewingDiaryEntry.phaseId && (() => {
-                    const phase = phases.find(p => p.id === viewingDiaryEntry!.phaseId);
+                    const phase = phasesForUi.find((p) => p.id === viewingDiaryEntry!.phaseId);
                     return phase ? (
                       <View style={styles.diaryDetailMetaRow}>
                         <Ionicons name="layers-outline" size={18} color={colors.primary} />
@@ -6408,8 +6541,9 @@ export function ProjectOverviewScreen() {
           <View style={styles.modal}>
             <Text style={styles.modalTitle}>{t("projectOverview.addTask")}</Text>
             
-            {/* Phase selector (if phases exist - only for BUILD projects) */}
-            {isBuildProject && phases.length > 0 && (
+            {/* Phase selector when project uses phased tasks (BUILD or AI-generated structure). */}
+            {(isBuildLikeStorageType(projectType) || templateId === "ai-generated" || hasPhaseLinksOnTasks) &&
+              phasesForUi.length > 0 && (
               <View style={styles.phaseSelector}>
                 <Text style={styles.phaseSelectorLabel}>{t("projectOverview.selectPhase") || "Vyberte fázu:"}</Text>
                 <View style={styles.phaseSelectorButtons}>
@@ -6421,7 +6555,7 @@ export function ProjectOverviewScreen() {
                       {t("projectOverview.noPhase") || "Bez fázy"}
                     </Text>
                   </TouchableOpacity>
-                  {phases.map((phase) => (
+                  {phasesForUi.map((phase) => (
                     <TouchableOpacity
                       key={phase.id}
                       style={[styles.phaseSelectorButton, selectedPhaseId === phase.id && styles.phaseSelectorButtonActive]}
@@ -6578,7 +6712,7 @@ export function ProjectOverviewScreen() {
               placeholder={t("projectOverview.materialsPlaceholder")}
               placeholderTextColor={colors.textMuted}
             />
-            {phases.length > 0 && (
+            {phasesForUi.length > 0 && (
               <View style={styles.phaseSelector}>
                 <Text style={styles.phaseSelectorLabel}>{t("projectOverview.phaseOptional")}</Text>
                 <ScrollView style={styles.phaseSelectorScroll} horizontal>
@@ -6590,7 +6724,7 @@ export function ProjectOverviewScreen() {
                       {t("projectOverview.phaseNone")}
                     </Text>
                   </TouchableOpacity>
-                  {phases.map((phase) => (
+                  {phasesForUi.map((phase) => (
                     <TouchableOpacity
                       key={phase.id}
                       style={[styles.phaseChip, diaryPhaseId === phase.id && styles.phaseChipSelected]}
@@ -6893,11 +7027,11 @@ export function ProjectOverviewScreen() {
               >
                 <Text style={styles.phaseOptionText}>{t("projectOverview.noPhaseOption")}</Text>
               </TouchableOpacity>
-              {phases.map((phase) => (
+              {phasesForUi.map((phase) => (
                 <TouchableOpacity
                   key={phase.id}
                   style={styles.phaseOption}
-                  onPress={() => handleMoveTaskToPhase(phase.id)}
+                  onPress={() => handleMoveTaskToPhase(phase.id, phase.name)}
                 >
                   <Text style={styles.phaseOptionText}>{phase.name}</Text>
                 </TouchableOpacity>

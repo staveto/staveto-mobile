@@ -384,10 +384,10 @@ export function EquipmentFormScreen() {
               return (
                 <TouchableOpacity
                   key={c.value}
-                  style={[styles.chipDark, active && styles.chipDarkActive]}
+                  style={[styles.chipLight, active && styles.chipLightActive]}
                   onPress={() => setCategory(c.value)}
                 >
-                  <Text style={[styles.chipDarkText, active && styles.chipDarkTextActive]}>{t(c.labelKey)}</Text>
+                  <Text style={[styles.chipLightText, active && styles.chipLightTextActive]}>{t(c.labelKey)}</Text>
                 </TouchableOpacity>
               );
             })}
@@ -426,8 +426,8 @@ export function EquipmentFormScreen() {
                           ? "equipmentTab.status.inService"
                           : "equipmentTab.status.inactive";
                   return (
-                    <TouchableOpacity key={s} style={[styles.chipDark, active && styles.chipDarkActive]} onPress={() => setStatus(s)}>
-                      <Text style={[styles.chipDarkText, active && styles.chipDarkTextActive]} numberOfLines={1}>
+                    <TouchableOpacity key={s} style={[styles.chipLight, active && styles.chipLightActive]} onPress={() => setStatus(s)}>
+                      <Text style={[styles.chipLightText, active && styles.chipLightTextActive]} numberOfLines={1}>
                         {t(labelKey)}
                       </Text>
                     </TouchableOpacity>
@@ -693,6 +693,20 @@ const styles = StyleSheet.create({
   },
   chipDarkText: { color: colors.labelMutedOnDark, fontSize: 13, fontWeight: "500" },
   chipDarkTextActive: { color: colors.textOnDark, fontWeight: "700" },
+  chipLight: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: R_FULL,
+    borderWidth: 1,
+    borderColor: "#c7d0db",
+    backgroundColor: "#ffffff",
+  },
+  chipLightActive: {
+    borderColor: colors.primary,
+    backgroundColor: "rgba(224, 103, 55, 0.16)",
+  },
+  chipLightText: { color: colors.text, fontSize: 13, fontWeight: "500" },
+  chipLightTextActive: { color: colors.primary, fontWeight: "700" },
   intervalRow: { flexDirection: "row", flexWrap: "wrap", alignItems: "center", gap: spacing.sm },
   everyLabel: { fontSize: 15, fontWeight: "600", color: colors.text },
   intervalInput: { width: 72, textAlign: "center", paddingHorizontal: spacing.sm },

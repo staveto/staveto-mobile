@@ -74,35 +74,41 @@ export function ProjectAIDraftReview({
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-      <Text style={styles.screenTitle}>{t("createProject.aiDraft.reviewTitle")}</Text>
-      <Text style={styles.screenSubtitle}>{t("createProject.aiDraft.reviewSubtitle")}</Text>
       <View style={styles.hintCard}>
-        <Ionicons name="finger-print-outline" size={22} color={colors.primary} />
-        <Text style={styles.hintCardText}>{t("createProject.aiDraft.tapPhaseTaskHint")}</Text>
+        <Ionicons name="finger-print-outline" size={18} color={colors.primary} />
+        <Text style={styles.hintCardText} numberOfLines={2}>
+          {t("createProject.aiDraft.tapPhaseTaskHint")}
+        </Text>
       </View>
 
-      <Text style={styles.fieldLabel}>{t("createProject.aiDraft.projectNameLabel")}</Text>
-      <TextInput
-        style={styles.titleInput}
-        value={editedTitle}
-        onChangeText={onChangeTitle}
-        placeholderTextColor={colors.inputPlaceholderOnLight}
-      />
-
-      <Text style={[styles.fieldLabel, { marginTop: spacing.sm }]}>{t("createProject.aiDraft.projectNumberLabel")}</Text>
-      <TextInput
-        style={styles.titleInput}
-        value={editedProjectNumber}
-        onChangeText={onChangeProjectNumber}
-        placeholder={t("createProject.aiDraft.projectNumberPlaceholder")}
-        placeholderTextColor={colors.inputPlaceholderOnLight}
-        autoCapitalize="characters"
-      />
+      <View style={styles.headerCard}>
+        <View style={styles.headerFieldFlexLarge}>
+          <Text style={styles.fieldLabel}>{t("createProject.aiDraft.projectNameLabel")}</Text>
+          <TextInput
+            style={styles.titleInput}
+            value={editedTitle}
+            onChangeText={onChangeTitle}
+            placeholderTextColor={colors.inputPlaceholderOnLight}
+          />
+        </View>
+        <View style={styles.headerFieldFlexSmall}>
+          <Text style={styles.fieldLabel}>{t("createProject.aiDraft.projectNumberLabel")}</Text>
+          <TextInput
+            style={styles.titleInput}
+            value={editedProjectNumber}
+            onChangeText={onChangeProjectNumber}
+            placeholder={t("createProject.aiDraft.projectNumberPlaceholder")}
+            placeholderTextColor={colors.inputPlaceholderOnLight}
+            autoCapitalize="characters"
+          />
+        </View>
+      </View>
 
       {summaryLine ? (
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryLabel}>{t("createProject.aiDraft.summaryLabel")}</Text>
-          <Text style={styles.summaryBody}>{summaryLine}</Text>
+          <Text style={styles.summaryBody} numberOfLines={3}>
+            {summaryLine}
+          </Text>
         </View>
       ) : null}
 
@@ -226,26 +232,14 @@ export function ProjectAIDraftReview({
 
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
-  scrollContent: { paddingBottom: spacing.xl },
-  screenTitle: {
-    fontSize: 20,
-    fontWeight: "700",
-    color: colors.text,
-    marginBottom: 6,
-  },
-  screenSubtitle: {
-    fontSize: 14,
-    color: colors.text,
-    lineHeight: 20,
-    marginBottom: spacing.sm,
-    opacity: 0.92,
-  },
+  scrollContent: { paddingBottom: spacing.md },
   hintCard: {
     flexDirection: "row",
-    alignItems: "flex-start",
-    gap: spacing.sm,
-    padding: spacing.md,
-    marginBottom: spacing.md,
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingVertical: spacing.xs,
+    paddingHorizontal: spacing.sm,
+    marginBottom: spacing.sm,
     borderRadius: radius,
     borderWidth: 1,
     borderColor: "rgba(224, 103, 55, 0.35)",
@@ -253,53 +247,59 @@ const styles = StyleSheet.create({
   },
   hintCardText: {
     flex: 1,
-    fontSize: 14,
+    fontSize: 12,
     fontWeight: "600",
     color: colors.text,
-    lineHeight: 20,
+    lineHeight: 16,
+  },
+  headerCard: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  headerFieldFlexLarge: {
+    flex: 2,
+    minWidth: 0,
+  },
+  headerFieldFlexSmall: {
+    flex: 1,
+    minWidth: 0,
   },
   fieldLabel: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "600",
     color: colors.text,
-    marginBottom: 6,
+    marginBottom: 4,
   },
   titleInput: {
     backgroundColor: colors.card,
     borderRadius: radius,
     borderWidth: 1,
     borderColor: colors.border,
-    padding: spacing.md,
-    fontSize: 16,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs + 2,
+    fontSize: 14,
     color: colors.text,
-    marginBottom: spacing.md,
   },
   summaryCard: {
     backgroundColor: colors.card,
     borderRadius: radius,
-    padding: spacing.md,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs + 2,
     borderWidth: 1,
     borderColor: colors.border,
-    marginBottom: spacing.lg,
-  },
-  summaryLabel: {
-    fontSize: 12,
-    fontWeight: "700",
-    color: colors.text,
-    marginBottom: 6,
-    textTransform: "uppercase",
-    letterSpacing: 0.3,
+    marginBottom: spacing.sm,
   },
   summaryBody: {
-    fontSize: 15,
+    fontSize: 13,
     color: colors.text,
-    lineHeight: 22,
+    lineHeight: 18,
   },
   sectionHeading: {
-    fontSize: 16,
+    fontSize: 14,
     fontWeight: "700",
     color: colors.text,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.xs,
   },
   phaseCard: {
     backgroundColor: colors.card,

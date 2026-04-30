@@ -1396,41 +1396,43 @@ export function CreateProjectAIFlow({
         <View
           style={[
             styles.previewFooter,
-            narrowActions && styles.previewFooterColumn,
-            { paddingBottom: Math.max(insets.bottom, spacing.sm) },
+            { paddingBottom: Math.max(insets.bottom, spacing.xs) },
           ]}
         >
           <View style={[styles.previewActionsSecondary, narrowActions && styles.secondaryActionsColumn]}>
             <TouchableOpacity
-              style={[styles.btn, styles.btnSecondary, narrowActions && styles.btnFullWidth]}
+              style={[styles.btn, styles.btnSecondary, styles.btnCompact, narrowActions && styles.btnFullWidth]}
               onPress={handleChangeDescription}
             >
-              <Text style={styles.btnSecondaryText}>{t("createProject.aiDraft.backToPrompt")}</Text>
+              <Text style={styles.btnSecondaryTextCompact} numberOfLines={1}>
+                {t("createProject.aiDraft.backToPrompt")}
+              </Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.btn, styles.btnSecondary, narrowActions && styles.btnFullWidth]}
+              style={[styles.btn, styles.btnSecondary, styles.btnCompact, narrowActions && styles.btnFullWidth]}
               onPress={handleGenerateAgain}
               disabled={refiningKey !== null}
             >
-              <Text style={styles.btnSecondaryText}>{t("createProject.aiDraft.regenerateWholeDraft")}</Text>
+              <Text style={styles.btnSecondaryTextCompact} numberOfLines={1}>
+                {t("createProject.aiDraft.regenerateWholeDraft")}
+              </Text>
             </TouchableOpacity>
           </View>
           <TouchableOpacity
-            style={[styles.btn, styles.btnPrimary, styles.createBtn, narrowActions && styles.btnFullWidth]}
+            style={[styles.btn, styles.btnPrimary, styles.createBtnCompact]}
             onPress={handleCreate}
             disabled={submitting || refiningKey !== null}
           >
             {submitting ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Text style={styles.btnPrimaryText}>{t("createProject.aiDraft.confirmProject")}</Text>
+              <Text style={styles.btnPrimaryTextCompact}>{t("createProject.aiDraft.confirmProject")}</Text>
             )}
           </TouchableOpacity>
+          <TouchableOpacity style={styles.cancelInlineBtn} onPress={onCancel} hitSlop={{ top: 8, bottom: 8, left: 16, right: 16 }}>
+            <Text style={styles.cancelText}>{t("projects.cancel")}</Text>
+          </TouchableOpacity>
         </View>
-
-        <TouchableOpacity style={styles.cancelBtn} onPress={onCancel}>
-          <Text style={styles.cancelText}>{t("projects.cancel")}</Text>
-        </TouchableOpacity>
 
         <RefineDraftNodeSheet
           visible={!!refineSheet}
@@ -1556,6 +1558,9 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   previewRoot: {
+    padding: 0,
+    paddingHorizontal: spacing.md,
+    paddingTop: spacing.sm,
     paddingBottom: 0,
   },
   center: {
@@ -1973,19 +1978,40 @@ const styles = StyleSheet.create({
   previewFooter: {
     borderTopWidth: 1,
     borderTopColor: colors.border,
-    paddingTop: spacing.md,
-    gap: spacing.sm,
-  },
-  previewFooterColumn: {
-    flexDirection: "column",
+    paddingTop: spacing.sm,
+    gap: spacing.xs,
   },
   previewActionsSecondary: {
     flexDirection: "row",
-    flexWrap: "wrap",
-    gap: spacing.sm,
+    flexWrap: "nowrap",
+    gap: spacing.xs,
   },
   createBtn: {
     minHeight: 48,
+  },
+  btnCompact: {
+    flex: 1,
+    paddingVertical: spacing.xs + 2,
+    paddingHorizontal: spacing.sm,
+  },
+  btnSecondaryTextCompact: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.primary,
+  },
+  createBtnCompact: {
+    paddingVertical: spacing.sm + 2,
+    minHeight: 0,
+  },
+  btnPrimaryTextCompact: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#fff",
+  },
+  cancelInlineBtn: {
+    alignItems: "center",
+    paddingVertical: 4,
+    marginTop: 0,
   },
   legacyHintCard: {
     backgroundColor: colors.card,

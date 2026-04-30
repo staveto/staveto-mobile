@@ -244,29 +244,82 @@ async function nativeHttpsCallable<TReq, TRes>(
   return out.data;
 }
 
+/**
+ * Cold-start of Gen2 Cloud Function + slow mobile network often causes a single
+ * `Network request failed` / `AbortError` / 503 on the first call, but a retry
+ * succeeds (the function instance is already warm). We retry a small number
+ * of times with short backoff before surfacing the error to the user.
+ */
+function isTransientCallableError(e: unknown): boolean {
+  const err = e as { code?: string; message?: string; name?: string };
+  const code = normalizeCallableErrorCode(err?.code);
+  const msg = String(err?.message ?? "").toLowerCase();
+  const name = String(err?.name ?? "").toLowerCase();
+
+  if (code === "unavailable" || code === "deadline-exceeded" || code === "aborted") {
+    return true;
+  }
+  if (name === "aborterror") return true;
+  if (msg.includes("network request failed")) return true;
+  if (msg.includes("failed to fetch")) return true;
+  if (msg.includes("aborted") && !msg.includes("user")) return true;
+  if (msg.includes("timed out") || msg.includes("timeout")) return true;
+  if (msg.includes("econnreset") || msg.includes("socket hang up")) return true;
+  /** Cloud Run cold start commonly returns 503 SERVICE_UNAVAILABLE before the instance is ready. */
+  if (/\b50[234]\b/.test(msg) && (msg.includes("status") || msg.includes("http"))) return true;
+  return false;
+}
+
+const COLD_START_MAX_RETRIES = 2;
+const COLD_START_BASE_DELAY_MS = 1500;
+
 async function invokeAiCallable<TReq, TRes>(
   functionName: AiCallableName,
   payload: TReq,
   idToken: string
 ): Promise<TRes> {
-  try {
-    return await postFirebaseCallable<TReq, TRes>(functionName, payload, idToken);
-  } catch (e) {
-    const msg = String((e as Error)?.message ?? e ?? "");
-    const code = normalizeCallableErrorCode((e as { code?: string })?.code);
-    /** Gen2 callable URL na cloudfunctions.net môže vrátiť 404/NOT_FOUND; SDK vyrieši správny endpoint. */
-    const retryNative =
-      msg.includes("401") ||
-      msg.includes("neplatná odpoveď") ||
-      msg.includes("príliš veľa presmerovaní") ||
-      msg.includes("Cloud Run") ||
-      code === "not-found";
-    if (!retryNative) throw e;
-    if (__DEV__) {
-      console.warn("[aiProject] HTTP callable failed, trying native httpsCallable:", code || msg.slice(0, 120));
+  let lastError: unknown;
+  for (let attempt = 0; attempt <= COLD_START_MAX_RETRIES; attempt++) {
+    try {
+      return await postFirebaseCallable<TReq, TRes>(functionName, payload, idToken);
+    } catch (e) {
+      lastError = e;
+      const msg = String((e as Error)?.message ?? e ?? "");
+      const code = normalizeCallableErrorCode((e as { code?: string })?.code);
+      /** Gen2 callable URL na cloudfunctions.net môže vrátiť 404/NOT_FOUND; SDK vyrieši správny endpoint. */
+      const retryNative =
+        msg.includes("401") ||
+        msg.includes("neplatná odpoveď") ||
+        msg.includes("príliš veľa presmerovaní") ||
+        msg.includes("Cloud Run") ||
+        code === "not-found";
+      if (retryNative) {
+        if (__DEV__) {
+          console.warn("[aiProject] HTTP callable failed, trying native httpsCallable:", code || msg.slice(0, 120));
+        }
+        try {
+          return await nativeHttpsCallable<TReq, TRes>(functionName, payload);
+        } catch (eNative) {
+          lastError = eNative;
+          if (!isTransientCallableError(eNative) || attempt >= COLD_START_MAX_RETRIES) {
+            throw eNative;
+          }
+        }
+      } else if (!isTransientCallableError(e) || attempt >= COLD_START_MAX_RETRIES) {
+        throw e;
+      }
+
+      const delay = COLD_START_BASE_DELAY_MS * Math.pow(2, attempt);
+      if (__DEV__) {
+        console.warn(
+          `[aiProject] transient failure, retry ${attempt + 1}/${COLD_START_MAX_RETRIES} in ${delay}ms:`,
+          code || msg.slice(0, 120)
+        );
+      }
+      await new Promise((r) => setTimeout(r, delay));
     }
-    return nativeHttpsCallable<TReq, TRes>(functionName, payload);
   }
+  throw lastError instanceof Error ? lastError : new Error(String(lastError ?? "AI callable failed"));
 }
 
 /** RN Firebase often reports `functions/internal`; normalize for UI mapping and logs. */

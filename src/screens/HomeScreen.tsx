@@ -64,7 +64,6 @@ import {
 import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
 import { readStoredPrimaryUsageMode } from "../lib/primaryUsageMode";
 import { showToast } from "../helpers/toast";
-import { formatElapsedHms } from "../utils/formatElapsedHms";
 
 // Conditional imports for image/document picker
 let ImagePicker: typeof import('expo-image-picker') | null = null;
@@ -85,6 +84,17 @@ function formatMinutesToHours(minutes: number): string {
 
 /** Success / running timer accent (FAB + panel). */
 const ACTIVE_TIMER_GREEN = "#22c55e";
+const ACTIVE_TIMER_PAUSED_AMBER = "#f59e0b";
+
+/** HH:MM:SS formatter for the home timer bar. Mirrors `formatElapsedHms` but works on raw ms. */
+function formatHomeTimerHms(ms: number): string {
+  const safeMs = Number.isFinite(ms) && ms >= 0 ? ms : 0;
+  const totalSec = Math.floor(safeMs / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
 
 const LAST_USED_PROJECT_KEY = "@staveto:lastUsedProjectId";
 const PROJECTS_FILTER_KEY = "projects_filter_v1";
@@ -465,6 +475,8 @@ export function HomeScreen() {
 
   useEffect(() => {
     if (!activeTimer) return;
+    /** No live ticking while paused — the displayed elapsed equals frozen `accumulatedMs`. */
+    if (activeTimer.status === "paused") return;
     const interval = setInterval(() => setTimerTick((n) => n + 1), 1000);
     return () => clearInterval(interval);
   }, [activeTimer]);
@@ -482,7 +494,8 @@ export function HomeScreen() {
   useEffect(() => {
     let intervalId: ReturnType<typeof setInterval> | undefined;
     const run = async () => {
-      if (!activeTimer) {
+      if (!activeTimer || activeTimer.status === "paused") {
+        /** Paused timers must not show a "running" tray entry; resume re-creates it. */
         await timerReminders.clearRunningTimerNotification();
         return;
       }
@@ -491,7 +504,7 @@ export function HomeScreen() {
         timerReminders.replaceRunningTimerNotification({
           title: t("time.timerRunning"),
           projectName: activeTimer.projectNameSnapshot,
-          startedAtIso: activeTimer.startedAt,
+          startedAtIso: activeTimer.runningSince ?? activeTimer.startedAt,
         });
       void tick();
       intervalId = setInterval(tick, 60_000);
@@ -1539,51 +1552,76 @@ export function HomeScreen() {
       </View>
 
       {user?.id ? (
-        <View style={[styles.homeTimerStatusBarWrap, { paddingHorizontal: spacing.lg }]}>
-          <TouchableOpacity
-            style={[
-              styles.homeTimerStatusBarInner,
-              activeTimer ? styles.homeTimerStatusBarInnerOn : styles.homeTimerStatusBarInnerOff,
-            ]}
-            onPress={openQuickTimeSheet}
-            activeOpacity={0.88}
-            accessibilityRole="button"
-            accessibilityLabel={
-              activeTimer
-                ? `${t("time.timerRunning")}: ${activeTimer.projectNameSnapshot}, ${formatElapsedHms(activeTimer.startedAt)}`
-                : t("home.timerStatusBarIdle")
-            }
-          >
-            <View style={[styles.homeTimerStatusBarIconWrap, activeTimer ? styles.homeTimerStatusBarIconWrapOn : null]}>
-              <Ionicons
-                name={activeTimer ? "time" : "time-outline"}
-                size={22}
-                color={activeTimer ? ACTIVE_TIMER_GREEN : "rgba(255,255,255,0.55)"}
-              />
-              {activeTimer ? <View style={styles.homeTimerStatusBarLiveDot} /> : null}
-            </View>
-            <View style={styles.homeTimerStatusBarTextCol}>
+        <View style={[styles.homeQuickTilesWrap, { paddingHorizontal: spacing.lg }]}>
+          <View style={styles.homeQuickTilesRow}>
+            <TouchableOpacity
+              style={[
+                styles.homeQuickTile,
+                styles.homeQuickTileTimer,
+                activeTimer ? styles.homeQuickTileTimerOn : null,
+              ]}
+              onPress={openQuickTimeSheet}
+              activeOpacity={0.88}
+              accessibilityRole="button"
+              accessibilityLabel={
+                activeTimer
+                  ? `${activeTimer.status === "paused" ? t("time.timerPaused") : t("time.timerRunning")}: ${activeTimer.projectNameSnapshot}, ${formatHomeTimerHms(timeTracking.calculateActiveTimerWorkMs(activeTimer))}`
+                  : t("time.title")
+              }
+            >
+              <View style={[styles.homeQuickTileIconWrap, activeTimer ? styles.homeQuickTileIconWrapTimerOn : null]}>
+                <Ionicons
+                  name={activeTimer ? (activeTimer.status === "paused" ? "pause" : "time") : "time-outline"}
+                  size={28}
+                  color={
+                    activeTimer
+                      ? activeTimer.status === "paused"
+                        ? ACTIVE_TIMER_PAUSED_AMBER
+                        : ACTIVE_TIMER_GREEN
+                      : "#fff"
+                  }
+                />
+                {activeTimer && activeTimer.status !== "paused" ? <View style={styles.homeQuickTileLiveDot} /> : null}
+              </View>
+              <Text style={styles.homeQuickTileLabel} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                {t("time.title")}
+              </Text>
               {activeTimer ? (
-                <>
-                  <Text style={styles.homeTimerStatusBarProject} numberOfLines={1} maxFontSizeMultiplier={1.2}>
-                    {activeTimer.projectNameSnapshot || "—"}
-                  </Text>
-                  <Text
-                    key={timerTick}
-                    style={styles.homeTimerStatusBarHms}
-                    maxFontSizeMultiplier={1.25}
-                  >
-                    {formatElapsedHms(activeTimer.startedAt)}
-                  </Text>
-                </>
-              ) : (
-                <Text style={styles.homeTimerStatusBarIdleText} maxFontSizeMultiplier={1.2}>
-                  {t("home.timerStatusBarIdle")}
+                <Text
+                  key={timerTick}
+                  style={[
+                    styles.homeQuickTileHms,
+                    activeTimer.status === "paused" ? { color: ACTIVE_TIMER_PAUSED_AMBER } : null,
+                  ]}
+                  numberOfLines={1}
+                  maxFontSizeMultiplier={1.25}
+                >
+                  {formatHomeTimerHms(timeTracking.calculateActiveTimerWorkMs(activeTimer))}
                 </Text>
-              )}
-            </View>
-            <Ionicons name="chevron-forward" size={22} color="rgba(255,255,255,0.55)" />
-          </TouchableOpacity>
+              ) : null}
+            </TouchableOpacity>
+            {orgId && enabledSectionIds.has("quick_capture_card") ? (
+              <TouchableOpacity
+                style={[styles.homeQuickTile, styles.homeQuickTileNote]}
+                onPress={() => setShowQuickNoteModal(true)}
+                activeOpacity={0.88}
+                accessibilityRole="button"
+                accessibilityLabel={t("home.quickCaptureTitle")}
+              >
+                <View style={[styles.homeQuickTileIconWrap, styles.homeQuickTileIconWrapNote]}>
+                  <Ionicons name="create-outline" size={28} color="#fff" />
+                </View>
+                <Text style={styles.homeQuickTileLabel} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                  {t("quickNotes.add")}
+                </Text>
+                {pendingQuickNotesCount > 0 ? (
+                  <Text style={styles.homeQuickTileBadge} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                    {pendingQuickNotesCount}
+                  </Text>
+                ) : null}
+              </TouchableOpacity>
+            ) : null}
+          </View>
           {activeTimer ? (
             <View style={styles.homeTimerStatusBarActions}>
               <TouchableOpacity
@@ -1644,29 +1682,7 @@ export function HomeScreen() {
                 </TouchableOpacity>
               </View>
             ) : null}
-            {orgId ? (
-              <TouchableOpacity
-                style={styles.quickCaptureCard}
-                onPress={() => setShowQuickNoteModal(true)}
-                activeOpacity={0.88}
-                accessibilityRole="button"
-                accessibilityLabel={t("home.quickCaptureTitle")}
-              >
-                <View style={styles.quickCaptureIconWrap}>
-                  <Ionicons name="create-outline" size={22} color="#fff" />
-                </View>
-                <View style={styles.quickCaptureTextCol}>
-                  <Text style={styles.quickCaptureTitleText} maxFontSizeMultiplier={1.25}>
-                    {t("home.quickCaptureTitle")}
-                  </Text>
-                  <Text style={styles.quickCaptureSubtitleText} maxFontSizeMultiplier={1.2}>
-                    {t("home.quickCaptureSubtitle")}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={22} color="rgba(255,255,255,0.85)" />
-              </TouchableOpacity>
-            ) : null}
-            {orgId && pendingQuickNotesCount > 0 ? (
+            {orgId && enabledSectionIds.has("quick_capture_card") && pendingQuickNotesCount > 0 ? (
               <TouchableOpacity
                 style={styles.quickNotesInboxHint}
                 onPress={() => stackNav.navigate("QuickNotesInbox")}
@@ -1865,7 +1881,8 @@ export function HomeScreen() {
                 ))}
               </View>
             ) : null}
-                  {equipmentHomeSummary &&
+                  {enabledSectionIds.has("service_tasks_alert") &&
+              equipmentHomeSummary &&
               (equipmentHomeSummary.openServiceTasks > 0 || equipmentHomeSummary.dueTodayOrOverdue > 0) ? (
                 <TouchableOpacity
                   style={[styles.alertRow, { marginBottom: spacing.md }]}
@@ -2190,12 +2207,20 @@ export function HomeScreen() {
               onPress={openQuickTimeSheet}
               activeOpacity={0.75}
               accessibilityRole="button"
-              accessibilityLabel={activeTimer ? `${t("time.timerRunning")}, ${formatElapsedHms(activeTimer.startedAt)}` : t("time.title")}
+              accessibilityLabel={
+                activeTimer
+                  ? `${activeTimer.status === "paused" ? t("time.timerPaused") : t("time.timerRunning")}, ${formatHomeTimerHms(timeTracking.calculateActiveTimerWorkMs(activeTimer))}`
+                  : t("time.title")
+              }
             >
               {activeTimer ? (
                 <View style={styles.fabDockTimerActiveWrap}>
-                  <Ionicons name="time" size={24} color={ACTIVE_TIMER_GREEN} />
-                  <View style={styles.fabDockTimerBadgeDot} />
+                  <Ionicons
+                    name={activeTimer.status === "paused" ? "pause" : "time"}
+                    size={24}
+                    color={activeTimer.status === "paused" ? ACTIVE_TIMER_PAUSED_AMBER : ACTIVE_TIMER_GREEN}
+                  />
+                  {activeTimer.status === "paused" ? null : <View style={styles.fabDockTimerBadgeDot} />}
                 </View>
               ) : (
                 <Ionicons name="time-outline" size={26} color={colors.primary} />
@@ -3829,6 +3854,92 @@ const styles = StyleSheet.create({
   },
   homeTimerStatusBarWrap: {
     marginBottom: spacing.sm,
+  },
+  homeQuickTilesWrap: {
+    marginBottom: spacing.sm,
+  },
+  homeQuickTilesRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  homeQuickTile: {
+    flex: 1,
+    minHeight: 96,
+    borderRadius: radius,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+  },
+  homeQuickTileTimer: {
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderColor: "rgba(255,255,255,0.22)",
+  },
+  homeQuickTileTimerOn: {
+    backgroundColor: "rgba(34,197,94,0.16)",
+    borderColor: "rgba(34,197,94,0.55)",
+  },
+  homeQuickTileNote: {
+    backgroundColor: colors.primary,
+    borderColor: "rgba(255,255,255,0.18)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.18,
+    shadowRadius: 6,
+    elevation: 4,
+  },
+  homeQuickTileIconWrap: {
+    width: 48,
+    height: 48,
+    borderRadius: 24,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.14)",
+    marginBottom: spacing.xs,
+  },
+  homeQuickTileIconWrapTimerOn: {
+    backgroundColor: "rgba(34,197,94,0.22)",
+    borderWidth: 2,
+    borderColor: ACTIVE_TIMER_GREEN,
+  },
+  homeQuickTileIconWrapNote: {
+    backgroundColor: "rgba(255,255,255,0.22)",
+  },
+  homeQuickTileLiveDot: {
+    position: "absolute",
+    top: 3,
+    right: 3,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: ACTIVE_TIMER_GREEN,
+    borderWidth: 2,
+    borderColor: "rgba(255,255,255,0.95)",
+  },
+  homeQuickTileLabel: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "700",
+    textAlign: "center",
+  },
+  homeQuickTileHms: {
+    marginTop: 2,
+    color: ACTIVE_TIMER_GREEN,
+    fontSize: 16,
+    fontWeight: "800",
+    fontVariant: ["tabular-nums"],
+  },
+  homeQuickTileBadge: {
+    marginTop: 2,
+    color: "#fff",
+    fontSize: 12,
+    fontWeight: "700",
+    paddingHorizontal: 8,
+    paddingVertical: 1,
+    borderRadius: 10,
+    backgroundColor: "rgba(0,0,0,0.28)",
+    overflow: "hidden",
   },
   homeTimerStatusBarInner: {
     flexDirection: "row",

@@ -348,7 +348,7 @@ export function EquipmentDetailScreen() {
             <View style={styles.modalHeader}>
               <Text style={styles.modalTitle}>{t("equipmentTab.pickProject")}</Text>
               <TouchableOpacity onPress={() => setAssignOpen(false)} hitSlop={12}>
-                <Ionicons name="close" size={26} color={colors.textOnDark} />
+                <Ionicons name="close" size={26} color={colors.text} />
               </TouchableOpacity>
             </View>
             {loadingProjects ? (
@@ -417,10 +417,10 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  sectionTitle: { fontSize: 15, fontWeight: "700", color: colors.textOnDark, marginBottom: spacing.sm },
+  sectionTitle: { fontSize: 15, fontWeight: "700", color: colors.text, marginBottom: spacing.sm },
   row: { flexDirection: "row", marginBottom: spacing.sm, alignItems: "flex-start" },
-  rowLabel: { width: 120, color: colors.textMuted, fontSize: 14 },
-  rowValue: { flex: 1, color: colors.textOnDark, fontSize: 14 },
+  rowLabel: { width: 120, color: colors.text, fontSize: 14 },
+  rowValue: { flex: 1, color: colors.text, fontSize: 14 },
   linkBtn: { flexDirection: "row", alignItems: "center", marginTop: spacing.sm },
   linkBtnText: { color: colors.primary, fontWeight: "600", fontSize: 15 },
   rowActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.md },
@@ -446,13 +446,13 @@ const styles = StyleSheet.create({
     paddingTop: spacing.md,
   },
   modalHeader: { flexDirection: "row", justifyContent: "space-between", alignItems: "center", marginBottom: spacing.sm },
-  modalTitle: { fontSize: 18, fontWeight: "700", color: colors.textOnDark },
+  modalTitle: { fontSize: 18, fontWeight: "700", color: colors.text },
   projectRow: {
     paddingVertical: spacing.md,
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  projectRowText: { color: colors.textOnDark, fontSize: 16 },
+  projectRowText: { color: colors.text, fontSize: 16 },
   servicePlanCta: {
     flexDirection: "row",
     alignItems: "center",
@@ -476,7 +476,7 @@ const styles = StyleSheet.create({
     borderWidth: 1,
     borderColor: colors.border,
   },
-  ruleTitle: { fontSize: 16, fontWeight: "600", color: colors.textOnDark },
+  ruleTitle: { fontSize: 16, fontWeight: "600", color: colors.text },
   ruleMeta: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
   ruleNextDue: { color: colors.primary, fontWeight: "500" },
   taskRow: {
@@ -487,7 +487,7 @@ const styles = StyleSheet.create({
     borderBottomWidth: StyleSheet.hairlineWidth,
     borderBottomColor: colors.border,
   },
-  taskTitle: { fontSize: 15, fontWeight: "600", color: colors.textOnDark },
+  taskTitle: { fontSize: 15, fontWeight: "600", color: colors.text },
   taskDue: { fontSize: 13, color: colors.textMuted, marginTop: 2 },
   completeBtn: {
     paddingVertical: spacing.xs,

@@ -36,8 +36,12 @@ import { toYmd, ymdToDate, normalizeDueDateToYmd } from "../utils/date";
 import { normalizeStatusValue } from "../helpers/taskStatusMapping";
 import * as tasksService from "../services/tasks";
 import * as problemsService from "../services/problems";
+import * as absencesService from "../services/absences";
 import type { TaskWithProject } from "../services/tasks";
 import type { ProblemWithProject } from "../services/problems";
+import type { AbsenceDoc } from "../services/absences";
+import { ABSENCE_COLOR, ABSENCE_TYPE_KEYS } from "../screens/absence/absenceUi";
+import { useNavigation } from "@react-navigation/native";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
 import { getProjectEngine } from "../lib/projectTypeModel";
 
@@ -101,10 +105,12 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
   const dateFnsLocale = LOCALE_MAP[locale] ?? enUS;
   const weekdays = WEEKDAYS_BY_LOCALE[locale] ?? WEEKDAYS_BY_LOCALE.en;
   const { user } = useAuth();
+  const navigation = useNavigation<any>();
   const [currentMonth, setCurrentMonth] = useState(new Date());
   const [selectedDate, setSelectedDate] = useState<Date | null>(null);
   const [tasksByYmd, setTasksByYmd] = useState<Map<string, TaskWithProject[]>>(new Map());
   const [problemsByYmd, setProblemsByYmd] = useState<Map<string, ProblemWithProject[]>>(new Map());
+  const [absencesByYmd, setAbsencesByYmd] = useState<Map<string, AbsenceDoc[]>>(new Map());
   const [loading, setLoading] = useState(false);
 
   const days = useMemo(() => {
@@ -121,9 +127,10 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
       const end = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 2, 0);
       const startYmd = toYmd(start);
       const endYmd = toYmd(end);
-      const [tasks, problems] = await Promise.all([
+      const [tasks, problems, absencesList] = await Promise.all([
         tasksService.listTasksWithDueDateInRange(user.id, startYmd, endYmd),
         problemsService.listProblemsWithDueDateInRange(user.id, startYmd, endYmd),
+        absencesService.listAbsencesForUser(user.id, startYmd, endYmd).catch(() => [] as AbsenceDoc[]),
       ]);
       const taskMap = new Map<string, TaskWithProject[]>();
       for (const task of tasks) {
@@ -143,10 +150,12 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
       }
       setTasksByYmd(taskMap);
       setProblemsByYmd(problemMap);
+      setAbsencesByYmd(absencesService.getAbsencesMapByYmd(absencesList));
     } catch (e) {
       console.warn("[HomeCalendarSheet] Failed to load tasks/problems:", e);
       setTasksByYmd(new Map());
       setProblemsByYmd(new Map());
+      setAbsencesByYmd(new Map());
     } finally {
       setLoading(false);
     }
@@ -172,6 +181,16 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
   const selectedYmd = selectedDate ? toYmd(selectedDate) : null;
   const tasksForSelected = selectedYmd ? (tasksByYmd.get(selectedYmd) ?? []) : [];
   const problemsForSelected = selectedYmd ? (problemsByYmd.get(selectedYmd) ?? []) : [];
+  const absencesForSelected = selectedYmd ? (absencesByYmd.get(selectedYmd) ?? []) : [];
+
+  const getAbsenceVisualForDay = (day: Date): { color: string; pending: boolean } | null => {
+    const list = absencesByYmd.get(toYmd(day));
+    if (!list || list.length === 0) return null;
+    // Prefer approved over pending so the cell renders solidly when at least one approval exists.
+    const approved = list.find((a) => a.status === "approved");
+    const chosen = approved ?? list[0];
+    return { color: ABSENCE_COLOR[chosen.type], pending: chosen.status === "pending" };
+  };
 
   const todayYmd = toYmd(new Date());
   const isTaskOverdue = (t: TaskWithProject) =>
@@ -301,6 +320,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                 const today = isToday(day);
                 const hasOverdue = hasOverdueOnDay(day);
                 const hasCompleted = hasCompletedPastDueOnDay(day);
+                const absVis = getAbsenceVisualForDay(day);
                 let typesPresent = [...CALENDAR_TASK_BUCKETS, "problem", "overdue", "completed"].filter((t) =>
                   hasTypeOnDay(day, t)
                 );
@@ -309,14 +329,25 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                 } else if (hasCompleted) {
                   typesPresent = ["completed", ...typesPresent.filter((t) => t !== "completed")];
                 }
+                const absenceBgColor = absVis
+                  ? absVis.pending
+                    ? `${absVis.color}33` // ~20% opacity
+                    : `${absVis.color}55` // ~33% opacity
+                  : null;
                 return (
                   <TouchableOpacity
                     key={day.toISOString()}
                     style={[
                       styles.dayCell,
                       !inMonth && styles.dayCellDisabled,
+                      absenceBgColor && !selected && !hasOverdue && !hasCompleted && {
+                        backgroundColor: absenceBgColor,
+                        borderWidth: absVis?.pending ? 1 : 0,
+                        borderStyle: "dashed",
+                        borderColor: absVis ? absVis.color : "transparent",
+                      },
                       selected && styles.dayCellSelected,
-                      today && !selected && !hasOverdue && !hasCompleted && styles.dayCellToday,
+                      today && !selected && !hasOverdue && !hasCompleted && !absenceBgColor && styles.dayCellToday,
                       hasOverdue && !selected && styles.dayCellOverdue,
                       hasCompleted && !selected && !hasOverdue && styles.dayCellCompleted,
                     ]}
@@ -383,6 +414,41 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
             </Text>
             {selectedYmd && (
               <>
+                {absencesForSelected.length > 0 && (
+                  <View style={styles.absenceSection}>
+                    <Text style={styles.absenceSectionTitle}>{t("absence.section.calendar")}</Text>
+                    {absencesForSelected.map((a) => (
+                      <TouchableOpacity
+                        key={`absence-${a.id}`}
+                        style={[styles.absenceRow, { borderLeftColor: ABSENCE_COLOR[a.type] }]}
+                        onPress={() => {
+                          sheetRef.current?.dismiss();
+                          navigation.navigate("AbsenceDetail", { absenceId: a.id });
+                        }}
+                        activeOpacity={0.85}
+                      >
+                        <View style={[styles.absenceDot, { backgroundColor: ABSENCE_COLOR[a.type] }]} />
+                        <Text style={styles.absenceRowTitle} numberOfLines={1}>
+                          {t(ABSENCE_TYPE_KEYS[a.type])}
+                        </Text>
+                        <Text style={styles.absenceRowName} numberOfLines={1}>
+                          {a.userNameSnapshot}
+                        </Text>
+                      </TouchableOpacity>
+                    ))}
+                  </View>
+                )}
+                <TouchableOpacity
+                  style={styles.absenceAddRow}
+                  onPress={() => {
+                    sheetRef.current?.dismiss();
+                    navigation.navigate("AbsenceRequest", { ymd: selectedYmd });
+                  }}
+                  activeOpacity={0.85}
+                >
+                  <Ionicons name="add-circle-outline" size={18} color={SHEET_ACTION} />
+                  <Text style={styles.absenceAddText}>{t("absence.fab.addForDay")}</Text>
+                </TouchableOpacity>
                 {loading ? (
                   <Text style={styles.loadingText}>{t("common.saving")}</Text>
                 ) : tasksForSelected.length === 0 && problemsForSelected.length === 0 ? (
@@ -689,5 +755,60 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: SHEET_ACTION,
+  },
+  absenceSection: {
+    marginBottom: spacing.sm,
+  },
+  absenceSectionTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "rgba(255,255,255,0.7)",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: spacing.xs,
+  },
+  absenceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 8,
+    marginBottom: spacing.xs,
+    borderLeftWidth: 3,
+    gap: spacing.sm,
+  },
+  absenceDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  absenceRowTitle: {
+    flex: 1,
+    fontSize: 14,
+    color: SHEET_TEXT,
+    fontWeight: "600",
+  },
+  absenceRowName: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.6)",
+    maxWidth: 120,
+  },
+  absenceAddRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(125,211,252,0.3)",
+    backgroundColor: "rgba(125,211,252,0.06)",
+    marginBottom: spacing.sm,
+  },
+  absenceAddText: {
+    color: SHEET_ACTION,
+    fontSize: 13,
+    fontWeight: "600",
   },
 });

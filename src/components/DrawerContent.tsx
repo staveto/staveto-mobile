@@ -296,6 +296,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     { id: "quickNotes", icon: "create-outline", labelKey: "quickNotes.title", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Home", params: { screen: "QuickNotesInbox" } }); } },
     { id: "tasks", icon: "checkbox-outline", labelKey: "home.myTasks", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Home", params: { screen: "Tasks" } }); } },
     { id: "expenses", icon: "cash-outline", labelKey: "home.expenses", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Home", params: { screen: "ExpensesKpiScreen" } }); } },
+    { id: "absences", icon: "umbrella-outline", labelKey: "absence.drawerLabel", action: () => { closeDrawer(); navigation.navigate("AbsenceHome"); } },
     { id: "notifications", icon: "notifications-outline", labelKey: "tabs.notifications", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Notifications" }); } },
     { id: "messages", icon: "chatbubbles-outline", labelKey: "nav.messages", action: () => { closeDrawer(); /* TODO: Messages */ } },
   ];

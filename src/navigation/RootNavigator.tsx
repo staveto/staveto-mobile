@@ -42,6 +42,9 @@ import { ProjectTeamScreen } from "../screens/projects/ProjectTeamScreen";
 import { ProjectInvitesScreen } from "../screens/ProjectInvitesScreen";
 import { ProblemsListScreen } from "../screens/ProblemsListScreen";
 import { CreateProblemScreen } from "../screens/CreateProblemScreen";
+import { AbsenceHomeScreen } from "../screens/absence/AbsenceHomeScreen";
+import { AbsenceRequestScreen } from "../screens/absence/AbsenceRequestScreen";
+import { AbsenceDetailScreen } from "../screens/absence/AbsenceDetailScreen";
 import { QuickActionsSetup } from "../components/QuickActionsSetup";
 
 // Lazy-load ProblemDetailScreen (react-native-maps) – speeds up initial app load
@@ -437,6 +440,21 @@ export function RootNavigator() {
         name="ExpenseReview"
         component={ExpenseReviewScreen}
         options={{ headerShown: true, title: t("nav.invoiceReview") }}
+      />
+      <Stack.Screen
+        name="AbsenceHome"
+        component={AbsenceHomeScreen}
+        options={{ headerShown: true, title: t("absence.title") }}
+      />
+      <Stack.Screen
+        name="AbsenceRequest"
+        component={AbsenceRequestScreen}
+        options={{ headerShown: true, title: t("absence.add") }}
+      />
+      <Stack.Screen
+        name="AbsenceDetail"
+        component={AbsenceDetailScreen}
+        options={{ headerShown: true, title: t("absence.title") }}
       />
       <Stack.Screen
         name="EquipmentList"

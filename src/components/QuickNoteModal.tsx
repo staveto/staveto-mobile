@@ -28,6 +28,26 @@ try {
   /* optional */
 }
 
+let SpeechRecognition: typeof import("expo-speech-recognition") | null = null;
+function ensureSpeechModule(): void {
+  if (SpeechRecognition) return;
+  try {
+    SpeechRecognition = require("expo-speech-recognition");
+  } catch {
+    /* optional */
+  }
+}
+
+const SPEECH_LOCALE_MAP: Record<string, string> = {
+  en: "en-US",
+  sk: "sk-SK",
+  de: "de-DE",
+  cs: "cs-CZ",
+  es: "es-ES",
+  it: "it-IT",
+  pl: "pl-PL",
+};
+
 const MAX_ATTACHMENTS = 5;
 const { height: SCREEN_H } = Dimensions.get("window");
 
@@ -49,23 +69,65 @@ export function QuickNoteModal({
   saveLabel = "Uložiť",
 }: Props) {
   const insets = useSafeAreaInsets();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<QuickNoteAttachment[]>([]);
   const [saving, setSaving] = useState(false);
   const [keyboardOffset, setKeyboardOffset] = useState(0);
   const [picking, setPicking] = useState(false);
+  const [isRecording, setIsRecording] = useState(false);
+  const [voiceUnavailable, setVoiceUnavailable] = useState(false);
   const inputRef = useRef<TextInput>(null);
+  const baseTextRef = useRef("");
+  const transcriptRef = useRef("");
+  const resultListenerRef = useRef<{ remove: () => void } | null>(null);
+  const endListenerRef = useRef<{ remove: () => void } | null>(null);
+  const errorListenerRef = useRef<{ remove: () => void } | null>(null);
+
+  const speechLang = SPEECH_LOCALE_MAP[locale] ?? "en-US";
+
+  const safeCatch = useCallback((p: unknown) => {
+    if (p != null && typeof (p as Promise<unknown>)?.catch === "function") {
+      (p as Promise<unknown>).catch(() => {});
+    }
+  }, []);
+
+  const cleanupListeners = useCallback(() => {
+    resultListenerRef.current?.remove();
+    endListenerRef.current?.remove();
+    errorListenerRef.current?.remove();
+    resultListenerRef.current = null;
+    endListenerRef.current = null;
+    errorListenerRef.current = null;
+  }, []);
 
   useEffect(() => {
     if (visible) {
+      ensureSpeechModule();
       setText("");
       setAttachments([]);
       setSaving(false);
       setKeyboardOffset(0);
+      setIsRecording(false);
+      transcriptRef.current = "";
+      baseTextRef.current = "";
       setTimeout(() => inputRef.current?.focus(), 350);
+    } else {
+      cleanupListeners();
+      if (SpeechRecognition?.ExpoSpeechRecognitionModule) {
+        safeCatch(SpeechRecognition.ExpoSpeechRecognitionModule.abort());
+      }
     }
-  }, [visible]);
+  }, [visible, cleanupListeners, safeCatch]);
+
+  useEffect(() => {
+    return () => {
+      cleanupListeners();
+      if (SpeechRecognition?.ExpoSpeechRecognitionModule) {
+        safeCatch(SpeechRecognition.ExpoSpeechRecognitionModule.abort());
+      }
+    };
+  }, [cleanupListeners, safeCatch]);
 
   useEffect(() => {
     if (!visible) return;
@@ -185,6 +247,83 @@ export function QuickNoteModal({
     setAttachments((prev) => prev.filter((_, i) => i !== index));
   }, []);
 
+  const startVoice = useCallback(async () => {
+    ensureSpeechModule();
+    const Mod = SpeechRecognition?.ExpoSpeechRecognitionModule;
+    if (!Mod) {
+      setVoiceUnavailable(true);
+      return;
+    }
+    try {
+      const avail = await Mod.isRecognitionAvailable();
+      if (!avail) {
+        setVoiceUnavailable(true);
+        return;
+      }
+      const perm = await Mod.requestPermissionsAsync();
+      if (!perm.granted) {
+        Alert.alert(
+          t("common.error") || "Chyba",
+          t("projectOverview.audioPermissionRequired") || "Microphone permission required."
+        );
+        return;
+      }
+      cleanupListeners();
+      transcriptRef.current = "";
+      baseTextRef.current = text;
+      setIsRecording(true);
+
+      resultListenerRef.current = Mod.addListener(
+        "result",
+        (event: { results: Array<{ transcript?: string }>; isFinal?: boolean }) => {
+          const transcript = event.results?.[0]?.transcript ?? "";
+          if (!transcript) return;
+          transcriptRef.current = transcript;
+          const base = baseTextRef.current;
+          const merged = base ? `${base} ${transcript}` : transcript;
+          setText(merged);
+        }
+      );
+      endListenerRef.current = Mod.addListener("end", () => {
+        setIsRecording(false);
+        cleanupListeners();
+      });
+      errorListenerRef.current = Mod.addListener("error", () => {
+        setIsRecording(false);
+        cleanupListeners();
+      });
+
+      await Mod.start({
+        lang: speechLang,
+        interimResults: true,
+        continuous: true,
+      });
+    } catch (e) {
+      if (__DEV__) console.warn("[QuickNoteModal] startVoice failed:", e);
+      setIsRecording(false);
+      cleanupListeners();
+    }
+  }, [cleanupListeners, speechLang, t, text]);
+
+  const stopVoice = useCallback(async () => {
+    const Mod = SpeechRecognition?.ExpoSpeechRecognitionModule;
+    if (!Mod) {
+      setIsRecording(false);
+      return;
+    }
+    try {
+      await Mod.stop();
+    } catch (e) {
+      try {
+        await Mod.abort();
+      } catch {
+        /* ignore */
+      }
+    } finally {
+      setIsRecording(false);
+    }
+  }, []);
+
   const handleSave = useCallback(async () => {
     const trimmed = text.trim();
     if ((!trimmed && attachments.length === 0) || saving) return;
@@ -265,19 +404,50 @@ export function QuickNoteModal({
                 </ScrollView>
               )}
 
-              <TextInput
-                ref={inputRef}
-                style={styles.input}
-                value={text}
-                onChangeText={setText}
-                placeholder={placeholder}
-                placeholderTextColor={colors.textMuted}
-                multiline
-                numberOfLines={4}
-                maxLength={500}
-                editable={!saving}
-                returnKeyType="default"
-              />
+              <View style={styles.inputRow}>
+                <TextInput
+                  ref={inputRef}
+                  style={[styles.input, styles.inputWithMic]}
+                  value={text}
+                  onChangeText={setText}
+                  placeholder={placeholder}
+                  placeholderTextColor={colors.textMuted}
+                  multiline
+                  numberOfLines={4}
+                  maxLength={500}
+                  editable={!saving}
+                  returnKeyType="default"
+                />
+                {!voiceUnavailable ? (
+                  <TouchableOpacity
+                    style={[styles.micBtn, isRecording && styles.micBtnActive]}
+                    onPressIn={() => {
+                      void startVoice();
+                    }}
+                    onPressOut={() => {
+                      void stopVoice();
+                    }}
+                    disabled={saving}
+                    activeOpacity={0.85}
+                    accessibilityRole="button"
+                    accessibilityLabel={isRecording ? "Recording, release to stop" : "Hold to record"}
+                    accessibilityHint="Hold to record voice note, release to transcribe"
+                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                  >
+                    <Ionicons
+                      name={isRecording ? "mic" : "mic-outline"}
+                      size={22}
+                      color="#fff"
+                    />
+                    {isRecording ? <View style={styles.micPulseDot} /> : null}
+                  </TouchableOpacity>
+                ) : null}
+              </View>
+              {isRecording ? (
+                <Text style={styles.micHint} maxFontSizeMultiplier={1.2}>
+                  ● {t("projectOverview.recording") || "Recording"}…
+                </Text>
+              ) : null}
 
               <TouchableOpacity
                 style={[styles.saveBtn, !canSave && styles.saveBtnDisabled]}
@@ -370,6 +540,12 @@ const styles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.5)",
     borderRadius: 12,
   },
+  inputRow: {
+    flexDirection: "row",
+    alignItems: "flex-end",
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
   input: {
     backgroundColor: "#fff",
     borderWidth: 1,
@@ -382,6 +558,43 @@ const styles = StyleSheet.create({
     maxHeight: 180,
     textAlignVertical: "top",
     marginBottom: spacing.md,
+  },
+  inputWithMic: {
+    flex: 1,
+    marginBottom: 0,
+  },
+  micBtn: {
+    width: 52,
+    height: 52,
+    borderRadius: 26,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.18,
+    shadowRadius: 4,
+    elevation: 3,
+  },
+  micBtnActive: {
+    backgroundColor: "#dc2626",
+    transform: [{ scale: 1.08 }],
+  },
+  micPulseDot: {
+    position: "absolute",
+    top: 6,
+    right: 6,
+    width: 10,
+    height: 10,
+    borderRadius: 5,
+    backgroundColor: "#fff",
+  },
+  micHint: {
+    fontSize: 13,
+    color: "#dc2626",
+    fontWeight: "600",
+    marginTop: -spacing.sm,
+    marginBottom: spacing.sm,
   },
   saveBtn: {
     backgroundColor: colors.primary,

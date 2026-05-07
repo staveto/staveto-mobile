@@ -32,6 +32,8 @@ const SECTION_LABELS: Record<HomeSectionId, string> = {
   projects_chip: "home.sectionProjectsChip",
   time_tracking_chip: "home.sectionTimeTrackingChip",
   expenses_chip: "home.sectionExpensesChip",
+  quick_capture_card: "home.sectionQuickCapture",
+  service_tasks_alert: "home.sectionServiceTasks",
   current_work: "home.sectionCurrentWork",
   project_filters: "home.sectionProjectFilters",
   other_projects: "home.sectionOtherProjects",

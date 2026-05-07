@@ -37,6 +37,9 @@ import { useI18n } from "../i18n/I18nContext";
 import type { Locale } from "../i18n/translations";
 import * as timeTracking from "../services/timeTracking";
 import type { TimeEntryDoc } from "../services/timeTracking";
+import * as absencesService from "../services/absences";
+import type { AbsenceDoc } from "../services/absences";
+import { ABSENCE_COLOR, ABSENCE_TYPE_KEYS } from "./absence/absenceUi";
 import { openLatLngInMaps } from "../lib/maps";
 import { toYmd } from "../utils/date";
 import { colors, spacing } from "../theme";
@@ -86,6 +89,31 @@ function formatTimeRange(startedAt: string, endedAt: string): string {
   }
 }
 
+/** "12:10–12:40, 14:05–14:12" — joins all closed pause windows; open pauses are shown as "12:10–…". */
+function formatPauseList(pauses: TimeEntryDoc["pauses"]): string {
+  if (!pauses || pauses.length === 0) return "";
+  const parts: string[] = [];
+  for (const p of pauses) {
+    if (!p?.startedAt) continue;
+    try {
+      const start = new Date(p.startedAt);
+      const sh = String(start.getHours()).padStart(2, "0");
+      const sm = String(start.getMinutes()).padStart(2, "0");
+      if (p.endedAt) {
+        const end = new Date(p.endedAt);
+        const eh = String(end.getHours()).padStart(2, "0");
+        const em = String(end.getMinutes()).padStart(2, "0");
+        parts.push(`${sh}:${sm}–${eh}:${em}`);
+      } else {
+        parts.push(`${sh}:${sm}–…`);
+      }
+    } catch {
+      /* ignore unparsable pause entry */
+    }
+  }
+  return parts.join(", ");
+}
+
 function hasValidGps(gps: { lat?: number; lng?: number } | null | undefined): boolean {
   return !!gps && typeof gps.lat === "number" && typeof gps.lng === "number" && !isNaN(gps.lat) && !isNaN(gps.lng);
 }
@@ -125,6 +153,11 @@ function EntryCard({
       <Text style={styles.entryTime}>
         {formatTimeRange(entry.startedAt, entry.endedAt)} • {formatMinutesWithUnits(entry.durationMinutes ?? 0)}
       </Text>
+      {entry.pauses && entry.pauses.length > 0 ? (
+        <Text style={styles.entryPauses} numberOfLines={2}>
+          {t("time.dailyProtocol.pauses")}: {formatPauseList(entry.pauses)}
+        </Text>
+      ) : null}
       <View style={styles.locationRow}>
         <TouchableOpacity
           style={[styles.locationBtn, !hasValidGps(entry.gpsStart) && styles.locationBtnDisabled]}
@@ -199,6 +232,7 @@ export function TimeDailyProtocolScreen() {
   const [teamEntriesForDay, setTeamEntriesForDay] = useState<TimeEntryDoc[]>([]);
   const [teamDayLoading, setTeamDayLoading] = useState(false);
   const [expandedPersonIds, setExpandedPersonIds] = useState<Set<string>>(new Set());
+  const [absencesByYmd, setAbsencesByYmd] = useState<Map<string, AbsenceDoc[]>>(new Map());
 
   const userId = user?.id ?? "";
   const canSeeTeam = teamProjectIds.length > 0;
@@ -262,6 +296,30 @@ export function TimeDailyProtocolScreen() {
       setTeamEntriesForMonth([]);
     }
   }, [teamProjectIds, currentMonth, loadTeamEntriesForMonth]);
+
+  // Load absences for the visible month so we can render them in the calendar.
+  useEffect(() => {
+    if (!userId) {
+      setAbsencesByYmd(new Map());
+      return;
+    }
+    const fromYmd = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, "0")}-01`;
+    const lastDay = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 1, 0).getDate();
+    const toYmdStr = `${currentMonth.getFullYear()}-${String(currentMonth.getMonth() + 1).padStart(2, "0")}-${String(lastDay).padStart(2, "0")}`;
+    let cancelled = false;
+    absencesService
+      .listAbsencesForUser(userId, fromYmd, toYmdStr)
+      .then((list) => {
+        if (cancelled) return;
+        setAbsencesByYmd(absencesService.getAbsencesMapByYmd(list));
+      })
+      .catch(() => {
+        if (!cancelled) setAbsencesByYmd(new Map());
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [userId, currentMonth]);
 
   const selectedYmd = selectedDate ? toYmd(selectedDate) : null;
 
@@ -542,6 +600,12 @@ export function TimeDailyProtocolScreen() {
             const hasTeamEntries = !!summary && summary.teamMinutes > 0;
             const totalMinutes = summary ? summary.meMinutes + summary.teamMinutes : 0;
             const hasLongDay = totalMinutes > 480;
+            const dayAbsences = absencesByYmd.get(dayKey);
+            const dayAbsence = dayAbsences && dayAbsences.length > 0
+              ? (dayAbsences.find((a) => a.status === "approved") ?? dayAbsences[0])
+              : null;
+            const absenceColor = dayAbsence ? ABSENCE_COLOR[dayAbsence.type] : null;
+            const absenceIsPending = dayAbsence?.status === "pending";
 
             return (
               <TouchableOpacity
@@ -550,8 +614,14 @@ export function TimeDailyProtocolScreen() {
                   styles.dayCell,
                   { width: DAY_CELL_SIZE, height: DAY_CELL_SIZE },
                   !inMonth && styles.dayCellDisabled,
+                  absenceColor && !selected && {
+                    backgroundColor: absenceIsPending ? `${absenceColor}33` : `${absenceColor}55`,
+                    borderWidth: absenceIsPending ? 1 : 0,
+                    borderStyle: "dashed",
+                    borderColor: absenceColor,
+                  },
                   selected && styles.dayCellSelected,
-                  today && !selected && styles.dayCellToday,
+                  today && !selected && !absenceColor && styles.dayCellToday,
                 ]}
                 onPress={() => setSelectedDate(day)}
                 activeOpacity={0.7}
@@ -604,6 +674,31 @@ export function TimeDailyProtocolScreen() {
                 })
               : t("time.dailyProtocol.selectDay")}
           </Text>
+
+          {selectedYmd && (() => {
+            const dayAbsences = absencesByYmd.get(selectedYmd) ?? [];
+            return dayAbsences.length > 0 ? (
+              <View style={styles.absenceSection}>
+                <Text style={styles.absenceSectionTitle}>{t("absence.section.calendar")}</Text>
+                {dayAbsences.map((a) => (
+                  <TouchableOpacity
+                    key={`absence-${a.id}`}
+                    style={[styles.absenceRow, { borderLeftColor: ABSENCE_COLOR[a.type] }]}
+                    onPress={() => (navigation as any).navigate?.("AbsenceDetail", { absenceId: a.id })}
+                    activeOpacity={0.85}
+                  >
+                    <View style={[styles.absenceDot, { backgroundColor: ABSENCE_COLOR[a.type] }]} />
+                    <Text style={styles.absenceRowTitle} numberOfLines={1}>
+                      {t(ABSENCE_TYPE_KEYS[a.type])}
+                    </Text>
+                    <Text style={styles.absenceRowName} numberOfLines={1}>
+                      {a.userNameSnapshot}
+                    </Text>
+                  </TouchableOpacity>
+                ))}
+              </View>
+            ) : null;
+          })()}
 
           {selectedYmd && (
             <>
@@ -1006,6 +1101,13 @@ const styles = StyleSheet.create({
     color: colors.textOnDark,
     marginBottom: spacing.sm,
   },
+  entryPauses: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.7)",
+    marginTop: -4,
+    marginBottom: spacing.sm,
+    fontStyle: "italic",
+  },
   locationRow: {
     flexDirection: "row",
     gap: spacing.sm,
@@ -1030,5 +1132,44 @@ const styles = StyleSheet.create({
   },
   locationBtnTextDisabled: {
     color: colors.textOnDark,
+  },
+  absenceSection: {
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
+  },
+  absenceSectionTitle: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: "rgba(255,255,255,0.7)",
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+    marginBottom: spacing.xs,
+  },
+  absenceRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: "rgba(255,255,255,0.08)",
+    borderRadius: 8,
+    marginBottom: spacing.xs,
+    borderLeftWidth: 3,
+    gap: spacing.sm,
+  },
+  absenceDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  absenceRowTitle: {
+    flex: 1,
+    fontSize: 14,
+    color: colors.textOnDark,
+    fontWeight: "600",
+  },
+  absenceRowName: {
+    fontSize: 12,
+    color: "rgba(255,255,255,0.6)",
+    maxWidth: 120,
   },
 });

@@ -355,6 +355,54 @@ service cloud.firestore {
 
     }
 
+    // Absences (vacation, sick leave, doctor visits, personal/unpaid leave).
+    // SEPARATE from timeEntries — never enters labour cost or duration totals.
+    // - read: self OR org admin (director / manager view of employee calendar)
+    // - create: signed-in user creating their own absence (userId == uid)
+    // - update/delete: owner of the doc OR org admin
+    match /absences/{absenceId} {
+      allow read: if signedIn()
+        && (
+          resource.data.userId == uid()
+          || (resource.data.orgId != null && isOrgAdmin(resource.data.orgId, uid()))
+        );
+
+      allow create: if signedIn()
+        && request.resource.data.userId == uid()
+        && request.resource.data.orgId is string
+        && request.resource.data.orgId != ''
+        && (
+          // Solo / personal: user is their own org root.
+          request.resource.data.orgId == uid()
+          // B2B: must be an active member of the target org.
+          || isOrgMember(request.resource.data.orgId, uid())
+        )
+        // Required schema fields
+        && request.resource.data.startDate is string
+        && request.resource.data.endDate is string
+        && request.resource.data.startDate <= request.resource.data.endDate
+        && request.resource.data.type in ['vacation', 'sick', 'doctor', 'unpaid', 'personal']
+        && request.resource.data.status in ['pending', 'approved', 'rejected', 'cancelled'];
+
+      allow update: if signedIn()
+        && (
+          resource.data.userId == uid()
+          || (resource.data.orgId != null && isOrgAdmin(resource.data.orgId, uid()))
+        )
+        // Immutable identity fields.
+        && request.resource.data.userId == resource.data.userId
+        && request.resource.data.orgId == resource.data.orgId
+        && request.resource.data.startDate is string
+        && request.resource.data.endDate is string
+        && request.resource.data.startDate <= request.resource.data.endDate;
+
+      allow delete: if signedIn()
+        && (
+          resource.data.userId == uid()
+          || (resource.data.orgId != null && isOrgAdmin(resource.data.orgId, uid()))
+        );
+    }
+
     // Time entries (time tracking / attendance)
     match /timeEntries/{entryId} {
       allow create: if signedIn()

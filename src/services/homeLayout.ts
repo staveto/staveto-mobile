@@ -8,6 +8,8 @@ export type HomeSectionId =
   | "projects_chip"
   | "time_tracking_chip"
   | "expenses_chip"
+  | "quick_capture_card"
+  | "service_tasks_alert"
   | "current_work"
   | "project_filters"
   | "other_projects"
@@ -32,6 +34,8 @@ const DEFAULT_SECTIONS: HomeSectionConfig[] = [
   { id: "projects_chip", enabled: false },
   { id: "time_tracking_chip", enabled: false },
   { id: "expenses_chip", enabled: false },
+  { id: "quick_capture_card", enabled: true },
+  { id: "service_tasks_alert", enabled: true },
   { id: "current_work", enabled: true },
   { id: "project_filters", enabled: true },
   { id: "other_projects", enabled: true },

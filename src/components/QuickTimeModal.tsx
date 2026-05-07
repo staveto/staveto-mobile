@@ -17,7 +17,6 @@ import DateTimePicker from "@react-native-community/datetimepicker";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, spacing } from "../theme";
 import { toYmd } from "../utils/date";
-import { formatElapsedHms } from "../utils/formatElapsedHms";
 import * as timeTracking from "../services/timeTracking";
 import type { ActiveTimer, GetActiveTimerReadOpts } from "../services/timeTracking";
 import type { ProjectDoc } from "../services/projects";
@@ -27,6 +26,18 @@ const SHEET_TEXT = "#ffffff";
 const SHEET_ACTION = "#7dd3fc";
 /** Matches home timer “running” accent. */
 const RUNNING_TIMER_GREEN = "#22c55e";
+/** Paused-state accent — neutral amber so it reads as "stopped between segments". */
+const PAUSED_TIMER_AMBER = "#f59e0b";
+
+/** HH:MM:SS from raw elapsed ms — used so paused timers can show frozen accumulated time. */
+function formatElapsedMs(ms: number): string {
+  const safeMs = Number.isFinite(ms) && ms >= 0 ? ms : 0;
+  const totalSec = Math.floor(safeMs / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  return `${String(h).padStart(2, "0")}:${String(m).padStart(2, "0")}:${String(s).padStart(2, "0")}`;
+}
 
 /** Project-only: phase/task are always null in Firestore. */
 const NO_PHASE_TASK = {
@@ -81,10 +92,15 @@ export function QuickTimeModal({
   const showProjectPicker = !activeTimer && (!selectedProject || pickingProject);
   const showSelectedProjectRow = !activeTimer && selectedProject && !pickingProject;
 
+  /** When paused: freeze on accumulatedMs (no ticking). When running: live tick from runningSince + accumulated. */
   useEffect(() => {
     if (!activeTimer) return;
-    const update = () => setElapsedDisplay(formatElapsedHms(activeTimer.startedAt));
+    const update = () =>
+      setElapsedDisplay(formatElapsedMs(timeTracking.calculateActiveTimerWorkMs(activeTimer)));
     update();
+    if (activeTimer.status === "paused") {
+      return;
+    }
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
   }, [activeTimer]);
@@ -102,7 +118,7 @@ export function QuickTimeModal({
   }, [activeTimer, sheetRef]);
 
   useEffect(() => {
-    if (!activeTimer) {
+    if (!activeTimer || activeTimer.status === "paused") {
       rotateAnim.setValue(0);
       return;
     }
@@ -161,6 +177,30 @@ export function QuickTimeModal({
       setLoading(false);
     }
   }, [activeTimer, onRefreshActiveTimer, onSaved, sheetRef]);
+
+  const handlePause = useCallback(async () => {
+    setLoading(true);
+    try {
+      await timeTracking.pauseTimer();
+      await Promise.resolve(onRefreshActiveTimer());
+    } catch (err) {
+      Alert.alert("Chyba", err instanceof Error ? err.message : "Nepodarilo sa pozastaviť časovač.");
+    } finally {
+      setLoading(false);
+    }
+  }, [onRefreshActiveTimer]);
+
+  const handleResume = useCallback(async () => {
+    setLoading(true);
+    try {
+      await timeTracking.resumeTimer();
+      await Promise.resolve(onRefreshActiveTimer());
+    } catch (err) {
+      Alert.alert("Chyba", err instanceof Error ? err.message : "Nepodarilo sa obnoviť časovač.");
+    } finally {
+      setLoading(false);
+    }
+  }, [onRefreshActiveTimer]);
 
   const handleManualSave = useCallback(async () => {
     if (!selectedProject) {
@@ -230,6 +270,12 @@ export function QuickTimeModal({
                 {activeTimer.projectNameSnapshot}
               </Text>
             </View>
+            {activeTimer.status === "paused" ? (
+              <View style={styles.pausedBadge}>
+                <Ionicons name="pause" size={12} color={PAUSED_TIMER_AMBER} />
+                <Text style={styles.pausedBadgeText}>{t("time.timerPaused")}</Text>
+              </View>
+            ) : null}
           </View>
         ) : showProjectPicker ? (
           <>
@@ -316,38 +362,100 @@ export function QuickTimeModal({
             {activeTimer ? (
               <View style={styles.trackingBox}>
                 <View style={styles.timerCircleWrap}>
-                  <View style={styles.timerCircle}>
-                    <Ionicons name="time-outline" size={22} color={RUNNING_TIMER_GREEN} style={styles.timerCircleWatchIcon} />
-                    <Text style={styles.elapsedText}>{elapsedDisplay || "00:00:00"}</Text>
-                    <Animated.View
+                  <View
+                    style={[
+                      styles.timerCircle,
+                      activeTimer.status === "paused" ? styles.timerCirclePaused : null,
+                    ]}
+                  >
+                    <Ionicons
+                      name={activeTimer.status === "paused" ? "pause" : "time-outline"}
+                      size={22}
+                      color={activeTimer.status === "paused" ? PAUSED_TIMER_AMBER : RUNNING_TIMER_GREEN}
+                      style={styles.timerCircleWatchIcon}
+                    />
+                    <Text
                       style={[
-                        styles.timerRunningTrack,
-                        {
-                          transform: [
-                            {
-                              rotate: rotateAnim.interpolate({
-                                inputRange: [0, 1],
-                                outputRange: ["0deg", "360deg"],
-                              }),
-                            },
-                          ],
-                        },
+                        styles.elapsedText,
+                        activeTimer.status === "paused" ? styles.elapsedTextPaused : null,
                       ]}
                     >
-                      <View style={styles.timerRunningDot} />
-                    </Animated.View>
+                      {elapsedDisplay || "00:00:00"}
+                    </Text>
+                    {activeTimer.status === "paused" ? null : (
+                      <Animated.View
+                        style={[
+                          styles.timerRunningTrack,
+                          {
+                            transform: [
+                              {
+                                rotate: rotateAnim.interpolate({
+                                  inputRange: [0, 1],
+                                  outputRange: ["0deg", "360deg"],
+                                }),
+                              },
+                            ],
+                          },
+                        ]}
+                      >
+                        <View style={styles.timerRunningDot} />
+                      </Animated.View>
+                    )}
                   </View>
                 </View>
-                <TouchableOpacity style={[styles.primaryBtn, styles.stopBtn]} onPress={handleStop} disabled={loading}>
-                  {loading ? (
-                    <ActivityIndicator color="#fff" />
+                <View style={styles.activeTimerActions}>
+                  {activeTimer.status === "paused" ? (
+                    <TouchableOpacity
+                      style={[styles.primaryBtn, styles.resumeBtn, styles.actionFlexBtn]}
+                      onPress={handleResume}
+                      disabled={loading}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("time.resume")}
+                    >
+                      {loading ? (
+                        <ActivityIndicator color="#fff" />
+                      ) : (
+                        <>
+                          <Ionicons name="play" size={18} color="#fff" />
+                          <Text style={styles.primaryBtnText}>{t("time.resume")}</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
                   ) : (
-                    <>
-                      <Ionicons name="stop" size={20} color="#fff" />
-                      <Text style={styles.primaryBtnText}>{t("time.stop")}</Text>
-                    </>
+                    <TouchableOpacity
+                      style={[styles.primaryBtn, styles.pauseBtn, styles.actionFlexBtn]}
+                      onPress={handlePause}
+                      disabled={loading}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("time.pause")}
+                    >
+                      {loading ? (
+                        <ActivityIndicator color="#fff" />
+                      ) : (
+                        <>
+                          <Ionicons name="pause" size={18} color="#fff" />
+                          <Text style={styles.primaryBtnText}>{t("time.pause")}</Text>
+                        </>
+                      )}
+                    </TouchableOpacity>
                   )}
-                </TouchableOpacity>
+                  <TouchableOpacity
+                    style={[styles.primaryBtn, styles.stopBtn, styles.actionFlexBtn]}
+                    onPress={handleStop}
+                    disabled={loading}
+                    accessibilityRole="button"
+                    accessibilityLabel={t("time.stop")}
+                  >
+                    {loading ? (
+                      <ActivityIndicator color="#fff" />
+                    ) : (
+                      <>
+                        <Ionicons name="stop" size={18} color="#fff" />
+                        <Text style={styles.primaryBtnText}>{t("time.stop")}</Text>
+                      </>
+                    )}
+                  </TouchableOpacity>
+                </View>
               </View>
             ) : (
               <>
@@ -608,7 +716,47 @@ const styles = StyleSheet.create({
   },
   stopBtn: {
     backgroundColor: "#dc3545",
+  },
+  pauseBtn: {
+    backgroundColor: PAUSED_TIMER_AMBER,
+  },
+  resumeBtn: {
+    backgroundColor: RUNNING_TIMER_GREEN,
+  },
+  activeTimerActions: {
+    flexDirection: "row",
+    gap: spacing.sm,
     marginTop: spacing.md,
+    alignSelf: "stretch",
+  },
+  actionFlexBtn: {
+    flex: 1,
+    paddingHorizontal: spacing.sm,
+  },
+  pausedBadge: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 2,
+    borderRadius: 12,
+    backgroundColor: "rgba(245,158,11,0.18)",
+    borderWidth: 1,
+    borderColor: "rgba(245,158,11,0.6)",
+  },
+  pausedBadgeText: {
+    fontSize: 11,
+    fontWeight: "700",
+    color: PAUSED_TIMER_AMBER,
+    textTransform: "uppercase",
+    letterSpacing: 0.4,
+  },
+  timerCirclePaused: {
+    borderColor: "rgba(245,158,11,0.55)",
+    backgroundColor: "rgba(245,158,11,0.10)",
+  },
+  elapsedTextPaused: {
+    color: PAUSED_TIMER_AMBER,
   },
   trackingBox: {
     padding: spacing.lg,

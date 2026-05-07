@@ -53,6 +53,15 @@ async function withTimeout<T>(promise: Promise<T>, ms: number, onTimeout: T): Pr
   }
 }
 
+/** Timer lifecycle: "running" = ticking, "paused" = stopped between work segments. */
+export type TimerStatus = "running" | "paused";
+
+/** One pause window inside a timer session. `endedAt` filled on resume; missing while currently paused. */
+export type TimerPause = {
+  startedAt: string;
+  endedAt?: string;
+};
+
 export type ActiveTimer = {
   projectId: string;
   projectNameSnapshot: string;
@@ -66,6 +75,17 @@ export type ActiveTimer = {
   taskTitleSnapshot?: string | null;
   /** `projects[].ownerId` at start — used for offline permission + stop when Firestore member cache is empty. */
   ownerIdSnapshot?: string | null;
+  /**
+   * Pause/resume support. Old timers without these fields keep working
+   * (treated as always-running started at `startedAt`).
+   */
+  status?: TimerStatus;
+  /** When the current running segment started; null while paused. */
+  runningSince?: string | null;
+  /** Net working time across previous segments — does NOT include the currently running segment. */
+  accumulatedMs?: number;
+  /** Pause windows during this session; last entry may be open (no `endedAt`) while currently paused. */
+  pauses?: TimerPause[];
 };
 
 export type TimeEntryDoc = {
@@ -87,6 +107,10 @@ export type TimeEntryDoc = {
   phaseNameSnapshot?: string | null;
   taskId?: string | null;
   taskTitleSnapshot?: string | null;
+  /** Optional: pause windows during the timer session (only present for newer entries). */
+  pauses?: TimerPause[];
+  /** Optional: net work duration in ms (no pauses). `durationMinutes` remains the canonical metric for reports. */
+  workDurationMs?: number;
   createdAt?: string;
   updatedAt?: string;
 };
@@ -216,6 +240,27 @@ export type GetActiveTimerReadOpts = {
   source?: "default" | "server";
 };
 
+/** Parse persisted pauses array; tolerates legacy timers without the field. */
+function coerceTimerPauses(raw: unknown): TimerPause[] {
+  if (!Array.isArray(raw)) return [];
+  const out: TimerPause[] = [];
+  for (const item of raw) {
+    if (!item || typeof item !== "object") continue;
+    const map = item as Record<string, unknown>;
+    const startedAt = toIso(map.startedAt) ?? (typeof map.startedAt === "string" ? map.startedAt : "");
+    if (!startedAt) continue;
+    const endedAtIso = toIso(map.endedAt);
+    const endedAt = endedAtIso ?? (typeof map.endedAt === "string" && map.endedAt ? map.endedAt : undefined);
+    out.push(endedAt ? { startedAt, endedAt } : { startedAt });
+  }
+  return out;
+}
+
+function coerceTimerStatus(raw: unknown): TimerStatus | undefined {
+  if (raw === "paused" || raw === "running") return raw;
+  return undefined;
+}
+
 async function readActiveTimerFromUserDoc(uid: string, opts?: GetActiveTimerReadOpts): Promise<ActiveTimer | null> {
   const userRef = doc(db, paths.userDoc(uid));
   /** Always use DocumentReference.get — modular `getDoc(ref)` with RNFB ref can yield bad snapshots / TypeError on `.data()`. */
@@ -229,6 +274,10 @@ async function readActiveTimerFromUserDoc(uid: string, opts?: GetActiveTimerRead
   const startedAt = toIso(atMap.startedAt);
   if (!startedAt) return null;
   const ownerIdSnapshot = typeof atMap.ownerIdSnapshot === "string" ? atMap.ownerIdSnapshot : null;
+  const status = coerceTimerStatus(atMap.status);
+  const runningSinceIso = toIso(atMap.runningSince) ?? (typeof atMap.runningSince === "string" ? atMap.runningSince : null);
+  const accumulatedRaw = atMap.accumulatedMs;
+  const accumulatedMs = typeof accumulatedRaw === "number" && Number.isFinite(accumulatedRaw) ? accumulatedRaw : undefined;
   return {
     projectId: (atMap.projectId as string) ?? "",
     projectNameSnapshot: (atMap.projectNameSnapshot as string) ?? (atMap.projectName as string) ?? "",
@@ -241,7 +290,33 @@ async function readActiveTimerFromUserDoc(uid: string, opts?: GetActiveTimerRead
     taskId: (atMap.taskId as string | null | undefined) ?? null,
     taskTitleSnapshot: (atMap.taskTitleSnapshot as string | null | undefined) ?? null,
     ownerIdSnapshot,
+    status,
+    runningSince: runningSinceIso ?? null,
+    accumulatedMs,
+    pauses: coerceTimerPauses(atMap.pauses),
   };
+}
+
+/**
+ * Net work milliseconds for an active timer at `nowIso` (or now).
+ * - Running: `accumulatedMs + (now - runningSince)` (legacy fallback: `now - startedAt`).
+ * - Paused: just `accumulatedMs`.
+ * Always returns >= 0. Safe for legacy timers without status / accumulated fields.
+ */
+export function calculateActiveTimerWorkMs(activeTimer: ActiveTimer, nowIso?: string): number {
+  const total = typeof activeTimer.accumulatedMs === "number" && Number.isFinite(activeTimer.accumulatedMs)
+    ? activeTimer.accumulatedMs
+    : 0;
+  if (activeTimer.status === "paused") {
+    return Math.max(0, total);
+  }
+  const nowMs = nowIso ? new Date(nowIso).getTime() : Date.now();
+  const sinceIso = activeTimer.runningSince ?? activeTimer.startedAt;
+  const sinceMs = sinceIso ? new Date(sinceIso).getTime() : NaN;
+  if (!Number.isFinite(sinceMs) || !Number.isFinite(nowMs)) {
+    return Math.max(0, total);
+  }
+  return Math.max(0, total + (nowMs - sinceMs));
 }
 
 /**
@@ -323,6 +398,10 @@ export async function startTimer(projectId: string, projectName: string, opts?: 
     taskId: opts?.taskId ?? null,
     taskTitleSnapshot: opts?.taskTitleSnapshot ?? null,
     ownerIdSnapshot,
+    status: "running",
+    runningSince: startedAt,
+    accumulatedMs: 0,
+    pauses: [],
   };
 
   const userRef = doc(db, paths.userDoc(uid));
@@ -339,6 +418,10 @@ export async function startTimer(projectId: string, projectName: string, opts?: 
       taskId: opts?.taskId ?? null,
       taskTitleSnapshot: opts?.taskTitleSnapshot ?? null,
       ownerIdSnapshot: ownerIdSnapshot ?? null,
+      status: "running",
+      runningSince: startedAt,
+      accumulatedMs: 0,
+      pauses: [],
     },
   });
 
@@ -353,6 +436,165 @@ export async function startTimer(projectId: string, projectName: string, opts?: 
   }
 
   return activeTimerPayload;
+}
+
+/**
+ * Pause the running timer (if any).
+ * - Computes new `accumulatedMs` from server-side state to stay safe under double-tap / multi-device.
+ * - Appends an open pause window `{ startedAt: now }`.
+ * - Idempotent: no-op when there is no active timer or it's already paused.
+ * - Clears the running notification (UI is no longer ticking).
+ */
+export async function pauseTimer(): Promise<ActiveTimer | null> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error("Musíte byť prihlásený.");
+  const userRef = doc(db, paths.userDoc(uid));
+  const nowIso = new Date().toISOString();
+
+  const result = await runTransaction<ActiveTimer | null>(async (transaction) => {
+    const snap = await transaction.get(userRef);
+    if (!snap.exists()) return null;
+    const data = snap.data() as Record<string, unknown> | undefined;
+    const at = data?.activeTimer;
+    if (!at || typeof at !== "object" || Array.isArray(at)) return null;
+    const atMap = at as Record<string, unknown>;
+    const status = coerceTimerStatus(atMap.status);
+    /** Already paused — nothing to do. Legacy timers without status are treated as running. */
+    if (status === "paused") {
+      return null;
+    }
+    const startedAt = toIso(atMap.startedAt) ?? (typeof atMap.startedAt === "string" ? atMap.startedAt : "");
+    const runningSinceIso = toIso(atMap.runningSince) ?? (typeof atMap.runningSince === "string" ? atMap.runningSince : "") ?? "";
+    const sinceIso = runningSinceIso || startedAt;
+    const sinceMs = sinceIso ? new Date(sinceIso).getTime() : NaN;
+    const prevAccumulated =
+      typeof atMap.accumulatedMs === "number" && Number.isFinite(atMap.accumulatedMs) ? atMap.accumulatedMs : 0;
+    const segmentMs = Number.isFinite(sinceMs) ? Math.max(0, new Date(nowIso).getTime() - sinceMs) : 0;
+    const newAccumulated = Math.max(0, prevAccumulated + segmentMs);
+    const prevPauses = coerceTimerPauses(atMap.pauses);
+    const nextPauses: TimerPause[] = [...prevPauses, { startedAt: nowIso }];
+
+    const next: Record<string, unknown> = {
+      ...atMap,
+      status: "paused",
+      runningSince: null,
+      accumulatedMs: newAccumulated,
+      pauses: nextPauses,
+    };
+    transaction.update(userRef, { activeTimer: next });
+    /** Return the post-update view for callers that want to update UI without an extra read round-trip. */
+    return {
+      projectId: (atMap.projectId as string) ?? "",
+      projectNameSnapshot: (atMap.projectNameSnapshot as string) ?? (atMap.projectName as string) ?? "",
+      startedAt: startedAt || nowIso,
+      source: (atMap.source as string) ?? "home_quick_timer",
+      gpsStart: (atMap.gpsStart as GpsPoint | null | undefined) ?? null,
+      reminderIds: Array.isArray(atMap.reminderIds) ? (atMap.reminderIds as string[]) : [],
+      phaseId: (atMap.phaseId as string | null | undefined) ?? null,
+      phaseNameSnapshot: (atMap.phaseNameSnapshot as string | null | undefined) ?? null,
+      taskId: (atMap.taskId as string | null | undefined) ?? null,
+      taskTitleSnapshot: (atMap.taskTitleSnapshot as string | null | undefined) ?? null,
+      ownerIdSnapshot: typeof atMap.ownerIdSnapshot === "string" ? atMap.ownerIdSnapshot : null,
+      status: "paused",
+      runningSince: null,
+      accumulatedMs: newAccumulated,
+      pauses: nextPauses,
+    };
+  });
+
+  if (result) {
+    /** Don't show "running" tray entry while paused. Resume re-creates it. */
+    try {
+      await clearRunningTimerNotification();
+    } catch (err) {
+      console.warn("[timeTracking] pauseTimer clearRunningTimerNotification:", err);
+    }
+  }
+
+  return result;
+}
+
+/**
+ * Resume a paused timer (if any).
+ * - Closes the last open pause window with `endedAt: now`.
+ * - Sets `status="running"`, `runningSince=now`. `accumulatedMs` stays untouched.
+ * - Idempotent: no-op when there is no active timer or it's already running.
+ */
+export async function resumeTimer(): Promise<ActiveTimer | null> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error("Musíte byť prihlásený.");
+  const userRef = doc(db, paths.userDoc(uid));
+  const nowIso = new Date().toISOString();
+
+  const result = await runTransaction<ActiveTimer | null>(async (transaction) => {
+    const snap = await transaction.get(userRef);
+    if (!snap.exists()) return null;
+    const data = snap.data() as Record<string, unknown> | undefined;
+    const at = data?.activeTimer;
+    if (!at || typeof at !== "object" || Array.isArray(at)) return null;
+    const atMap = at as Record<string, unknown>;
+    const status = coerceTimerStatus(atMap.status);
+    /** Only resume from paused. Legacy / running timers are no-op. */
+    if (status !== "paused") {
+      return null;
+    }
+
+    const prevPauses = coerceTimerPauses(atMap.pauses);
+    const nextPauses: TimerPause[] = prevPauses.map((p, idx) =>
+      idx === prevPauses.length - 1 && !p.endedAt ? { ...p, endedAt: nowIso } : p
+    );
+    /** Defensive: if no open pause was found, append a closed zero-length one so audit trail isn't lost. */
+    if (
+      nextPauses.length === 0 ||
+      (nextPauses[nextPauses.length - 1]?.endedAt && prevPauses.every((p) => !!p.endedAt))
+    ) {
+      nextPauses.push({ startedAt: nowIso, endedAt: nowIso });
+    }
+
+    const accumulatedMs =
+      typeof atMap.accumulatedMs === "number" && Number.isFinite(atMap.accumulatedMs) ? atMap.accumulatedMs : 0;
+
+    const next: Record<string, unknown> = {
+      ...atMap,
+      status: "running",
+      runningSince: nowIso,
+      accumulatedMs,
+      pauses: nextPauses,
+    };
+    transaction.update(userRef, { activeTimer: next });
+
+    return {
+      projectId: (atMap.projectId as string) ?? "",
+      projectNameSnapshot: (atMap.projectNameSnapshot as string) ?? (atMap.projectName as string) ?? "",
+      startedAt: toIso(atMap.startedAt) ?? (typeof atMap.startedAt === "string" ? atMap.startedAt : nowIso),
+      source: (atMap.source as string) ?? "home_quick_timer",
+      gpsStart: (atMap.gpsStart as GpsPoint | null | undefined) ?? null,
+      reminderIds: Array.isArray(atMap.reminderIds) ? (atMap.reminderIds as string[]) : [],
+      phaseId: (atMap.phaseId as string | null | undefined) ?? null,
+      phaseNameSnapshot: (atMap.phaseNameSnapshot as string | null | undefined) ?? null,
+      taskId: (atMap.taskId as string | null | undefined) ?? null,
+      taskTitleSnapshot: (atMap.taskTitleSnapshot as string | null | undefined) ?? null,
+      ownerIdSnapshot: typeof atMap.ownerIdSnapshot === "string" ? atMap.ownerIdSnapshot : null,
+      status: "running",
+      runningSince: nowIso,
+      accumulatedMs,
+      pauses: nextPauses,
+    };
+  });
+
+  if (result) {
+    try {
+      await replaceRunningTimerNotification({
+        title: "Timer running",
+        projectName: result.projectNameSnapshot,
+        startedAtIso: result.runningSince ?? result.startedAt,
+      });
+    } catch (err) {
+      console.warn("[timeTracking] resumeTimer replaceRunningTimerNotification (offline OK):", err);
+    }
+  }
+
+  return result;
 }
 
 export type StopTimerOpts = {
@@ -378,10 +620,19 @@ export async function stopTimer(note?: string, opts?: StopTimerOpts): Promise<Ti
   await ensureCanWriteTime(entryPid, uid, active.ownerIdSnapshot ?? null);
 
   const endedAt = new Date().toISOString();
-  const startDate = new Date(active.startedAt).getTime();
-  const endDate = new Date(endedAt).getTime();
-  let durationMinutes = Math.round((endDate - startDate) / 60000);
+  /**
+   * Net work time across all running segments — pauses excluded.
+   * Legacy timers without `accumulatedMs/runningSince` collapse back to wall-clock (`now - startedAt`),
+   * which keeps existing rows behaving exactly as before.
+   */
+  const workMs = calculateActiveTimerWorkMs(active, endedAt);
+  let durationMinutes = Math.round(workMs / 60000);
   if (durationMinutes < 1) durationMinutes = 1;
+
+  /** Close the last pause window if we somehow stop while paused — preserves audit trail and totals. */
+  const sessionPauses: TimerPause[] = (active.pauses ?? []).map((p, idx, arr) =>
+    active.status === "paused" && idx === arr.length - 1 && !p.endedAt ? { ...p, endedAt } : p
+  );
 
   const flags: { reminded?: boolean; autoStopped?: boolean; lowAccuracy?: boolean } = {};
   if (active.gpsStart && active.gpsStart.accuracyM > 50) {
@@ -417,6 +668,9 @@ export async function stopTimer(note?: string, opts?: StopTimerOpts): Promise<Ti
     phaseNameSnapshot: active.phaseNameSnapshot ?? null,
     taskId: active.taskId ?? null,
     taskTitleSnapshot: active.taskTitleSnapshot ?? null,
+    /** Empty array OK for legacy / no-pause sessions; reports tolerate missing field. */
+    pauses: sessionPauses,
+    workDurationMs: workMs,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
@@ -523,8 +777,15 @@ export async function checkAutoStopOnAppOpen(): Promise<TimeEntryDoc | null> {
   const active = await getActiveTimer();
   if (!active) return null;
 
-  const elapsedMs = Date.now() - new Date(active.startedAt).getTime();
-  const elapsedHours = elapsedMs / (60 * 60 * 1000);
+  /**
+   * Auto-stop must not fire while paused — a paused timer doesn't accrue work
+   * and the user is intentionally between segments. We use net work ms instead of wall-clock
+   * so paused windows (incl. previous segments) don't push the timer over the threshold.
+   */
+  if (active.status === "paused") return null;
+  const endedAt = new Date().toISOString();
+  const workMs = calculateActiveTimerWorkMs(active, endedAt);
+  const elapsedHours = workMs / (60 * 60 * 1000);
   if (elapsedHours <= AUTO_STOP_HOURS) return null;
 
   const uid = auth.currentUser?.uid;
@@ -534,10 +795,10 @@ export async function checkAutoStopOnAppOpen(): Promise<TimeEntryDoc | null> {
   if (!entryPid) return null;
   await ensureCanWriteTime(entryPid, uid, active.ownerIdSnapshot ?? null);
 
-  const endedAt = new Date().toISOString();
-  let durationMinutes = Math.round((new Date(endedAt).getTime() - new Date(active.startedAt).getTime()) / 60000);
+  let durationMinutes = Math.round(workMs / 60000);
   if (durationMinutes < 1) durationMinutes = 1;
   const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
+  const sessionPauses: TimerPause[] = active.pauses ?? [];
 
   const entryData = {
     projectId: entryPid,
@@ -556,6 +817,8 @@ export async function checkAutoStopOnAppOpen(): Promise<TimeEntryDoc | null> {
     phaseNameSnapshot: active.phaseNameSnapshot ?? null,
     taskId: active.taskId ?? null,
     taskTitleSnapshot: active.taskTitleSnapshot ?? null,
+    pauses: sessionPauses,
+    workDurationMs: workMs,
     createdAt: serverTimestamp(),
     updatedAt: serverTimestamp(),
   };
@@ -730,6 +993,12 @@ function parseTimeEntryDoc(d: { id: string; data: () => unknown }): TimeEntryDoc
       rawStartedType: data.startedAt == null ? "null" : typeof data.startedAt,
     });
   }
+  const parsedPauses = coerceTimerPauses(data.pauses);
+  const workDurationRaw = data.workDurationMs;
+  const workDurationMs =
+    typeof workDurationRaw === "number" && Number.isFinite(workDurationRaw) && workDurationRaw >= 0
+      ? workDurationRaw
+      : undefined;
   return {
     id: d.id,
     projectId: coerceProjectIdFromFirestore(data.projectId),
@@ -749,6 +1018,8 @@ function parseTimeEntryDoc(d: { id: string; data: () => unknown }): TimeEntryDoc
     phaseNameSnapshot: (data.phaseNameSnapshot as string) ?? undefined,
     taskId: (data.taskId as string) ?? undefined,
     taskTitleSnapshot: (data.taskTitleSnapshot as string) ?? undefined,
+    pauses: parsedPauses.length > 0 ? parsedPauses : undefined,
+    workDurationMs,
     createdAt: toIso(data.createdAt) ?? undefined,
     updatedAt: toIso(data.updatedAt) ?? undefined,
   } as TimeEntryDoc;

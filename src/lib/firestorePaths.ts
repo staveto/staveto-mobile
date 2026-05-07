@@ -86,4 +86,7 @@ export const paths = {
   userDoc: (uid: string) => `users/${uid}`,
   timeEntries: () => `timeEntries`,
   timeEntry: (id: string) => `timeEntries/${id}`,
+  // Absences (vacation, sick leave, doctor visits, personal leave) — separate from timeEntries
+  absences: () => `absences`,
+  absence: (id: string) => `absences/${id}`,
 };

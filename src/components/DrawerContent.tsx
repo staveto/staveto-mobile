@@ -26,7 +26,7 @@ import type { SubscriptionTier } from "../services/subscription";
 import { SUPPORT_EMAIL } from "../constants/consent";
 import { useUnreadCount } from "../hooks/useUnreadCount";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
-import { isBusinessFeatureEnabled } from "../lib/featureFlags";
+import { isAdminEmail, isBusinessFeatureEnabled } from "../lib/featureFlags";
 
 type NavItem = {
   id: string;
@@ -57,6 +57,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const [updatingOpenToWork, setUpdatingOpenToWork] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const businessEnabled = isBusinessFeatureEnabled();
+  const adminEnabled = isAdminEmail(user?.email);
 
   const sendAgentDebugLog = useCallback(
     (hypothesisId: string, location: string, message: string, data: Record<string, unknown> = {}, runId = "profile-photo-upload") => {
@@ -312,6 +313,18 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       action: () => {
         closeDrawer();
         navigation.navigate("BusinessStack");
+      },
+    });
+  }
+  if (adminEnabled) {
+    mainNavItems.push({
+      id: "admin",
+      icon: "shield-checkmark-outline",
+      labelKey: "nav.admin",
+      label: "Staveto Admin",
+      action: () => {
+        closeDrawer();
+        navigation.navigate("AdminStack");
       },
     });
   }

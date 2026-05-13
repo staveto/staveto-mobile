@@ -1,0 +1,418 @@
+/**
+ * Read-only data layer for Staveto Business organizations.
+ *
+ * PHASE 1 SCOPE
+ * -------------
+ * Read-only. NO create / update / delete is exposed here. All write paths
+ * (provision org, change status / seats, activate Business) must go through
+ * authenticated Cloud Functions with the `admin: true` custom claim
+ * (Phase 5+). Direct client writes to server-only fields are blocked by the
+ * Firestore rules diff proposed in docs/firestore-rules-business-phase1.md.
+ *
+ * INVARIANTS (see .cursor/rules/business-architecture.mdc)
+ * --------------------------------------------------------
+ * - This module MUST NOT read from / write to `AuthContext.orgId`.
+ *   `AuthContext.orgId` is the solo namespace for B2C (=== fbUser.uid) and is
+ *   intentionally separate from any Business org id, which will live in a
+ *   later `BusinessContext.activeBusinessOrgId`.
+ * - No existing B2C screen should import this file. It is meant to be wired
+ *   in from Phase 2 (`BusinessContext`) onwards.
+ */
+
+import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
+import { collection, collectionGroup, doc, query, where } from "../lib/rnFirestore";
+import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
+import { db, getAuth } from "../firebase";
+import { paths } from "../lib/firestorePaths";
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Types
+// ─────────────────────────────────────────────────────────────────────────────
+
+/**
+ * Lifecycle of an organization licence (server-controlled).
+ * - pending_payment: created, waiting for licence to be paid / activated
+ * - active:          paid licence, Business surface unlocked for active members
+ * - past_due:        licence renewal failed; grace period (still readable)
+ * - suspended:       admin manually paused; no Business UI for members
+ * - cancelled:       terminal state; orgs should be archived, not deleted
+ *
+ * Clients MUST NOT write this field; the Firestore rules diff in
+ * docs/firestore-rules-business-phase1.md rejects any client mutation.
+ */
+export type OrgStatus =
+  | "pending_payment"
+  | "active"
+  | "past_due"
+  | "suspended"
+  | "cancelled";
+
+/**
+ * Role of a user inside an organization. Pre-Business legacy `'member'`
+ * value (seen on per-project members docs) is normalised to `'viewer'`.
+ */
+export type OrgRole = "owner" | "admin" | "manager" | "worker" | "viewer";
+
+/** Membership lifecycle. Only `'active'` members count toward `seatsUsed`. */
+export type MembershipStatus = "invited" | "active" | "suspended" | "removed";
+
+/**
+ * `organizations/{orgId}` document.
+ *
+ * SERVER-ONLY fields (clients MUST NOT mutate; rules reject):
+ * - status
+ * - businessEnabled
+ * - seatsLimit
+ * - seatsUsed
+ * - businessActivatedAt
+ * - businessActivatedBy
+ *
+ * Owner/admin clients may edit only the `profile` sub-object plus `name`.
+ */
+export type OrganizationDoc = {
+  id: string;
+  /** Display name of the organization (editable by owner/admin). */
+  name: string;
+  /** Auth uid of the user who created the org. Immutable. */
+  ownerUid: string;
+  /** Licence lifecycle — SERVER-ONLY. */
+  status: OrgStatus;
+  /** Master switch: is the Business surface unlocked for this org? SERVER-ONLY. */
+  businessEnabled: boolean;
+  /** Seats cap under this licence. SERVER-ONLY. */
+  seatsLimit: number;
+  /** Denormalised active-member count, maintained by CF. SERVER-ONLY. */
+  seatsUsed: number;
+  /** When the Business surface was first activated. SERVER-ONLY. */
+  businessActivatedAt?: FirebaseFirestoreTypes.Timestamp | string | null;
+  /** uid of the admin/staff who flipped `businessEnabled`. SERVER-ONLY. */
+  businessActivatedBy?: string | null;
+  /** Free-form company profile, editable by owner/admin. */
+  profile?: {
+    legalName?: string;
+    ico?: string;
+    icDph?: string;
+    dic?: string;
+    countryCode?: string;
+    addressText?: string;
+    contactEmail?: string;
+    contactPhone?: string;
+    websiteUrl?: string;
+  };
+  createdAt?: FirebaseFirestoreTypes.Timestamp | string;
+  updatedAt?: FirebaseFirestoreTypes.Timestamp | string;
+};
+
+/**
+ * `organizations/{orgId}/members/{memberId}` document.
+ *
+ * Convention (Phase 5+): `memberId === userId` (Auth uid) once the invite is
+ * claimed via Cloud Function. Pre-claim docs may use a generated id with
+ * `userId` empty and `emailLower` set — Phase 1 readers tolerate that.
+ */
+export type MembershipDoc = {
+  id: string;
+  orgId: string;
+  /** Auth uid of the member. Empty string for pending invites pre-claim. */
+  userId: string;
+  /** Lower-case email used during invite (defense-in-depth lookup). */
+  emailLower?: string;
+  /** Role inside the org. Legacy `'member'` is normalised to `'viewer'`. */
+  role: OrgRole;
+  /** Lifecycle. Only `active` counts toward seats. */
+  status: MembershipStatus;
+  /** When this membership became active. */
+  joinedAt?: FirebaseFirestoreTypes.Timestamp | string;
+  /** When the underlying doc was first created (server timestamp). */
+  addedAt?: FirebaseFirestoreTypes.Timestamp | string;
+  /** Hourly rate in EUR — used by the (later) labour-cost report. */
+  hourlyRateEur?: number;
+};
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Parsers (exported so businessMembers.ts can reuse without duplication)
+// ─────────────────────────────────────────────────────────────────────────────
+
+const VALID_STATUSES: ReadonlySet<OrgStatus> = new Set<OrgStatus>([
+  "pending_payment",
+  "active",
+  "past_due",
+  "suspended",
+  "cancelled",
+]);
+
+const VALID_ROLES: ReadonlySet<OrgRole> = new Set<OrgRole>([
+  "owner",
+  "admin",
+  "manager",
+  "worker",
+  "viewer",
+]);
+
+const VALID_MEMBERSHIP_STATUSES: ReadonlySet<MembershipStatus> = new Set<MembershipStatus>([
+  "invited",
+  "active",
+  "suspended",
+  "removed",
+]);
+
+/** Coerce a raw value into a known `OrgStatus`. Unknown → `pending_payment`. */
+export function parseOrgStatus(raw: unknown): OrgStatus {
+  if (typeof raw === "string" && (VALID_STATUSES as ReadonlySet<string>).has(raw)) {
+    return raw as OrgStatus;
+  }
+  return "pending_payment";
+}
+
+/** Coerce a raw value into a known `OrgRole`. Legacy `'member'` → `'viewer'`. */
+export function parseOrgRole(raw: unknown): OrgRole {
+  if (typeof raw === "string" && (VALID_ROLES as ReadonlySet<string>).has(raw)) {
+    return raw as OrgRole;
+  }
+  if (raw === "member") return "viewer";
+  return "viewer";
+}
+
+/** Coerce a raw value into a known `MembershipStatus`. Unknown → `invited`. */
+export function parseMembershipStatus(raw: unknown): MembershipStatus {
+  if (
+    typeof raw === "string" &&
+    (VALID_MEMBERSHIP_STATUSES as ReadonlySet<string>).has(raw)
+  ) {
+    return raw as MembershipStatus;
+  }
+  return "invited";
+}
+
+/** Build an `OrganizationDoc` from a Firestore document payload. */
+export function parseOrganizationDoc(
+  id: string,
+  data: Record<string, unknown>
+): OrganizationDoc {
+  const profileRaw =
+    (data.profile as Record<string, unknown> | undefined) ?? undefined;
+  const profile = profileRaw
+    ? {
+        legalName: typeof profileRaw.legalName === "string" ? profileRaw.legalName : undefined,
+        ico: typeof profileRaw.ico === "string" ? profileRaw.ico : undefined,
+        icDph: typeof profileRaw.icDph === "string" ? profileRaw.icDph : undefined,
+        dic: typeof profileRaw.dic === "string" ? profileRaw.dic : undefined,
+        countryCode:
+          typeof profileRaw.countryCode === "string" ? profileRaw.countryCode : undefined,
+        addressText:
+          typeof profileRaw.addressText === "string" ? profileRaw.addressText : undefined,
+        contactEmail:
+          typeof profileRaw.contactEmail === "string" ? profileRaw.contactEmail : undefined,
+        contactPhone:
+          typeof profileRaw.contactPhone === "string" ? profileRaw.contactPhone : undefined,
+        websiteUrl:
+          typeof profileRaw.websiteUrl === "string" ? profileRaw.websiteUrl : undefined,
+      }
+    : undefined;
+
+  const seatsLimitRaw = data.seatsLimit;
+  const seatsUsedRaw = data.seatsUsed;
+
+  return {
+    id,
+    name: typeof data.name === "string" ? data.name : "",
+    ownerUid: typeof data.ownerUid === "string" ? data.ownerUid : "",
+    status: parseOrgStatus(data.status),
+    businessEnabled: data.businessEnabled === true,
+    seatsLimit:
+      typeof seatsLimitRaw === "number" && Number.isFinite(seatsLimitRaw) && seatsLimitRaw >= 0
+        ? seatsLimitRaw
+        : 0,
+    seatsUsed:
+      typeof seatsUsedRaw === "number" && Number.isFinite(seatsUsedRaw) && seatsUsedRaw >= 0
+        ? seatsUsedRaw
+        : 0,
+    businessActivatedAt:
+      data.businessActivatedAt === null
+        ? null
+        : (data.businessActivatedAt as OrganizationDoc["businessActivatedAt"]) ?? undefined,
+    businessActivatedBy:
+      typeof data.businessActivatedBy === "string"
+        ? data.businessActivatedBy
+        : data.businessActivatedBy === null
+        ? null
+        : undefined,
+    profile,
+    createdAt: (data.createdAt as OrganizationDoc["createdAt"]) ?? undefined,
+    updatedAt: (data.updatedAt as OrganizationDoc["updatedAt"]) ?? undefined,
+  };
+}
+
+/** Build a `MembershipDoc` from a Firestore document payload. */
+export function parseMembershipDoc(
+  id: string,
+  orgId: string,
+  data: Record<string, unknown>
+): MembershipDoc {
+  const userIdRaw = data.userId;
+  const hourlyRaw = data.hourlyRateEur;
+  return {
+    id,
+    orgId,
+    userId: typeof userIdRaw === "string" && userIdRaw.length > 0 ? userIdRaw : "",
+    emailLower:
+      typeof data.emailLower === "string" ? data.emailLower.toLowerCase() : undefined,
+    role: parseOrgRole(data.role),
+    status: parseMembershipStatus(data.status),
+    joinedAt: (data.joinedAt as MembershipDoc["joinedAt"]) ?? undefined,
+    addedAt: (data.addedAt as MembershipDoc["addedAt"]) ?? undefined,
+    hourlyRateEur:
+      typeof hourlyRaw === "number" && Number.isFinite(hourlyRaw) && hourlyRaw >= 0
+        ? hourlyRaw
+        : undefined,
+  };
+}
+
+// ─────────────────────────────────────────────────────────────────────────────
+// Read-only API
+// ─────────────────────────────────────────────────────────────────────────────
+
+function requireSignedInUid(): string {
+  const uid = getAuth()?.currentUser?.uid;
+  if (!uid) {
+    throw new Error("Musíte byť prihlásený.");
+  }
+  return uid;
+}
+
+function isPermissionDenied(error: unknown): boolean {
+  const code = (error as { code?: string } | null)?.code ?? "";
+  return code === "permission-denied" || code === "firestore/permission-denied";
+}
+
+/**
+ * Read a single organization document.
+ *
+ * Returns `null` when the org doesn't exist OR the caller is not allowed to
+ * read it (Firestore rule: `signedIn() && isOrgMemberActive(orgId)`). The
+ * permission-denied case is intentionally swallowed and logged because the
+ * caller can't tell "doesn't exist" from "not allowed" anyway.
+ */
+export async function getOrganization(orgId: string): Promise<OrganizationDoc | null> {
+  if (typeof orgId !== "string" || orgId.trim().length === 0) return null;
+  requireSignedInUid();
+  try {
+    const ref = doc(db, paths.organization(orgId));
+    const snap = await getDocSmart(ref);
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    if (!data || typeof data !== "object") return null;
+    return parseOrganizationDoc(snap.id, data as Record<string, unknown>);
+  } catch (error) {
+    if (isPermissionDenied(error)) {
+      if (__DEV__) {
+        console.warn("[organizations] getOrganization: permission denied for org", orgId);
+      }
+      return null;
+    }
+    console.error("[organizations] getOrganization error:", error);
+    throw error;
+  }
+}
+
+/**
+ * Read the membership doc for (orgId, userId).
+ *
+ * Firestore rule allows a user to read their own membership
+ * (`uid() == memberId`) even when they're not yet "active". That makes this
+ * helper safe to call from the (Phase 2) BusinessContext during startup to
+ * decide which orgs to surface to the user.
+ *
+ * Convention: `memberId === userId` once the invite has been claimed.
+ */
+export async function getMembership(
+  orgId: string,
+  userId: string
+): Promise<MembershipDoc | null> {
+  if (!orgId || !userId) return null;
+  requireSignedInUid();
+  try {
+    const ref = doc(db, paths.organizationMember(orgId, userId));
+    const snap = await getDocSmart(ref);
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    if (!data || typeof data !== "object") return null;
+    return parseMembershipDoc(snap.id, orgId, data as Record<string, unknown>);
+  } catch (error) {
+    if (isPermissionDenied(error)) {
+      if (__DEV__) {
+        console.warn("[organizations] getMembership: permission denied", { orgId, userId });
+      }
+      return null;
+    }
+    console.error("[organizations] getMembership error:", error);
+    throw error;
+  }
+}
+
+/**
+ * List every membership belonging to `userId` across all organizations.
+ *
+ * Implementation: collectionGroup query on `members` filtered by `userId`.
+ * The same collectionGroup name is reused by `projects/{pid}/members`; we
+ * filter those out client-side via `ref.path` so this stays org-only.
+ *
+ * Security:
+ * - Firestore evaluates the read rule per-document. For
+ *   `organizations/{orgId}/members/{memberId}` the rule requires
+ *   `uid() == memberId` OR active membership — both pass for the caller's
+ *   own docs.
+ * - For `projects/{pid}/members` the rule requires owner/member access; we
+ *   would either pass or get filtered out via permission-denied at the
+ *   query level. To stay defensive, we accept a partial denial as `[]` and
+ *   log a warning.
+ *
+ * This helper intentionally only supports `userId === auth.currentUser.uid`.
+ * Listing other users' memberships must go through a Cloud Function (later).
+ */
+export async function listMyMemberships(userId: string): Promise<MembershipDoc[]> {
+  if (!userId) return [];
+  const currentUid = requireSignedInUid();
+  if (currentUid !== userId) {
+    if (__DEV__) {
+      console.warn(
+        "[organizations] listMyMemberships called for a foreign user; refusing"
+      );
+    }
+    return [];
+  }
+  try {
+    const group = collectionGroup(db, "members");
+    const q = query(group, where("userId", "==", userId));
+    const snap = await getDocsSmart(q);
+    const out: MembershipDoc[] = [];
+    for (const d of snap.docs) {
+      // ref.path example: "organizations/{orgId}/members/{memberId}"
+      const path = d.ref.path;
+      if (!path.startsWith("organizations/")) continue;
+      const parts = path.split("/");
+      const orgId = parts[1];
+      if (!orgId) continue;
+      const raw = d.data();
+      if (!raw || typeof raw !== "object") continue;
+      out.push(parseMembershipDoc(d.id, orgId, raw as Record<string, unknown>));
+    }
+    if (__DEV__) {
+      console.log(
+        `[organizations] listMyMemberships: ${out.length} org memberships for ${userId}`
+      );
+    }
+    return out;
+  } catch (error) {
+    if (isPermissionDenied(error)) {
+      if (__DEV__) {
+        console.warn(
+          "[organizations] listMyMemberships: collectionGroup denied; returning []"
+        );
+      }
+      return [];
+    }
+    console.error("[organizations] listMyMemberships error:", error);
+    throw error;
+  }
+}

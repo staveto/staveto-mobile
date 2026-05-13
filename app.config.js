@@ -130,6 +130,9 @@ module.exports = ({ config }) => {
       EXPO_PUBLIC_DISABLE_PUSH: process.env.EXPO_PUBLIC_DISABLE_PUSH ?? "",
       EXPO_PUBLIC_AI_GENERATE_PROJECT_URL: process.env.EXPO_PUBLIC_AI_GENERATE_PROJECT_URL ?? "",
       EXPO_PUBLIC_AI_CREATE_PROJECT_URL: process.env.EXPO_PUBLIC_AI_CREATE_PROJECT_URL ?? "",
+      // Staveto Business (B2B) — opt-in. Default prázdne => Business surface vypnutý.
+      EXPO_PUBLIC_BUSINESS_ENABLED: process.env.EXPO_PUBLIC_BUSINESS_ENABLED ?? "",
+      EXPO_PUBLIC_ADMIN_EMAILS: process.env.EXPO_PUBLIC_ADMIN_EMAILS ?? "",
     },
   };
 };

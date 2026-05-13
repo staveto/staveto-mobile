@@ -61,6 +61,7 @@ function ProblemDetailScreenWithSuspense(props: object) {
 }
 import { AppDrawer } from "./AppDrawer";
 import { BusinessStack } from "./BusinessStack";
+import { AdminStack } from "./AdminStack";
 import { OfflineBanner } from "../components/OfflineBanner";
 import { StoreUpdateGate } from "../components/StoreUpdateGate";
 import { colors, spacing } from "../theme";
@@ -323,6 +324,11 @@ export function RootNavigator() {
       <Stack.Screen
         name="BusinessStack"
         component={BusinessStack}
+        options={{ headerShown: false }}
+      />
+      <Stack.Screen
+        name="AdminStack"
+        component={AdminStack}
         options={{ headerShown: false }}
       />
       <Stack.Screen

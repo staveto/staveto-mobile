@@ -3,3 +3,4 @@
  * Deploy from repo directory that contains `firebase.json` (here: `mobile/`).
  */
 export { extractInvoiceDataFromStorage } from "./extractInvoiceDataFromStorage";
+export { adminActivateBusinessOrg } from "./business/adminActivateBusinessOrg";

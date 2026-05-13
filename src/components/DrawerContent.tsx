@@ -26,11 +26,13 @@ import type { SubscriptionTier } from "../services/subscription";
 import { SUPPORT_EMAIL } from "../constants/consent";
 import { useUnreadCount } from "../hooks/useUnreadCount";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
+import { isBusinessFeatureEnabled } from "../lib/featureFlags";
 
 type NavItem = {
   id: string;
   icon: React.ComponentProps<typeof Ionicons>["name"];
   labelKey: string;
+  label?: string;
   action: () => void;
 };
 
@@ -54,6 +56,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const [openToWork, setOpenToWork] = useState(false);
   const [updatingOpenToWork, setUpdatingOpenToWork] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const businessEnabled = isBusinessFeatureEnabled();
 
   const sendAgentDebugLog = useCallback(
     (hypothesisId: string, location: string, message: string, data: Record<string, unknown> = {}, runId = "profile-photo-upload") => {
@@ -300,6 +303,18 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     { id: "notifications", icon: "notifications-outline", labelKey: "tabs.notifications", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Notifications" }); } },
     { id: "messages", icon: "chatbubbles-outline", labelKey: "nav.messages", action: () => { closeDrawer(); /* TODO: Messages */ } },
   ];
+  if (businessEnabled) {
+    mainNavItems.push({
+      id: "business",
+      icon: "business-outline",
+      labelKey: "nav.business",
+      label: "Staveto Business",
+      action: () => {
+        closeDrawer();
+        navigation.navigate("BusinessStack");
+      },
+    });
+  }
 
   const bottomNavItems: NavItem[] = [
     { id: "settings", icon: "settings-outline", labelKey: "account.settings", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Account" }); } },
@@ -379,7 +394,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
             onPress={item.action}
             activeOpacity={0.7}
             accessibilityRole="button"
-            accessibilityLabel={t(item.labelKey)}
+            accessibilityLabel={item.label ?? t(item.labelKey)}
           >
             <View style={styles.navIconWrap}>
               <Ionicons name={item.icon} size={24} color={colors.textOnDark} style={styles.navIcon} />
@@ -392,7 +407,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
               )}
             </View>
             <Text style={styles.navLabel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-              {t(item.labelKey)}
+              {item.label ?? t(item.labelKey)}
             </Text>
             <Ionicons name="chevron-forward" size={20} color="rgba(255,255,255,0.6)" />
           </TouchableOpacity>

@@ -27,7 +27,10 @@ yarn-debug.*
 yarn-error.*
 
 # Cursor / local IDE logs (do not commit)
-.cursor/
+# Use .cursor/* (not .cursor/) so the .cursor/rules/ exception below is reachable.
+.cursor/*
+# …except project rules, which are versioned source-of-truth for AI agents.
+!.cursor/rules/
 
 # EAS build logs (local)
 .eas-build-*.log

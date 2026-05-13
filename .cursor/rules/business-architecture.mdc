@@ -1,0 +1,73 @@
+---
+description: Staveto Business (B2B) architecture invariants — must follow when touching multi-tenant code
+alwaysApply: true
+---
+
+# Staveto Business — Architecture Invariants
+
+Staveto is a B2C app today. We are adding **Staveto Business** as an opt-in B2B layer.
+The rules below are invariants that MUST NOT be broken without explicit human approval.
+
+## Hard rules
+
+1. **NEVER change `AuthContext.orgId`** (`src/context/AuthContext.tsx`).
+   Today `orgId === fbUser.uid` and it is the solo namespace used by `absences`,
+   `HomeScreen`, `ProjectsScreen`, `TasksScreen`, `useProjectAccess`, and others.
+   Business state lives in a **separate** `BusinessContext.activeBusinessOrgId`.
+
+2. **NEVER require `workspaceType` on existing projects.**
+   Legacy projects without `workspaceType` are personal/B2C and stay readable/writable
+   for their owner exactly as before. `workspaceType: 'business'` is opt-in for new
+   B2B projects only.
+
+3. **NEVER let the client write `organizations/{orgId}.status`,
+   `.businessEnabled`, `.seatsLimit`, `.seatsUsed`, or `.businessActivatedAt/By`
+   directly.** These fields are server-only (Cloud Functions with admin claim).
+   Firestore rules must reject client mutations of these keys.
+
+4. **NEVER add a sixth bottom tab to `AppTabs.tsx`** in the first phases.
+   Business entry goes through `DrawerContent` (conditional item) and opens
+   `BusinessStack`. A dedicated `BusinessTabs` may exist **inside** `BusinessStack`.
+
+5. **Business UI MUST be gated by `BusinessGate`.**
+   Gate checks: signed-in + active org member + `organization.businessEnabled === true`
+   + `organization.status === 'active'`. Deep-link entry must hit the gate too.
+
+6. **Feature flag default = OFF.**
+   `isBusinessFeatureEnabled()` reads `EXPO_PUBLIC_BUSINESS_ENABLED`. When false
+   and the user has no org membership, no Business UI may render.
+
+## Naming and file layout
+
+- New B2B code lives under:
+  - `src/context/BusinessContext.tsx`
+  - `src/hooks/useActiveOrg.ts`, `src/hooks/useOrgAccess.ts`
+  - `src/services/organizations.ts`, `src/services/businessInvites.ts`
+  - `src/navigation/BusinessStack.tsx`
+  - `src/screens/business/*`
+  - `src/screens/admin/*`
+  - `functions/src/business/*` (Cloud Functions, when added)
+- `src/lib/featureFlags.ts` exposes `isBusinessFeatureEnabled()` and `getAdminEmails()`.
+
+## Roles
+
+`organizations/{orgId}/members/{uid}.role` is one of:
+`'owner' | 'admin' | 'manager' | 'worker' | 'viewer'`.
+Legacy values (e.g. `'member'`) must be tolerated as `'viewer'`.
+
+## Status enum
+
+`organizations/{orgId}.status` is one of:
+`'pending_payment' | 'active' | 'past_due' | 'suspended' | 'cancelled'`.
+
+## Phased delivery
+
+Implement strictly in this order. Do not skip ahead without human approval:
+
+- Phase 0: feature flag + project rule (this file) + `featureFlags.ts` + `.env.example` + `app.config.js` — no UI
+- Phase 1: `services/organizations.ts` + rules tightening + indexes
+- Phase 2: `BusinessContext` + `useActiveOrg` + `useOrgAccess`
+- Phase 3: `BusinessGate` + Pending/Suspended placeholders
+- Phase 4: empty `BusinessDashboardScreen` + conditional drawer entry
+- Phase 5: admin screens (whitelist email gate, read-only)
+- Phase 6+: invite codes, stavby, chat, reports, AI (each as separate PR)

@@ -60,6 +60,7 @@ function ProblemDetailScreenWithSuspense(props: object) {
   );
 }
 import { AppDrawer } from "./AppDrawer";
+import { BusinessStack } from "./BusinessStack";
 import { OfflineBanner } from "../components/OfflineBanner";
 import { StoreUpdateGate } from "../components/StoreUpdateGate";
 import { colors, spacing } from "../theme";
@@ -319,6 +320,11 @@ export function RootNavigator() {
         }}
       >
         <Stack.Screen name="AppTabs" component={AppDrawer} />
+      <Stack.Screen
+        name="BusinessStack"
+        component={BusinessStack}
+        options={{ headerShown: false }}
+      />
       <Stack.Screen
         name="GlobalSearch"
         component={SearchScreen}

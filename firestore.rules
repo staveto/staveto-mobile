@@ -19,6 +19,12 @@ service cloud.firestore {
       return isOrgMember(orgId, u)
         && get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role == 'admin';
     }
+    function isOrgOwner(orgId, u) {
+      return orgId != null
+        && orgId != ''
+        && exists(/databases/$(database)/documents/organizations/$(orgId))
+        && get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == u;
+    }
 
     function projectOwner(projectId) {
       return signedIn()
@@ -178,13 +184,42 @@ service cloud.firestore {
       }
     }
 
-    // B2B Organizations: read for active members, create for self-owner, update/delete for admin or owner
+    // B2B Organizations
     match /organizations/{orgId} {
       allow read: if signedIn() && isOrgMemberActive(orgId);
-      allow create: if signedIn() && request.resource.data.ownerUid == uid();
-      allow update, delete: if signedIn()
-        && (isOrgAdmin(orgId, uid())
-            || get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == uid());
+      allow create: if signedIn()
+        && request.resource.data.ownerUid == uid()
+        && (
+          !('status' in request.resource.data)
+          || request.resource.data.status == 'pending_payment'
+        )
+        && (
+          !('businessEnabled' in request.resource.data)
+          || request.resource.data.businessEnabled == false
+        )
+        && (
+          !('seatsLimit' in request.resource.data)
+          || request.resource.data.seatsLimit == 0
+        )
+        && (
+          !('seatsUsed' in request.resource.data)
+          || request.resource.data.seatsUsed == 0
+        )
+        && !('businessActivatedAt' in request.resource.data)
+        && !('businessActivatedBy' in request.resource.data);
+
+      // Client owner/admin can edit only safe profile fields.
+      // Server-only fields are updated exclusively by Cloud Functions (admin SDK).
+      allow update: if signedIn()
+        && (isOrgAdmin(orgId, uid()) || isOrgOwner(orgId, uid()))
+        && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'name',
+          'profile',
+          'updatedAt'
+        ]);
+
+      allow delete: if signedIn() && (isOrgAdmin(orgId, uid()) || isOrgOwner(orgId, uid()));
 
       // B2B Org members: read for self or active member; create/update/delete ONLY for org admin
       match /members/{memberId} {

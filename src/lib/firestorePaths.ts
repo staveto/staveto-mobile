@@ -89,4 +89,13 @@ export const paths = {
   // Absences (vacation, sick leave, doctor visits, personal leave) — separate from timeEntries
   absences: () => `absences`,
   absence: (id: string) => `absences/${id}`,
+  // ─────────────────────────────────────────────────────────────────────────
+  // Staveto Business (B2B) — organizations & memberships. READ-ONLY use-sites
+  // only in Phase 1; writes happen via Cloud Functions in later phases.
+  organization: (orgId: string) => `organizations/${orgId}`,
+  organizationMembers: (orgId: string) => `organizations/${orgId}/members`,
+  organizationMember: (orgId: string, userId: string) =>
+    `organizations/${orgId}/members/${userId}`,
+  invites: () => `invites`,
+  invite: (inviteId: string) => `invites/${inviteId}`,
 };

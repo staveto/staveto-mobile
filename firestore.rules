@@ -187,26 +187,8 @@ service cloud.firestore {
     // B2B Organizations
     match /organizations/{orgId} {
       allow read: if signedIn() && isOrgMemberActive(orgId);
-      allow create: if signedIn()
-        && request.resource.data.ownerUid == uid()
-        && (
-          !('status' in request.resource.data)
-          || request.resource.data.status == 'pending_payment'
-        )
-        && (
-          !('businessEnabled' in request.resource.data)
-          || request.resource.data.businessEnabled == false
-        )
-        && (
-          !('seatsLimit' in request.resource.data)
-          || request.resource.data.seatsLimit == 0
-        )
-        && (
-          !('seatsUsed' in request.resource.data)
-          || request.resource.data.seatsUsed == 0
-        )
-        && !('businessActivatedAt' in request.resource.data)
-        && !('businessActivatedBy' in request.resource.data);
+      // Organizations are created only via callable (admin SDK bypasses rules).
+      allow create: if false;
 
       // Client owner/admin can edit only safe profile fields.
       // Server-only fields are updated exclusively by Cloud Functions (admin SDK).
@@ -232,6 +214,17 @@ service cloud.firestore {
         allow read: if signedIn() && (uid() == memberId || isOrgMemberActive(orgId));
         allow update, delete: if signedIn() && isOrgAdmin(orgId, uid());
       }
+    }
+
+    // Business registration orders (manual invoice flow)
+    match /businessOrders/{orderId} {
+      allow read: if signedIn()
+        && (
+          resource.data.billingOwnerUid == uid()
+          || (resource.data.orgId != null && isOrgOwner(resource.data.orgId, uid()))
+        );
+      // Orders are created and mutated only through Cloud Functions.
+      allow create, update, delete: if false;
     }
 
     // B2B Invites (org invites): create/read for org admin or invitee; update/delete ONLY for org admin

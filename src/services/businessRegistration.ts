@@ -34,12 +34,27 @@ export type CreateBusinessOrgResult = {
 export async function createBusinessOrg(
   input: CreateBusinessOrgInput
 ): Promise<CreateBusinessOrgResult> {
-  const callable = getCallable("createBusinessOrg");
-  const result = await callable(input);
-  const data = (result as { data?: CreateBusinessOrgResult })?.data;
-  if (!data || data.ok !== true || typeof data.orgId !== "string" || typeof data.orderId !== "string") {
-    throw new Error("Neplatná odpoveď servera pre createBusinessOrg.");
+  try {
+    console.log("[businessRegistration] createBusinessOrg callable start");
+    const callable = getCallable("createBusinessOrg");
+    const result = await callable(input);
+    const data = (result as { data?: CreateBusinessOrgResult })?.data;
+    if (!data || data.ok !== true || typeof data.orgId !== "string" || typeof data.orderId !== "string") {
+      throw new Error("Neplatná odpoveď servera pre createBusinessOrg.");
+    }
+    console.log("[businessRegistration] createBusinessOrg callable success");
+    return data;
+  } catch (error) {
+    const errorCode =
+      typeof (error as { code?: unknown } | null)?.code === "string"
+        ? ((error as { code: string }).code as string)
+        : "unknown";
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    console.warn("[businessRegistration] createBusinessOrg callable error", {
+      code: errorCode,
+      message: errorMessage,
+    });
+    throw error;
   }
-  return data;
 }
 

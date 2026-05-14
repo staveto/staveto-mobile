@@ -15,7 +15,7 @@ import {
   writeBatch,
 } from "../lib/rnFirestore";
 import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
-import { db, auth } from "../firebase";
+import { db, auth, getAuth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { firestoreValueToIsoString, normalizeDueDateToYmd } from "../utils/date";
 import { upsertTaskDueNotification, markTaskNotificationsRead, recordSyncIssue } from "./notifications";
@@ -345,14 +345,13 @@ export async function listTasksByProject(projectId: string): Promise<TaskDoc[]> 
   }
   console.log(`[tasks] listTasksByProject called for projectId: ${projectId}`);
   
-  // DEBUG: Check auth state
-  const currentUser = auth.currentUser;
-  const currentUserUid = currentUser?.uid;
-  console.log(`[tasks] listTasksByProject: auth.currentUser?.uid = "${currentUserUid}"`);
-  
+  // During app boot the Auth state may still be restoring. Keep this read-path
+  // non-fatal to avoid LogBox blocking the app when currentUser is not ready yet.
+  const currentUserUid = getAuth()?.currentUser?.uid ?? auth.currentUser?.uid;
+  console.log(`[tasks] listTasksByProject: auth.currentUser?.uid = "${currentUserUid ?? ""}"`);
   if (!currentUserUid) {
-    console.error(`[tasks] listTasksByProject: auth.currentUser is null`);
-    throw new Error('Musíte byť prihlásený na načítanie úloh.');
+    console.warn("[tasks] listTasksByProject: auth.currentUser is null, returning []");
+    return [];
   }
   
   try {

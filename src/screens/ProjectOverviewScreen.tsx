@@ -40,6 +40,7 @@ import { useRoute, useNavigation, NavigationProp, useFocusEffect } from "@react-
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
+import { useCapabilities } from "../hooks/useCapabilities";
 import { useProjectAccess } from "../hooks/useProjectAccess";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
@@ -77,6 +78,7 @@ import { exportProjectToCsv } from "../services/projectExport";
 import { exportProjectAsProtocol } from "../services/projectProtocolExport";
 import * as timeTracking from "../services/timeTracking";
 import { postDebugIngest } from "../lib/debugIngest";
+import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
 import * as quickNotesService from "../services/quickNotes";
 import { updateTaskStatus } from "../services/taskService";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
@@ -275,6 +277,8 @@ export function ProjectOverviewScreen() {
   const [datePickerMode, setDatePickerMode] = useState<'new' | 'edit' | 'expense'>('new');
   const [datePickerDate, setDatePickerDate] = useState(new Date());
   const [projectType, setProjectType] = useState<string | undefined>(undefined);
+  const [projectWorkspaceType, setProjectWorkspaceType] = useState<string | undefined>(undefined);
+  const [projectOrgId, setProjectOrgId] = useState<string | undefined>(undefined);
   const [templateId, setTemplateId] = useState<string | undefined>(undefined);
   const [addressText, setAddressText] = useState<string | undefined>(undefined);
   const [projectCountryCode, setProjectCountryCode] = useState<string | undefined>(undefined);
@@ -367,6 +371,11 @@ export function ProjectOverviewScreen() {
   } | null>(null);
   const isOwner = !!projectOwnerId && projectOwnerId === user?.id;
   const access = useProjectAccess(projectId, projectOwnerId);
+  const capabilities = useCapabilities({
+    projectWorkspaceType,
+    projectOrgId,
+    legacyProject: !projectWorkspaceType && !projectOrgId,
+  });
 
   const canViewProjectTime = useMemo(() => {
     if (access.loading) return false;
@@ -624,6 +633,10 @@ export function ProjectOverviewScreen() {
       if (project) {
         console.log(`[ProjectOverview] Project loaded: projectType="${project.projectType}", templateId="${project.templateId}"`);
         setProjectType(project.projectType);
+        const rawWorkspaceType = (project as { workspaceType?: unknown }).workspaceType;
+        const rawOrgId = (project as { orgId?: unknown }).orgId;
+        setProjectWorkspaceType(typeof rawWorkspaceType === "string" ? rawWorkspaceType : undefined);
+        setProjectOrgId(typeof rawOrgId === "string" ? rawOrgId : undefined);
         setTemplateId(project.templateId);
         setAddressText(project.addressText);
         setProjectCountryCode(project.countryCode);
@@ -637,6 +650,8 @@ export function ProjectOverviewScreen() {
         }
       } else {
         console.warn(`[ProjectOverview] Project ${projectId} not found or no access - continuing without project metadata`);
+        setProjectWorkspaceType(undefined);
+        setProjectOrgId(undefined);
         if (routeProjectIdRef.current === loadForProjectId) {
           setFetchedProjectName("");
         }
@@ -1246,7 +1261,17 @@ export function ProjectOverviewScreen() {
   ]);
 
   const goBack = () => navigation.goBack();
-  const goToMembers = () => (navigation as { navigate: (n: string, p?: object) => void }).navigate("ProjectMembers", { projectId, projectName, projectType });
+  const goToMembers = () => {
+    if (!capabilities.capabilities.canUseProjectMembers) {
+      showTeamFeatureSoftGate({
+        onRegisterCompany: () => {
+          (navigation as { navigate: (n: string, p?: object) => void }).navigate("BusinessStack");
+        },
+      });
+      return;
+    }
+    (navigation as { navigate: (n: string, p?: object) => void }).navigate("ProjectMembers", { projectId, projectName, projectType });
+  };
 
   const handleCalculateDistanceKm = useCallback(async () => {
     const from = expenseTravelFromAddress.trim();

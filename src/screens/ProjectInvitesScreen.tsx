@@ -13,10 +13,12 @@ import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { auth } from "../firebase";
 import { useAuth } from "../context/AuthContext";
+import { useCapabilities } from "../hooks/useCapabilities";
 import { useI18n } from "../i18n/I18nContext";
 import { showToast } from "../helpers/toast";
 import { colors, radius, spacing } from "../theme";
 import * as invitesService from "../services/invites";
+import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
 import type { PendingInvite } from "../services/invites";
 
 function sharedItemsSummary(shared: Record<string, boolean> | undefined, t: (k: string) => string): string {
@@ -34,6 +36,7 @@ export function ProjectInvitesScreen() {
   const { t } = useI18n();
   const { user } = useAuth();
   const navigation = useNavigation();
+  const baseCapabilities = useCapabilities();
   const [invites, setInvites] = useState<PendingInvite[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -88,8 +91,38 @@ export function ProjectInvitesScreen() {
 
   const onRefresh = useCallback(() => load(true), [load]);
 
+  const shouldGateInviteTeamAction = useCallback(
+    (invite: PendingInvite): boolean => {
+      const workspaceType =
+        typeof invite.projectWorkspaceType === "string"
+          ? invite.projectWorkspaceType.trim().toLowerCase()
+          : "";
+      if (!workspaceType) {
+        // Unknown workspace should stay backward-compatible (legacy shared invites).
+        return false;
+      }
+      if (workspaceType === "business") {
+        return !baseCapabilities.capabilities.canUseTeamFeatures;
+      }
+      if (workspaceType === "personal") {
+        return true;
+      }
+      // Explicit legacy must not be hard-locked in this phase.
+      return false;
+    },
+    [baseCapabilities.capabilities.canUseTeamFeatures]
+  );
+
   const handleAccept = useCallback(
     async (invite: PendingInvite) => {
+      if (shouldGateInviteTeamAction(invite)) {
+        showTeamFeatureSoftGate({
+          onRegisterCompany: () => {
+            (navigation as { navigate: (name: string, params?: object) => void }).navigate("BusinessStack");
+          },
+        });
+        return;
+      }
       setActionProjectId(invite.projectId);
       try {
         const result = await invitesService.acceptProjectInvite(invite.projectId);
@@ -117,7 +150,7 @@ export function ProjectInvitesScreen() {
         setActionProjectId(null);
       }
     },
-    [navigation, t]
+    [navigation, shouldGateInviteTeamAction, t]
   );
 
   const handleDecline = useCallback(
@@ -131,6 +164,14 @@ export function ProjectInvitesScreen() {
             text: t("projectInvites.decline") || "Odmietnuť",
             style: "destructive",
             onPress: async () => {
+              if (shouldGateInviteTeamAction(invite)) {
+                showTeamFeatureSoftGate({
+                  onRegisterCompany: () => {
+                    (navigation as { navigate: (name: string, params?: object) => void }).navigate("BusinessStack");
+                  },
+                });
+                return;
+              }
               setActionProjectId(invite.projectId);
               try {
                 await invitesService.declineProjectInvite(invite.projectId);
@@ -147,7 +188,7 @@ export function ProjectInvitesScreen() {
         ]
       );
     },
-    [t]
+    [navigation, shouldGateInviteTeamAction, t]
   );
 
   const renderItem = useCallback(

@@ -5,12 +5,14 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useProjectAccess } from "../hooks/useProjectAccess";
+import { useCapabilities } from "../hooks/useCapabilities";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import * as projectMembersService from "../services/projectMembers";
 import * as projectsService from "../services/projects";
 import * as equipmentService from "../services/equipment";
 import { getCallable } from "../firebase";
+import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
 import type { ProjectMemberDoc } from "../services/projectMembers";
 import type { ProjectPhaseDoc } from "../services/projects";
 import type { EquipmentDoc } from "../services/equipment";
@@ -42,6 +44,8 @@ export function ProjectMembersScreen() {
   const [submitting, setSubmitting] = useState(false);
   const [projectOwnerId, setProjectOwnerId] = useState<string | null>(null);
   const [projectType, setProjectType] = useState<string | undefined>(paramProjectType);
+  const [projectWorkspaceType, setProjectWorkspaceType] = useState<string | undefined>(undefined);
+  const [projectOrgId, setProjectOrgId] = useState<string | undefined>(undefined);
   const [phases, setPhases] = useState<ProjectPhaseDoc[]>([]);
   const [equipmentList, setEquipmentList] = useState<EquipmentDoc[]>([]);
   const [selectedEquipmentIds, setSelectedEquipmentIds] = useState<string[]>([]);
@@ -61,6 +65,11 @@ export function ProjectMembersScreen() {
   const [selectedPhaseIds, setSelectedPhaseIds] = useState<string[]>([]);
   const [addHourlyRate, setAddHourlyRate] = useState("");
   const [editHourlyRate, setEditHourlyRate] = useState("");
+  const capabilities = useCapabilities({
+    projectWorkspaceType,
+    projectOrgId,
+    legacyProject: !projectWorkspaceType && !projectOrgId,
+  });
 
   const goBack = () => navigation.goBack();
 
@@ -74,6 +83,13 @@ export function ProjectMembersScreen() {
       if (project) {
         setProjectOwnerId(project.ownerId || null);
         if (!paramProjectType) setProjectType(project.projectType || undefined);
+        const rawWorkspaceType = (project as { workspaceType?: unknown }).workspaceType;
+        const rawOrgId = (project as { orgId?: unknown }).orgId;
+        setProjectWorkspaceType(typeof rawWorkspaceType === "string" ? rawWorkspaceType : undefined);
+        setProjectOrgId(typeof rawOrgId === "string" ? rawOrgId : undefined);
+      } else {
+        setProjectWorkspaceType(undefined);
+        setProjectOrgId(undefined);
       }
 
       // Load phases (for sharing selection)
@@ -115,6 +131,14 @@ export function ProjectMembersScreen() {
   }, [projectId]);
 
   const onAddMember = () => {
+    if (!capabilities.capabilities.canInviteMembers) {
+      showTeamFeatureSoftGate({
+        onRegisterCompany: () => {
+          (navigation as { navigate: (n: string, p?: object) => void }).navigate("BusinessStack");
+        },
+      });
+      return;
+    }
     // Reset sharing options to defaults (editor: timeTracking true, viewer: false)
     setPermissionLevel('editor');
     setShareTasks(true);
@@ -148,6 +172,14 @@ export function ProjectMembersScreen() {
   };
 
   const handleInviteMember = async () => {
+    if (!capabilities.capabilities.canInviteMembers) {
+      showTeamFeatureSoftGate({
+        onRegisterCompany: () => {
+          (navigation as { navigate: (n: string, p?: object) => void }).navigate("BusinessStack");
+        },
+      });
+      return;
+    }
     if (!projectId || !addMemberEmail.trim()) {
       Alert.alert(
         t('common.error') || 'Chyba',

@@ -8,6 +8,8 @@ type ClaimInvitesResult = {
 export type PendingInvite = {
   projectId: string;
   projectName: string;
+  projectWorkspaceType?: string;
+  projectOrgId?: string;
   memberId: string;
   invitedBy?: string;
   invitedAt?: unknown;

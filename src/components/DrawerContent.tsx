@@ -27,6 +27,7 @@ import { SUPPORT_EMAIL } from "../constants/consent";
 import { useUnreadCount } from "../hooks/useUnreadCount";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
 import { isAdminEmail, isBusinessFeatureEnabled } from "../lib/featureFlags";
+import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
 
 type NavItem = {
   id: string;
@@ -302,7 +303,19 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     { id: "expenses", icon: "cash-outline", labelKey: "home.expenses", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Home", params: { screen: "ExpensesKpiScreen" } }); } },
     { id: "absences", icon: "umbrella-outline", labelKey: "absence.drawerLabel", action: () => { closeDrawer(); navigation.navigate("AbsenceHome"); } },
     { id: "notifications", icon: "notifications-outline", labelKey: "tabs.notifications", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Notifications" }); } },
-    { id: "messages", icon: "chatbubbles-outline", labelKey: "nav.messages", action: () => { closeDrawer(); /* TODO: Messages */ } },
+    {
+      id: "messages",
+      icon: "chatbubbles-outline",
+      labelKey: "nav.messages",
+      action: () => {
+        closeDrawer();
+        showTeamFeatureSoftGate({
+          onRegisterCompany: () => {
+            navigation.navigate("BusinessStack");
+          },
+        });
+      },
+    },
   ];
   if (businessEnabled) {
     mainNavItems.push({

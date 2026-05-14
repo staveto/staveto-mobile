@@ -4,3 +4,4 @@
  */
 export { extractInvoiceDataFromStorage } from "./extractInvoiceDataFromStorage";
 export { adminActivateBusinessOrg } from "./business/adminActivateBusinessOrg";
+export { createBusinessOrg } from "./business/createBusinessOrg";

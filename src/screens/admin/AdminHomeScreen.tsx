@@ -1,15 +1,32 @@
 import React from "react";
-import { StyleSheet, Text, View } from "react-native";
+import { Pressable, StyleSheet, Text, View } from "react-native";
+import { useNavigation } from "@react-navigation/native";
+import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { colors } from "../../theme";
 
+type AdminStackParamList = {
+  AdminHome: undefined;
+  AdminOrganizations: undefined;
+};
+
 export function AdminHomeScreen() {
+  const navigation =
+    useNavigation<NativeStackNavigationProp<AdminStackParamList>>();
+
   return (
     <View style={styles.container}>
       <Text style={styles.title}>Staveto Admin</Text>
       <Text style={styles.subtitle}>Interná administrácia Staveto Business</Text>
 
       <View style={styles.sectionList}>
-        <Text style={styles.sectionItem}>- Firmy</Text>
+        <Pressable
+          style={({ pressed }) => [styles.sectionButton, pressed && styles.sectionButtonPressed]}
+          onPress={() => navigation.navigate("AdminOrganizations")}
+          accessibilityRole="button"
+          accessibilityLabel="Firmy"
+        >
+          <Text style={styles.sectionButtonText}>- Firmy</Text>
+        </Pressable>
         <Text style={styles.sectionItem}>- Licencie</Text>
         <Text style={styles.sectionItem}>- Faktúry</Text>
       </View>
@@ -48,6 +65,18 @@ const styles = StyleSheet.create({
     fontSize: 15,
     color: colors.textMuted,
     marginBottom: 8,
+  },
+  sectionButton: {
+    marginBottom: 8,
+    paddingVertical: 2,
+  },
+  sectionButtonPressed: {
+    opacity: 0.75,
+  },
+  sectionButtonText: {
+    fontSize: 15,
+    color: colors.primary,
+    fontWeight: "600",
   },
 });
 

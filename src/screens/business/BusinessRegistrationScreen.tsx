@@ -10,6 +10,7 @@ import {
   View,
 } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+import { getAuth } from "../../firebase";
 import { useBusinessContext } from "../../hooks/useBusinessContext";
 import { createBusinessOrg } from "../../services/businessRegistration";
 import { colors, radius, spacing } from "../../theme";
@@ -46,6 +47,27 @@ const INITIAL_FORM: FormState = {
   requestedSeats: "5",
 };
 
+type ValidationResult =
+  | {
+      ok: true;
+      requestedSeats: number;
+    }
+  | {
+      ok: false;
+      field: string;
+      message: string;
+    };
+
+function getErrorDetails(error: unknown): { code: string; message: string; stack?: string } {
+  const code =
+    typeof (error as { code?: unknown } | null)?.code === "string"
+      ? ((error as { code: string }).code as string)
+      : "unknown";
+  const message = error instanceof Error ? error.message : String(error);
+  const stack = error instanceof Error ? error.stack : undefined;
+  return { code, message, stack };
+}
+
 export function BusinessRegistrationScreen() {
   const navigation = useNavigation();
   const { setActiveBusinessOrgId } = useBusinessContext();
@@ -59,29 +81,69 @@ export function BusinessRegistrationScreen() {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  const validate = (): { ok: boolean; requestedSeats?: number } => {
-    if (!form.companyName.trim()) return { ok: false };
-    if (!form.legalName.trim()) return { ok: false };
-    if (!normalizedCountry) return { ok: false };
-    if (!form.billingEmail.trim()) return { ok: false };
-    if (!form.billingAddressLine1.trim()) return { ok: false };
-    if (!form.billingAddressCity.trim()) return { ok: false };
-    if (!form.billingAddressZip.trim()) return { ok: false };
-    if (isSkCz && !form.registrationNumber.trim()) return { ok: false };
+  const validate = (): ValidationResult => {
+    if (!form.companyName.trim()) return { ok: false, field: "companyName", message: "Názov firmy je povinný." };
+    if (!form.legalName.trim()) return { ok: false, field: "legalName", message: "Právny názov je povinný." };
+    if (!normalizedCountry) return { ok: false, field: "countryCode", message: "Krajina je povinná." };
+    if (!form.billingEmail.trim()) {
+      return { ok: false, field: "billingEmail", message: "Fakturačný e-mail je povinný." };
+    }
+    if (!form.billingAddressLine1.trim()) {
+      return { ok: false, field: "billingAddress.line1", message: "Ulica fakturačnej adresy je povinná." };
+    }
+    if (!form.billingAddressCity.trim()) {
+      return { ok: false, field: "billingAddress.city", message: "Mesto fakturačnej adresy je povinné." };
+    }
+    if (!form.billingAddressZip.trim()) {
+      return { ok: false, field: "billingAddress.zip", message: "PSČ fakturačnej adresy je povinné." };
+    }
+    if (isSkCz && !form.registrationNumber.trim()) {
+      return {
+        ok: false,
+        field: "companyIdentifiers.registrationNumber",
+        message: "IČO/registration number je pre SK/CZ povinné.",
+      };
+    }
     const seats = Number(form.requestedSeats);
-    if (!Number.isInteger(seats) || seats < 1) return { ok: false };
+    if (!Number.isInteger(seats) || seats < 1) {
+      return {
+        ok: false,
+        field: "requestedSeats",
+        message: "Počet licencií musí byť celé číslo aspoň 1.",
+      };
+    }
     return { ok: true, requestedSeats: seats };
   };
 
   const onSubmit = async () => {
+    console.log("[BusinessRegistration] submit pressed");
     const validation = validate();
-    if (!validation.ok || validation.requestedSeats == null) {
+    if (!validation.ok) {
+      console.warn("[BusinessRegistration] validation failed", {
+        field: validation.field,
+        message: validation.message,
+      });
       Alert.alert(
         "Neplatné údaje",
         "Skontrolujte povinné polia a počet licencií (celé číslo aspoň 1)."
       );
       return;
     }
+    console.log("[BusinessRegistration] validation passed");
+
+    const authUser = getAuth()?.currentUser ?? null;
+    if (!authUser?.uid) {
+      console.warn("[BusinessRegistration] no auth user before callable");
+      Alert.alert("Nie ste prihlásený. Prihláste sa a skúste znova.");
+      return;
+    }
+
+    console.log("[BusinessRegistration] calling createBusinessOrg", {
+      countryCode: normalizedCountry,
+      requestedSeats: validation.requestedSeats,
+      hasRegistrationNumber: !!form.registrationNumber.trim(),
+      hasBillingEmail: !!form.billingEmail.trim(),
+    });
 
     setSubmitting(true);
     try {
@@ -104,6 +166,11 @@ export function BusinessRegistrationScreen() {
         contactName: form.contactName.trim() || null,
         phone: form.phone.trim() || null,
       });
+      console.log("[BusinessRegistration] createBusinessOrg success", {
+        orgId: result.orgId,
+        orderId: result.orderId,
+        orderNumber: result.orderNumber,
+      });
 
       setActiveBusinessOrgId(result.orgId);
       (navigation as { navigate: (name: string, params?: object) => void }).navigate(
@@ -122,8 +189,12 @@ export function BusinessRegistrationScreen() {
         }
       );
     } catch (error) {
-      const message = error instanceof Error ? error.message : String(error);
-      Alert.alert("Registrácia zlyhala", message || "Skúste to prosím znova.");
+      const details = getErrorDetails(error);
+      console.warn("[BusinessRegistration] createBusinessOrg error", details);
+      Alert.alert(
+        "Registrácia zlyhala",
+        `Code: ${details.code}\nMessage: ${details.message || "Skúste to prosím znova."}`
+      );
     } finally {
       setSubmitting(false);
     }

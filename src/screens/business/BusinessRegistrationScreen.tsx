@@ -205,11 +205,13 @@ function toMillis(raw: unknown): number | null {
 }
 
 function isUsableBusinessOrg(org: OrganizationDoc | null): boolean {
-  if (!org || !org.businessEnabled) return false;
+  if (!org) return false;
   if (org.status === "active" || org.status === "trialing") return true;
   if (org.status === "pending_payment") {
     const trialEndsAtMs = toMillis(org.trialEndsAt);
-    return trialEndsAtMs !== null && trialEndsAtMs > Date.now();
+    if (trialEndsAtMs !== null && trialEndsAtMs > Date.now()) return true;
+    if (org.businessEnabled) return true;
+    if (org.activeBusinessOrderId) return true;
   }
   return false;
 }
@@ -251,26 +253,18 @@ export function BusinessRegistrationScreen() {
     () => BUSINESS_PLANS.find((plan) => plan.planCode === selectedPlanCode) ?? null,
     [selectedPlanCode]
   );
+  const effectiveBusinessPlan = selectedBusinessPlan ?? BUSINESS_PLANS[0];
+  const effectiveBillingPeriod: BillingPeriod =
+    selectedBillingPeriod === "yearly" ? "yearly" : "monthly";
   const selectedPrice = selectedBusinessPlan
-    ? selectedBillingPeriod === "yearly"
-      ? selectedBusinessPlan.yearlyPrice
-      : selectedBusinessPlan.monthlyPrice
-    : null;
-
-  React.useEffect(() => {
-    if (!selectedBusinessPlan || (selectedBillingPeriod !== "monthly" && selectedBillingPeriod !== "yearly")) {
-      Alert.alert(
-        t("business.registration.alert.planMissingTitle"),
-        t("business.registration.alert.planMissingBody")
-      );
-      (navigation as { navigate: (name: string) => void }).navigate("BusinessPlanSelection");
-    }
-  }, [navigation, selectedBillingPeriod, selectedBusinessPlan, t]);
+    ? effectiveBillingPeriod === "yearly"
+      ? effectiveBusinessPlan.yearlyPrice
+      : effectiveBusinessPlan.monthlyPrice
+    : effectiveBillingPeriod === "yearly"
+    ? effectiveBusinessPlan.yearlyPrice
+    : effectiveBusinessPlan.monthlyPrice;
 
   const validate = (): ValidationResult => {
-    if (!selectedBusinessPlan || (selectedBillingPeriod !== "monthly" && selectedBillingPeriod !== "yearly")) {
-      return { ok: false, field: "planCode", message: t("business.registration.alert.planMissingBody") };
-    }
     if (!form.companyName.trim()) {
       return { ok: false, field: "companyName", message: t("business.registration.validation.companyNameRequired") };
     }
@@ -352,37 +346,39 @@ export function BusinessRegistrationScreen() {
     }
 
     console.log("[BusinessRegistration] calling createBusinessOrg", {
-      planCode: selectedBusinessPlan?.planCode ?? null,
-      billingPeriod: selectedBillingPeriod ?? null,
+      planCode: effectiveBusinessPlan.planCode,
+      billingPeriod: effectiveBillingPeriod,
       countryCode: normalizedCountry,
-      requestedSeats: selectedBusinessPlan?.seatsIncluded ?? null,
+      requestedSeats: effectiveBusinessPlan.seatsIncluded,
       hasRegistrationNumber: !!form.registrationNumber.trim(),
       hasBillingEmail: !!form.billingEmail.trim(),
     });
 
     setSubmitting(true);
     try {
-      const result = await createBusinessOrg({
-        planCode: selectedBusinessPlan!.planCode,
-        billingPeriod: selectedBillingPeriod!,
-        companyName: form.companyName.trim(),
-        legalName: form.legalName.trim(),
-        countryCode: normalizedCountry,
-        billingEmail: form.billingEmail.trim(),
-        requestedSeats: selectedBusinessPlan!.seatsIncluded,
-        billingAddress: {
-          line1: form.billingAddressLine1.trim(),
-          city: form.billingAddressCity.trim(),
-          zip: form.billingAddressZip.trim(),
-        },
-        companyIdentifiers: {
-          registrationNumber: form.registrationNumber.trim() || null,
-          taxId: form.taxId.trim() || null,
-          vatId: form.vatId.trim() || null,
-        },
-        contactName: form.contactName.trim() || null,
-        phone: form.phone.trim() || null,
-      });
+      const result = await createBusinessOrg(
+        {
+          planCode: effectiveBusinessPlan.planCode,
+          billingPeriod: effectiveBillingPeriod,
+          companyName: form.companyName.trim(),
+          legalName: form.legalName.trim(),
+          countryCode: normalizedCountry,
+          billingEmail: form.billingEmail.trim(),
+          requestedSeats: effectiveBusinessPlan.seatsIncluded,
+          billingAddress: {
+            line1: form.billingAddressLine1.trim(),
+            city: form.billingAddressCity.trim(),
+            zip: form.billingAddressZip.trim(),
+          },
+          companyIdentifiers: {
+            registrationNumber: form.registrationNumber.trim() || null,
+            taxId: form.taxId.trim() || null,
+            vatId: form.vatId.trim() || null,
+          },
+          contactName: form.contactName.trim() || null,
+          phone: form.phone.trim() || null,
+        } as unknown as Parameters<typeof createBusinessOrg>[0]
+      );
       console.log("[BusinessRegistration] createBusinessOrg success", {
         orgId: result.orgId,
         orderId: result.orderId,
@@ -538,15 +534,15 @@ export function BusinessRegistrationScreen() {
         <Text style={styles.summaryTitle}>{t("business.registration.summary.title")}</Text>
         <Text style={styles.summaryLine}>
           {t("business.registration.summary.plan")}:{" "}
-          {selectedBusinessPlan ? t(selectedBusinessPlan.titleKey) : "—"}
+          {t(effectiveBusinessPlan.titleKey)}
         </Text>
         <Text style={styles.summaryLine}>
-          {t("business.registration.summary.seats")}: {selectedBusinessPlan ? String(selectedBusinessPlan.seatsIncluded) : "—"}
+          {t("business.registration.summary.seats")}: {String(effectiveBusinessPlan.seatsIncluded)}
         </Text>
         <Text style={styles.summaryLine}>
           {t("business.registration.summary.period")}:{" "}
           {t(
-            selectedBillingPeriod === "yearly"
+            effectiveBillingPeriod === "yearly"
               ? "business.planSelection.billingYearly"
               : "business.planSelection.billingMonthly"
           )}
@@ -554,7 +550,7 @@ export function BusinessRegistrationScreen() {
         <Text style={styles.summaryLine}>
           {t("business.registration.summary.price")}:{" "}
           {selectedPrice !== null
-            ? selectedBillingPeriod === "yearly"
+            ? effectiveBillingPeriod === "yearly"
               ? t("business.planSelection.yearlyPrice", { price: String(selectedPrice) })
               : t("business.planSelection.monthlyPrice", { price: String(selectedPrice) })
             : "—"}

@@ -14,6 +14,7 @@ import {
   updateDoc,
   where,
 } from "../lib/rnFirestore";
+import { getMembership, getOrganization } from "./organizations";
 
 export type BusinessChatType = "general";
 export type BusinessChatMessageType = "text" | "image";
@@ -47,12 +48,62 @@ export type BusinessChatMessageDoc = {
   status: "sent";
 };
 
+const CHAT_WRITER_ROLES = new Set(["owner", "admin", "manager", "worker"]);
+
 function requireUid(): string {
   const uid = getAuth()?.currentUser?.uid ?? null;
   if (!uid) {
     throw new Error("Musíte byť prihlásený.");
   }
   return uid;
+}
+
+function toMillis(raw: unknown): number {
+  if (!raw) return 0;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string") {
+    const parsed = new Date(raw).getTime();
+    return Number.isFinite(parsed) ? parsed : 0;
+  }
+  if (typeof raw === "object" && raw !== null) {
+    const maybe = raw as { toDate?: () => Date };
+    if (typeof maybe.toDate === "function") {
+      const parsed = maybe.toDate().getTime();
+      return Number.isFinite(parsed) ? parsed : 0;
+    }
+  }
+  return 0;
+}
+
+function hasPendingTrialAccess(org: { status?: string; trialEndsAt?: unknown; businessEnabled?: boolean; activeBusinessOrderId?: string | null }): boolean {
+  if (org.status !== "pending_payment") return false;
+  const trialEndsAtMs = toMillis(org.trialEndsAt);
+  const trialValid = trialEndsAtMs > Date.now();
+  return trialValid || org.businessEnabled === true || !!org.activeBusinessOrderId;
+}
+
+async function resolveBusinessChatAccess(orgId: string): Promise<{ uid: string; canRead: boolean; canWrite: boolean }> {
+  const uid = requireUid();
+  const normalizedOrgId = orgId.trim();
+  if (!normalizedOrgId) return { uid, canRead: false, canWrite: false };
+
+  const [organization, membership] = await Promise.all([
+    getOrganization(normalizedOrgId),
+    getMembership(normalizedOrgId, uid),
+  ]);
+  if (!organization || !membership) {
+    return { uid, canRead: false, canWrite: false };
+  }
+  if (membership.status !== "active") {
+    return { uid, canRead: false, canWrite: false };
+  }
+  const statusCanAccess =
+    organization.status === "active" ||
+    organization.status === "trialing" ||
+    hasPendingTrialAccess(organization);
+  const canRead = statusCanAccess;
+  const canWrite = canRead && CHAT_WRITER_ROLES.has(membership.role);
+  return { uid, canRead, canWrite };
 }
 
 function toChatDoc(id: string, raw: Record<string, unknown>): BusinessChatDoc {
@@ -90,7 +141,10 @@ function toMessageDoc(id: string, raw: Record<string, unknown>): BusinessChatMes
 }
 
 export async function ensureGeneralChat(orgId: string): Promise<void> {
-  requireUid();
+  const access = await resolveBusinessChatAccess(orgId);
+  if (!access.canRead) {
+    throw new Error("business-chat/no-access");
+  }
   const normalizedOrgId = orgId.trim();
   if (!normalizedOrgId) return;
 
@@ -151,7 +205,11 @@ export function listenChatMessages(
 }
 
 export async function sendTextMessage(input: { orgId: string; chatId: string; text: string }): Promise<void> {
-  const uid = requireUid();
+  const access = await resolveBusinessChatAccess(input.orgId);
+  if (!access.canWrite) {
+    throw new Error("business-chat/write-not-allowed");
+  }
+  const uid = access.uid;
   const authUser = getAuth()?.currentUser ?? null;
   const text = input.text.trim();
   if (!text) return;
@@ -181,7 +239,11 @@ export async function sendTextMessage(input: { orgId: string; chatId: string; te
 }
 
 export async function markChatRead(input: { orgId: string; chatId: string }): Promise<void> {
-  const uid = requireUid();
+  const access = await resolveBusinessChatAccess(input.orgId);
+  if (!access.canRead) {
+    return;
+  }
+  const uid = access.uid;
   const readRef = doc(db, `organizations/${input.orgId}/chats/${input.chatId}/reads/${uid}`);
   await setDoc(
     readRef,
@@ -194,25 +256,10 @@ export async function markChatRead(input: { orgId: string; chatId: string }): Pr
   );
 }
 
-function toMillis(raw: unknown): number {
-  if (!raw) return 0;
-  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-  if (typeof raw === "string") {
-    const parsed = new Date(raw).getTime();
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  if (typeof raw === "object" && raw !== null) {
-    const maybe = raw as { toDate?: () => Date };
-    if (typeof maybe.toDate === "function") {
-      const parsed = maybe.toDate().getTime();
-      return Number.isFinite(parsed) ? parsed : 0;
-    }
-  }
-  return 0;
-}
-
 export async function getUnreadChatCount(orgId: string, uid: string): Promise<number> {
   if (!orgId || !uid) return 0;
+  const access = await resolveBusinessChatAccess(orgId);
+  if (!access.canRead || access.uid !== uid) return 0;
   const normalizedOrgId = orgId.trim();
   if (!normalizedOrgId) return 0;
 

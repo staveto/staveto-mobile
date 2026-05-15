@@ -4,6 +4,7 @@ import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../../i18n/I18nContext";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
+import { useOrgAccess } from "../../hooks/useOrgAccess";
 import { getAuth } from "../../firebase";
 import {
   ensureGeneralChat,
@@ -47,17 +48,24 @@ export function BusinessChatListScreen() {
   const navigation = useNavigation();
   const nav = navigation as unknown as { navigate: (name: string, params?: object) => void };
   const { t } = useI18n();
-  const { activeBusinessOrgId } = useActiveOrg();
+  const { activeBusinessOrgId, activeOrganization, activeMembership } = useActiveOrg();
+  const { canAccessBusiness } = useOrgAccess();
   const [chats, setChats] = useState<BusinessChatDoc[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [unreadByChatId, setUnreadByChatId] = useState<Record<string, number>>({});
   const cleanupRef = React.useRef<(() => void) | null>(null);
+  const canOpenBusinessChat = Boolean(
+    activeBusinessOrgId &&
+      canAccessBusiness &&
+      activeOrganization &&
+      activeMembership?.status === "active"
+  );
 
   const refreshUnreadCounts = useCallback(
     async (rows: BusinessChatDoc[]) => {
       const uid = getAuth()?.currentUser?.uid ?? null;
-      if (!activeBusinessOrgId || !uid || rows.length === 0) {
+      if (!activeBusinessOrgId || !uid || rows.length === 0 || !canOpenBusinessChat) {
         setUnreadByChatId({});
         return;
       }
@@ -66,14 +74,15 @@ export function BusinessChatListScreen() {
       );
       setUnreadByChatId(Object.fromEntries(pairs));
     },
-    [activeBusinessOrgId]
+    [activeBusinessOrgId, canOpenBusinessChat]
   );
 
   useEffect(() => {
     let cancelled = false;
-    if (!activeBusinessOrgId) {
+    if (!activeBusinessOrgId || !canOpenBusinessChat) {
       setChats([]);
       setLoading(false);
+      setError(t("business.chat.businessRequiredBody"));
       return;
     }
 
@@ -110,11 +119,11 @@ export function BusinessChatListScreen() {
       cleanupRef.current?.();
       cleanupRef.current = null;
     };
-  }, [activeBusinessOrgId, refreshUnreadCounts, t]);
+  }, [activeBusinessOrgId, canOpenBusinessChat, refreshUnreadCounts, t]);
 
   const rows = useMemo(() => {
     if (chats.length > 0) return chats;
-    if (!activeBusinessOrgId) return [];
+    if (!activeBusinessOrgId || !canOpenBusinessChat) return [];
     return [
       {
         id: "general",
@@ -128,7 +137,7 @@ export function BusinessChatListScreen() {
         lastMessageByUid: null,
       },
     ];
-  }, [activeBusinessOrgId, chats, t]);
+  }, [activeBusinessOrgId, canOpenBusinessChat, chats, t]);
 
   if (loading) {
     return (

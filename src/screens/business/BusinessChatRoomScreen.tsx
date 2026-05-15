@@ -16,6 +16,7 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../../i18n/I18nContext";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
+import { useOrgAccess } from "../../hooks/useOrgAccess";
 import { getAuth } from "../../firebase";
 import {
   ensureGeneralChat,
@@ -59,7 +60,8 @@ export function BusinessChatRoomScreen() {
   const params = (route.params ?? {}) as ChatRouteParams;
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
-  const { activeBusinessOrgId } = useActiveOrg();
+  const { activeBusinessOrgId, activeOrganization, activeMembership } = useActiveOrg();
+  const { canAccessBusiness } = useOrgAccess();
   const [messages, setMessages] = useState<BusinessChatMessageDoc[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(true);
@@ -72,6 +74,14 @@ export function BusinessChatRoomScreen() {
   const chatId = params.chatId ?? "general";
   const chatTitle = params.title || t("business.chat.generalTitle");
   const uid = getAuth()?.currentUser?.uid ?? "";
+  const canOpenBusinessChat = Boolean(
+    activeBusinessOrgId &&
+      canAccessBusiness &&
+      activeOrganization &&
+      activeMembership?.status === "active" &&
+      orgId &&
+      orgId === activeBusinessOrgId
+  );
 
   const refreshRead = useCallback(async () => {
     if (!orgId || !chatId) return;
@@ -84,9 +94,9 @@ export function BusinessChatRoomScreen() {
 
   useEffect(() => {
     let cancelled = false;
-    if (!orgId) {
+    if (!orgId || !canOpenBusinessChat) {
       setLoading(false);
-      setError(t("business.chat.error"));
+      setError(t("business.chat.businessRequiredBody"));
       return;
     }
     setLoading(true);
@@ -126,9 +136,9 @@ export function BusinessChatRoomScreen() {
       cleanupRef.current?.();
       cleanupRef.current = null;
     };
-  }, [chatId, orgId, refreshRead, t]);
+  }, [canOpenBusinessChat, chatId, orgId, refreshRead, t]);
 
-  const canSend = input.trim().length > 0 && !sending;
+  const canSend = canOpenBusinessChat && input.trim().length > 0 && !sending;
 
   const onSend = async () => {
     if (!canSend || !orgId || !chatId) return;
@@ -162,6 +172,10 @@ export function BusinessChatRoomScreen() {
           <ActivityIndicator size="large" color="#EA580C" />
           <Text style={styles.loadingText}>{t("business.chat.loading")}</Text>
         </View>
+      ) : !canOpenBusinessChat ? (
+        <View style={styles.loadingWrap}>
+          <Text style={styles.emptyText}>{t("business.chat.businessRequiredBody")}</Text>
+        </View>
       ) : (
         <FlatList
           ref={flatListRef}
@@ -191,31 +205,33 @@ export function BusinessChatRoomScreen() {
         />
       )}
 
-      <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={64}>
-        <View style={[styles.inputWrap, { paddingBottom: Math.max(insets.bottom, 8) }]}>
-          <Pressable
-            style={styles.photoBtn}
-            onPress={() =>
-              Alert.alert(t("business.chat.photoComingSoonTitle"), t("business.chat.photoComingSoonBody"))
-            }
-          >
-            <Ionicons name="image-outline" size={22} color="#1E3A8A" />
-          </Pressable>
-          <TextInput
-            value={input}
-            onChangeText={setInput}
-            placeholder={t("business.chat.inputPlaceholder")}
-            placeholderTextColor="#94A3B8"
-            multiline
-            style={styles.input}
-            maxLength={1200}
-          />
-          <Pressable style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]} disabled={!canSend} onPress={onSend}>
-            <Text style={styles.sendText}>{t("business.chat.send")}</Text>
-          </Pressable>
-        </View>
-        {error ? <Text style={styles.errorText}>{error}</Text> : null}
-      </KeyboardAvoidingView>
+      {canOpenBusinessChat ? (
+        <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={64}>
+          <View style={[styles.inputWrap, { paddingBottom: Math.max(insets.bottom, 8) }]}>
+            <Pressable
+              style={styles.photoBtn}
+              onPress={() =>
+                Alert.alert(t("business.chat.photoComingSoonTitle"), t("business.chat.photoComingSoonBody"))
+              }
+            >
+              <Ionicons name="image-outline" size={22} color="#1E3A8A" />
+            </Pressable>
+            <TextInput
+              value={input}
+              onChangeText={setInput}
+              placeholder={t("business.chat.inputPlaceholder")}
+              placeholderTextColor="#94A3B8"
+              multiline
+              style={styles.input}
+              maxLength={1200}
+            />
+            <Pressable style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]} disabled={!canSend} onPress={onSend}>
+              <Text style={styles.sendText}>{t("business.chat.send")}</Text>
+            </Pressable>
+          </View>
+          {error ? <Text style={styles.errorText}>{error}</Text> : null}
+        </KeyboardAvoidingView>
+      ) : null}
     </View>
   );
 }

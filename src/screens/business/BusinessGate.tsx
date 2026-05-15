@@ -13,7 +13,7 @@ type BusinessGateProps = {
 
 export function BusinessGate({ children }: BusinessGateProps) {
   const { activeBusinessOrgId, loading } = useActiveOrg();
-  const { orgStatus, canAccessBusiness } = useOrgAccess();
+  const { orgStatus, canAccessBusiness, trialIsValid, pendingCanAccess } = useOrgAccess();
 
   if (loading) {
     return (
@@ -28,7 +28,7 @@ export function BusinessGate({ children }: BusinessGateProps) {
     return <BusinessUnavailableScreen />;
   }
 
-  if (orgStatus === "pending_payment") {
+  if (orgStatus === "pending_payment" && !trialIsValid && !pendingCanAccess) {
     return <PendingPaymentScreen />;
   }
 

@@ -2,11 +2,20 @@ import React from "react";
 import { Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { useI18n } from "../../i18n/I18nContext";
+import { translations } from "../../i18n/translations";
 import { colors, radius, spacing } from "../../theme";
 
 export function BusinessLandingScreen() {
   const navigation = useNavigation();
   const { t } = useI18n();
+  const tr = React.useCallback(
+    (key: string) => {
+      const value = t(key);
+      if (value !== key) return value;
+      return translations.en[key] ?? key;
+    },
+    [t]
+  );
   const nav = navigation as unknown as {
     navigate: (name: string, params?: object) => void;
     goBack: () => void;
@@ -14,45 +23,45 @@ export function BusinessLandingScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>{t("business.landing.planChoiceTitle")}</Text>
-      <Text style={styles.subtitle}>{t("business.landing.planChoiceSubtitle")}</Text>
+      <Text style={styles.title}>{tr("business.landing.planChoiceTitle")}</Text>
+      <Text style={styles.subtitle}>{tr("business.landing.planChoiceSubtitle")}</Text>
 
       <View style={styles.planCard}>
-        <Text style={styles.planName}>{t("business.landing.free.title")}</Text>
-        <Text style={styles.planSubtitle}>{t("business.landing.free.subtitle")}</Text>
-        <Text style={styles.planPrice}>{t("business.landing.free.price")}</Text>
-        <Text style={styles.planDescription}>{t("business.landing.free.description")}</Text>
+        <Text style={styles.planName}>{tr("business.landing.free.title")}</Text>
+        <Text style={styles.planSubtitle}>{tr("business.landing.free.subtitle")}</Text>
+        <Text style={styles.planPrice}>{tr("business.landing.free.price")}</Text>
+        <Text style={styles.planDescription}>{tr("business.landing.free.description")}</Text>
         <TouchableOpacity style={styles.secondaryButton} onPress={() => nav.goBack()}>
-          <Text style={styles.secondaryButtonText}>{t("business.landing.free.cta")}</Text>
+          <Text style={styles.secondaryButtonText}>{tr("business.landing.free.cta")}</Text>
         </TouchableOpacity>
       </View>
 
       <View style={styles.planCard}>
-        <Text style={styles.planName}>{t("business.landing.pro.title")}</Text>
-        <Text style={styles.planSubtitle}>{t("business.landing.pro.subtitle")}</Text>
-        <Text style={styles.planPrice}>{t("business.landing.pro.price")}</Text>
-        <Text style={styles.planDescription}>{t("business.landing.pro.description")}</Text>
+        <Text style={styles.planName}>{tr("business.landing.pro.title")}</Text>
+        <Text style={styles.planSubtitle}>{tr("business.landing.pro.subtitle")}</Text>
+        <Text style={styles.planPrice}>{tr("business.landing.pro.price")}</Text>
+        <Text style={styles.planDescription}>{tr("business.landing.pro.description")}</Text>
         <TouchableOpacity
           style={styles.secondaryButton}
           onPress={() => {
             try {
               nav.navigate("Paywall", { source: "business_landing_pro" });
             } catch {
-              Alert.alert(t("business.landing.pro.alertTitle"), t("business.landing.pro.alertBody"));
+              Alert.alert(tr("business.landing.pro.alertTitle"), tr("business.landing.pro.alertBody"));
             }
           }}
         >
-          <Text style={styles.secondaryButtonText}>{t("business.landing.pro.cta")}</Text>
+          <Text style={styles.secondaryButtonText}>{tr("business.landing.pro.cta")}</Text>
         </TouchableOpacity>
       </View>
 
       <View style={[styles.planCard, styles.businessCard]}>
-        <Text style={styles.planName}>{t("business.landing.business.title")}</Text>
-        <Text style={styles.planSubtitle}>{t("business.landing.business.subtitle")}</Text>
-        <Text style={styles.planPrice}>{t("business.landing.business.price")}</Text>
-        <Text style={styles.planDescription}>{t("business.landing.business.description")}</Text>
+        <Text style={styles.planName}>{tr("business.landing.business.title")}</Text>
+        <Text style={styles.planSubtitle}>{tr("business.landing.business.subtitle")}</Text>
+        <Text style={styles.planPrice}>{tr("business.landing.business.price")}</Text>
+        <Text style={styles.planDescription}>{tr("business.landing.business.description")}</Text>
         <TouchableOpacity style={styles.primaryButton} onPress={() => nav.navigate("BusinessRegistration")}>
-          <Text style={styles.primaryButtonText}>{t("business.landing.business.cta")}</Text>
+          <Text style={styles.primaryButtonText}>{tr("business.landing.business.cta")}</Text>
         </TouchableOpacity>
       </View>
     </ScrollView>

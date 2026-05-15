@@ -19,6 +19,15 @@ import {
 
 const ACTIVE_BUSINESS_ORG_STORAGE_KEY = "staveto_active_business_org_id";
 
+function debugBusinessContext(message: string, payload?: Record<string, unknown>) {
+  if (!__DEV__) return;
+  if (payload) {
+    console.log(`[BusinessContext] ${message}`, payload);
+    return;
+  }
+  console.log(`[BusinessContext] ${message}`);
+}
+
 type BusinessContextValue = {
   activeBusinessOrgId: string | null;
   setActiveBusinessOrgId: (orgId: string | null) => void;
@@ -56,6 +65,9 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     (async () => {
       try {
         const storedOrgId = await AsyncStorage.getItem(ACTIVE_BUSINESS_ORG_STORAGE_KEY);
+        debugBusinessContext("storage hydrated", {
+          storedActiveBusinessOrgId: storedOrgId ?? null,
+        });
         if (!cancelled) {
           setActiveBusinessOrgIdState(storedOrgId || null);
         }
@@ -88,8 +100,13 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
 
   const resolveAndSetPreferredOrg = useCallback(
     async (userIdForLookup: string): Promise<boolean> => {
+      debugBusinessContext("resolving preferred org", {
+        userId: userIdForLookup,
+        storedActiveBusinessOrgId: activeBusinessOrgId,
+      });
       const preferred = await findPreferredBusinessOrgForUser(userIdForLookup);
       if (!preferred) {
+        debugBusinessContext("preferred org not found - showing landing", { userId: userIdForLookup });
         setActiveBusinessOrgIdState(null);
         setActiveOrganization(null);
         setActiveMembership(null);
@@ -100,9 +117,15 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       setActiveOrganization(preferred.org);
       setActiveMembership(preferred.membership);
       await persistActiveBusinessOrgId(preferred.org.id);
+      debugBusinessContext("preferred org found - showing dashboard", {
+        orgId: preferred.org.id,
+        orgStatus: preferred.org.status,
+        source: preferred.source,
+        reason: preferred.reason,
+      });
       return true;
     },
-    []
+    [activeBusinessOrgId]
   );
 
   const refreshActiveBusinessOrg = useCallback(async () => {
@@ -121,6 +144,9 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     if (!activeBusinessOrgId) {
       setLoading(true);
       try {
+        debugBusinessContext("missing activeBusinessOrgId; fallback lookup starts", {
+          userId: user.id,
+        });
         await resolveAndSetPreferredOrg(user.id);
       } catch (e) {
         const message = e instanceof Error ? e.message : String(e);
@@ -147,11 +173,20 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (!organization || !membership) {
+        debugBusinessContext("stored activeBusinessOrgId not usable; fallback lookup starts", {
+          activeBusinessOrgId: expectedOrgId,
+          hasOrganization: !!organization,
+          hasMembership: !!membership,
+        });
         await resolveAndSetPreferredOrg(expectedUserId ?? "");
         setLoading(false);
         return;
       }
 
+      debugBusinessContext("using stored activeBusinessOrgId", {
+        orgId: organization.id,
+        orgStatus: organization.status,
+      });
       setActiveOrganization(organization);
       setActiveMembership(membership);
       setLoading(false);

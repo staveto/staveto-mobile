@@ -1,6 +1,8 @@
 import { getCallable } from "../firebase";
 
 export type CreateBusinessOrgInput = {
+  planCode: "business_starter" | "business_team" | "business_company";
+  billingPeriod: "monthly" | "yearly";
   companyName: string;
   legalName: string;
   countryCode: string;

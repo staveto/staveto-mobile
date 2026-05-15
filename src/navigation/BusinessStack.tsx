@@ -4,6 +4,7 @@ import { createNativeStackNavigator } from "@react-navigation/native-stack";
 import { BusinessGate } from "../screens/business/BusinessGate";
 import { BusinessDashboardScreen } from "../screens/business/BusinessDashboardScreen";
 import { BusinessLandingScreen } from "../screens/business/BusinessLandingScreen";
+import { BusinessPlanSelectionScreen } from "../screens/business/BusinessPlanSelectionScreen";
 import { BusinessRegistrationScreen } from "../screens/business/BusinessRegistrationScreen";
 import { BusinessOrderPendingScreen } from "../screens/business/BusinessOrderPendingScreen";
 import { useActiveOrg } from "../hooks/useActiveOrg";
@@ -54,6 +55,11 @@ export function BusinessStack() {
         name="BusinessRegistration"
         component={BusinessRegistrationScreen}
         options={{ title: "Registrácia firmy" }}
+      />
+      <Stack.Screen
+        name="BusinessPlanSelection"
+        component={BusinessPlanSelectionScreen}
+        options={{ title: "Výber Business plánu" }}
       />
       <Stack.Screen
         name="BusinessOrderPending"

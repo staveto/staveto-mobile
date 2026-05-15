@@ -94,7 +94,11 @@ export function BusinessLandingScreen() {
             <Text style={styles.businessBenefitChipText}>{t("business.landing.business.benefit.attendanceReports")}</Text>
           </View>
         </View>
-        <TouchableOpacity style={styles.primaryButton} activeOpacity={0.9} onPress={() => nav.navigate("BusinessRegistration")}>
+        <TouchableOpacity
+          style={styles.primaryButton}
+          activeOpacity={0.9}
+          onPress={() => nav.navigate("BusinessPlanSelection")}
+        >
           <Text style={styles.primaryButtonText}>{t("business.landing.business.cta")}</Text>
         </TouchableOpacity>
       </View>

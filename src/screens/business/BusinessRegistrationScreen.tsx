@@ -10,7 +10,7 @@ import {
   TouchableOpacity,
   View,
 } from "react-native";
-import { useNavigation } from "@react-navigation/native";
+import { useNavigation, useRoute } from "@react-navigation/native";
 import { getAuth } from "../../firebase";
 import { useBusinessContext } from "../../hooks/useBusinessContext";
 import { useI18n } from "../../i18n/I18nContext";
@@ -30,7 +30,44 @@ type FormState = {
   billingAddressZip: string;
   contactName: string;
   phone: string;
-  requestedSeats: string;
+};
+
+type PlanCode = "business_starter" | "business_team" | "business_company";
+type BillingPeriod = "monthly" | "yearly";
+
+const BUSINESS_PLANS: Array<{
+  planCode: PlanCode;
+  seatsIncluded: number;
+  monthlyPrice: number;
+  yearlyPrice: number;
+  titleKey: string;
+}> = [
+  {
+    planCode: "business_starter",
+    seatsIncluded: 5,
+    monthlyPrice: 149,
+    yearlyPrice: 1490,
+    titleKey: "business.planSelection.starterTitle",
+  },
+  {
+    planCode: "business_team",
+    seatsIncluded: 15,
+    monthlyPrice: 329,
+    yearlyPrice: 3290,
+    titleKey: "business.planSelection.teamTitle",
+  },
+  {
+    planCode: "business_company",
+    seatsIncluded: 30,
+    monthlyPrice: 649,
+    yearlyPrice: 6490,
+    titleKey: "business.planSelection.companyTitle",
+  },
+];
+
+type RegistrationRouteParams = {
+  planCode?: PlanCode;
+  billingPeriod?: BillingPeriod;
 };
 
 type SupportedCountryCode = "SK" | "CZ" | "AT" | "DE" | "PL" | "GB" | "US" | "OTHER";
@@ -48,13 +85,11 @@ const INITIAL_FORM: FormState = {
   billingAddressZip: "",
   contactName: "",
   phone: "",
-  requestedSeats: "5",
 };
 
 type ValidationResult =
   | {
       ok: true;
-      requestedSeats: number;
     }
   | {
       ok: false;
@@ -153,8 +188,12 @@ function getErrorDetails(error: unknown): { code: string; message: string; stack
 
 export function BusinessRegistrationScreen() {
   const navigation = useNavigation();
+  const route = useRoute();
   const { setActiveBusinessOrgId } = useBusinessContext();
   const { t } = useI18n();
+  const routeParams = ((route as { params?: RegistrationRouteParams }).params ?? {}) as RegistrationRouteParams;
+  const selectedPlanCode = routeParams.planCode;
+  const selectedBillingPeriod = routeParams.billingPeriod;
   const [form, setForm] = useState<FormState>(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [countryModalVisible, setCountryModalVisible] = useState(false);
@@ -180,8 +219,30 @@ export function BusinessRegistrationScreen() {
   const taxIdLabel = t(labels.taxIdLabelKey);
   const vatIdLabel = t(labels.vatIdLabelKey);
   const zipLabel = t(labels.zipLabelKey);
+  const selectedBusinessPlan = useMemo(
+    () => BUSINESS_PLANS.find((plan) => plan.planCode === selectedPlanCode) ?? null,
+    [selectedPlanCode]
+  );
+  const selectedPrice = selectedBusinessPlan
+    ? selectedBillingPeriod === "yearly"
+      ? selectedBusinessPlan.yearlyPrice
+      : selectedBusinessPlan.monthlyPrice
+    : null;
+
+  React.useEffect(() => {
+    if (!selectedBusinessPlan || (selectedBillingPeriod !== "monthly" && selectedBillingPeriod !== "yearly")) {
+      Alert.alert(
+        t("business.registration.alert.planMissingTitle"),
+        t("business.registration.alert.planMissingBody")
+      );
+      (navigation as { navigate: (name: string) => void }).navigate("BusinessPlanSelection");
+    }
+  }, [navigation, selectedBillingPeriod, selectedBusinessPlan, t]);
 
   const validate = (): ValidationResult => {
+    if (!selectedBusinessPlan || (selectedBillingPeriod !== "monthly" && selectedBillingPeriod !== "yearly")) {
+      return { ok: false, field: "planCode", message: t("business.registration.alert.planMissingBody") };
+    }
     if (!form.companyName.trim()) {
       return { ok: false, field: "companyName", message: t("business.registration.validation.companyNameRequired") };
     }
@@ -214,15 +275,7 @@ export function BusinessRegistrationScreen() {
         message: t("business.registration.validation.registrationRequiredForSkCz", { registrationLabel }),
       };
     }
-    const seats = Number(form.requestedSeats);
-    if (!Number.isInteger(seats) || seats < 1) {
-      return {
-        ok: false,
-        field: "requestedSeats",
-        message: t("business.registration.validation.requestedSeatsInvalid"),
-      };
-    }
-    return { ok: true, requestedSeats: seats };
+    return { ok: true };
   };
 
   const onSubmit = async () => {
@@ -250,8 +303,10 @@ export function BusinessRegistrationScreen() {
     }
 
     console.log("[BusinessRegistration] calling createBusinessOrg", {
+      planCode: selectedBusinessPlan?.planCode ?? null,
+      billingPeriod: selectedBillingPeriod ?? null,
       countryCode: normalizedCountry,
-      requestedSeats: validation.requestedSeats,
+      requestedSeats: selectedBusinessPlan?.seatsIncluded ?? null,
       hasRegistrationNumber: !!form.registrationNumber.trim(),
       hasBillingEmail: !!form.billingEmail.trim(),
     });
@@ -259,11 +314,13 @@ export function BusinessRegistrationScreen() {
     setSubmitting(true);
     try {
       const result = await createBusinessOrg({
+        planCode: selectedBusinessPlan!.planCode,
+        billingPeriod: selectedBillingPeriod!,
         companyName: form.companyName.trim(),
         legalName: form.legalName.trim(),
         countryCode: normalizedCountry,
         billingEmail: form.billingEmail.trim(),
-        requestedSeats: validation.requestedSeats,
+        requestedSeats: selectedBusinessPlan!.seatsIncluded,
         billingAddress: {
           line1: form.billingAddressLine1.trim(),
           city: form.billingAddressCity.trim(),
@@ -290,7 +347,7 @@ export function BusinessRegistrationScreen() {
           orgId: result.orgId,
           orderId: result.orderId,
           companyName: form.companyName.trim(),
-          requestedSeats: validation.requestedSeats,
+          requestedSeats: selectedBusinessPlan!.seatsIncluded,
           countryCode: normalizedCountry,
           billingEmail: form.billingEmail.trim(),
           orderNumber: result.orderNumber,
@@ -438,15 +495,32 @@ export function BusinessRegistrationScreen() {
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>{t("business.registration.requestedSeatsLabel")} *</Text>
-      <TextInput
-        style={styles.input}
-        value={form.requestedSeats}
-        onChangeText={(v) => setField("requestedSeats", v.replace(/[^\d]/g, ""))}
-        keyboardType="number-pad"
-        placeholder={t("business.registration.requestedSeatsPlaceholder")}
-        placeholderTextColor={colors.inputPlaceholderOnLight}
-      />
+      <View style={styles.summaryCard}>
+        <Text style={styles.summaryTitle}>{t("business.registration.summary.title")}</Text>
+        <Text style={styles.summaryLine}>
+          {t("business.registration.summary.plan")}:{" "}
+          {selectedBusinessPlan ? t(selectedBusinessPlan.titleKey) : "—"}
+        </Text>
+        <Text style={styles.summaryLine}>
+          {t("business.registration.summary.seats")}: {selectedBusinessPlan ? String(selectedBusinessPlan.seatsIncluded) : "—"}
+        </Text>
+        <Text style={styles.summaryLine}>
+          {t("business.registration.summary.period")}:{" "}
+          {t(
+            selectedBillingPeriod === "yearly"
+              ? "business.planSelection.billingYearly"
+              : "business.planSelection.billingMonthly"
+          )}
+        </Text>
+        <Text style={styles.summaryLine}>
+          {t("business.registration.summary.price")}:{" "}
+          {selectedPrice !== null
+            ? selectedBillingPeriod === "yearly"
+              ? t("business.planSelection.yearlyPrice", { price: String(selectedPrice) })
+              : t("business.planSelection.monthlyPrice", { price: String(selectedPrice) })
+            : "—"}
+        </Text>
+      </View>
 
       <TouchableOpacity style={styles.submitButton} onPress={onSubmit} disabled={submitting}>
         {submitting ? (
@@ -565,6 +639,25 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "700",
+  },
+  summaryCard: {
+    marginTop: spacing.lg,
+    borderWidth: 1,
+    borderColor: colors.formPanelBorder,
+    borderRadius: radius,
+    backgroundColor: colors.formPanel,
+    padding: spacing.md,
+  },
+  summaryTitle: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: "700",
+    marginBottom: spacing.xs,
+  },
+  summaryLine: {
+    color: colors.text,
+    fontSize: 14,
+    marginBottom: spacing.xs,
   },
   modalBackdrop: {
     flex: 1,

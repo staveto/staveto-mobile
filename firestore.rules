@@ -25,6 +25,10 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/organizations/$(orgId))
         && get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == u;
     }
+    function isOrgChatWriter(orgId, u) {
+      return isOrgMember(orgId, u)
+        && get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['owner', 'admin', 'manager', 'worker'];
+    }
 
     function projectOwner(projectId) {
       return signedIn()
@@ -213,6 +217,49 @@ service cloud.firestore {
                   && request.resource.data.status == 'active'));
         allow read: if signedIn() && (uid() == memberId || isOrgMemberActive(orgId));
         allow update, delete: if signedIn() && isOrgAdmin(orgId, uid());
+      }
+
+      // B2B Team chat (MVP)
+      match /chats/{chatId} {
+        allow read: if signedIn() && isOrgMemberActive(orgId);
+        allow create: if signedIn()
+          && isOrgMemberActive(orgId)
+          && request.resource.data.orgId == orgId
+          && request.resource.data.type in ['general'];
+        allow update: if signedIn()
+          && isOrgChatWriter(orgId, uid())
+          && request.resource.data.orgId == resource.data.orgId
+          && request.resource.data.type == resource.data.type
+          && request.resource.data.createdAt == resource.data.createdAt
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+            'title',
+            'updatedAt',
+            'lastMessageText',
+            'lastMessageAt',
+            'lastMessageByUid'
+          ]);
+        allow delete: if false;
+
+        match /messages/{messageId} {
+          allow read: if signedIn() && isOrgMemberActive(orgId);
+          allow create: if signedIn()
+            && isOrgChatWriter(orgId, uid())
+            && request.resource.data.orgId == orgId
+            && request.resource.data.chatId == chatId
+            && request.resource.data.senderUid == uid()
+            && request.resource.data.type in ['text', 'image']
+            && request.resource.data.status == 'sent';
+          allow update, delete: if false;
+        }
+
+        match /reads/{readUid} {
+          allow read: if signedIn() && isOrgMemberActive(orgId);
+          allow create, update: if signedIn()
+            && isOrgMemberActive(orgId)
+            && readUid == uid()
+            && request.resource.data.uid == uid();
+          allow delete: if false;
+        }
       }
     }
 

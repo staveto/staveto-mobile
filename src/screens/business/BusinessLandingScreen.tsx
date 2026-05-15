@@ -53,7 +53,7 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 30,
     fontWeight: "700",
-    color: colors.text,
+    color: colors.textOnDark,
     textAlign: "center",
     marginBottom: spacing.sm,
     marginTop: spacing.lg,
@@ -61,7 +61,7 @@ const styles = StyleSheet.create({
   subtitle: {
     fontSize: 16,
     fontWeight: "600",
-    color: colors.textMuted,
+    color: colors.onboardingHelperOnDark,
     textAlign: "center",
     marginBottom: spacing.lg,
   },
@@ -92,9 +92,10 @@ const styles = StyleSheet.create({
     color: "#fff",
   },
   secondaryButton: {
-    borderColor: colors.border,
+    borderColor: "rgba(255,255,255,0.55)",
     borderWidth: 1,
     borderRadius: radius,
+    backgroundColor: "rgba(255,255,255,0.08)",
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: spacing.md,
@@ -102,7 +103,7 @@ const styles = StyleSheet.create({
   secondaryButtonText: {
     fontSize: 15,
     fontWeight: "600",
-    color: colors.text,
+    color: colors.textOnDark,
   },
 });
 

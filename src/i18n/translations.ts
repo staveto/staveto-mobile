@@ -43,7 +43,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.landing.business.title": "Staveto Business",
     "business.landing.business.badge": "BUSINESS",
     "business.landing.business.subtitle": "For companies with a team",
-    "business.landing.business.price": "From 149 EUR / month",
+    "business.landing.business.price": "Business plans are selected in the next step.",
     "business.landing.business.description":
       "For companies that need multiple users, roles, team projects, and shared communication.",
     "business.landing.business.benefit.users": "Multiple users",
@@ -2152,7 +2152,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.landing.business.title": "Staveto Business",
     "business.landing.business.badge": "BUSINESS",
     "business.landing.business.subtitle": "Fur Firmen mit Team",
-    "business.landing.business.price": "Ab 149 EUR / Monat",
+    "business.landing.business.price": "Business-Pakete werden im nachsten Schritt ausgewahlt.",
     "business.landing.business.description":
       "Fur Firmen, die mehrere Nutzer, Rollen, Teamprojekte und gemeinsame Kommunikation brauchen.",
     "business.landing.business.benefit.users": "Mehrere Nutzer",
@@ -3790,7 +3790,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.landing.business.title": "Staveto Business",
     "business.landing.business.badge": "BUSINESS",
     "business.landing.business.subtitle": "Pre firmy s timom",
-    "business.landing.business.price": "Od 149 EUR / mesiac",
+    "business.landing.business.price": "Business balik si vyberiete v dalsom kroku.",
     "business.landing.business.description":
       "Pre firmy, ktore potrebuju viac pouzivatelov, role, timove projekty a spolocnu komunikaciu.",
     "business.landing.business.benefit.users": "Viac pouzivatelov",
@@ -5796,7 +5796,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.landing.business.title": "Staveto Business",
     "business.landing.business.badge": "BUSINESS",
     "business.landing.business.subtitle": "Pro firmy s tymem",
-    "business.landing.business.price": "Od 149 EUR / mesic",
+    "business.landing.business.price": "Business balik si vyberete v dalsim kroku.",
     "business.landing.business.description":
       "Pro firmy, ktere potrebuji vice uzivatelu, role, tymove projekty a sdilenou komunikaci.",
     "business.landing.business.benefit.users": "Vice uzivatelu",
@@ -7491,7 +7491,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.landing.business.title": "Staveto Business",
     "business.landing.business.badge": "BUSINESS",
     "business.landing.business.subtitle": "Para empresas con equipo",
-    "business.landing.business.price": "Desde 149 EUR / mes",
+    "business.landing.business.price": "Los planes Business se eligen en el siguiente paso.",
     "business.landing.business.description":
       "Para empresas que necesitan varios usuarios, roles, proyectos de equipo y comunicacion compartida.",
     "business.landing.business.benefit.users": "Varios usuarios",
@@ -8497,7 +8497,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.landing.business.title": "Staveto Business",
     "business.landing.business.badge": "BUSINESS",
     "business.landing.business.subtitle": "Per aziende con team",
-    "business.landing.business.price": "Da 149 EUR / mese",
+    "business.landing.business.price": "I piani Business si scelgono nel prossimo passaggio.",
     "business.landing.business.description":
       "Per aziende che hanno bisogno di piu utenti, ruoli, progetti di team e comunicazione condivisa.",
     "business.landing.business.benefit.users": "Piu utenti",
@@ -9984,7 +9984,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.landing.business.title": "Staveto Business",
     "business.landing.business.badge": "BUSINESS",
     "business.landing.business.subtitle": "Dla firm z zespolem",
-    "business.landing.business.price": "Od 149 EUR / miesiac",
+    "business.landing.business.price": "Plan Business wybierzesz w kolejnym kroku.",
     "business.landing.business.description":
       "Dla firm, ktore potrzebuja wielu uzytkownikow, rol, projektow zespolowych i wspolnej komunikacji.",
     "business.landing.business.benefit.users": "Wielu uzytkownikow",

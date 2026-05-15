@@ -75,7 +75,7 @@ export function BusinessLandingScreen() {
         </View>
         <Text style={styles.planName}>{t("business.landing.business.title")}</Text>
         <Text style={styles.planSubtitle}>{t("business.landing.business.subtitle")}</Text>
-        <Text style={styles.planPrice}>{t("business.landing.business.price")}</Text>
+        <Text style={styles.businessHint}>{t("business.landing.business.nextStepHint")}</Text>
         <Text style={styles.planDescription}>{t("business.landing.business.description")}</Text>
         <View style={styles.businessBenefitChips}>
           <View style={styles.businessBenefitChip}>
@@ -97,7 +97,6 @@ export function BusinessLandingScreen() {
         <TouchableOpacity style={styles.primaryButton} activeOpacity={0.9} onPress={() => nav.navigate("BusinessRegistration")}>
           <Text style={styles.primaryButtonText}>{t("business.landing.business.cta")}</Text>
         </TouchableOpacity>
-        <Text style={styles.businessHint}>{t("business.landing.business.nextStepHint")}</Text>
       </View>
     </ScrollView>
   );
@@ -284,7 +283,7 @@ const styles = StyleSheet.create({
     fontWeight: "600",
   },
   businessHint: {
-    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
     fontSize: 12,
     lineHeight: 18,
     color: "#8a4f2f",

@@ -22,7 +22,7 @@ export function BusinessLandingScreen() {
         <Text style={styles.planSubtitle}>{t("business.landing.free.subtitle")}</Text>
         <Text style={styles.planPrice}>{t("business.landing.free.price")}</Text>
         <Text style={styles.planDescription}>{t("business.landing.free.description")}</Text>
-        <TouchableOpacity style={styles.secondaryButton} onPress={() => nav.goBack()}>
+        <TouchableOpacity style={styles.secondaryButton} activeOpacity={0.85} onPress={() => nav.goBack()}>
           <Text style={styles.secondaryButtonText}>{t("business.landing.free.cta")}</Text>
         </TouchableOpacity>
       </View>
@@ -34,6 +34,7 @@ export function BusinessLandingScreen() {
         <Text style={styles.planDescription}>{t("business.landing.pro.description")}</Text>
         <TouchableOpacity
           style={styles.secondaryButton}
+          activeOpacity={0.85}
           onPress={() => {
             try {
               nav.navigate("Paywall", { source: "business_landing_pro" });
@@ -51,7 +52,7 @@ export function BusinessLandingScreen() {
         <Text style={styles.planSubtitle}>{t("business.landing.business.subtitle")}</Text>
         <Text style={styles.planPrice}>{t("business.landing.business.price")}</Text>
         <Text style={styles.planDescription}>{t("business.landing.business.description")}</Text>
-        <TouchableOpacity style={styles.primaryButton} onPress={() => nav.navigate("BusinessRegistration")}>
+        <TouchableOpacity style={styles.primaryButton} activeOpacity={0.9} onPress={() => nav.navigate("BusinessRegistration")}>
           <Text style={styles.primaryButtonText}>{t("business.landing.business.cta")}</Text>
         </TouchableOpacity>
       </View>
@@ -65,9 +66,10 @@ const styles = StyleSheet.create({
     backgroundColor: colors.background,
   },
   content: {
+    flexGrow: 1,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.xl,
-    paddingBottom: spacing.xl,
+    paddingBottom: spacing.xl + 40,
   },
   title: {
     fontSize: 28,
@@ -96,6 +98,7 @@ const styles = StyleSheet.create({
   businessCard: {
     borderColor: colors.primary,
     backgroundColor: "#f7e7df",
+    marginBottom: spacing.xl,
   },
   planName: {
     fontSize: 20,
@@ -134,18 +137,18 @@ const styles = StyleSheet.create({
     color: "#fff",
   },
   secondaryButton: {
-    borderColor: colors.formPanelBorder,
+    borderColor: colors.primary,
     borderWidth: 1,
     borderRadius: radius,
-    backgroundColor: "rgba(22,34,45,0.05)",
+    backgroundColor: "#fff",
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: spacing.md,
   },
   secondaryButtonText: {
     fontSize: 15,
-    fontWeight: "600",
-    color: colors.textOnDark,
+    fontWeight: "700",
+    color: colors.primary,
   },
 });
 

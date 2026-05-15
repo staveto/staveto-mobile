@@ -6,9 +6,11 @@ import {
   ScrollView,
   StyleSheet,
   Text,
+  TextInput,
   TouchableOpacity,
   View,
 } from "react-native";
+import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
 import { useI18n } from "../../i18n/I18nContext";
@@ -17,7 +19,19 @@ import { getAuth } from "../../firebase";
 import { getBusinessOrder, type BusinessOrderDoc } from "../../services/organizations";
 import { listMembers, type MembershipDoc } from "../../services/businessMembers";
 import { createBusinessCheckoutSession } from "../../services/businessPayments";
+import {
+  createBusinessInviteCode,
+  type BusinessInviteRole,
+  type CreateBusinessInviteCodeResult,
+} from "../../services/businessInvites";
 import { colors } from "../../theme";
+
+let InviteQrCode: React.ComponentType<{ value: string; size: number }> | null = null;
+try {
+  InviteQrCode = require("react-native-qrcode-svg").default;
+} catch {
+  InviteQrCode = null;
+}
 
 function toMillis(raw: unknown): number | null {
   if (!raw) return null;
@@ -143,6 +157,11 @@ export function BusinessDashboardScreen() {
   const [membersLoading, setMembersLoading] = useState(false);
   const [membersReadBlocked, setMembersReadBlocked] = useState(false);
   const [showBusinessInfo, setShowBusinessInfo] = useState(false);
+  const [showInviteModal, setShowInviteModal] = useState(false);
+  const [inviteRole, setInviteRole] = useState<BusinessInviteRole>("worker");
+  const [inviteEmail, setInviteEmail] = useState("");
+  const [inviteBusy, setInviteBusy] = useState(false);
+  const [inviteResult, setInviteResult] = useState<CreateBusinessInviteCodeResult | null>(null);
   const authUser = getAuth()?.currentUser ?? null;
 
   const tr = (key: string, params?: Record<string, string | number>, fallback?: string): string => {
@@ -354,6 +373,50 @@ export function BusinessDashboardScreen() {
     });
   };
 
+  const openInviteMemberModal = () => {
+    setInviteResult(null);
+    setInviteRole("worker");
+    setInviteEmail("");
+    setShowInviteModal(true);
+  };
+
+  const onGenerateInviteCode = async () => {
+    if (!orgId) {
+      Alert.alert(tr("common.error", undefined, "Error"), tr("business.dashboard.companyFallback", undefined, "Business organization"));
+      return;
+    }
+    setInviteBusy(true);
+    try {
+      const normalizedEmail = inviteEmail.trim().toLowerCase();
+      const result = await createBusinessInviteCode({
+        orgId,
+        role: inviteRole,
+        emailLower: normalizedEmail || undefined,
+        requiresApproval: normalizedEmail ? false : true,
+      });
+      setInviteResult(result);
+    } catch (error) {
+      const details = getErrorDetails(error);
+      Alert.alert(
+        tr("common.error", undefined, "Error"),
+        `${tr("business.registration.alert.submitFailedBody", undefined, "Please try again.")}\n${details.code}: ${details.message}`
+      );
+    } finally {
+      setInviteBusy(false);
+    }
+  };
+
+  const onCopyInviteCode = async () => {
+    if (!inviteResult?.code) return;
+    try {
+      const Clipboard = await import("expo-clipboard");
+      await Clipboard.setStringAsync(inviteResult.code);
+      Alert.alert(tr("business.invites.copied", undefined, "Copied"));
+    } catch {
+      Alert.alert(tr("business.invites.code", undefined, "Code"), inviteResult.code);
+    }
+  };
+
   const infoRows: Array<{ label: string; value: string | null }> = [
     { label: tr("business.dashboard.detailsCompany", undefined, "Company"), value: companyName },
     { label: tr("business.dashboard.detailsStatus", undefined, "Status"), value: statusLabel },
@@ -478,12 +541,7 @@ export function BusinessDashboardScreen() {
           <TouchableOpacity
             style={[styles.secondaryButton, !canManageTeam && styles.buttonDisabled]}
             disabled={!canManageTeam}
-            onPress={() =>
-              Alert.alert(
-                tr("business.dashboard.teamCardInvite", undefined, "Pozvat clena"),
-                tr("business.dashboard.teamLicenses.manageComingSoon", undefined, "Coming soon.")
-              )
-            }
+            onPress={openInviteMemberModal}
           >
             <Text style={styles.secondaryButtonText}>
               {tr("business.dashboard.teamCardInvite", undefined, "Pozvat clena")}
@@ -492,12 +550,7 @@ export function BusinessDashboardScreen() {
           <TouchableOpacity
             style={[styles.secondaryButton, !canManageTeam && styles.buttonDisabled]}
             disabled={!canManageTeam}
-            onPress={() =>
-              Alert.alert(
-                tr("business.dashboard.teamCardManage", undefined, "Spravovat tim"),
-                tr("business.dashboard.teamLicenses.manageComingSoon", undefined, "Coming soon.")
-              )
-            }
+            onPress={() => nav.navigate("BusinessTeamManagement")}
           >
             <Text style={styles.secondaryButtonText}>
               {tr("business.dashboard.teamCardManage", undefined, "Spravovat tim")}
@@ -508,6 +561,7 @@ export function BusinessDashboardScreen() {
 
       <View style={styles.actionsRow}>
         <ActionCard
+          icon="people-outline"
           title={tr("business.dashboard.actionTeamTitle", undefined, "Tim")}
           body={tr("business.dashboard.actionTeamBody", undefined, "Spravujte clenov a roly.")}
           openLabel={tr("business.dashboard.actionOpen", undefined, "Open")}
@@ -519,6 +573,7 @@ export function BusinessDashboardScreen() {
           }
         />
         <ActionCard
+          icon="construct-outline"
           title={tr("business.dashboard.actionProjectsTitle", undefined, "Projekty")}
           body={tr("business.dashboard.actionProjectsBody", undefined, "Firemne projekty a stavby.")}
           openLabel={tr("business.dashboard.actionOpen", undefined, "Open")}
@@ -530,6 +585,7 @@ export function BusinessDashboardScreen() {
           }
         />
         <ActionCard
+          icon="checkmark-done-outline"
           title={tr("business.dashboard.actionTasksTitle", undefined, "Ulohy")}
           body={tr("business.dashboard.actionTasksBody", undefined, "Prehlad timovych uloh.")}
           openLabel={tr("business.dashboard.actionOpen", undefined, "Open")}
@@ -541,15 +597,11 @@ export function BusinessDashboardScreen() {
           }
         />
         <ActionCard
-          title={tr("business.dashboard.actionMessagesTitle", undefined, "Spravy")}
-          body={tr("business.dashboard.actionMessagesBody", undefined, "Firemny inbox a chat.")}
+          icon="chatbubbles-outline"
+          title={tr("business.dashboard.actions.messages.title", undefined, "Spravy")}
+          body={tr("business.dashboard.actions.messages.body", undefined, "Firemny inbox a chat.")}
           openLabel={tr("business.dashboard.actionOpen", undefined, "Open")}
-          onPress={() =>
-            Alert.alert(
-              tr("business.dashboard.actionMessagesTitle", undefined, "Spravy"),
-              tr("business.dashboard.teamLicenses.manageComingSoon", undefined, "Coming soon.")
-            )
-          }
+          onPress={() => nav.navigate("BusinessChatList")}
         />
       </View>
 
@@ -579,6 +631,91 @@ export function BusinessDashboardScreen() {
                   </View>
                 ))}
             </ScrollView>
+          </View>
+        </View>
+      </Modal>
+
+      <Modal
+        visible={showInviteModal}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowInviteModal(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>{tr("business.invites.title", undefined, "Pozvat clena")}</Text>
+              <TouchableOpacity onPress={() => setShowInviteModal(false)}>
+                <Text style={styles.modalClose}>{tr("common.close", undefined, "Close")}</Text>
+              </TouchableOpacity>
+            </View>
+
+            <Text style={styles.fieldLabel}>{tr("business.invites.role", undefined, "Role")}</Text>
+            <View style={styles.roleWrap}>
+              {(["worker", "manager", "viewer", "admin"] as BusinessInviteRole[]).map((role) => {
+                const active = inviteRole === role;
+                return (
+                  <TouchableOpacity
+                    key={role}
+                    style={[styles.roleChip, active && styles.roleChipActive]}
+                    onPress={() => setInviteRole(role)}
+                  >
+                    <Text style={[styles.roleChipText, active && styles.roleChipTextActive]}>
+                      {tr(`business.dashboard.teamLicenses.role.${role}`, undefined, role)}
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </View>
+
+            <Text style={styles.fieldLabel}>
+              {tr("business.invites.emailOptional", undefined, "Email (optional)")}
+            </Text>
+            <TextInput
+              style={styles.input}
+              value={inviteEmail}
+              onChangeText={setInviteEmail}
+              placeholder={tr("business.invites.emailOptional", undefined, "Email (optional)")}
+              autoCapitalize="none"
+              keyboardType="email-address"
+            />
+
+            <TouchableOpacity
+              style={[styles.primaryButton, inviteBusy && styles.buttonDisabled]}
+              disabled={inviteBusy}
+              onPress={onGenerateInviteCode}
+            >
+              <Text style={styles.primaryButtonText}>
+                {tr("business.invites.generateCode", undefined, "Vygenerovat kod")}
+              </Text>
+            </TouchableOpacity>
+
+            {inviteResult ? (
+              <ScrollView style={styles.inviteResultWrap}>
+                <Text style={styles.infoLabel}>{tr("business.invites.code", undefined, "Code")}</Text>
+                <Text style={styles.inviteCode}>{inviteResult.code}</Text>
+                <TouchableOpacity style={styles.secondaryButton} onPress={onCopyInviteCode}>
+                  <Text style={styles.secondaryButtonText}>
+                    {tr("business.invites.copyCode", undefined, "Copy code")}
+                  </Text>
+                </TouchableOpacity>
+                <Text style={styles.deepLinkText}>{inviteResult.deepLink}</Text>
+                {InviteQrCode ? (
+                  <View style={styles.qrBox}>
+                    <InviteQrCode value={inviteResult.deepLink} size={170} />
+                  </View>
+                ) : (
+                  <Text style={styles.emptyText}>
+                    {tr("business.invites.qrComingSoon", undefined, "QR code coming soon")}
+                  </Text>
+                )}
+                {inviteResult.expiresAt ? (
+                  <Text style={styles.pendingInfoText}>
+                    {tr("business.invites.expires", { date: new Date(inviteResult.expiresAt).toLocaleDateString() }, "Expires {{date}}")}
+                  </Text>
+                ) : null}
+              </ScrollView>
+            ) : null}
           </View>
         </View>
       </Modal>
@@ -631,11 +768,13 @@ function MemberRow({
 }
 
 function ActionCard({
+  icon,
   title,
   body,
   openLabel,
   onPress,
 }: {
+  icon: React.ComponentProps<typeof Ionicons>["name"];
   title: string;
   body: string;
   openLabel: string;
@@ -643,11 +782,14 @@ function ActionCard({
 }) {
   return (
     <TouchableOpacity style={styles.actionCard} onPress={onPress}>
-      <View style={styles.actionHeader}>
-        <Text style={styles.actionTitle}>{title}</Text>
-        <Text style={styles.actionOpen}>{openLabel} ›</Text>
+      <View style={styles.actionIconWrap}>
+        <Ionicons name={icon} size={22} color="#1E3A8A" />
       </View>
-      <Text style={styles.actionBody}>{body}</Text>
+      <Text style={styles.actionTitle}>{title}</Text>
+      <Text style={styles.actionBody} numberOfLines={2}>
+        {body}
+      </Text>
+      <Text style={styles.actionOpen}>{openLabel} ›</Text>
     </TouchableOpacity>
   );
 }
@@ -813,33 +955,45 @@ const styles = StyleSheet.create({
     gap: 8,
   },
   actionsRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
     gap: 10,
+    justifyContent: "space-between",
   },
   actionCard: {
     backgroundColor: "#FFFFFF",
     borderRadius: 14,
-    padding: 14,
-  },
-  actionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
+    width: "48.5%",
+    minHeight: 150,
+    padding: 12,
     justifyContent: "space-between",
-    gap: 8,
+  },
+  actionIconWrap: {
+    width: 42,
+    height: 42,
+    borderRadius: 12,
+    backgroundColor: "#EEF2FF",
+    alignItems: "center",
+    justifyContent: "center",
+    marginBottom: 8,
   },
   actionTitle: {
-    fontSize: 16,
+    fontSize: 15,
     fontWeight: "700",
     color: "#0F172A",
   },
   actionOpen: {
+    marginTop: 8,
     fontSize: 13,
     color: "#334155",
     fontWeight: "700",
+    alignSelf: "flex-end",
   },
   actionBody: {
     marginTop: 4,
-    fontSize: 14,
+    fontSize: 13,
     color: "#475569",
+    lineHeight: 18,
   },
   buttonDisabled: {
     opacity: 0.55,
@@ -923,5 +1077,64 @@ const styles = StyleSheet.create({
     color: "#0F172A",
     fontSize: 14,
     fontWeight: "600",
+  },
+  fieldLabel: {
+    color: "#64748B",
+    fontSize: 12,
+    marginTop: 6,
+    marginBottom: 6,
+  },
+  roleWrap: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: 8,
+    marginBottom: 10,
+  },
+  roleChip: {
+    borderRadius: 999,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+  },
+  roleChipActive: {
+    borderColor: "#EA580C",
+    backgroundColor: "#FFF7ED",
+  },
+  roleChipText: {
+    color: "#334155",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  roleChipTextActive: {
+    color: "#9A3412",
+  },
+  input: {
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    borderRadius: 10,
+    paddingHorizontal: 12,
+    paddingVertical: 10,
+    color: "#0F172A",
+    backgroundColor: "#FFFFFF",
+  },
+  inviteResultWrap: {
+    marginTop: 10,
+  },
+  inviteCode: {
+    marginTop: 4,
+    fontSize: 24,
+    color: "#0F172A",
+    fontWeight: "800",
+    letterSpacing: 1.5,
+  },
+  deepLinkText: {
+    marginTop: 8,
+    color: "#475569",
+    fontSize: 12,
+  },
+  qrBox: {
+    marginTop: 12,
+    alignItems: "center",
   },
 });

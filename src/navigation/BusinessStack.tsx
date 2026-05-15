@@ -7,6 +7,8 @@ import { BusinessLandingScreen } from "../screens/business/BusinessLandingScreen
 import { BusinessPlanSelectionScreen } from "../screens/business/BusinessPlanSelectionScreen";
 import { BusinessRegistrationScreen } from "../screens/business/BusinessRegistrationScreen";
 import { BusinessOrderPendingScreen } from "../screens/business/BusinessOrderPendingScreen";
+import { BusinessChatListScreen } from "../screens/business/BusinessChatListScreen";
+import { BusinessChatRoomScreen } from "../screens/business/BusinessChatRoomScreen";
 import { useActiveOrg } from "../hooks/useActiveOrg";
 import { colors } from "../theme";
 
@@ -16,6 +18,22 @@ function BusinessDashboardWithGate() {
   return (
     <BusinessGate>
       <BusinessDashboardScreen />
+    </BusinessGate>
+  );
+}
+
+function BusinessChatListWithGate() {
+  return (
+    <BusinessGate>
+      <BusinessChatListScreen />
+    </BusinessGate>
+  );
+}
+
+function BusinessChatRoomWithGate() {
+  return (
+    <BusinessGate>
+      <BusinessChatRoomScreen />
     </BusinessGate>
   );
 }
@@ -70,6 +88,16 @@ export function BusinessStack() {
         name="BusinessDashboard"
         component={BusinessDashboardWithGate}
         options={{ title: "Staveto Business" }}
+      />
+      <Stack.Screen
+        name="BusinessChatList"
+        component={BusinessChatListWithGate}
+        options={{ title: "Správy" }}
+      />
+      <Stack.Screen
+        name="BusinessChatRoom"
+        component={BusinessChatRoomWithGate}
+        options={{ title: "Chat" }}
       />
     </Stack.Navigator>
   );

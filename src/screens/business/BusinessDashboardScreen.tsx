@@ -285,6 +285,13 @@ export function BusinessDashboardScreen() {
             <Text style={styles.secondaryButtonText}>{t("business.dashboard.teamLicenses.manageTeam")}</Text>
           </TouchableOpacity>
         </View>
+        <View style={styles.messagesCard}>
+          <Text style={styles.messagesTitle}>{t("business.dashboard.actions.messages.title")}</Text>
+          <Text style={styles.messagesBody}>{t("business.dashboard.actions.messages.body")}</Text>
+          <TouchableOpacity style={styles.secondaryButton} onPress={() => nav.navigate("BusinessChatList")}>
+            <Text style={styles.secondaryButtonText}>{t("business.chat.open")}</Text>
+          </TouchableOpacity>
+        </View>
       </View>
 
       {(isTrialing || isPendingPayment) && (
@@ -571,6 +578,23 @@ const styles = StyleSheet.create({
   teamActions: {
     marginTop: 10,
     gap: 8,
+  },
+  messagesCard: {
+    marginTop: 12,
+    paddingTop: 12,
+    borderTopWidth: 1,
+    borderTopColor: colors.border,
+  },
+  messagesTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  messagesBody: {
+    marginTop: 4,
+    fontSize: 13,
+    color: colors.textMuted,
+    lineHeight: 18,
   },
   buttonDisabled: {
     opacity: 0.55,

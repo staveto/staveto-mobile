@@ -23,6 +23,8 @@ import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
+import { useActiveOrg } from "../hooks/useActiveOrg";
+import { useOrgAccess } from "../hooks/useOrgAccess";
 import * as tasksService from "../services/tasks";
 import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
@@ -64,6 +66,7 @@ import {
 import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
 import { readStoredPrimaryUsageMode } from "../lib/primaryUsageMode";
 import { showToast } from "../helpers/toast";
+import { getUnreadChatCount } from "../services/businessChat";
 
 // Conditional imports for image/document picker
 let ImagePicker: typeof import('expo-image-picker') | null = null;
@@ -302,6 +305,8 @@ export function HomeScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const { user, orgId } = useAuth();
+  const { activeBusinessOrgId } = useActiveOrg();
+  const { canAccessBusiness } = useOrgAccess();
   const { isOnline } = useOnlineStatus();
   const [dashboardData, setDashboardData] = useState<DashboardViewModel | null>(null);
   const [liveRows, setLiveRows] = useState<LiveProjectRow[]>([]);
@@ -408,6 +413,7 @@ export function HomeScreen() {
   const [monthlyMinutes, setMonthlyMinutes] = useState<number>(0);
   const [showQuickNoteModal, setShowQuickNoteModal] = useState(false);
   const [pendingQuickNotesCount, setPendingQuickNotesCount] = useState(0);
+  const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const quickNoteCtx = useQuickNoteContext();
 
   useEffect(() => {
@@ -437,6 +443,33 @@ export function HomeScreen() {
     setShowCustomizeModal(true);
   }, []);
 
+  const refreshChatUnread = useCallback(async () => {
+    const uid = user?.id ?? null;
+    if (!uid || !activeBusinessOrgId || !canAccessBusiness) {
+      setChatUnreadCount(0);
+      return;
+    }
+    try {
+      const count = await getUnreadChatCount(activeBusinessOrgId, uid);
+      setChatUnreadCount(count);
+    } catch {
+      setChatUnreadCount(0);
+    }
+  }, [activeBusinessOrgId, canAccessBusiness, user?.id]);
+
+  const openBusinessChat = useCallback(() => {
+    if (!activeBusinessOrgId || !canAccessBusiness) {
+      Alert.alert(
+        t("business.chat.businessRequiredTitle"),
+        t("business.chat.businessRequiredBody")
+      );
+      return;
+    }
+    (navigation as { navigate: (name: string, params?: object) => void }).navigate("BusinessStack", {
+      screen: "BusinessChatList",
+    });
+  }, [activeBusinessOrgId, canAccessBusiness, navigation, t]);
+
   const openCalendarSheet = useCallback(() => {
     calendarSheetRef.current?.present();
   }, []);
@@ -461,6 +494,7 @@ export function HomeScreen() {
       if (!user?.id) return;
       refreshActiveTimer();
       quickNotesService.getOpenQuickNotesCount(user.id).then(setPendingQuickNotesCount);
+      void refreshChatUnread();
       timeTracking.checkAutoStopOnAppOpen().then((entry) => {
         if (entry) {
           setActiveTimer(null);
@@ -470,7 +504,7 @@ export function HomeScreen() {
           );
         }
       });
-    }, [user?.id, refreshActiveTimer])
+    }, [user?.id, refreshActiveTimer, refreshChatUnread])
   );
 
   useEffect(() => {
@@ -1539,16 +1573,32 @@ export function HomeScreen() {
             )}
           </Text>
         </View>
-        <Pressable
-          style={styles.headerCustomizeBtn}
-          onPress={openCustomizeSheet}
-          accessibilityLabel={t("home.customizeHome")}
-          accessibilityRole="button"
-          hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
-        >
-          <Ionicons name="grid-outline" size={20} color={colors.textOnDark} />
-          <Ionicons name="add" size={16} color={colors.textOnDark} style={{ marginLeft: 2 }} />
-        </Pressable>
+        <View style={styles.headerActionsRow}>
+          <Pressable
+            style={styles.headerChatBtn}
+            onPress={openBusinessChat}
+            accessibilityLabel={t("business.chat.title")}
+            accessibilityRole="button"
+            hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+          >
+            <Ionicons name="chatbubble-ellipses-outline" size={20} color={colors.textOnDark} />
+            {chatUnreadCount > 0 ? (
+              <View style={styles.headerChatBadge}>
+                <Text style={styles.headerChatBadgeText}>{chatUnreadCount > 99 ? "99+" : String(chatUnreadCount)}</Text>
+              </View>
+            ) : null}
+          </Pressable>
+          <Pressable
+            style={styles.headerCustomizeBtn}
+            onPress={openCustomizeSheet}
+            accessibilityLabel={t("home.customizeHome")}
+            accessibilityRole="button"
+            hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+          >
+            <Ionicons name="grid-outline" size={20} color={colors.textOnDark} />
+            <Ionicons name="add" size={16} color={colors.textOnDark} style={{ marginLeft: 2 }} />
+          </Pressable>
+        </View>
       </View>
 
       {user?.id ? (
@@ -2781,6 +2831,36 @@ const styles = StyleSheet.create({
   headerCenter: {
     flex: 1,
     minWidth: 0,
+  },
+  headerActionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+  },
+  headerChatBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: "rgba(255,255,255,0.15)",
+  },
+  headerChatBadge: {
+    position: "absolute",
+    top: -2,
+    right: -2,
+    minWidth: 18,
+    height: 18,
+    borderRadius: 9,
+    backgroundColor: "#EA580C",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: 4,
+  },
+  headerChatBadgeText: {
+    color: "#FFFFFF",
+    fontSize: 10,
+    fontWeight: "700",
   },
   headerCustomizeBtn: {
     width: 44,

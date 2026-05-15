@@ -33,7 +33,7 @@ type FormState = {
   requestedSeats: string;
 };
 
-type SupportedCountryCode = "SK" | "CZ" | "AT" | "DE" | "PL" | "OTHER";
+type SupportedCountryCode = "SK" | "CZ" | "AT" | "DE" | "PL" | "GB" | "US" | "OTHER";
 
 const INITIAL_FORM: FormState = {
   companyName: "",
@@ -68,6 +68,8 @@ const COUNTRY_OPTIONS: Array<{ code: SupportedCountryCode; labelKey: string }> =
   { code: "AT", labelKey: "business.registration.country.at" },
   { code: "DE", labelKey: "business.registration.country.de" },
   { code: "PL", labelKey: "business.registration.country.pl" },
+  { code: "GB", labelKey: "business.registration.country.gb" },
+  { code: "US", labelKey: "business.registration.country.us" },
   { code: "OTHER", labelKey: "business.registration.country.other" },
 ];
 
@@ -114,6 +116,20 @@ const COUNTRY_LABELS: Record<
     taxIdLabelKey: "business.registration.countryLabels.pl.taxId",
     vatIdLabelKey: "business.registration.countryLabels.pl.vatId",
     zipLabelKey: "business.registration.countryLabels.pl.zip",
+    registrationRequired: false,
+  },
+  GB: {
+    registrationLabelKey: "business.registration.countryLabels.gb.registration",
+    taxIdLabelKey: "business.registration.countryLabels.gb.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.gb.vatId",
+    zipLabelKey: "business.registration.countryLabels.gb.zip",
+    registrationRequired: false,
+  },
+  US: {
+    registrationLabelKey: "business.registration.countryLabels.us.registration",
+    taxIdLabelKey: "business.registration.countryLabels.us.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.us.vatId",
+    zipLabelKey: "business.registration.countryLabels.us.zip",
     registrationRequired: false,
   },
   OTHER: {

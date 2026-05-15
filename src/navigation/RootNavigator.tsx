@@ -102,6 +102,7 @@ export function RootNavigator() {
   const [onboardingOk, setOnboardingOk] = useState(false);
   const [languageSelectionDone, setLanguageSelectionDone] = useState<boolean | null>(null);
   const [showConsentAgain, setShowConsentAgain] = useState(false);
+  const [openBusinessAfterOnboarding, setOpenBusinessAfterOnboarding] = useState(false);
   const hasShownTrialPopup = useRef(false);
 
   useEffect(() => {
@@ -244,6 +245,12 @@ export function RootNavigator() {
     };
   }, [token, user?.id, user?.billing, gateLoading, consentOk, onboardingOk, t]);
 
+  useEffect(() => {
+    if (onboardingOk && openBusinessAfterOnboarding) {
+      setOpenBusinessAfterOnboarding(false);
+    }
+  }, [onboardingOk, openBusinessAfterOnboarding]);
+
   // #region agent log
   useEffect(() => {
     if (!loading && onboardingLoaded) {
@@ -304,6 +311,7 @@ export function RootNavigator() {
       <OnboardingMvpScreen
         onFinished={checkGate}
         onBack={() => setShowConsentAgain(true)}
+        onBusinessFlowRequested={() => setOpenBusinessAfterOnboarding(true)}
       />
     );
   }
@@ -314,6 +322,7 @@ export function RootNavigator() {
       <QuickActionsSetup />
       <OfflineBanner />
       <Stack.Navigator
+        initialRouteName={openBusinessAfterOnboarding ? "BusinessStack" : "AppTabs"}
         screenOptions={{
           headerShown: false,
           headerStyle: { backgroundColor: colors.background },

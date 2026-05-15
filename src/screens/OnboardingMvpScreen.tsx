@@ -19,7 +19,9 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { colors, radius, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
 import { useAuth } from "../context/AuthContext";
+import { useBusinessContext } from "../hooks/useBusinessContext";
 import { updateUserProfileFromOnboarding } from "../services/auth";
+import { redeemBusinessInviteCode } from "../services/businessInvites";
 import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
 import { persistPrimaryUsageMode } from "../lib/primaryUsageMode";
 import { COUNTRY_CODES, getCountryCallingCode, getDeviceTimezone, getDeviceRegionCode, getLocalizedCountryName } from "../utils/countries";
@@ -31,13 +33,14 @@ import { UnifiedProjectCreationFlow } from "../components/UnifiedProjectCreation
 type Props = {
   onFinished: () => void;
   onBack?: () => void;
+  onBusinessFlowRequested?: () => void;
 };
 
 type Mode = PrimaryUsageMode;
 const PENDING_ONBOARDING_KEY = "pending_onboarding";
 
-/** Steps: 1=mode, 2=country, 3=name, 4=phone, 5=first project, 6=first equipment, 7=finish (finishOnboarding only here) */
-type OnboardingStep = 1 | 2 | 3 | 4 | 5 | 6 | 7;
+/** Steps: 1=mode, 2=country, 3=name, 4=phone, 5=first project, 6=first equipment, 7=company choice, 8=join by code */
+type OnboardingStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 const EQ_CATEGORIES: { value: EquipmentCategory; icon: React.ComponentProps<typeof Ionicons>["name"] }[] = [
   { value: "tool", icon: "hammer-outline" },
@@ -76,9 +79,10 @@ function equipmentCategoryKey(c: EquipmentCategory): string {
   return m[c];
 }
 
-export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
+export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequested }: Props) {
   const { t, locale } = useI18n();
   const { user, finishOnboarding } = useAuth();
+  const { setActiveBusinessOrgId, refreshActiveBusinessOrg } = useBusinessContext();
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState<OnboardingStep>(1);
   const [mode, setMode] = useState<Mode | null>(null);
@@ -106,6 +110,8 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
   const [eqLocation, setEqLocation] = useState("");
   const [creatingEquipment, setCreatingEquipment] = useState(false);
   const createdEquipmentRef = useRef(false);
+  const [joinCode, setJoinCode] = useState("");
+  const [joinBusy, setJoinBusy] = useState(false);
 
   useEffect(() => {
     if (!user) return;
@@ -172,7 +178,7 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
     setStep(5);
   };
 
-  const completeActivation = useCallback(async () => {
+  const completeActivation = useCallback(async (afterFinished?: () => void) => {
     if (!mode || !primaryCountry) {
       setError(t("onboardingMvp.errorSaveFailed"));
       return;
@@ -224,6 +230,9 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
 
       await finishOnboarding();
       onFinished();
+      if (afterFinished) {
+        setTimeout(afterFinished, 50);
+      }
     } catch (e) {
       console.error("ONBOARDING activation error", e);
       setError(t("onboardingMvp.errorSaveFailed"));
@@ -254,6 +263,48 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
     setError("");
     setStep(7);
   };
+
+  const continueAlone = async () => {
+    await completeActivation();
+  };
+
+  const createCompanyFlow = async () => {
+    await completeActivation(() => {
+      onBusinessFlowRequested?.();
+    });
+  };
+
+  const redeemCodeAndFinish = async () => {
+    const normalizedCode = joinCode.trim().toUpperCase();
+    if (!normalizedCode) {
+      setError(t("business.join.invalidCode"));
+      return;
+    }
+    setJoinBusy(true);
+    setError("");
+    try {
+      const result = await redeemBusinessInviteCode({ code: normalizedCode });
+      if (result.status === "active") {
+        setActiveBusinessOrgId(result.orgId);
+        await refreshActiveBusinessOrg();
+        Alert.alert(t("business.join.successActiveTitle"), t("business.join.successActiveBody"));
+        await completeActivation(() => {
+          onBusinessFlowRequested?.();
+        });
+      } else {
+        Alert.alert(t("business.join.pendingTitle"), t("business.join.pendingBody"));
+        await completeActivation();
+      }
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      setError(`${t("business.join.invalidCode")}: ${message}`);
+    } finally {
+      setJoinBusy(false);
+    }
+  };
+
+  // TODO(business-join-deeplink): keep deep-link handoff/prefill for a dedicated PR
+  // that can safely update global linking setup in AppShell/RootNavigator.
 
   const onCreateEquipment = async () => {
     if (!user?.id) return;
@@ -587,20 +638,78 @@ export function OnboardingMvpScreen({ onFinished, onBack }: Props) {
             </TouchableOpacity>
           </>
         )
+      ) : step === 7 ? (
+        wrap(
+          <>
+            <Text style={styles.title}>{t("business.join.title")}</Text>
+            <Text style={styles.subtitle}>{t("business.join.subtitle")}</Text>
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            <TouchableOpacity
+              style={[styles.button, (saving || joinBusy) && styles.buttonDisabled]}
+              onPress={() => void continueAlone()}
+              disabled={saving || joinBusy}
+            >
+              {saving ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.buttonText}>{t("business.join.continueAlone")}</Text>
+              )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.secondaryBtnFull, { marginTop: spacing.md }]}
+              onPress={() => {
+                setError("");
+                setStep(8);
+              }}
+              disabled={saving || joinBusy}
+            >
+              <Text style={styles.secondaryText}>{t("business.join.haveCode")}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.secondaryBtnFull, { marginTop: spacing.md }]}
+              onPress={() => void createCompanyFlow()}
+              disabled={saving}
+            >
+              <Text style={styles.secondaryText}>{t("business.join.createCompany")}</Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={[styles.textLinkBtn, { marginTop: spacing.md }]} onPress={() => { setError(""); setStep(6); }} disabled={saving}>
+              <Text style={styles.textLink}>{t("onboardingMvp.back")}</Text>
+            </TouchableOpacity>
+          </>
+        )
       ) : (
         wrap(
           <>
-            <Text style={styles.title}>{t("onboardingMvp.stepFinishTitle")}</Text>
-            <Text style={styles.subtitle}>{t("onboardingMvp.stepFinishSubtitle")}</Text>
+            <Text style={styles.title}>{t("business.join.haveCode")}</Text>
+            <Text style={styles.subtitle}>{t("business.join.enterCode")}</Text>
+            <TextInput
+              style={styles.input}
+              placeholder={t("business.join.codePlaceholder")}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
+              value={joinCode}
+              onChangeText={setJoinCode}
+              autoCapitalize="characters"
+            />
             {error ? <Text style={styles.error}>{error}</Text> : null}
             <TouchableOpacity
-              style={[styles.button, saving && styles.buttonDisabled]}
-              onPress={() => void completeActivation()}
-              disabled={saving}
+              style={[styles.button, (saving || joinBusy) && styles.buttonDisabled]}
+              onPress={() => void redeemCodeAndFinish()}
+              disabled={saving || joinBusy}
             >
-              {saving ? <ActivityIndicator color="#fff" /> : <Text style={styles.buttonText}>{t("onboardingMvp.continueToApp")}</Text>}
+              {joinBusy ? (
+                <ActivityIndicator color="#fff" />
+              ) : (
+                <Text style={styles.buttonText}>{t("business.join.submit")}</Text>
+              )}
             </TouchableOpacity>
-            <TouchableOpacity style={[styles.textLinkBtn, { marginTop: spacing.md }]} onPress={() => { setError(""); setStep(6); }} disabled={saving}>
+            <TouchableOpacity
+              style={[styles.textLinkBtn, { marginTop: spacing.md }]}
+              onPress={() => {
+                setError("");
+                setStep(7);
+              }}
+              disabled={saving || joinBusy}
+            >
               <Text style={styles.textLink}>{t("onboardingMvp.back")}</Text>
             </TouchableOpacity>
           </>

@@ -77,9 +77,27 @@ export function BusinessLandingScreen() {
         <Text style={styles.planSubtitle}>{t("business.landing.business.subtitle")}</Text>
         <Text style={styles.planPrice}>{t("business.landing.business.price")}</Text>
         <Text style={styles.planDescription}>{t("business.landing.business.description")}</Text>
+        <View style={styles.businessBenefitChips}>
+          <View style={styles.businessBenefitChip}>
+            <Text style={styles.businessBenefitChipText}>{t("business.landing.business.benefit.users")}</Text>
+          </View>
+          <View style={styles.businessBenefitChip}>
+            <Text style={styles.businessBenefitChipText}>{t("business.landing.business.benefit.roles")}</Text>
+          </View>
+          <View style={styles.businessBenefitChip}>
+            <Text style={styles.businessBenefitChipText}>{t("business.landing.business.benefit.teamProjects")}</Text>
+          </View>
+          <View style={styles.businessBenefitChip}>
+            <Text style={styles.businessBenefitChipText}>{t("business.landing.business.benefit.chatMedia")}</Text>
+          </View>
+          <View style={styles.businessBenefitChip}>
+            <Text style={styles.businessBenefitChipText}>{t("business.landing.business.benefit.attendanceReports")}</Text>
+          </View>
+        </View>
         <TouchableOpacity style={styles.primaryButton} activeOpacity={0.9} onPress={() => nav.navigate("BusinessRegistration")}>
           <Text style={styles.primaryButtonText}>{t("business.landing.business.cta")}</Text>
         </TouchableOpacity>
+        <Text style={styles.businessHint}>{t("business.landing.business.nextStepHint")}</Text>
       </View>
     </ScrollView>
   );
@@ -245,6 +263,31 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: "#fff",
+  },
+  businessBenefitChips: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  businessBenefitChip: {
+    borderWidth: 1,
+    borderColor: "#e8b699",
+    backgroundColor: "#fff5ef",
+    borderRadius: 999,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+  },
+  businessBenefitChipText: {
+    color: "#8a4f2f",
+    fontSize: 12,
+    fontWeight: "600",
+  },
+  businessHint: {
+    marginTop: spacing.sm,
+    fontSize: 12,
+    lineHeight: 18,
+    color: "#8a4f2f",
   },
 });
 

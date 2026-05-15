@@ -13,6 +13,7 @@ import {
 import { useNavigation } from "@react-navigation/native";
 import { getAuth } from "../../firebase";
 import { useBusinessContext } from "../../hooks/useBusinessContext";
+import { useI18n } from "../../i18n/I18nContext";
 import { createBusinessOrg } from "../../services/businessRegistration";
 import { colors, radius, spacing } from "../../theme";
 
@@ -61,65 +62,65 @@ type ValidationResult =
       message: string;
     };
 
-const COUNTRY_OPTIONS: Array<{ code: SupportedCountryCode; label: string }> = [
-  { code: "SK", label: "Slovensko" },
-  { code: "CZ", label: "Česko" },
-  { code: "AT", label: "Rakúsko" },
-  { code: "DE", label: "Nemecko" },
-  { code: "PL", label: "Poľsko" },
-  { code: "OTHER", label: "Iná krajina" },
+const COUNTRY_OPTIONS: Array<{ code: SupportedCountryCode; labelKey: string }> = [
+  { code: "SK", labelKey: "business.registration.country.sk" },
+  { code: "CZ", labelKey: "business.registration.country.cz" },
+  { code: "AT", labelKey: "business.registration.country.at" },
+  { code: "DE", labelKey: "business.registration.country.de" },
+  { code: "PL", labelKey: "business.registration.country.pl" },
+  { code: "OTHER", labelKey: "business.registration.country.other" },
 ];
 
 const COUNTRY_LABELS: Record<
   SupportedCountryCode,
   {
-    registrationLabel: string;
-    taxIdLabel: string;
-    vatIdLabel: string;
-    zipLabel: string;
+    registrationLabelKey: string;
+    taxIdLabelKey: string;
+    vatIdLabelKey: string;
+    zipLabelKey: string;
     registrationRequired: boolean;
   }
 > = {
   SK: {
-    registrationLabel: "IČO / registračné číslo",
-    taxIdLabel: "DIČ",
-    vatIdLabel: "IČ DPH",
-    zipLabel: "PSČ",
+    registrationLabelKey: "business.registration.countryLabels.sk.registration",
+    taxIdLabelKey: "business.registration.countryLabels.sk.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.sk.vatId",
+    zipLabelKey: "business.registration.countryLabels.sk.zip",
     registrationRequired: true,
   },
   CZ: {
-    registrationLabel: "IČO / registrační číslo",
-    taxIdLabel: "DIČ",
-    vatIdLabel: "DIČ k DPH",
-    zipLabel: "PSČ",
+    registrationLabelKey: "business.registration.countryLabels.cz.registration",
+    taxIdLabelKey: "business.registration.countryLabels.cz.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.cz.vatId",
+    zipLabelKey: "business.registration.countryLabels.cz.zip",
     registrationRequired: true,
   },
   AT: {
-    registrationLabel: "Firmenbuchnummer / registračné číslo",
-    taxIdLabel: "Steuernummer",
-    vatIdLabel: "UID / VAT ID",
-    zipLabel: "PLZ",
+    registrationLabelKey: "business.registration.countryLabels.at.registration",
+    taxIdLabelKey: "business.registration.countryLabels.at.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.at.vatId",
+    zipLabelKey: "business.registration.countryLabels.at.zip",
     registrationRequired: false,
   },
   DE: {
-    registrationLabel: "Handelsregisternummer / registračné číslo",
-    taxIdLabel: "Steuernummer",
-    vatIdLabel: "USt-IdNr. / VAT ID",
-    zipLabel: "PLZ",
+    registrationLabelKey: "business.registration.countryLabels.de.registration",
+    taxIdLabelKey: "business.registration.countryLabels.de.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.de.vatId",
+    zipLabelKey: "business.registration.countryLabels.de.zip",
     registrationRequired: false,
   },
   PL: {
-    registrationLabel: "REGON / registračné číslo",
-    taxIdLabel: "NIP / Tax ID",
-    vatIdLabel: "VAT UE",
-    zipLabel: "Kod pocztowy",
+    registrationLabelKey: "business.registration.countryLabels.pl.registration",
+    taxIdLabelKey: "business.registration.countryLabels.pl.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.pl.vatId",
+    zipLabelKey: "business.registration.countryLabels.pl.zip",
     registrationRequired: false,
   },
   OTHER: {
-    registrationLabel: "Company registration number",
-    taxIdLabel: "Tax ID",
-    vatIdLabel: "VAT ID",
-    zipLabel: "ZIP / Postal code",
+    registrationLabelKey: "business.registration.countryLabels.other.registration",
+    taxIdLabelKey: "business.registration.countryLabels.other.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.other.vatId",
+    zipLabelKey: "business.registration.countryLabels.other.zip",
     registrationRequired: false,
   },
 };
@@ -137,6 +138,7 @@ function getErrorDetails(error: unknown): { code: string; message: string; stack
 export function BusinessRegistrationScreen() {
   const navigation = useNavigation();
   const { setActiveBusinessOrgId } = useBusinessContext();
+  const { t } = useI18n();
   const [form, setForm] = useState<FormState>(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
   const [countryModalVisible, setCountryModalVisible] = useState(false);
@@ -154,34 +156,46 @@ export function BusinessRegistrationScreen() {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
-  const selectedCountryLabel =
-    COUNTRY_OPTIONS.find((country) => country.code === normalizedCountry)?.label ?? "Vyberte krajinu";
+  const selectedCountryLabel = t(
+    COUNTRY_OPTIONS.find((country) => country.code === normalizedCountry)?.labelKey ??
+      "business.registration.countryPicker.selectCountry"
+  );
+  const registrationLabel = t(labels.registrationLabelKey);
+  const taxIdLabel = t(labels.taxIdLabelKey);
+  const vatIdLabel = t(labels.vatIdLabelKey);
+  const zipLabel = t(labels.zipLabelKey);
 
   const validate = (): ValidationResult => {
-    if (!form.companyName.trim()) return { ok: false, field: "companyName", message: "Názov firmy je povinný." };
-    if (!form.legalName.trim()) return { ok: false, field: "legalName", message: "Právny názov je povinný." };
-    if (!normalizedCountry) return { ok: false, field: "countryCode", message: "Krajina je povinná." };
+    if (!form.companyName.trim()) {
+      return { ok: false, field: "companyName", message: t("business.registration.validation.companyNameRequired") };
+    }
+    if (!form.legalName.trim()) {
+      return { ok: false, field: "legalName", message: t("business.registration.validation.legalNameRequired") };
+    }
+    if (!normalizedCountry) {
+      return { ok: false, field: "countryCode", message: t("business.registration.validation.countryRequired") };
+    }
     if (!form.billingEmail.trim()) {
-      return { ok: false, field: "billingEmail", message: "Fakturačný e-mail je povinný." };
+      return { ok: false, field: "billingEmail", message: t("business.registration.validation.billingEmailRequired") };
     }
     if (!form.billingAddressLine1.trim()) {
-      return { ok: false, field: "billingAddress.line1", message: "Ulica fakturačnej adresy je povinná." };
+      return { ok: false, field: "billingAddress.line1", message: t("business.registration.validation.billingLine1Required") };
     }
     if (!form.billingAddressCity.trim()) {
-      return { ok: false, field: "billingAddress.city", message: "Mesto fakturačnej adresy je povinné." };
+      return { ok: false, field: "billingAddress.city", message: t("business.registration.validation.billingCityRequired") };
     }
     if (!form.billingAddressZip.trim()) {
       return {
         ok: false,
         field: "billingAddress.zip",
-        message: `${labels.zipLabel} fakturačnej adresy je povinné.`,
+        message: t("business.registration.validation.billingZipRequired", { zipLabel }),
       };
     }
     if (labels.registrationRequired && !form.registrationNumber.trim()) {
       return {
         ok: false,
         field: "companyIdentifiers.registrationNumber",
-        message: `${labels.registrationLabel} je pre SK/CZ povinné.`,
+        message: t("business.registration.validation.registrationRequiredForSkCz", { registrationLabel }),
       };
     }
     const seats = Number(form.requestedSeats);
@@ -189,7 +203,7 @@ export function BusinessRegistrationScreen() {
       return {
         ok: false,
         field: "requestedSeats",
-        message: "Počet licencií musí byť celé číslo aspoň 1.",
+        message: t("business.registration.validation.requestedSeatsInvalid"),
       };
     }
     return { ok: true, requestedSeats: seats };
@@ -205,10 +219,7 @@ export function BusinessRegistrationScreen() {
         message: validation.message,
       });
       setFormError(validation.message);
-      Alert.alert(
-        "Neplatné údaje",
-        "Skontrolujte povinné polia a počet licencií (celé číslo aspoň 1)."
-      );
+      Alert.alert(t("business.registration.alert.invalidDataTitle"), t("business.registration.alert.invalidDataBody"));
       return;
     }
     console.log("[BusinessRegistration] validation passed");
@@ -216,8 +227,9 @@ export function BusinessRegistrationScreen() {
     const authUser = getAuth()?.currentUser ?? null;
     if (!authUser?.uid) {
       console.warn("[BusinessRegistration] no auth user before callable");
-      setFormError("Nie ste prihlásený. Prihláste sa a skúste znova.");
-      Alert.alert("Nie ste prihlásený. Prihláste sa a skúste znova.");
+      const authError = t("business.registration.alert.notSignedInBody");
+      setFormError(authError);
+      Alert.alert(t("business.registration.alert.notSignedInTitle"), authError);
       return;
     }
 
@@ -274,10 +286,13 @@ export function BusinessRegistrationScreen() {
     } catch (error) {
       const details = getErrorDetails(error);
       console.warn("[BusinessRegistration] createBusinessOrg error", details);
-      setFormError(details.message || "Registrácia zlyhala. Skúste to prosím znova.");
+      setFormError(t("business.registration.alert.submitFailedBody"));
       Alert.alert(
-        "Registrácia zlyhala",
-        `Code: ${details.code}\nMessage: ${details.message || "Skúste to prosím znova."}`
+        t("business.registration.alert.submitFailedTitle"),
+        t("business.registration.alert.submitFailedBodyWithCode", {
+          code: details.code,
+          message: details.message || t("business.registration.alert.tryAgain"),
+        })
       );
     } finally {
       setSubmitting(false);
@@ -286,30 +301,30 @@ export function BusinessRegistrationScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Registrácia firmy</Text>
-      <Text style={styles.subtitle}>Vyplňte fakturačné údaje a počet používateľov pre Staveto Business.</Text>
+      <Text style={styles.title}>{t("business.registration.title")}</Text>
+      <Text style={styles.subtitle}>{t("business.registration.subtitle")}</Text>
 
       {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
 
-      <Text style={styles.label}>Názov firmy *</Text>
+      <Text style={styles.label}>{t("business.registration.companyNameLabel")} *</Text>
       <TextInput
         style={styles.input}
         value={form.companyName}
         onChangeText={(v) => setField("companyName", v)}
-        placeholder="Napr. Staveto s.r.o."
+        placeholder={t("business.registration.companyNamePlaceholder")}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Právny názov *</Text>
+      <Text style={styles.label}>{t("business.registration.legalNameLabel")} *</Text>
       <TextInput
         style={styles.input}
         value={form.legalName}
         onChangeText={(v) => setField("legalName", v)}
-        placeholder="Napr. Staveto spoločnosť s ručením obmedzeným"
+        placeholder={t("business.registration.legalNamePlaceholder")}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Krajina firmy *</Text>
+      <Text style={styles.label}>{t("business.registration.countryLabel")} *</Text>
       <TouchableOpacity
         style={styles.countrySelect}
         onPress={() => setCountryModalVisible(true)}
@@ -322,98 +337,98 @@ export function BusinessRegistrationScreen() {
       </TouchableOpacity>
 
       <Text style={styles.label}>
-        {labels.registrationLabel} {labels.registrationRequired ? "*" : ""}
+        {registrationLabel} {labels.registrationRequired ? "*" : ""}
       </Text>
       <TextInput
         style={styles.input}
         value={form.registrationNumber}
         onChangeText={(v) => setField("registrationNumber", v)}
-        placeholder={labels.registrationLabel}
+        placeholder={registrationLabel}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>{labels.taxIdLabel}</Text>
+      <Text style={styles.label}>{taxIdLabel}</Text>
       <TextInput
         style={styles.input}
         value={form.taxId}
         onChangeText={(v) => setField("taxId", v)}
-        placeholder={labels.taxIdLabel}
+        placeholder={taxIdLabel}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>{labels.vatIdLabel}</Text>
+      <Text style={styles.label}>{vatIdLabel}</Text>
       <TextInput
         style={styles.input}
         value={form.vatId}
         onChangeText={(v) => setField("vatId", v)}
-        placeholder={labels.vatIdLabel}
+        placeholder={vatIdLabel}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Fakturačný e-mail *</Text>
+      <Text style={styles.label}>{t("business.registration.billingEmailLabel")} *</Text>
       <TextInput
         style={styles.input}
         value={form.billingEmail}
         onChangeText={(v) => setField("billingEmail", v)}
         autoCapitalize="none"
         keyboardType="email-address"
-        placeholder="fakturacia@firma.sk"
+        placeholder={t("business.registration.billingEmailPlaceholder")}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Fakturačná adresa - ulica *</Text>
+      <Text style={styles.label}>{t("business.registration.billingLine1Label")} *</Text>
       <TextInput
         style={styles.input}
         value={form.billingAddressLine1}
         onChangeText={(v) => setField("billingAddressLine1", v)}
-        placeholder="Ulica a číslo"
+        placeholder={t("business.registration.billingLine1Placeholder")}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Fakturačná adresa - mesto *</Text>
+      <Text style={styles.label}>{t("business.registration.billingCityLabel")} *</Text>
       <TextInput
         style={styles.input}
         value={form.billingAddressCity}
         onChangeText={(v) => setField("billingAddressCity", v)}
-        placeholder="Mesto"
+        placeholder={t("business.registration.billingCityPlaceholder")}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Fakturačná adresa - {labels.zipLabel} *</Text>
+      <Text style={styles.label}>{t("business.registration.billingZipLabel", { zipLabel })} *</Text>
       <TextInput
         style={styles.input}
         value={form.billingAddressZip}
         onChangeText={(v) => setField("billingAddressZip", v)}
-        placeholder={labels.zipLabel}
+        placeholder={zipLabel}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Kontaktná osoba</Text>
+      <Text style={styles.label}>{t("business.registration.contactNameLabel")}</Text>
       <TextInput
         style={styles.input}
         value={form.contactName}
         onChangeText={(v) => setField("contactName", v)}
-        placeholder="Voliteľné"
+        placeholder={t("business.registration.optionalPlaceholder")}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Telefón</Text>
+      <Text style={styles.label}>{t("business.registration.phoneLabel")}</Text>
       <TextInput
         style={styles.input}
         value={form.phone}
         onChangeText={(v) => setField("phone", v)}
         keyboardType="phone-pad"
-        placeholder="Voliteľné"
+        placeholder={t("business.registration.optionalPlaceholder")}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Počet používateľov / licencií *</Text>
+      <Text style={styles.label}>{t("business.registration.requestedSeatsLabel")} *</Text>
       <TextInput
         style={styles.input}
         value={form.requestedSeats}
         onChangeText={(v) => setField("requestedSeats", v.replace(/[^\d]/g, ""))}
         keyboardType="number-pad"
-        placeholder="Napr. 5"
+        placeholder={t("business.registration.requestedSeatsPlaceholder")}
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
@@ -421,14 +436,14 @@ export function BusinessRegistrationScreen() {
         {submitting ? (
           <ActivityIndicator size="small" color="#fff" />
         ) : (
-          <Text style={styles.submitButtonText}>Vytvoriť firemný účet</Text>
+          <Text style={styles.submitButtonText}>{t("business.registration.submitCta")}</Text>
         )}
       </TouchableOpacity>
 
       <Modal transparent visible={countryModalVisible} animationType="fade" onRequestClose={() => setCountryModalVisible(false)}>
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
-            <Text style={styles.modalTitle}>Vyberte krajinu firmy</Text>
+            <Text style={styles.modalTitle}>{t("business.registration.countryPicker.title")}</Text>
             {COUNTRY_OPTIONS.map((option) => {
               const selected = option.code === normalizedCountry;
               return (
@@ -441,13 +456,13 @@ export function BusinessRegistrationScreen() {
                   }}
                 >
                   <Text style={[styles.countryOptionText, selected && styles.countryOptionTextSelected]}>
-                    {option.label} ({option.code})
+                    {t(option.labelKey)} ({option.code})
                   </Text>
                 </TouchableOpacity>
               );
             })}
             <TouchableOpacity style={styles.modalCancelButton} onPress={() => setCountryModalVisible(false)}>
-              <Text style={styles.modalCancelText}>Zavrieť</Text>
+              <Text style={styles.modalCancelText}>{t("business.registration.countryPicker.cancel")}</Text>
             </TouchableOpacity>
           </View>
         </View>

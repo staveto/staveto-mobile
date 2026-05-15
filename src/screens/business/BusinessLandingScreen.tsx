@@ -1,32 +1,34 @@
 import React from "react";
 import { StyleSheet, Text, TouchableOpacity, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
+import { useI18n } from "../../i18n/I18nContext";
 import { colors, radius, spacing } from "../../theme";
 
 export function BusinessLandingScreen() {
   const navigation = useNavigation();
+  const { t } = useI18n();
 
   return (
     <View style={styles.container}>
-      <Text style={styles.title}>Staveto Business</Text>
-      <Text style={styles.subtitle}>Firemný workspace pre stavebné tímy</Text>
+      <Text style={styles.title}>{t("business.landing.title")}</Text>
+      <Text style={styles.subtitle}>{t("business.landing.subtitle")}</Text>
 
       <View style={styles.benefitsCard}>
-        <Text style={styles.benefit}>- firemný workspace</Text>
-        <Text style={styles.benefit}>- projekty pre tím</Text>
-        <Text style={styles.benefit}>- projektový chat</Text>
-        <Text style={styles.benefit}>- fotky a videá ku stavbe</Text>
-        <Text style={styles.benefit}>- zamestnanci a role</Text>
-        <Text style={styles.benefit}>- dochádzka</Text>
-        <Text style={styles.benefit}>- problémy</Text>
-        <Text style={styles.benefit}>- mesačné prehľady</Text>
+        <Text style={styles.benefit}>- {t("business.landing.benefit.workspace")}</Text>
+        <Text style={styles.benefit}>- {t("business.landing.benefit.teamProjects")}</Text>
+        <Text style={styles.benefit}>- {t("business.landing.benefit.projectChat")}</Text>
+        <Text style={styles.benefit}>- {t("business.landing.benefit.media")}</Text>
+        <Text style={styles.benefit}>- {t("business.landing.benefit.roles")}</Text>
+        <Text style={styles.benefit}>- {t("business.landing.benefit.attendance")}</Text>
+        <Text style={styles.benefit}>- {t("business.landing.benefit.issues")}</Text>
+        <Text style={styles.benefit}>- {t("business.landing.benefit.reports")}</Text>
       </View>
 
       <TouchableOpacity
         style={styles.primaryButton}
         onPress={() => (navigation as { navigate: (name: string) => void }).navigate("BusinessRegistration")}
       >
-        <Text style={styles.primaryButtonText}>Registrovať moju firmu</Text>
+        <Text style={styles.primaryButtonText}>{t("business.landing.registerCta")}</Text>
       </TouchableOpacity>
 
       <TouchableOpacity
@@ -37,7 +39,7 @@ export function BusinessLandingScreen() {
           }
         }}
       >
-        <Text style={styles.secondaryButtonText}>Pokračovať v osobnom Stavete</Text>
+        <Text style={styles.secondaryButtonText}>{t("business.landing.personalCta")}</Text>
       </TouchableOpacity>
     </View>
   );

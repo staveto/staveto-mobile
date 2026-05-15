@@ -1,8 +1,18 @@
 import React, { useEffect, useMemo, useState } from "react";
-import { Alert, Linking, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import {
+  Alert,
+  Linking,
+  Modal,
+  ScrollView,
+  StyleSheet,
+  Text,
+  TouchableOpacity,
+  View,
+} from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
 import { useI18n } from "../../i18n/I18nContext";
+import { translations } from "../../i18n/translations";
 import { getBusinessOrder, type BusinessOrderDoc } from "../../services/organizations";
 import { listMembers, type MembershipDoc } from "../../services/businessMembers";
 import { createBusinessCheckoutSession } from "../../services/businessPayments";
@@ -35,13 +45,6 @@ function formatDate(raw: unknown): string | null {
   }
 }
 
-function getDaysUntil(raw: unknown): number | null {
-  const ms = toMillis(raw);
-  if (ms === null) return null;
-  const diff = ms - Date.now();
-  return Math.ceil(diff / (1000 * 60 * 60 * 24));
-}
-
 function getErrorDetails(error: unknown): { code: string; message: string } {
   const code =
     typeof (error as { code?: unknown } | null)?.code === "string"
@@ -49,6 +52,47 @@ function getErrorDetails(error: unknown): { code: string; message: string } {
       : "unknown";
   const message = error instanceof Error ? error.message : String(error);
   return { code, message };
+}
+
+function normalizeParams(params?: Record<string, string | number>): Record<string, string> | undefined {
+  if (!params) return undefined;
+  return Object.entries(params).reduce<Record<string, string>>((acc, [key, value]) => {
+    acc[key] = String(value);
+    return acc;
+  }, {});
+}
+
+function interpolate(template: string, params?: Record<string, string | number>): string {
+  if (!params) return template;
+  return Object.entries(params).reduce((acc, [key, value]) => {
+    return acc.replace(new RegExp(`\\{\\{\\s*${key}\\s*\\}\\}`, "g"), String(value));
+  }, template);
+}
+
+function getMemberDisplay(member: MembershipDoc): string {
+  const displayName = ((member as { displayName?: string }).displayName ?? "").trim();
+  if (displayName) return displayName;
+  const name = ((member as { name?: string }).name ?? "").trim();
+  if (name) return name;
+  const email = (
+    (member as { email?: string; emailLower?: string }).email ??
+    (member as { email?: string; emailLower?: string }).emailLower ??
+    ""
+  ).trim();
+  if (email) return email;
+  return member.userId || "—";
+}
+
+function getInitials(source: string): string {
+  const cleaned = source.trim();
+  if (!cleaned) return "?";
+  const chunks = cleaned
+    .split(/[\s@._-]+/)
+    .filter(Boolean)
+    .slice(0, 2)
+    .map((part) => part[0]?.toUpperCase() ?? "");
+  const combined = chunks.join("");
+  return combined || cleaned.slice(0, 1).toUpperCase();
 }
 
 export function BusinessDashboardScreen() {
@@ -60,6 +104,17 @@ export function BusinessDashboardScreen() {
   const [orgMembers, setOrgMembers] = useState<MembershipDoc[]>([]);
   const [membersLoading, setMembersLoading] = useState(false);
   const [membersReadBlocked, setMembersReadBlocked] = useState(false);
+  const [showBusinessInfo, setShowBusinessInfo] = useState(false);
+
+  const tr = (key: string, params?: Record<string, string | number>, fallback?: string): string => {
+    const normalized = normalizeParams(params);
+    const resolved = t(key, normalized);
+    if (resolved !== key) return resolved;
+    const en = translations.en[key];
+    if (typeof en === "string") return interpolate(en, params);
+    if (fallback) return interpolate(fallback, params);
+    return key;
+  };
 
   useEffect(() => {
     let cancelled = false;
@@ -112,19 +167,19 @@ export function BusinessDashboardScreen() {
   const planLabel = useMemo(() => {
     const planCode = activeOrganization?.planCode ?? activeOrder?.planCode ?? activeOrder?.priceSnapshot?.planCode;
     if (!planCode) return "—";
-    if (planCode === "business_starter") return t("business.planSelection.starterTitle");
-    if (planCode === "business_team") return t("business.planSelection.teamTitle");
-    if (planCode === "business_company") return t("business.planSelection.companyTitle");
-    if (planCode === "business_enterprise") return t("business.planSelection.enterpriseTitle");
+    if (planCode === "business_starter") return tr("business.planSelection.starterTitle");
+    if (planCode === "business_team") return tr("business.planSelection.teamTitle");
+    if (planCode === "business_company") return tr("business.planSelection.companyTitle");
+    if (planCode === "business_enterprise") return tr("business.planSelection.enterpriseTitle");
     return "Business";
-  }, [activeOrder?.planCode, activeOrder?.priceSnapshot?.planCode, activeOrganization?.planCode, t]);
+  }, [activeOrder?.planCode, activeOrder?.priceSnapshot?.planCode, activeOrganization?.planCode]);
 
-  const seats = activeOrganization?.requestedSeats ?? activeOrder?.requestedSeats ?? activeOrganization?.seatsLimit ?? 0;
-  const trialDaysLeft = getDaysUntil(activeOrganization?.trialEndsAt);
-  const hasValidTrial = trialDaysLeft !== null && trialDaysLeft >= 0;
   const isPendingPayment = activeOrganization?.status === "pending_payment";
   const isTrialing = activeOrganization?.status === "trialing";
-  const isLegacyPending = isPendingPayment && !hasValidTrial;
+  const orgRequestedSeats =
+    (activeOrganization as { requestedSeats?: number } | null)?.requestedSeats ?? null;
+  const seats = orgRequestedSeats ?? activeOrder?.requestedSeats ?? activeOrganization?.seatsLimit ?? 0;
+  const seatsLimit = activeOrganization?.seatsLimit || orgRequestedSeats || 0;
   const billingPeriodRaw =
     activeOrganization?.billingPeriod ??
     activeOrder?.billingPeriod ??
@@ -132,15 +187,15 @@ export function BusinessDashboardScreen() {
     "manual";
   const billingPeriodLabel =
     billingPeriodRaw === "yearly"
-      ? t("business.planSelection.billingYearly")
+      ? tr("business.planSelection.billingYearly")
       : billingPeriodRaw === "monthly"
-      ? t("business.planSelection.billingMonthly")
-      : t("business.dashboard.billingManual");
-  const amountGross =
-    activeOrder?.paymentInstructions?.amountGross ??
-    activeOrder?.priceSnapshot?.totalGross ??
-    null;
-  const seatsLimit = activeOrganization?.seatsLimit || activeOrganization?.requestedSeats || 0;
+      ? tr("business.planSelection.billingMonthly")
+      : tr("business.dashboard.billingManual", undefined, "Manual billing");
+  const companyName =
+    activeOrganization?.name ||
+    (activeOrganization as { companyName?: string } | null)?.companyName ||
+    "Business";
+
   const memberCandidates = orgMembers.filter((member) => {
     const normalized = member.status.toLowerCase();
     return normalized === "active" || normalized === "invited" || normalized === "pending";
@@ -150,9 +205,9 @@ export function BusinessDashboardScreen() {
     const normalized = member.status.toLowerCase();
     return normalized === "invited" || normalized === "pending";
   });
-  const usedSeats = activeMembers.length;
+  const usedSeats = activeOrganization?.seatsUsed ?? activeMembers.length;
   const freeSeats = Math.max(seatsLimit - usedSeats, 0);
-  const previewMembers = memberCandidates.slice(0, 5);
+  const previewMembers = memberCandidates.slice(0, 3);
   const canManageTeam =
     activeMembership?.role === "owner" ||
     activeMembership?.role === "admin" ||
@@ -160,10 +215,37 @@ export function BusinessDashboardScreen() {
   const canChangePlan = activeMembership?.role === "owner" || activeMembership?.role === "admin";
   const orgId = activeOrganization?.id ?? null;
   const orderId = activeOrder?.id ?? activeOrganization?.activeBusinessOrderId ?? null;
+  const statusBadgeLabel = isPendingPayment
+    ? tr("business.dashboard.badgePaymentDue", undefined, "Payment due")
+    : isTrialing
+    ? tr("business.dashboard.badgeTrial", undefined, "Trial")
+    : tr("business.dashboard.badgeActive", undefined, "Active");
+  const statusLabel = isPendingPayment
+    ? tr("business.pending.statusPendingPayment", undefined, "pending_payment")
+    : isTrialing
+    ? tr("business.pending.statusTrialing", undefined, "trialing")
+    : tr("business.pending.statusActive", undefined, "active");
+  const statusBadgeStyle = isPendingPayment
+    ? styles.badgeWarning
+    : isTrialing
+    ? styles.badgeTrial
+    : styles.badgeSuccess;
+  const trialEndsLabel = formatDate(activeOrganization?.trialEndsAt);
+  const amountGross =
+    activeOrder?.paymentInstructions?.amountGross ??
+    activeOrder?.priceSnapshot?.totalGross ??
+    null;
+  const amountLabel =
+    amountGross !== null
+      ? tr("business.dashboard.amountLabel", { amount: String(amountGross) }, "{{amount}} EUR")
+      : "—";
 
   const openChangePlan = () => {
     if (!orgId || !orderId) {
-      Alert.alert(t("business.dashboard.paymentStartFailedTitle"), t("business.dashboard.selectPlanFirstBody"));
+      Alert.alert(
+        tr("business.dashboard.paymentStartFailedTitle", undefined, "Could not start payment"),
+        tr("business.dashboard.selectPlanFirstBody", undefined, "Select a Business plan first.")
+      );
       return;
     }
     nav.navigate("BusinessPlanSelection", {
@@ -183,11 +265,17 @@ export function BusinessDashboardScreen() {
 
   const onPayOnlinePress = async () => {
     if (!orgId || !orderId) {
-      Alert.alert(t("business.dashboard.paymentStartFailedTitle"), t("business.dashboard.selectPlanFirstBody"));
+      Alert.alert(
+        tr("business.dashboard.paymentStartFailedTitle", undefined, "Could not start payment"),
+        tr("business.dashboard.selectPlanFirstBody", undefined, "Select a Business plan first.")
+      );
       return;
     }
     try {
-      Alert.alert(t("business.dashboard.payOnlineTitle"), t("business.dashboard.openingStripeCheckout"));
+      Alert.alert(
+        tr("business.dashboard.payOnlineTitle", undefined, "Pay online"),
+        tr("business.dashboard.openingStripeCheckout", undefined, "Opening Stripe checkout...")
+      );
       const result = await createBusinessCheckoutSession({ orgId, orderId });
       await Linking.openURL(result.checkoutUrl);
     } catch (error) {
@@ -199,56 +287,143 @@ export function BusinessDashboardScreen() {
         (lowerMessage.includes("najprv vyberte konkr") || lowerMessage.includes("select"));
       if (needsPlanSelection) {
         Alert.alert(
-          t("business.dashboard.selectPlanFirstTitle"),
-          t("business.dashboard.selectPlanFirstBody"),
+          tr("business.dashboard.selectPlanFirstTitle", undefined, "Select Business plan"),
+          tr("business.dashboard.selectPlanFirstBody", undefined, "Select a Business plan first."),
           [
-            { text: t("common.cancel"), style: "cancel" },
-            { text: t("business.dashboard.changePlanCta"), onPress: openChangePlan },
+            { text: tr("common.cancel", undefined, "Cancel"), style: "cancel" },
+            { text: tr("business.dashboard.changePlanCta", undefined, "Change plan"), onPress: openChangePlan },
           ]
         );
         return;
       }
       Alert.alert(
-        t("business.dashboard.paymentStartFailedTitle"),
-        `${t("business.dashboard.paymentStartFailedBody")}\n${details.code}: ${details.message}`
+        tr("business.dashboard.paymentStartFailedTitle", undefined, "Could not start payment"),
+        `${tr("business.dashboard.paymentStartFailedBody", undefined, "Try again in a moment.")}\n${details.code}: ${details.message}`
       );
     }
   };
 
+  const openBankTransferDetail = () => {
+    nav.navigate("BusinessOrderPending", {
+      companyName: activeOrganization?.name,
+      orderNumber: activeOrder?.orderNumber,
+      requestedSeats: seats,
+      status: activeOrganization?.status,
+      variableSymbol: activeOrder?.variableSymbol,
+      paymentReference: activeOrder?.paymentReference,
+      billingEmail: activeOrganization?.billingEmail,
+    });
+  };
+
+  const infoRows: Array<{ label: string; value: string | null }> = [
+    { label: tr("business.dashboard.detailsCompany", undefined, "Company"), value: companyName },
+    { label: tr("business.dashboard.detailsStatus", undefined, "Status"), value: statusLabel },
+    { label: tr("business.dashboard.detailsPlan", undefined, "Plan"), value: planLabel },
+    { label: tr("business.dashboard.detailsLicenses", undefined, "Licenses"), value: `${usedSeats} / ${seatsLimit || seats}` },
+    { label: tr("business.dashboard.detailsBillingPeriod", undefined, "Billing period"), value: billingPeriodLabel },
+    { label: tr("business.dashboard.detailsOrderNumber", undefined, "Order number"), value: activeOrder?.orderNumber ?? null },
+    { label: tr("business.dashboard.detailsVariableSymbol", undefined, "Variable symbol"), value: activeOrder?.variableSymbol ?? null },
+    { label: tr("business.dashboard.detailsPaymentReference", undefined, "Payment reference"), value: activeOrder?.paymentReference ?? null },
+    { label: tr("business.dashboard.detailsBillingEmail", undefined, "Billing email"), value: activeOrganization?.billingEmail ?? null },
+    { label: tr("business.dashboard.detailsAmount", undefined, "Amount"), value: amountGross !== null ? amountLabel : null },
+    { label: tr("business.dashboard.detailsTrialEnds", undefined, "Trial end date"), value: trialEndsLabel ?? null },
+  ];
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>{t("business.dashboard.title")}</Text>
-      <Text style={styles.subtitle}>{t("business.dashboard.subtitle")}</Text>
-      <Text style={styles.text}>{t("business.dashboard.placeholderBody")}</Text>
-      {activeOrganization?.name ? (
-        <Text style={styles.orgName}>
-          {t("business.pending.company")}: {activeOrganization.name}
-        </Text>
-      ) : null}
+      <View style={styles.card}>
+        <View style={styles.headerRow}>
+          <View style={styles.headerMeta}>
+            <Text style={styles.companyName}>{companyName}</Text>
+            <Text style={styles.planName}>{planLabel}</Text>
+            <Text style={styles.licenseLine}>
+              {tr(
+                "business.dashboard.headerLicensesLine",
+                {
+                  used: String(usedSeats),
+                  limit: String(seatsLimit || seats),
+                  free: String(freeSeats),
+                },
+                "{{used}} / {{limit}} licenses · {{free}} free"
+              )}
+            </Text>
+          </View>
+          <TouchableOpacity style={styles.infoButton} onPress={() => setShowBusinessInfo(true)}>
+            <Text style={styles.infoButtonText}>i</Text>
+          </TouchableOpacity>
+        </View>
+        <View style={[styles.statusBadge, statusBadgeStyle]}>
+          <Text style={styles.statusBadgeText}>{statusBadgeLabel}</Text>
+        </View>
+      </View>
+
+      {(isTrialing || isPendingPayment) && (
+        <View style={styles.banner}>
+          <Text style={styles.bannerTitle}>
+            {tr("business.dashboard.paymentBannerTitle", undefined, "Dokoncite aktivaciu")}
+          </Text>
+          <Text style={styles.bannerBody}>
+            {tr(
+              "business.dashboard.paymentBannerBody",
+              undefined,
+              "Firemny ucet je pripraveny. Aktivujte predplatne, aby ste mohli pokracovat po skusobnom obdobi."
+            )}
+          </Text>
+          <View style={styles.bannerActions}>
+            <TouchableOpacity style={styles.primaryButton} onPress={onPayOnlinePress}>
+              <Text style={styles.primaryButtonText}>
+                {tr("business.dashboard.payOnlineCta", undefined, "Zaplatit online")}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.secondaryButton, !canChangePlan && styles.buttonDisabled]}
+              disabled={!canChangePlan}
+              onPress={openChangePlan}
+            >
+              <Text style={styles.secondaryButtonText}>
+                {tr("business.dashboard.changePlanCta", undefined, "Zmenit plan")}
+              </Text>
+            </TouchableOpacity>
+            <TouchableOpacity style={styles.linkButton} onPress={openBankTransferDetail}>
+              <Text style={styles.linkButtonText}>
+                {tr("business.dashboard.bankTransferCta", undefined, "Bankovy prevod")}
+              </Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      )}
 
       <View style={styles.card}>
-        <Text style={styles.cardTitle}>{t("business.dashboard.teamLicenses.title")}</Text>
-        <Text style={styles.cardBody}>{t("business.dashboard.teamLicenses.used", { used: String(usedSeats), limit: String(seatsLimit) })}</Text>
-        <Text style={styles.cardBody}>{t("business.dashboard.teamLicenses.free", { count: String(freeSeats) })}</Text>
-        <Text style={styles.cardBody}>{t("business.dashboard.teamLicenses.members", { count: String(memberCandidates.length) })}</Text>
+        <Text style={styles.cardTitle}>{tr("business.dashboard.teamCardTitle", undefined, "Tim a licencie")}</Text>
+        <Text style={styles.cardBody}>
+          {tr(
+            "business.dashboard.teamCardUsed",
+            { used: String(usedSeats), limit: String(seatsLimit || seats) },
+            "{{used}} / {{limit}} pouzitych"
+          )}
+        </Text>
+        <Text style={styles.cardBody}>
+          {tr("business.dashboard.teamCardFree", { free: String(freeSeats) }, "{{free}} volne licencie")}
+        </Text>
         {pendingInvites.length > 0 ? (
           <Text style={styles.pendingInfoText}>
-            {t("business.dashboard.teamLicenses.pendingInvites", { count: String(pendingInvites.length) })}
+            {tr("business.dashboard.teamCardPending", { count: String(pendingInvites.length) }, "{{count}} cakajucich pozvanok")}
           </Text>
         ) : null}
-        {seatsLimit <= 0 ? (
-          <Text style={styles.warningText}>{t("business.dashboard.teamLicenses.limitNotSet")}</Text>
-        ) : null}
         {membersLoading ? (
-          <Text style={styles.emptyText}>{t("loading.text")}</Text>
+          <Text style={styles.emptyText}>{tr("loading.text", undefined, "Loading...")}</Text>
         ) : membersReadBlocked ? (
-          <Text style={styles.warningText}>{t("business.dashboard.teamLicenses.membersReadBlocked")}</Text>
+          <Text style={styles.warningText}>
+            {tr("business.dashboard.teamLicenses.membersReadBlocked", undefined, "Members are temporarily unavailable.")}
+          </Text>
         ) : previewMembers.length === 0 ? (
-          <Text style={styles.emptyText}>{t("business.dashboard.teamLicenses.noMembers")}</Text>
+          <Text style={styles.emptyText}>
+            {tr("business.dashboard.teamLicenses.noMembers", undefined, "No members yet.")}
+          </Text>
         ) : (
           <View style={styles.membersList}>
             {previewMembers.map((member) => (
-              <MemberRow key={member.id} member={member} t={t} />
+              <MemberRow key={member.id} member={member} tr={tr} />
             ))}
           </View>
         )}
@@ -256,164 +431,124 @@ export function BusinessDashboardScreen() {
           <TouchableOpacity
             style={[styles.secondaryButton, !canManageTeam && styles.buttonDisabled]}
             disabled={!canManageTeam}
-            onPress={() => {
-              if (freeSeats <= 0) {
-                Alert.alert(
-                  t("business.dashboard.teamLicenses.limitReachedTitle"),
-                  t("business.dashboard.teamLicenses.limitReachedMessage")
-                );
-                return;
-              }
+            onPress={() =>
               Alert.alert(
-                t("business.dashboard.teamLicenses.inviteMember"),
-                t("business.dashboard.teamLicenses.manageComingSoon")
-              );
-            }}
+                tr("business.dashboard.teamCardInvite", undefined, "Pozvat clena"),
+                tr("business.dashboard.teamLicenses.manageComingSoon", undefined, "Coming soon.")
+              )
+            }
           >
-            <Text style={styles.secondaryButtonText}>{t("business.dashboard.teamLicenses.inviteMember")}</Text>
+            <Text style={styles.secondaryButtonText}>
+              {tr("business.dashboard.teamCardInvite", undefined, "Pozvat clena")}
+            </Text>
           </TouchableOpacity>
           <TouchableOpacity
             style={[styles.secondaryButton, !canManageTeam && styles.buttonDisabled]}
             disabled={!canManageTeam}
             onPress={() =>
               Alert.alert(
-                t("business.dashboard.teamLicenses.manageTeam"),
-                t("business.dashboard.teamLicenses.manageComingSoon")
+                tr("business.dashboard.teamCardManage", undefined, "Spravovat tim"),
+                tr("business.dashboard.teamLicenses.manageComingSoon", undefined, "Coming soon.")
               )
             }
           >
-            <Text style={styles.secondaryButtonText}>{t("business.dashboard.teamLicenses.manageTeam")}</Text>
+            <Text style={styles.secondaryButtonText}>
+              {tr("business.dashboard.teamCardManage", undefined, "Spravovat tim")}
+            </Text>
           </TouchableOpacity>
         </View>
       </View>
 
-      {(isTrialing || isPendingPayment) && (
-        <View style={styles.card}>
-          <Text style={styles.cardTitle}>
-            {isLegacyPending
-              ? t("business.dashboard.pendingLegacyBannerTitle")
-              : t("business.dashboard.trialCardTitle")}
-          </Text>
-          <Text style={styles.cardBody}>
-            {isLegacyPending
-              ? t("business.dashboard.pendingLegacyBannerBody")
-              : t("business.dashboard.trialCardSubtitle")}
-          </Text>
+      <View style={styles.actionsRow}>
+        <ActionCard
+          title={tr("business.dashboard.actionTeamTitle", undefined, "Tim")}
+          body={tr("business.dashboard.actionTeamBody", undefined, "Spravujte clenov a roly.")}
+          onPress={() =>
+            Alert.alert(
+              tr("business.dashboard.actionTeamTitle", undefined, "Tim"),
+              tr("business.dashboard.teamLicenses.manageComingSoon", undefined, "Coming soon.")
+            )
+          }
+        />
+        <ActionCard
+          title={tr("business.dashboard.actionProjectsTitle", undefined, "Projekty")}
+          body={tr("business.dashboard.actionProjectsBody", undefined, "Firemne projekty a stavby.")}
+          onPress={() =>
+            Alert.alert(
+              tr("business.dashboard.actionProjectsTitle", undefined, "Projekty"),
+              tr("business.dashboard.teamLicenses.manageComingSoon", undefined, "Coming soon.")
+            )
+          }
+        />
+        <ActionCard
+          title={tr("business.dashboard.actionTasksTitle", undefined, "Ulohy")}
+          body={tr("business.dashboard.actionTasksBody", undefined, "Prehlad timovych uloh.")}
+          onPress={() =>
+            Alert.alert(
+              tr("business.dashboard.actionTasksTitle", undefined, "Ulohy"),
+              tr("business.dashboard.teamLicenses.manageComingSoon", undefined, "Coming soon.")
+            )
+          }
+        />
+        <ActionCard
+          title={tr("business.dashboard.actionMessagesTitle", undefined, "Spravy")}
+          body={tr("business.dashboard.actionMessagesBody", undefined, "Firemny inbox a chat.")}
+          onPress={() =>
+            Alert.alert(
+              tr("business.dashboard.actionMessagesTitle", undefined, "Spravy"),
+              tr("business.dashboard.teamLicenses.manageComingSoon", undefined, "Coming soon.")
+            )
+          }
+        />
+      </View>
 
-          <InfoRow
-            label={t("business.pending.company")}
-            value={activeOrganization?.name ?? t("business.dashboard.companyFallback")}
-          />
-          <InfoRow label={t("business.pending.status")} value={activeOrganization?.status ?? "—"} />
-          <InfoRow label={t("business.dashboard.planLabel", { plan: planLabel })} value={planLabel} />
-          <InfoRow
-            label={t("business.dashboard.seatsLabel", {
-              used: String(usedSeats),
-              limit: String(seatsLimit > 0 ? seatsLimit : seats),
-            })}
-            value={seats > 0 ? String(seats) : "—"}
-          />
-          <InfoRow
-            label={t("business.pending.billingPeriod")}
-            value={billingPeriodLabel}
-          />
-          {amountGross !== null ? (
-            <InfoRow
-              label={t("business.pending.amount")}
-              value={t("business.dashboard.amountLabel", { amount: String(amountGross) })}
-            />
-          ) : null}
-          {activeOrder?.orderNumber ? (
-            <InfoRow label={t("business.pending.orderNumber")} value={activeOrder.orderNumber} />
-          ) : null}
-          {activeOrder?.variableSymbol ? (
-            <InfoRow label={t("business.pending.variableSymbol")} value={activeOrder.variableSymbol} />
-          ) : null}
-          {hasValidTrial ? (
-            <InfoRow
-              label={t("business.dashboard.trialEndsAtLabel", {
-                date: formatDate(activeOrganization?.trialEndsAt) ?? "—",
-              })}
-              value={
-                t("business.dashboard.trialEndsInDays", { days: String(trialDaysLeft ?? 0) })
-              }
-            />
-          ) : null}
-
-          <TouchableOpacity
-            style={styles.primaryButton}
-            onPress={onPayOnlinePress}
-          >
-            <Text style={styles.primaryButtonText}>{t("business.dashboard.payOnlineCta")}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={[styles.secondaryButton, !canChangePlan && styles.buttonDisabled]}
-            disabled={!canChangePlan}
-            onPress={openChangePlan}
-          >
-            <Text style={styles.secondaryButtonText}>{t("business.dashboard.changePlanCta")}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.secondaryButton}
-            onPress={() =>
-              nav.navigate("BusinessOrderPending", {
-                companyName: activeOrganization?.name,
-                orderNumber: activeOrder?.orderNumber,
-                requestedSeats: seats,
-                status: activeOrganization?.status,
-                variableSymbol: activeOrder?.variableSymbol,
-                paymentReference: activeOrder?.paymentReference,
-                billingEmail: activeOrganization?.billingEmail,
-              })
-            }
-          >
-            <Text style={styles.secondaryButtonText}>{t("business.dashboard.bankTransferCta")}</Text>
-          </TouchableOpacity>
-
-          <TouchableOpacity
-            style={styles.tertiaryButton}
-            onPress={() => Alert.alert(t("business.dashboard.contactSupportTitle"), t("business.dashboard.contactSupportBody"))}
-          >
-            <Text style={styles.tertiaryButtonText}>{t("business.dashboard.contactSupportCta")}</Text>
-          </TouchableOpacity>
+      <Modal
+        visible={showBusinessInfo}
+        animationType="slide"
+        transparent
+        onRequestClose={() => setShowBusinessInfo(false)}
+      >
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <View style={styles.modalHeader}>
+              <Text style={styles.modalTitle}>
+                {tr("business.dashboard.detailsTitle", undefined, "Business details")}
+              </Text>
+              <TouchableOpacity onPress={() => setShowBusinessInfo(false)}>
+                <Text style={styles.modalClose}>{tr("common.close", undefined, "Close")}</Text>
+              </TouchableOpacity>
+            </View>
+            <ScrollView>
+              {infoRows
+                .filter((row) => row.value && row.value !== "—")
+                .map((row) => (
+                  <View key={row.label} style={styles.infoRow}>
+                    <Text style={styles.infoLabel}>{row.label}</Text>
+                    <Text style={styles.infoValue}>{row.value}</Text>
+                  </View>
+                ))}
+            </ScrollView>
+          </View>
         </View>
-      )}
+      </Modal>
     </ScrollView>
   );
 }
 
-function getMemberDisplay(member: MembershipDoc): string {
-  const displayName = (member.displayName ?? "").trim();
-  if (displayName) return displayName;
-  const email = (member.email ?? member.emailLower ?? "").trim();
-  if (email) return email;
-  return member.userId || "—";
-}
-
-function getInitials(source: string): string {
-  const cleaned = source.trim();
-  if (!cleaned) return "?";
-  const chunks = cleaned
-    .split(/[\s@._-]+/)
-    .filter(Boolean)
-    .slice(0, 2)
-    .map((part) => part[0]?.toUpperCase() ?? "");
-  const combined = chunks.join("");
-  return combined || cleaned.slice(0, 1).toUpperCase();
-}
-
 function MemberRow({
   member,
-  t,
+  tr,
 }: {
   member: MembershipDoc;
-  t: (key: string, params?: Record<string, string>) => string;
+  tr: (key: string, params?: Record<string, string | number>, fallback?: string) => string;
 }) {
   const display = getMemberDisplay(member);
-  const statusKey = member.status === "active" ? "business.dashboard.teamLicenses.statusActive" : "business.dashboard.teamLicenses.statusPending";
-  const roleKey = `business.dashboard.teamLicenses.role.${member.role}`;
+  const role = member.role || "viewer";
+  const roleKey = `business.dashboard.teamLicenses.role.${role}`;
+  const statusKey =
+    member.status === "active"
+      ? "business.dashboard.teamLicenses.statusActive"
+      : "business.dashboard.teamLicenses.statusPending";
   return (
     <View style={styles.memberRow}>
       <View style={styles.memberAvatar}>
@@ -423,96 +558,143 @@ function MemberRow({
         <Text style={styles.memberName} numberOfLines={1}>
           {display}
         </Text>
-        <View style={styles.badgeRow}>
-          <Text style={styles.roleBadge}>{t(roleKey)}</Text>
-          {member.status !== "active" ? <Text style={styles.statusBadge}>{t(statusKey)}</Text> : null}
-        </View>
+        <Text style={styles.memberRoleLine}>
+          {tr(roleKey, undefined, role)} · {tr(statusKey, undefined, member.status)}
+        </Text>
       </View>
     </View>
   );
 }
 
-function InfoRow({ label, value }: { label: string; value: string }) {
+function ActionCard({ title, body, onPress }: { title: string; body: string; onPress: () => void }) {
   return (
-    <View style={styles.row}>
-      <Text style={styles.rowLabel}>{label}</Text>
-      <Text style={styles.rowValue}>{value}</Text>
-    </View>
+    <TouchableOpacity style={styles.actionCard} onPress={onPress}>
+      <Text style={styles.actionTitle}>{title}</Text>
+      <Text style={styles.actionBody}>{body}</Text>
+    </TouchableOpacity>
   );
 }
 
 const styles = StyleSheet.create({
   container: {
     flex: 1,
-    backgroundColor: colors.background,
+    backgroundColor: "#0E1D3A",
   },
   content: {
-    paddingHorizontal: 20,
+    paddingHorizontal: 16,
     paddingVertical: 18,
-    paddingBottom: 28,
-  },
-  title: {
-    fontSize: 28,
-    fontWeight: "700",
-    color: colors.text,
-    textAlign: "left",
-    marginBottom: 8,
-  },
-  subtitle: {
-    fontSize: 16,
-    fontWeight: "600",
-    color: colors.text,
-    textAlign: "left",
-    marginBottom: 14,
-  },
-  text: {
-    fontSize: 14,
-    color: colors.textMuted,
-    textAlign: "left",
-    lineHeight: 20,
-  },
-  orgName: {
-    marginTop: 16,
-    fontSize: 13,
-    color: colors.textMuted,
-    textAlign: "left",
+    paddingBottom: 32,
+    gap: 12,
   },
   card: {
-    marginTop: 16,
-    width: "100%",
-    maxWidth: 460,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 12,
-    backgroundColor: colors.card,
+    borderRadius: 16,
+    backgroundColor: "#FFFFFF",
     padding: 14,
   },
-  cardTitle: {
-    fontSize: 16,
+  headerRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: 12,
+  },
+  headerMeta: {
+    flex: 1,
+  },
+  companyName: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  planName: {
+    marginTop: 2,
+    fontSize: 15,
+    color: "#334155",
+    fontWeight: "600",
+  },
+  licenseLine: {
+    marginTop: 8,
+    fontSize: 14,
+    color: "#475569",
+  },
+  infoButton: {
+    width: 30,
+    height: 30,
+    borderRadius: 15,
+    borderWidth: 1,
+    borderColor: "#CBD5E1",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  infoButtonText: {
+    color: "#334155",
     fontWeight: "700",
-    color: colors.text,
-    marginBottom: 8,
+  },
+  statusBadge: {
+    marginTop: 12,
+    alignSelf: "flex-start",
+    borderRadius: 999,
+    paddingHorizontal: 10,
+    paddingVertical: 4,
+  },
+  badgeWarning: {
+    backgroundColor: "#FEF3C7",
+  },
+  badgeTrial: {
+    backgroundColor: "#DBEAFE",
+  },
+  badgeSuccess: {
+    backgroundColor: "#DCFCE7",
+  },
+  statusBadgeText: {
+    color: "#1E293B",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  banner: {
+    borderRadius: 14,
+    backgroundColor: "#FFFFFF",
+    padding: 14,
+  },
+  bannerTitle: {
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  bannerBody: {
+    marginTop: 6,
+    fontSize: 14,
+    lineHeight: 20,
+    color: "#475569",
+  },
+  bannerActions: {
+    marginTop: 10,
+    gap: 8,
+  },
+  cardTitle: {
+    fontSize: 18,
+    fontWeight: "700",
+    color: "#0F172A",
+    marginBottom: 6,
   },
   cardBody: {
     fontSize: 14,
-    color: colors.textMuted,
-    lineHeight: 20,
-    marginBottom: 6,
+    color: "#334155",
+    marginBottom: 4,
   },
   pendingInfoText: {
-    marginTop: 4,
+    marginTop: 2,
     fontSize: 13,
-    color: colors.textMuted,
+    color: "#475569",
   },
   warningText: {
-    marginTop: 8,
+    marginTop: 6,
     fontSize: 13,
     color: colors.error,
   },
   emptyText: {
-    marginTop: 8,
+    marginTop: 6,
     fontSize: 13,
-    color: colors.textMuted,
+    color: "#64748B",
   },
   membersList: {
     marginTop: 10,
@@ -521,18 +703,18 @@ const styles = StyleSheet.create({
   memberRow: {
     flexDirection: "row",
     alignItems: "center",
+    gap: 10,
   },
   memberAvatar: {
     width: 34,
     height: 34,
     borderRadius: 17,
-    backgroundColor: colors.primary,
+    backgroundColor: "#1E3A8A",
     alignItems: "center",
     justifyContent: "center",
-    marginRight: 10,
   },
   memberAvatarText: {
-    color: "#fff",
+    color: "#FFFFFF",
     fontWeight: "700",
     fontSize: 12,
   },
@@ -540,90 +722,118 @@ const styles = StyleSheet.create({
     flex: 1,
   },
   memberName: {
-    color: colors.text,
+    color: "#0F172A",
     fontSize: 14,
     fontWeight: "600",
   },
-  badgeRow: {
+  memberRoleLine: {
     marginTop: 2,
-    flexDirection: "row",
-    alignItems: "center",
-    gap: 6,
-  },
-  roleBadge: {
-    fontSize: 11,
-    color: colors.primary,
-    borderWidth: 1,
-    borderColor: colors.primary,
-    borderRadius: 8,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
-  },
-  statusBadge: {
-    fontSize: 11,
-    color: colors.textMuted,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderRadius: 8,
-    paddingHorizontal: 6,
-    paddingVertical: 2,
+    color: "#64748B",
+    fontSize: 12,
   },
   teamActions: {
     marginTop: 10,
     gap: 8,
   },
+  actionsRow: {
+    gap: 10,
+  },
+  actionCard: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    padding: 14,
+  },
+  actionTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  actionBody: {
+    marginTop: 4,
+    fontSize: 14,
+    color: "#475569",
+  },
   buttonDisabled: {
     opacity: 0.55,
   },
-  row: {
-    marginBottom: 8,
-  },
-  rowLabel: {
-    fontSize: 12,
-    color: colors.textMuted,
-  },
-  rowValue: {
-    fontSize: 14,
-    color: colors.text,
-    fontWeight: "600",
-  },
   primaryButton: {
-    marginTop: 10,
     borderRadius: 10,
-    backgroundColor: colors.primary,
+    backgroundColor: "#EA580C",
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 12,
   },
   primaryButtonText: {
-    color: "#fff",
+    color: "#FFFFFF",
     fontWeight: "700",
     fontSize: 15,
   },
   secondaryButton: {
-    marginTop: 10,
     borderRadius: 10,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "#CBD5E1",
     alignItems: "center",
     justifyContent: "center",
     paddingVertical: 12,
+    backgroundColor: "#FFFFFF",
   },
   secondaryButtonText: {
-    color: colors.text,
+    color: "#0F172A",
     fontWeight: "700",
     fontSize: 15,
   },
-  tertiaryButton: {
-    marginTop: 8,
+  linkButton: {
     alignItems: "center",
-    justifyContent: "center",
     paddingVertical: 8,
   },
-  tertiaryButtonText: {
-    color: colors.textMuted,
-    fontWeight: "600",
+  linkButtonText: {
+    color: "#334155",
     fontSize: 13,
+    fontWeight: "600",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.55)",
+    justifyContent: "flex-end",
+  },
+  modalCard: {
+    maxHeight: "75%",
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 20,
+    borderTopRightRadius: 20,
+    paddingHorizontal: 16,
+    paddingTop: 14,
+    paddingBottom: 24,
+  },
+  modalHeader: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "center",
+    marginBottom: 10,
+  },
+  modalTitle: {
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  modalClose: {
+    color: "#334155",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  infoRow: {
+    paddingVertical: 8,
+    borderBottomWidth: 1,
+    borderBottomColor: "#E2E8F0",
+  },
+  infoLabel: {
+    color: "#64748B",
+    fontSize: 12,
+  },
+  infoValue: {
+    marginTop: 3,
+    color: "#0F172A",
+    fontSize: 14,
+    fontWeight: "600",
   },
 });
-

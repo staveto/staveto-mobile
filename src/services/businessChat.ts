@@ -15,8 +15,9 @@ import {
   where,
 } from "../lib/rnFirestore";
 import { getMembership, getOrganization } from "./organizations";
+import type { MembershipDoc, OrgRole } from "./organizations";
 
-export type BusinessChatType = "general";
+export type BusinessChatType = "general" | "direct";
 export type BusinessChatMessageType = "text" | "image";
 
 export type BusinessChatDoc = {
@@ -29,6 +30,17 @@ export type BusinessChatDoc = {
   lastMessageText: string;
   lastMessageAt: unknown;
   lastMessageByUid: string | null;
+  participantUids?: string[];
+};
+
+export type BusinessChatMemberDoc = {
+  id: string;
+  orgId: string;
+  uid: string;
+  displayName: string;
+  email: string;
+  role: OrgRole;
+  status: MembershipDoc["status"];
 };
 
 export type BusinessChatMessageDoc = {
@@ -82,20 +94,20 @@ function hasPendingTrialAccess(org: { status?: string; trialEndsAt?: unknown; bu
   return trialValid || org.businessEnabled === true || !!org.activeBusinessOrderId;
 }
 
-async function resolveBusinessChatAccess(orgId: string): Promise<{ uid: string; canRead: boolean; canWrite: boolean }> {
+async function resolveBusinessChatAccess(orgId: string): Promise<{ uid: string; role: OrgRole; canRead: boolean; canWrite: boolean }> {
   const uid = requireUid();
   const normalizedOrgId = orgId.trim();
-  if (!normalizedOrgId) return { uid, canRead: false, canWrite: false };
+  if (!normalizedOrgId) return { uid, role: "viewer", canRead: false, canWrite: false };
 
   const [organization, membership] = await Promise.all([
     getOrganization(normalizedOrgId),
     getMembership(normalizedOrgId, uid),
   ]);
   if (!organization || !membership) {
-    return { uid, canRead: false, canWrite: false };
+    return { uid, role: "viewer", canRead: false, canWrite: false };
   }
   if (membership.status !== "active") {
-    return { uid, canRead: false, canWrite: false };
+    return { uid, role: membership.role, canRead: false, canWrite: false };
   }
   const statusCanAccess =
     organization.status === "active" ||
@@ -103,20 +115,64 @@ async function resolveBusinessChatAccess(orgId: string): Promise<{ uid: string; 
     hasPendingTrialAccess(organization);
   const canRead = statusCanAccess;
   const canWrite = canRead && CHAT_WRITER_ROLES.has(membership.role);
-  return { uid, canRead, canWrite };
+  return { uid, role: membership.role, canRead, canWrite };
+}
+
+function memberNameFromRaw(raw: Record<string, unknown>, fallbackUid: string): string {
+  const fromDisplayName = typeof raw.displayName === "string" ? raw.displayName.trim() : "";
+  if (fromDisplayName) return fromDisplayName;
+  const fromName = typeof raw.name === "string" ? raw.name.trim() : "";
+  if (fromName) return fromName;
+  const fromEmail = typeof raw.email === "string" ? raw.email.trim() : "";
+  if (fromEmail) return fromEmail;
+  const fromEmailLower = typeof raw.emailLower === "string" ? raw.emailLower.trim() : "";
+  if (fromEmailLower) return fromEmailLower;
+  if (fallbackUid) return fallbackUid;
+  return "User";
+}
+
+function localPart(email: string): string {
+  const idx = email.indexOf("@");
+  if (idx <= 0) return email;
+  return email.slice(0, idx);
+}
+
+export function buildDirectChatId(uidA: string, uidB: string): string {
+  const a = uidA.trim();
+  const b = uidB.trim();
+  if (!a || !b) return "direct_";
+  const [minUid, maxUid] = a < b ? [a, b] : [b, a];
+  return `direct_${minUid}_${maxUid}`;
+}
+
+async function canAccessDirectChat(orgId: string, chatId: string, uid: string, role: OrgRole): Promise<boolean> {
+  const chatRef = doc(db, `organizations/${orgId}/chats/${chatId}`);
+  const snap = await getDoc(chatRef);
+  if (!snap.exists()) return false;
+  const raw = (snap.data() ?? {}) as Record<string, unknown>;
+  if (raw.type !== "direct") return false;
+  const participants = Array.isArray(raw.participantUids)
+    ? raw.participantUids.filter((item): item is string => typeof item === "string")
+    : [];
+  if (participants.includes(uid)) return true;
+  return role === "owner" || role === "admin";
 }
 
 function toChatDoc(id: string, raw: Record<string, unknown>): BusinessChatDoc {
+  const participantUids = Array.isArray(raw.participantUids)
+    ? raw.participantUids.filter((v): v is string => typeof v === "string" && v.trim().length > 0)
+    : [];
   return {
     id,
     orgId: typeof raw.orgId === "string" ? raw.orgId : "",
-    type: raw.type === "general" ? "general" : "general",
+    type: raw.type === "direct" ? "direct" : "general",
     title: typeof raw.title === "string" && raw.title.trim() ? raw.title.trim() : "General",
     createdAt: raw.createdAt ?? null,
     updatedAt: raw.updatedAt ?? null,
     lastMessageText: typeof raw.lastMessageText === "string" ? raw.lastMessageText : "",
     lastMessageAt: raw.lastMessageAt ?? null,
     lastMessageByUid: typeof raw.lastMessageByUid === "string" ? raw.lastMessageByUid : null,
+    participantUids,
   };
 }
 
@@ -164,6 +220,44 @@ export async function ensureGeneralChat(orgId: string): Promise<void> {
   });
 }
 
+export async function ensureDirectChat(orgId: string, otherUserId: string): Promise<string> {
+  const access = await resolveBusinessChatAccess(orgId);
+  if (!access.canRead) {
+    throw new Error("business-chat/no-access");
+  }
+  const normalizedOrgId = orgId.trim();
+  const targetUid = otherUserId.trim();
+  if (!normalizedOrgId || !targetUid) {
+    throw new Error("business-chat/no-access");
+  }
+  if (targetUid === access.uid) {
+    return buildDirectChatId(access.uid, targetUid);
+  }
+
+  const targetMembership = await getMembership(normalizedOrgId, targetUid);
+  if (!targetMembership || targetMembership.status !== "active") {
+    throw new Error("business-chat/no-access");
+  }
+
+  const chatId = buildDirectChatId(access.uid, targetUid);
+  const chatRef = doc(db, `organizations/${normalizedOrgId}/chats/${chatId}`);
+  const snap = await getDoc(chatRef);
+  if (!snap.exists()) {
+    await setDoc(chatRef, {
+      orgId: normalizedOrgId,
+      type: "direct",
+      participantUids: [access.uid, targetUid].sort(),
+      title: "",
+      createdAt: serverTimestamp(),
+      updatedAt: serverTimestamp(),
+      lastMessageText: "",
+      lastMessageAt: null,
+      lastMessageByUid: null,
+    });
+  }
+  return chatId;
+}
+
 export function listenBusinessChats(
   orgId: string,
   callback: (chats: BusinessChatDoc[]) => void,
@@ -177,6 +271,55 @@ export function listenBusinessChats(
     (snap) => {
       const rows = snap.docs.map((d: { id: string; data: () => unknown }) =>
         toChatDoc(d.id, (d.data() ?? {}) as Record<string, unknown>)
+      );
+      callback(rows);
+    },
+    onError
+  );
+}
+
+export function listenBusinessChatMembers(
+  orgId: string,
+  callback: (members: BusinessChatMemberDoc[]) => void,
+  onError?: (error: Error) => void
+): () => void {
+  const normalizedOrgId = orgId.trim();
+  const membersRef = collection(db, `organizations/${normalizedOrgId}/members`);
+  const q = query(membersRef, where("status", "==", "active"), limit(200));
+  return onSnapshot(
+    q,
+    (snap) => {
+      const rows: BusinessChatMemberDoc[] = snap.docs
+        .map((d: { id: string; data: () => unknown }) => {
+          const raw = (d.data() ?? {}) as Record<string, unknown>;
+          const uid =
+            (typeof raw.userId === "string" && raw.userId.trim()) ||
+            (typeof raw.uid === "string" && raw.uid.trim()) ||
+            d.id;
+          const email = (typeof raw.email === "string" ? raw.email.trim() : "") ||
+            (typeof raw.emailLower === "string" ? raw.emailLower.trim() : "");
+          const displayNameRaw = memberNameFromRaw(raw, uid);
+          const displayName = email && (displayNameRaw === email || displayNameRaw === (raw.emailLower ?? ""))
+            ? localPart(email)
+            : displayNameRaw;
+          const roleRaw = typeof raw.role === "string" ? raw.role.toLowerCase() : "viewer";
+          const role: OrgRole =
+            roleRaw === "owner" || roleRaw === "admin" || roleRaw === "manager" || roleRaw === "worker"
+              ? roleRaw
+              : "viewer";
+          return {
+            id: d.id,
+            orgId: normalizedOrgId,
+            uid,
+            displayName,
+            email,
+            role,
+            status: "active" as const,
+          };
+        })
+        .filter((row: BusinessChatMemberDoc) => row.uid.trim().length > 0);
+      rows.sort((a: BusinessChatMemberDoc, b: BusinessChatMemberDoc) =>
+        a.displayName.localeCompare(b.displayName, undefined, { sensitivity: "base" })
       );
       callback(rows);
     },
@@ -214,7 +357,14 @@ export async function sendTextMessage(input: { orgId: string; chatId: string; te
   const text = input.text.trim();
   if (!text) return;
 
-  await ensureGeneralChat(input.orgId);
+  if (input.chatId === "general") {
+    await ensureGeneralChat(input.orgId);
+  } else {
+    const directAllowed = await canAccessDirectChat(input.orgId, input.chatId, uid, access.role);
+    if (!directAllowed) {
+      throw new Error("business-chat/no-access");
+    }
+  }
 
   const messagesRef = collection(db, `organizations/${input.orgId}/chats/${input.chatId}/messages`);
   await addDoc(messagesRef, {
@@ -243,6 +393,10 @@ export async function markChatRead(input: { orgId: string; chatId: string }): Pr
   if (!access.canRead) {
     return;
   }
+  if (input.chatId !== "general") {
+    const directAllowed = await canAccessDirectChat(input.orgId, input.chatId, access.uid, access.role);
+    if (!directAllowed) return;
+  }
   const uid = access.uid;
   const readRef = doc(db, `organizations/${input.orgId}/chats/${input.chatId}/reads/${uid}`);
   await setDoc(
@@ -257,23 +411,33 @@ export async function markChatRead(input: { orgId: string; chatId: string }): Pr
 }
 
 export async function getUnreadChatCount(orgId: string, uid: string): Promise<number> {
+  return getUnreadChatCountForChat(orgId, "general", uid);
+}
+
+export async function getUnreadChatCountForChat(orgId: string, chatId: string, uid: string): Promise<number> {
   if (!orgId || !uid) return 0;
   const access = await resolveBusinessChatAccess(orgId);
   if (!access.canRead || access.uid !== uid) return 0;
   const normalizedOrgId = orgId.trim();
   if (!normalizedOrgId) return 0;
+  const normalizedChatId = chatId.trim();
+  if (!normalizedChatId) return 0;
+  if (normalizedChatId !== "general") {
+    const directAllowed = await canAccessDirectChat(normalizedOrgId, normalizedChatId, access.uid, access.role);
+    if (!directAllowed) return 0;
+  }
 
-  const chatRef = doc(db, `organizations/${normalizedOrgId}/chats/general`);
+  const chatRef = doc(db, `organizations/${normalizedOrgId}/chats/${normalizedChatId}`);
   const chatSnap = await getDoc(chatRef);
   if (!chatSnap.exists()) {
     return 0;
   }
 
-  const readRef = doc(db, `organizations/${normalizedOrgId}/chats/general/reads/${uid}`);
+  const readRef = doc(db, `organizations/${normalizedOrgId}/chats/${normalizedChatId}/reads/${uid}`);
   const readSnap = await getDoc(readRef);
   const lastReadAtMs = toMillis(readSnap.data()?.lastReadAt);
 
-  const messagesRef = collection(db, `organizations/${normalizedOrgId}/chats/general/messages`);
+  const messagesRef = collection(db, `organizations/${normalizedOrgId}/chats/${normalizedChatId}/messages`);
   const q =
     lastReadAtMs > 0
       ? query(messagesRef, where("createdAt", ">", new Date(lastReadAtMs)), orderBy("createdAt", "desc"), limit(100))

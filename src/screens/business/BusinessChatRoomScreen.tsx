@@ -19,6 +19,7 @@ import { useActiveOrg } from "../../hooks/useActiveOrg";
 import { useOrgAccess } from "../../hooks/useOrgAccess";
 import { getAuth } from "../../firebase";
 import {
+  ensureDirectChat,
   ensureGeneralChat,
   listenChatMessages,
   markChatRead,
@@ -29,6 +30,8 @@ import {
 type ChatRouteParams = {
   orgId?: string;
   chatId?: string;
+  chatType?: "general" | "direct";
+  otherUserId?: string;
   title?: string;
 };
 
@@ -67,12 +70,16 @@ export function BusinessChatRoomScreen() {
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [resolvedChatId, setResolvedChatId] = useState<string>("");
   const flatListRef = useRef<FlatList<BusinessChatMessageDoc> | null>(null);
   const cleanupRef = React.useRef<(() => void) | null>(null);
 
   const orgId = params.orgId ?? activeBusinessOrgId ?? "";
-  const chatId = params.chatId ?? "general";
-  const chatTitle = params.title || t("business.chat.generalTitle");
+  const chatType = params.chatType === "direct" ? "direct" : "general";
+  const routeChatId = params.chatId ?? (chatType === "general" ? "general" : "");
+  const otherUserId = params.otherUserId ?? "";
+  const chatTitle =
+    params.title || (chatType === "direct" ? t("business.chat.directChat") : t("business.chat.generalTitle"));
   const uid = getAuth()?.currentUser?.uid ?? "";
   const canOpenBusinessChat = Boolean(
     activeBusinessOrgId &&
@@ -83,27 +90,54 @@ export function BusinessChatRoomScreen() {
       orgId === activeBusinessOrgId
   );
 
+  const mapFriendlyError = useCallback(
+    (raw: unknown): string => {
+      const message = raw instanceof Error ? raw.message : String(raw ?? "");
+      if (
+        message.includes("permission-denied") ||
+        message.includes("firestore/permission-denied") ||
+        message.includes("business-chat/no-access")
+      ) {
+        return t("business.chat.permissionDeniedFriendly");
+      }
+      return t("business.chat.error");
+    },
+    [t]
+  );
+
   const refreshRead = useCallback(async () => {
-    if (!orgId || !chatId) return;
+    if (!orgId || !resolvedChatId) return;
     try {
-      await markChatRead({ orgId, chatId });
+      await markChatRead({ orgId, chatId: resolvedChatId });
     } catch {
       // Read marker is best effort in MVP.
     }
-  }, [chatId, orgId]);
+  }, [orgId, resolvedChatId]);
 
   useEffect(() => {
     let cancelled = false;
     if (!orgId || !canOpenBusinessChat) {
       setLoading(false);
-      setError(t("business.chat.businessRequiredBody"));
+      setResolvedChatId("");
+      setError(null);
       return;
     }
     setLoading(true);
     setError(null);
-    ensureGeneralChat(orgId)
-      .then(() => {
+    const ensureChat = async () => {
+      if (chatType === "direct") {
+        if (!otherUserId.trim()) {
+          throw new Error("business-chat/no-access");
+        }
+        return ensureDirectChat(orgId, otherUserId);
+      }
+      await ensureGeneralChat(orgId);
+      return routeChatId || "general";
+    };
+    ensureChat()
+      .then((chatId) => {
         if (cancelled) return;
+        setResolvedChatId(chatId);
         return listenChatMessages(
           orgId,
           chatId,
@@ -116,7 +150,7 @@ export function BusinessChatRoomScreen() {
           },
           (snapshotError) => {
             if (cancelled) return;
-            setError(snapshotError.message || t("business.chat.error"));
+            setError(mapFriendlyError(snapshotError));
             setLoading(false);
           }
         );
@@ -127,7 +161,7 @@ export function BusinessChatRoomScreen() {
       })
       .catch((e) => {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : String(e));
+        setError(mapFriendlyError(e));
         setLoading(false);
       });
 
@@ -136,23 +170,22 @@ export function BusinessChatRoomScreen() {
       cleanupRef.current?.();
       cleanupRef.current = null;
     };
-  }, [canOpenBusinessChat, chatId, orgId, refreshRead, t]);
+  }, [canOpenBusinessChat, chatType, mapFriendlyError, orgId, otherUserId, refreshRead, routeChatId]);
 
-  const canSend = canOpenBusinessChat && input.trim().length > 0 && !sending;
+  const canSend = canOpenBusinessChat && resolvedChatId.length > 0 && input.trim().length > 0 && !sending;
 
   const onSend = async () => {
-    if (!canSend || !orgId || !chatId) return;
+    if (!canSend || !orgId || !resolvedChatId) return;
     setSending(true);
     setError(null);
     const textToSend = input.trim();
     setInput("");
     try {
-      await sendTextMessage({ orgId, chatId, text: textToSend });
+      await sendTextMessage({ orgId, chatId: resolvedChatId, text: textToSend });
       await refreshRead();
       requestAnimationFrame(() => flatListRef.current?.scrollToEnd({ animated: true }));
     } catch (e) {
-      const message = e instanceof Error ? e.message : String(e);
-      setError(message || t("business.chat.error"));
+      setError(mapFriendlyError(e));
       setInput(textToSend);
     } finally {
       setSending(false);
@@ -174,7 +207,7 @@ export function BusinessChatRoomScreen() {
         </View>
       ) : !canOpenBusinessChat ? (
         <View style={styles.loadingWrap}>
-          <Text style={styles.emptyText}>{t("business.chat.businessRequiredBody")}</Text>
+          <Text style={styles.emptyText}>{t("business.chat.noAccessBody")}</Text>
         </View>
       ) : (
         <FlatList

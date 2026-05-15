@@ -29,6 +29,26 @@ service cloud.firestore {
       return isOrgMember(orgId, u)
         && get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['owner', 'admin', 'manager', 'worker'];
     }
+    function directParticipantsValid(orgId, chatData) {
+      return chatData.participantUids is list
+        && chatData.participantUids.size() == 2
+        && chatData.participantUids[0] != chatData.participantUids[1]
+        && isOrgMember(orgId, chatData.participantUids[0])
+        && isOrgMember(orgId, chatData.participantUids[1]);
+    }
+    function chatDoc(orgId, chatId) {
+      return get(/databases/$(database)/documents/organizations/$(orgId)/chats/$(chatId)).data;
+    }
+    function isGeneralChat(orgId, chatId) {
+      return exists(/databases/$(database)/documents/organizations/$(orgId)/chats/$(chatId))
+        && chatDoc(orgId, chatId).type == 'general';
+    }
+    function isDirectChatParticipant(orgId, chatId, u) {
+      return exists(/databases/$(database)/documents/organizations/$(orgId)/chats/$(chatId))
+        && chatDoc(orgId, chatId).type == 'direct'
+        && chatDoc(orgId, chatId).participantUids is list
+        && u in chatDoc(orgId, chatId).participantUids;
+    }
 
     function projectOwner(projectId) {
       return signedIn()
@@ -225,11 +245,25 @@ service cloud.firestore {
         allow create: if signedIn()
           && isOrgMemberActive(orgId)
           && request.resource.data.orgId == orgId
-          && request.resource.data.type in ['general'];
+          && (
+            request.resource.data.type == 'general'
+            || (
+              request.resource.data.type == 'direct'
+              && uid() in request.resource.data.participantUids
+              && directParticipantsValid(orgId, request.resource.data)
+            )
+          );
         allow update: if signedIn()
-          && isOrgChatWriter(orgId, uid())
+          && (
+            (resource.data.type == 'general' && isOrgChatWriter(orgId, uid()))
+            || (resource.data.type == 'direct'
+              && isOrgChatWriter(orgId, uid())
+              && resource.data.participantUids is list
+              && uid() in resource.data.participantUids)
+          )
           && request.resource.data.orgId == resource.data.orgId
           && request.resource.data.type == resource.data.type
+          && (resource.data.type != 'direct' || request.resource.data.participantUids == resource.data.participantUids)
           && request.resource.data.createdAt == resource.data.createdAt
           && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
             'title',
@@ -243,12 +277,15 @@ service cloud.firestore {
         match /messages/{messageId} {
           allow read: if signedIn() && isOrgMemberActive(orgId);
           allow create: if signedIn()
-            && isOrgChatWriter(orgId, uid())
             && request.resource.data.orgId == orgId
             && request.resource.data.chatId == chatId
             && request.resource.data.senderUid == uid()
             && request.resource.data.type in ['text', 'image']
-            && request.resource.data.status == 'sent';
+            && request.resource.data.status == 'sent'
+            && (
+              (isGeneralChat(orgId, chatId) && isOrgChatWriter(orgId, uid()))
+              || (isDirectChatParticipant(orgId, chatId, uid()) && isOrgChatWriter(orgId, uid()))
+            );
           allow update, delete: if false;
         }
 

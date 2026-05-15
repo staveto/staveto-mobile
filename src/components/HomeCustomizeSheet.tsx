@@ -21,6 +21,8 @@ import { colors, spacing } from "../theme";
 import {
   type HomeSectionConfig,
   type HomeSectionId,
+  type HomeLayout,
+  type HomeWidgetToggles,
   loadHomeLayout,
   saveHomeLayout,
   getDefaultLayout,
@@ -44,7 +46,7 @@ const SECTION_LABELS: Record<HomeSectionId, string> = {
 
 type Props = {
   sheetRef: React.RefObject<BottomSheetModal | null>;
-  onLayoutChanged?: (layout: { sections: HomeSectionConfig[] }) => void;
+  onLayoutChanged?: (layout: HomeLayout) => void;
   /** When set, use Modal instead of BottomSheetModal (more reliable on some devices) */
   visible?: boolean;
   onDismiss?: () => void;
@@ -101,9 +103,13 @@ function SectionRow({
 export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismiss }: Props) {
   const { t } = useI18n();
   const [sections, setSections] = useState<HomeSectionConfig[]>(DEFAULT_HOME_LAYOUT.sections);
+  const [widgets, setWidgets] = useState<HomeWidgetToggles>(DEFAULT_HOME_LAYOUT.widgets);
 
   useEffect(() => {
-    loadHomeLayout().then((layout) => setSections(layout.sections));
+    loadHomeLayout().then((layout) => {
+      setSections(layout.sections);
+      setWidgets(layout.widgets);
+    });
   }, []);
 
   const handleToggle = useCallback((id: HomeSectionId, enabled: boolean) => {
@@ -113,7 +119,7 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
   }, []);
 
   const handleSave = useCallback(async () => {
-    const layout = { sections };
+    const layout: HomeLayout = { sections, widgets };
     await saveHomeLayout(layout);
     onLayoutChanged?.(layout);
     if (visible !== undefined) {
@@ -121,7 +127,7 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
     } else {
       sheetRef.current?.dismiss();
     }
-  }, [sections, onLayoutChanged, sheetRef, visible, onDismiss]);
+  }, [sections, widgets, onLayoutChanged, sheetRef, visible, onDismiss]);
 
   const handleCancel = useCallback(() => {
     if (visible !== undefined) {
@@ -142,13 +148,19 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
           onPress: () => {
             const def = getDefaultLayout();
             setSections(def.sections);
+            setWidgets(def.widgets);
           },
         },
       ]
     );
   }, [t]);
 
-  const allDisabled = sections.filter((s) => !s.locked).every((s) => !s.enabled);
+  const allDisabled =
+    sections.filter((s) => !s.locked).every((s) => !s.enabled) &&
+    !widgets.showHeaderChatShortcut &&
+    !widgets.showQuickTime &&
+    !widgets.showTodayPriorities &&
+    !widgets.showBottomQuickActions;
 
   const renderBackdrop = useCallback(
     (props: any) => (
@@ -194,6 +206,29 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
           </View>
         ) : (
           <GestureHandlerRootView style={{ flex: 1 }}>
+            <View style={styles.widgetsSection}>
+              <Text style={styles.widgetsSectionTitle}>{t("home.customizeAdditionalWidgets")}</Text>
+              <ToggleRow
+                label={t("home.customize.showHeaderChatShortcut")}
+                value={widgets.showHeaderChatShortcut}
+                onChange={(value) => setWidgets((prev) => ({ ...prev, showHeaderChatShortcut: value }))}
+              />
+              <ToggleRow
+                label={t("home.customize.showQuickTime")}
+                value={widgets.showQuickTime}
+                onChange={(value) => setWidgets((prev) => ({ ...prev, showQuickTime: value }))}
+              />
+              <ToggleRow
+                label={t("home.customize.showTodayPriorities")}
+                value={widgets.showTodayPriorities}
+                onChange={(value) => setWidgets((prev) => ({ ...prev, showTodayPriorities: value }))}
+              />
+              <ToggleRow
+                label={t("home.customize.showBottomQuickActions")}
+                value={widgets.showBottomQuickActions}
+                onChange={(value) => setWidgets((prev) => ({ ...prev, showBottomQuickActions: value }))}
+              />
+            </View>
             <DraggableFlatList
               data={sections.filter((s) => s.id !== "kpis")}
               onDragEnd={({ data }) => setSections(data)}
@@ -244,6 +279,30 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
     >
       {renderContent()}
     </BottomSheetModal>
+  );
+}
+
+function ToggleRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <View style={styles.toggleRow}>
+      <Text style={styles.toggleLabel} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+        {label}
+      </Text>
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        trackColor={{ false: "rgba(255,255,255,0.3)", true: "#22c55e" }}
+        thumbColor="#fff"
+      />
+    </View>
   );
 }
 
@@ -307,6 +366,30 @@ const styles = StyleSheet.create({
     flex: 1,
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xl,
+  },
+  widgetsSection: {
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  widgetsSectionTitle: {
+    fontSize: 14,
+    color: "rgba(255,255,255,0.65)",
+    marginBottom: spacing.xs,
+  },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: SHEET_BORDER,
+    minHeight: 52,
+  },
+  toggleLabel: {
+    flex: 1,
+    color: SHEET_TEXT,
+    fontSize: 15,
+    marginRight: spacing.md,
   },
   row: {
     flexDirection: "row",

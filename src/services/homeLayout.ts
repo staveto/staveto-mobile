@@ -17,6 +17,13 @@ export type HomeSectionId =
   | "quick_add"
   | "kpis"; // legacy, migrated to chips
 
+export type HomeWidgetToggles = {
+  showHeaderChatShortcut: boolean;
+  showQuickTime: boolean;
+  showTodayPriorities: boolean;
+  showBottomQuickActions: boolean;
+};
+
 export type HomeSectionConfig = {
   id: HomeSectionId;
   enabled: boolean;
@@ -26,6 +33,7 @@ export type HomeSectionConfig = {
 
 export type HomeLayout = {
   sections: HomeSectionConfig[];
+  widgets: HomeWidgetToggles;
 };
 
 /** Calmer first-time Home: one tasks shortcut; extra KPI chips off by default (customize to turn on). */
@@ -45,10 +53,19 @@ const DEFAULT_SECTIONS: HomeSectionConfig[] = [
 
 export const DEFAULT_HOME_LAYOUT: HomeLayout = {
   sections: DEFAULT_SECTIONS,
+  widgets: {
+    showHeaderChatShortcut: true,
+    showQuickTime: true,
+    showTodayPriorities: true,
+    showBottomQuickActions: true,
+  },
 };
 
 export function getDefaultLayout(): HomeLayout {
-  return { sections: [...DEFAULT_SECTIONS] };
+  return {
+    sections: [...DEFAULT_SECTIONS],
+    widgets: { ...DEFAULT_HOME_LAYOUT.widgets },
+  };
 }
 
 const HOME_LAYOUT_KEY_V1 = "staveto_home_layout_v1";
@@ -60,7 +77,7 @@ export async function loadHomeLayout(): Promise<HomeLayout> {
       raw = await AsyncStorage.getItem(HOME_LAYOUT_KEY_V1);
     }
     if (!raw) return getDefaultLayout();
-    const parsed = JSON.parse(raw) as HomeLayout;
+    const parsed = JSON.parse(raw) as Partial<HomeLayout>;
     if (!parsed?.sections || !Array.isArray(parsed.sections)) return getDefaultLayout();
     // Migrate legacy "kpis" to individual chips
     const hasLegacyKpis = parsed.sections.some((s) => s.id === "kpis");
@@ -76,7 +93,28 @@ export async function loadHomeLayout(): Promise<HomeLayout> {
         merged.push({ ...def });
       }
     }
-    const result = { sections: merged };
+    const loadedWidgets: Partial<HomeWidgetToggles> = parsed.widgets ?? {};
+    const result: HomeLayout = {
+      sections: merged,
+      widgets: {
+        showHeaderChatShortcut:
+          typeof loadedWidgets.showHeaderChatShortcut === "boolean"
+            ? loadedWidgets.showHeaderChatShortcut
+            : DEFAULT_HOME_LAYOUT.widgets.showHeaderChatShortcut,
+        showQuickTime:
+          typeof loadedWidgets.showQuickTime === "boolean"
+            ? loadedWidgets.showQuickTime
+            : DEFAULT_HOME_LAYOUT.widgets.showQuickTime,
+        showTodayPriorities:
+          typeof loadedWidgets.showTodayPriorities === "boolean"
+            ? loadedWidgets.showTodayPriorities
+            : DEFAULT_HOME_LAYOUT.widgets.showTodayPriorities,
+        showBottomQuickActions:
+          typeof loadedWidgets.showBottomQuickActions === "boolean"
+            ? loadedWidgets.showBottomQuickActions
+            : DEFAULT_HOME_LAYOUT.widgets.showBottomQuickActions,
+      },
+    };
     if (raw && !raw.includes("open_tasks_chip")) {
       await AsyncStorage.setItem(HOME_LAYOUT_KEY, JSON.stringify(result));
     }

@@ -1,12 +1,16 @@
 import * as admin from "firebase-admin";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
+type PlanCode = "business_starter" | "business_team" | "business_company";
+type BillingPeriod = "monthly" | "yearly";
+
 type CreateBusinessOrgInput = {
+  planCode?: unknown;
+  billingPeriod?: unknown;
   companyName?: unknown;
   legalName?: unknown;
   countryCode?: unknown;
   billingEmail?: unknown;
-  requestedSeats?: unknown;
   billingAddress?: {
     line1?: unknown;
     line2?: unknown;
@@ -33,11 +37,15 @@ type CreateBusinessOrgResult = {
 };
 
 type NormalizedCreateInput = {
+  planCode: PlanCode;
+  billingPeriod: BillingPeriod;
+  seatsIncluded: number;
+  totalGross: number;
+  planName: string;
   companyName: string;
   legalName: string;
   countryCode: string;
   billingEmail: string;
-  requestedSeats: number;
   billingAddress: {
     line1: string;
     line2: string | null;
@@ -51,6 +59,30 @@ type NormalizedCreateInput = {
   };
   contactName: string | null;
   phone: string | null;
+};
+
+const PLAN_CONFIGS: Record<
+  PlanCode,
+  { planName: string; seatsIncluded: number; monthly: number; yearly: number }
+> = {
+  business_starter: {
+    planName: "Business Starter",
+    seatsIncluded: 5,
+    monthly: 149,
+    yearly: 1490,
+  },
+  business_team: {
+    planName: "Business Team",
+    seatsIncluded: 15,
+    monthly: 329,
+    yearly: 3290,
+  },
+  business_company: {
+    planName: "Business Company",
+    seatsIncluded: 30,
+    monthly: 649,
+    yearly: 6490,
+  },
 };
 
 function toTrimmedString(raw: unknown): string {
@@ -82,11 +114,20 @@ function normalizeOptionalText(raw: unknown): string | null {
   return value || null;
 }
 
-function normalizeRequestedSeats(raw: unknown): number {
-  if (typeof raw !== "number" || !Number.isFinite(raw) || !Number.isInteger(raw) || raw < 1) {
-    throw new HttpsError("invalid-argument", "requestedSeats must be an integer >= 1.");
+function normalizePlanCode(raw: unknown): PlanCode {
+  const value = toTrimmedString(raw).toLowerCase();
+  if (value === "business_starter" || value === "business_team" || value === "business_company") {
+    return value as PlanCode;
   }
-  return raw;
+  throw new HttpsError("invalid-argument", "planCode must be one of business_starter, business_team, business_company.");
+}
+
+function normalizeBillingPeriod(raw: unknown): BillingPeriod {
+  const value = toTrimmedString(raw).toLowerCase();
+  if (value === "monthly" || value === "yearly") {
+    return value as BillingPeriod;
+  }
+  throw new HttpsError("invalid-argument", "billingPeriod must be monthly or yearly.");
 }
 
 function requireAuth(
@@ -102,11 +143,15 @@ function requireAuth(
 }
 
 function normalizeInput(raw: CreateBusinessOrgInput): NormalizedCreateInput {
+  const planCode = normalizePlanCode(raw.planCode);
+  const billingPeriod = normalizeBillingPeriod(raw.billingPeriod);
+  const planConfig = PLAN_CONFIGS[planCode];
+  const seatsIncluded = planConfig.seatsIncluded;
+  const totalGross = billingPeriod === "yearly" ? planConfig.yearly : planConfig.monthly;
   const companyName = toTrimmedString(raw.companyName);
   const legalName = toTrimmedString(raw.legalName);
   const countryCode = normalizeCountryCode(raw.countryCode);
   const billingEmail = normalizeEmail(raw.billingEmail);
-  const requestedSeats = normalizeRequestedSeats(raw.requestedSeats);
 
   const billingAddressRaw = raw.billingAddress ?? {};
   const line1 = toTrimmedString(billingAddressRaw.line1);
@@ -134,11 +179,15 @@ function normalizeInput(raw: CreateBusinessOrgInput): NormalizedCreateInput {
   }
 
   return {
+    planCode,
+    billingPeriod,
+    seatsIncluded,
+    totalGross,
+    planName: planConfig.planName,
     companyName,
     legalName,
     countryCode,
     billingEmail,
-    requestedSeats,
     billingAddress: {
       line1,
       line2,
@@ -166,9 +215,23 @@ function getYearString(): string {
 async function assertNoDuplicateBusinessIdentity(
   tx: FirebaseFirestore.Transaction,
   db: FirebaseFirestore.Firestore,
-  input: NormalizedCreateInput
+  input: NormalizedCreateInput,
+  actorUid: string
 ): Promise<void> {
-  const duplicateStatuses = ["pending", "pending_payment", "active"];
+  const duplicateStatuses = ["pending", "pending_payment", "trialing", "active"];
+
+  const ownerOrgQuery = db
+    .collection("organizations")
+    .where("ownerUid", "==", actorUid)
+    .where("status", "in", duplicateStatuses)
+    .limit(1);
+  const ownedOrgSnap = await tx.get(ownerOrgQuery);
+  if (!ownedOrgSnap.empty) {
+    throw new HttpsError(
+      "failed-precondition",
+      "You already have a business organization with active or pending status."
+    );
+  }
 
   if (input.companyIdentifiers.registrationNumber) {
     const orgQuery = db
@@ -231,6 +294,8 @@ export const createBusinessOrg = onCall(
     const db = admin.firestore();
 
     const now = admin.firestore.FieldValue.serverTimestamp();
+    const trialEndsAtDate = new Date(Date.now() + 14 * 24 * 60 * 60 * 1000);
+    const trialEndsAt = admin.firestore.Timestamp.fromDate(trialEndsAtDate);
     const year = getYearString();
     const countersRef = db.collection("counters").doc(`businessOrders_${year}`);
     const orgRef = db.collection("organizations").doc();
@@ -243,7 +308,7 @@ export const createBusinessOrg = onCall(
     let paymentReference = "";
 
     await db.runTransaction(async (tx) => {
-      await assertNoDuplicateBusinessIdentity(tx, db, input);
+      await assertNoDuplicateBusinessIdentity(tx, db, input, actor.uid);
 
       const counterSnap = await tx.get(countersRef);
       const currentSequence =
@@ -277,11 +342,15 @@ export const createBusinessOrg = onCall(
         ownerUid: actor.uid,
         billingOwnerUid: actor.uid,
         createdByUid: actor.uid,
-        status: "pending_payment",
-        businessEnabled: false,
-        requestedSeats: input.requestedSeats,
-        seatsLimit: 0,
+        status: "trialing",
+        businessEnabled: true,
+        requestedSeats: input.seatsIncluded,
+        seatsLimit: input.seatsIncluded,
         seatsUsed: 1,
+        trialStartedAt: now,
+        trialEndsAt,
+        planCode: input.planCode,
+        billingPeriod: input.billingPeriod,
         countryCode: input.countryCode,
         billingEmail: input.billingEmail,
         billingAddress: input.billingAddress,
@@ -309,8 +378,11 @@ export const createBusinessOrg = onCall(
         paymentReference,
         countryCode: input.countryCode,
         currency: "EUR",
-        requestedSeats: input.requestedSeats,
+        planCode: input.planCode,
+        billingPeriod: input.billingPeriod,
+        requestedSeats: input.seatsIncluded,
         status: "pending_payment",
+        dueAt: trialEndsAt,
         billingOwnerUid: actor.uid,
         createdByUid: actor.uid,
         companyName: input.companyName,
@@ -318,11 +390,26 @@ export const createBusinessOrg = onCall(
         billingAddress: input.billingAddress,
         companyIdentifiers: input.companyIdentifiers,
         priceSnapshot: {
-          planCode: "business",
-          billingPeriod: "manual",
-          requestedSeats: input.requestedSeats,
+          planCode: input.planCode,
+          planName: input.planName,
+          billingPeriod: input.billingPeriod,
+          seatsIncluded: input.seatsIncluded,
           currency: "EUR",
-          pricingMode: "manual_invoice",
+          totalGross: input.totalGross,
+          pricingMode: "bank_transfer",
+          paymentProvider: "bank_transfer",
+        },
+        paymentInstructions: {
+          method: "bank_transfer",
+          beneficiaryName: "staveto s. r. o.",
+          iban: "DOPLNIT_IBAN",
+          bic: "DOPLNIT_BIC",
+          bankName: "DOPLNIT_BANKU",
+          currency: "EUR",
+          amountGross: input.totalGross,
+          variableSymbol,
+          paymentReference,
+          dueDays: 14,
         },
         createdAt: now,
         updatedAt: now,

@@ -2,6 +2,7 @@ import React, { useMemo, useState } from "react";
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   ScrollView,
   StyleSheet,
   Text,
@@ -12,6 +13,7 @@ import {
 import { useNavigation } from "@react-navigation/native";
 import { getAuth } from "../../firebase";
 import { useBusinessContext } from "../../hooks/useBusinessContext";
+import { useI18n } from "../../i18n/I18nContext";
 import { createBusinessOrg } from "../../services/businessRegistration";
 import { colors, radius, spacing } from "../../theme";
 
@@ -30,6 +32,8 @@ type FormState = {
   phone: string;
   requestedSeats: string;
 };
+
+type SupportedCountryCode = "SK" | "CZ" | "AT" | "DE" | "PL" | "GB" | "US" | "OTHER";
 
 const INITIAL_FORM: FormState = {
   companyName: "",
@@ -58,6 +62,85 @@ type ValidationResult =
       message: string;
     };
 
+const COUNTRY_OPTIONS: Array<{ code: SupportedCountryCode; labelKey: string }> = [
+  { code: "SK", labelKey: "business.registration.country.sk" },
+  { code: "CZ", labelKey: "business.registration.country.cz" },
+  { code: "AT", labelKey: "business.registration.country.at" },
+  { code: "DE", labelKey: "business.registration.country.de" },
+  { code: "PL", labelKey: "business.registration.country.pl" },
+  { code: "GB", labelKey: "business.registration.country.gb" },
+  { code: "US", labelKey: "business.registration.country.us" },
+  { code: "OTHER", labelKey: "business.registration.country.other" },
+];
+
+const COUNTRY_LABELS: Record<
+  SupportedCountryCode,
+  {
+    registrationLabelKey: string;
+    taxIdLabelKey: string;
+    vatIdLabelKey: string;
+    zipLabelKey: string;
+    registrationRequired: boolean;
+  }
+> = {
+  SK: {
+    registrationLabelKey: "business.registration.countryLabels.sk.registration",
+    taxIdLabelKey: "business.registration.countryLabels.sk.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.sk.vatId",
+    zipLabelKey: "business.registration.countryLabels.sk.zip",
+    registrationRequired: true,
+  },
+  CZ: {
+    registrationLabelKey: "business.registration.countryLabels.cz.registration",
+    taxIdLabelKey: "business.registration.countryLabels.cz.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.cz.vatId",
+    zipLabelKey: "business.registration.countryLabels.cz.zip",
+    registrationRequired: true,
+  },
+  AT: {
+    registrationLabelKey: "business.registration.countryLabels.at.registration",
+    taxIdLabelKey: "business.registration.countryLabels.at.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.at.vatId",
+    zipLabelKey: "business.registration.countryLabels.at.zip",
+    registrationRequired: false,
+  },
+  DE: {
+    registrationLabelKey: "business.registration.countryLabels.de.registration",
+    taxIdLabelKey: "business.registration.countryLabels.de.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.de.vatId",
+    zipLabelKey: "business.registration.countryLabels.de.zip",
+    registrationRequired: false,
+  },
+  PL: {
+    registrationLabelKey: "business.registration.countryLabels.pl.registration",
+    taxIdLabelKey: "business.registration.countryLabels.pl.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.pl.vatId",
+    zipLabelKey: "business.registration.countryLabels.pl.zip",
+    registrationRequired: false,
+  },
+  GB: {
+    registrationLabelKey: "business.registration.countryLabels.gb.registration",
+    taxIdLabelKey: "business.registration.countryLabels.gb.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.gb.vatId",
+    zipLabelKey: "business.registration.countryLabels.gb.zip",
+    registrationRequired: false,
+  },
+  US: {
+    registrationLabelKey: "business.registration.countryLabels.us.registration",
+    taxIdLabelKey: "business.registration.countryLabels.us.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.us.vatId",
+    zipLabelKey: "business.registration.countryLabels.us.zip",
+    registrationRequired: false,
+  },
+  OTHER: {
+    registrationLabelKey: "business.registration.countryLabels.other.registration",
+    taxIdLabelKey: "business.registration.countryLabels.other.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.other.vatId",
+    zipLabelKey: "business.registration.countryLabels.other.zip",
+    registrationRequired: false,
+  },
+};
+
 function getErrorDetails(error: unknown): { code: string; message: string; stack?: string } {
   const code =
     typeof (error as { code?: unknown } | null)?.code === "string"
@@ -71,37 +154,64 @@ function getErrorDetails(error: unknown): { code: string; message: string; stack
 export function BusinessRegistrationScreen() {
   const navigation = useNavigation();
   const { setActiveBusinessOrgId } = useBusinessContext();
+  const { t } = useI18n();
   const [form, setForm] = useState<FormState>(INITIAL_FORM);
   const [submitting, setSubmitting] = useState(false);
+  const [countryModalVisible, setCountryModalVisible] = useState(false);
+  const [formError, setFormError] = useState<string | null>(null);
 
-  const normalizedCountry = useMemo(() => form.countryCode.trim().toUpperCase(), [form.countryCode]);
-  const isSkCz = normalizedCountry === "SK" || normalizedCountry === "CZ";
+  const normalizedCountry = useMemo<SupportedCountryCode>(() => {
+    const normalized = form.countryCode.trim().toUpperCase();
+    return COUNTRY_OPTIONS.some((item) => item.code === normalized)
+      ? (normalized as SupportedCountryCode)
+      : "OTHER";
+  }, [form.countryCode]);
+  const labels = COUNTRY_LABELS[normalizedCountry];
 
   const setField = (key: keyof FormState, value: string) => {
     setForm((prev) => ({ ...prev, [key]: value }));
   };
 
+  const selectedCountryLabel = t(
+    COUNTRY_OPTIONS.find((country) => country.code === normalizedCountry)?.labelKey ??
+      "business.registration.countryPicker.selectCountry"
+  );
+  const registrationLabel = t(labels.registrationLabelKey);
+  const taxIdLabel = t(labels.taxIdLabelKey);
+  const vatIdLabel = t(labels.vatIdLabelKey);
+  const zipLabel = t(labels.zipLabelKey);
+
   const validate = (): ValidationResult => {
-    if (!form.companyName.trim()) return { ok: false, field: "companyName", message: "Názov firmy je povinný." };
-    if (!form.legalName.trim()) return { ok: false, field: "legalName", message: "Právny názov je povinný." };
-    if (!normalizedCountry) return { ok: false, field: "countryCode", message: "Krajina je povinná." };
+    if (!form.companyName.trim()) {
+      return { ok: false, field: "companyName", message: t("business.registration.validation.companyNameRequired") };
+    }
+    if (!form.legalName.trim()) {
+      return { ok: false, field: "legalName", message: t("business.registration.validation.legalNameRequired") };
+    }
+    if (!normalizedCountry) {
+      return { ok: false, field: "countryCode", message: t("business.registration.validation.countryRequired") };
+    }
     if (!form.billingEmail.trim()) {
-      return { ok: false, field: "billingEmail", message: "Fakturačný e-mail je povinný." };
+      return { ok: false, field: "billingEmail", message: t("business.registration.validation.billingEmailRequired") };
     }
     if (!form.billingAddressLine1.trim()) {
-      return { ok: false, field: "billingAddress.line1", message: "Ulica fakturačnej adresy je povinná." };
+      return { ok: false, field: "billingAddress.line1", message: t("business.registration.validation.billingLine1Required") };
     }
     if (!form.billingAddressCity.trim()) {
-      return { ok: false, field: "billingAddress.city", message: "Mesto fakturačnej adresy je povinné." };
+      return { ok: false, field: "billingAddress.city", message: t("business.registration.validation.billingCityRequired") };
     }
     if (!form.billingAddressZip.trim()) {
-      return { ok: false, field: "billingAddress.zip", message: "PSČ fakturačnej adresy je povinné." };
+      return {
+        ok: false,
+        field: "billingAddress.zip",
+        message: t("business.registration.validation.billingZipRequired", { zipLabel }),
+      };
     }
-    if (isSkCz && !form.registrationNumber.trim()) {
+    if (labels.registrationRequired && !form.registrationNumber.trim()) {
       return {
         ok: false,
         field: "companyIdentifiers.registrationNumber",
-        message: "IČO/registration number je pre SK/CZ povinné.",
+        message: t("business.registration.validation.registrationRequiredForSkCz", { registrationLabel }),
       };
     }
     const seats = Number(form.requestedSeats);
@@ -109,7 +219,7 @@ export function BusinessRegistrationScreen() {
       return {
         ok: false,
         field: "requestedSeats",
-        message: "Počet licencií musí byť celé číslo aspoň 1.",
+        message: t("business.registration.validation.requestedSeatsInvalid"),
       };
     }
     return { ok: true, requestedSeats: seats };
@@ -117,16 +227,15 @@ export function BusinessRegistrationScreen() {
 
   const onSubmit = async () => {
     console.log("[BusinessRegistration] submit pressed");
+    setFormError(null);
     const validation = validate();
     if (!validation.ok) {
       console.warn("[BusinessRegistration] validation failed", {
         field: validation.field,
         message: validation.message,
       });
-      Alert.alert(
-        "Neplatné údaje",
-        "Skontrolujte povinné polia a počet licencií (celé číslo aspoň 1)."
-      );
+      setFormError(validation.message);
+      Alert.alert(t("business.registration.alert.invalidDataTitle"), t("business.registration.alert.invalidDataBody"));
       return;
     }
     console.log("[BusinessRegistration] validation passed");
@@ -134,7 +243,9 @@ export function BusinessRegistrationScreen() {
     const authUser = getAuth()?.currentUser ?? null;
     if (!authUser?.uid) {
       console.warn("[BusinessRegistration] no auth user before callable");
-      Alert.alert("Nie ste prihlásený. Prihláste sa a skúste znova.");
+      const authError = t("business.registration.alert.notSignedInBody");
+      setFormError(authError);
+      Alert.alert(t("business.registration.alert.notSignedInTitle"), authError);
       return;
     }
 
@@ -191,9 +302,13 @@ export function BusinessRegistrationScreen() {
     } catch (error) {
       const details = getErrorDetails(error);
       console.warn("[BusinessRegistration] createBusinessOrg error", details);
+      setFormError(t("business.registration.alert.submitFailedBody"));
       Alert.alert(
-        "Registrácia zlyhala",
-        `Code: ${details.code}\nMessage: ${details.message || "Skúste to prosím znova."}`
+        t("business.registration.alert.submitFailedTitle"),
+        t("business.registration.alert.submitFailedBodyWithCode", {
+          code: details.code,
+          message: details.message || t("business.registration.alert.tryAgain"),
+        })
       );
     } finally {
       setSubmitting(false);
@@ -202,92 +317,172 @@ export function BusinessRegistrationScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>Registrácia firmy</Text>
-      <Text style={styles.subtitle}>Vyplňte údaje pre Staveto Business</Text>
+      <Text style={styles.title}>{t("business.registration.title")}</Text>
+      <Text style={styles.subtitle}>{t("business.registration.subtitle")}</Text>
 
-      <Text style={styles.label}>Názov firmy *</Text>
-      <TextInput style={styles.input} value={form.companyName} onChangeText={(v) => setField("companyName", v)} />
+      {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
 
-      <Text style={styles.label}>Právny názov *</Text>
-      <TextInput style={styles.input} value={form.legalName} onChangeText={(v) => setField("legalName", v)} />
-
-      <Text style={styles.label}>Krajina (ISO kód) *</Text>
+      <Text style={styles.label}>{t("business.registration.companyNameLabel")} *</Text>
       <TextInput
         style={styles.input}
-        value={form.countryCode}
-        onChangeText={(v) => setField("countryCode", v.toUpperCase())}
-        autoCapitalize="characters"
+        value={form.companyName}
+        onChangeText={(v) => setField("companyName", v)}
+        placeholder={t("business.registration.companyNamePlaceholder")}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>IČO / Registration number {isSkCz ? "*" : ""}</Text>
+      <Text style={styles.label}>{t("business.registration.legalNameLabel")} *</Text>
+      <TextInput
+        style={styles.input}
+        value={form.legalName}
+        onChangeText={(v) => setField("legalName", v)}
+        placeholder={t("business.registration.legalNamePlaceholder")}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
+      />
+
+      <Text style={styles.label}>{t("business.registration.countryLabel")} *</Text>
+      <TouchableOpacity
+        style={styles.countrySelect}
+        onPress={() => setCountryModalVisible(true)}
+        activeOpacity={0.85}
+        disabled={submitting}
+      >
+        <Text style={styles.countrySelectText}>
+          {selectedCountryLabel} ({normalizedCountry})
+        </Text>
+      </TouchableOpacity>
+
+      <Text style={styles.label}>
+        {registrationLabel} {labels.registrationRequired ? "*" : ""}
+      </Text>
       <TextInput
         style={styles.input}
         value={form.registrationNumber}
         onChangeText={(v) => setField("registrationNumber", v)}
+        placeholder={registrationLabel}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>DIČ / Tax ID</Text>
-      <TextInput style={styles.input} value={form.taxId} onChangeText={(v) => setField("taxId", v)} />
+      <Text style={styles.label}>{taxIdLabel}</Text>
+      <TextInput
+        style={styles.input}
+        value={form.taxId}
+        onChangeText={(v) => setField("taxId", v)}
+        placeholder={taxIdLabel}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
+      />
 
-      <Text style={styles.label}>IČ DPH / VAT ID</Text>
-      <TextInput style={styles.input} value={form.vatId} onChangeText={(v) => setField("vatId", v)} />
+      <Text style={styles.label}>{vatIdLabel}</Text>
+      <TextInput
+        style={styles.input}
+        value={form.vatId}
+        onChangeText={(v) => setField("vatId", v)}
+        placeholder={vatIdLabel}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
+      />
 
-      <Text style={styles.label}>Fakturačný e-mail *</Text>
+      <Text style={styles.label}>{t("business.registration.billingEmailLabel")} *</Text>
       <TextInput
         style={styles.input}
         value={form.billingEmail}
         onChangeText={(v) => setField("billingEmail", v)}
         autoCapitalize="none"
         keyboardType="email-address"
+        placeholder={t("business.registration.billingEmailPlaceholder")}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Fakturačná adresa - ulica *</Text>
+      <Text style={styles.label}>{t("business.registration.billingLine1Label")} *</Text>
       <TextInput
         style={styles.input}
         value={form.billingAddressLine1}
         onChangeText={(v) => setField("billingAddressLine1", v)}
+        placeholder={t("business.registration.billingLine1Placeholder")}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Fakturačná adresa - mesto *</Text>
+      <Text style={styles.label}>{t("business.registration.billingCityLabel")} *</Text>
       <TextInput
         style={styles.input}
         value={form.billingAddressCity}
         onChangeText={(v) => setField("billingAddressCity", v)}
+        placeholder={t("business.registration.billingCityPlaceholder")}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Fakturačná adresa - PSČ *</Text>
+      <Text style={styles.label}>{t("business.registration.billingZipLabel", { zipLabel })} *</Text>
       <TextInput
         style={styles.input}
         value={form.billingAddressZip}
         onChangeText={(v) => setField("billingAddressZip", v)}
+        placeholder={zipLabel}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Kontaktná osoba</Text>
-      <TextInput style={styles.input} value={form.contactName} onChangeText={(v) => setField("contactName", v)} />
+      <Text style={styles.label}>{t("business.registration.contactNameLabel")}</Text>
+      <TextInput
+        style={styles.input}
+        value={form.contactName}
+        onChangeText={(v) => setField("contactName", v)}
+        placeholder={t("business.registration.optionalPlaceholder")}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
+      />
 
-      <Text style={styles.label}>Telefón</Text>
+      <Text style={styles.label}>{t("business.registration.phoneLabel")}</Text>
       <TextInput
         style={styles.input}
         value={form.phone}
         onChangeText={(v) => setField("phone", v)}
         keyboardType="phone-pad"
+        placeholder={t("business.registration.optionalPlaceholder")}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <Text style={styles.label}>Počet licencií *</Text>
+      <Text style={styles.label}>{t("business.registration.requestedSeatsLabel")} *</Text>
       <TextInput
         style={styles.input}
         value={form.requestedSeats}
         onChangeText={(v) => setField("requestedSeats", v.replace(/[^\d]/g, ""))}
         keyboardType="number-pad"
+        placeholder={t("business.registration.requestedSeatsPlaceholder")}
+        placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
       <TouchableOpacity style={styles.submitButton} onPress={onSubmit} disabled={submitting}>
         {submitting ? (
           <ActivityIndicator size="small" color="#fff" />
         ) : (
-          <Text style={styles.submitButtonText}>Vytvoriť firemný účet</Text>
+          <Text style={styles.submitButtonText}>{t("business.registration.submitCta")}</Text>
         )}
       </TouchableOpacity>
+
+      <Modal transparent visible={countryModalVisible} animationType="fade" onRequestClose={() => setCountryModalVisible(false)}>
+        <View style={styles.modalBackdrop}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{t("business.registration.countryPicker.title")}</Text>
+            {COUNTRY_OPTIONS.map((option) => {
+              const selected = option.code === normalizedCountry;
+              return (
+                <TouchableOpacity
+                  key={option.code}
+                  style={[styles.countryOption, selected && styles.countryOptionSelected]}
+                  onPress={() => {
+                    setField("countryCode", option.code);
+                    setCountryModalVisible(false);
+                  }}
+                >
+                  <Text style={[styles.countryOptionText, selected && styles.countryOptionTextSelected]}>
+                    {t(option.labelKey)} ({option.code})
+                  </Text>
+                </TouchableOpacity>
+              );
+            })}
+            <TouchableOpacity style={styles.modalCancelButton} onPress={() => setCountryModalVisible(false)}>
+              <Text style={styles.modalCancelText}>{t("business.registration.countryPicker.cancel")}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
     </ScrollView>
   );
 }
@@ -305,33 +500,60 @@ const styles = StyleSheet.create({
   title: {
     fontSize: 24,
     fontWeight: "700",
-    color: colors.text,
+    color: colors.textOnDark,
     marginBottom: spacing.xs,
   },
   subtitle: {
     fontSize: 14,
-    color: colors.textMuted,
+    color: colors.onboardingHelperOnDark,
     marginBottom: spacing.lg,
+    lineHeight: 20,
+  },
+  errorText: {
+    color: "#ffd7d7",
+    backgroundColor: "rgba(220, 53, 69, 0.22)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.18)",
+    borderRadius: radius,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    marginBottom: spacing.sm,
   },
   label: {
     fontSize: 13,
     fontWeight: "600",
-    color: colors.text,
+    color: colors.labelOnDark,
     marginBottom: spacing.xs,
-    marginTop: spacing.sm,
+    marginTop: spacing.md,
   },
   input: {
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     borderRadius: radius,
-    backgroundColor: colors.card,
+    backgroundColor: colors.formPanel,
     color: colors.text,
     fontSize: 15,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
+    minHeight: 48,
+  },
+  countrySelect: {
+    borderWidth: 1,
+    borderColor: colors.formPanelBorder,
+    borderRadius: radius,
+    backgroundColor: colors.formPanel,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    minHeight: 48,
+    justifyContent: "center",
+  },
+  countrySelectText: {
+    color: colors.text,
+    fontSize: 15,
+    fontWeight: "500",
   },
   submitButton: {
-    marginTop: spacing.lg,
+    marginTop: spacing.xl,
     backgroundColor: colors.primary,
     borderRadius: radius,
     alignItems: "center",
@@ -343,6 +565,54 @@ const styles = StyleSheet.create({
     color: "#fff",
     fontSize: 16,
     fontWeight: "700",
+  },
+  modalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.45)",
+    justifyContent: "center",
+    paddingHorizontal: spacing.lg,
+  },
+  modalCard: {
+    backgroundColor: colors.formPanel,
+    borderRadius: radius,
+    padding: spacing.md,
+    borderWidth: 1,
+    borderColor: colors.formPanelBorder,
+  },
+  modalTitle: {
+    color: colors.text,
+    fontWeight: "700",
+    fontSize: 16,
+    marginBottom: spacing.sm,
+  },
+  countryOption: {
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    borderRadius: radius,
+    marginBottom: spacing.xs,
+    backgroundColor: "#e3eaf2",
+  },
+  countryOptionSelected: {
+    backgroundColor: "#d4dde8",
+    borderWidth: 1,
+    borderColor: colors.primary,
+  },
+  countryOptionText: {
+    color: colors.text,
+    fontSize: 15,
+  },
+  countryOptionTextSelected: {
+    fontWeight: "700",
+  },
+  modalCancelButton: {
+    marginTop: spacing.sm,
+    paddingVertical: spacing.sm,
+    alignItems: "center",
+  },
+  modalCancelText: {
+    color: colors.primary,
+    fontWeight: "700",
+    fontSize: 15,
   },
 });
 

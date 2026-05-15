@@ -96,6 +96,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.planSelection.enterprisePrice": "Individual pricing",
     "business.planSelection.enterpriseDisabled": "Contact us",
     "business.planSelection.continueCta": "Continue to company registration",
+    "business.planSelection.savePlanCta": "Save plan",
+    "business.planSelection.changePlanTitle": "Change Business plan",
+    "business.planSelection.changePlanSubtitle":
+      "Select Starter, Team, or Company and save it for online payment.",
     "business.planSelection.selectPlanTitle": "Select Business plan",
     "business.planSelection.selectPlanBody": "Choose Starter, Team, or Company to continue.",
     "business.registration.alert.trialActivatedTitle": "Business activated",
@@ -129,6 +133,17 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.payOnlineTitle": "Online payment",
     "business.dashboard.payOnlineTodoBody":
       "Online payment will be available soon. For now, you can use bank transfer.",
+    "business.dashboard.changePlanCta": "Change plan",
+    "business.dashboard.selectPlanFirstTitle": "Select a Business plan first",
+    "business.dashboard.selectPlanFirstBody":
+      "We need a concrete Business plan before online payment.",
+    "business.dashboard.planUpdatedTitle": "Plan updated",
+    "business.dashboard.planUpdatedBody": "Business plan has been updated successfully.",
+    "business.dashboard.paymentStartFailedTitle": "Could not start payment",
+    "business.dashboard.paymentStartFailedBody": "Could not start secure payment.",
+    "business.dashboard.openingStripeCheckout": "Opening secure Stripe checkout...",
+    "business.dashboard.paymentCancelledTitle": "Online payment cancelled",
+    "business.dashboard.paymentSuccessTitle": "Online payment started",
     "business.dashboard.manageSubscriptionCta": "Manage subscription",
     "business.dashboard.manageSubscriptionTitle": "Subscription management",
     "business.dashboard.manageSubscriptionTodoBody":
@@ -2289,6 +2304,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.planSelection.enterprisePrice": "Individueller Preis",
     "business.planSelection.enterpriseDisabled": "Kontaktieren Sie uns",
     "business.planSelection.continueCta": "Weiter zur Firmenregistrierung",
+    "business.planSelection.savePlanCta": "Plan speichern",
+    "business.planSelection.changePlanTitle": "Business-Plan andern",
+    "business.planSelection.changePlanSubtitle":
+      "Wahlen Sie Starter, Team oder Company und speichern Sie fur Online-Zahlung.",
     "business.planSelection.selectPlanTitle": "Business-Plan auswahlen",
     "business.planSelection.selectPlanBody": "Wahlen Sie Starter, Team oder Company zum Fortfahren.",
     "business.registration.alert.trialActivatedTitle": "Business aktiviert",
@@ -2322,6 +2341,17 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.payOnlineTitle": "Online-Zahlung",
     "business.dashboard.payOnlineTodoBody":
       "Online-Zahlung ist bald verfugbar. Bis dahin nutzen Sie bitte Bankuberweisung.",
+    "business.dashboard.changePlanCta": "Plan andern",
+    "business.dashboard.selectPlanFirstTitle": "Wahlen Sie zuerst einen Business-Plan",
+    "business.dashboard.selectPlanFirstBody":
+      "Vor der Online-Zahlung brauchen wir einen konkreten Business-Plan.",
+    "business.dashboard.planUpdatedTitle": "Plan aktualisiert",
+    "business.dashboard.planUpdatedBody": "Der Business-Plan wurde erfolgreich aktualisiert.",
+    "business.dashboard.paymentStartFailedTitle": "Zahlung konnte nicht gestartet werden",
+    "business.dashboard.paymentStartFailedBody": "Sichere Zahlung konnte nicht gestartet werden.",
+    "business.dashboard.openingStripeCheckout": "Sicheres Stripe Checkout wird geoffnet...",
+    "business.dashboard.paymentCancelledTitle": "Online-Zahlung abgebrochen",
+    "business.dashboard.paymentSuccessTitle": "Online-Zahlung gestartet",
     "business.dashboard.manageSubscriptionCta": "Abo verwalten",
     "business.dashboard.manageSubscriptionTitle": "Abo-Verwaltung",
     "business.dashboard.manageSubscriptionTodoBody":
@@ -4011,6 +4041,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.planSelection.enterprisePrice": "Individualna cena",
     "business.planSelection.enterpriseDisabled": "Kontaktujte nas",
     "business.planSelection.continueCta": "Pokracovat na registraciu firmy",
+    "business.planSelection.savePlanCta": "Ulozit plan",
+    "business.planSelection.changePlanTitle": "Zmenit Business plan",
+    "business.planSelection.changePlanSubtitle":
+      "Vyberte Starter, Team alebo Company a ulozte pre online platbu.",
     "business.planSelection.selectPlanTitle": "Vyberte Business plan",
     "business.planSelection.selectPlanBody": "Pre pokracovanie vyberte Starter, Team alebo Company.",
     "business.registration.alert.trialActivatedTitle": "Business aktivovany",
@@ -4044,6 +4078,17 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.payOnlineTitle": "Online platba",
     "business.dashboard.payOnlineTodoBody":
       "Online platba bude dostupna coskoro. Zatial mozete pouzit bankovy prevod.",
+    "business.dashboard.changePlanCta": "Zmenit plan",
+    "business.dashboard.selectPlanFirstTitle": "Najprv vyberte Business plan",
+    "business.dashboard.selectPlanFirstBody":
+      "Pred online platbou potrebujeme konkretny Business plan.",
+    "business.dashboard.planUpdatedTitle": "Plan aktualizovany",
+    "business.dashboard.planUpdatedBody": "Business plan bol uspesne aktualizovany.",
+    "business.dashboard.paymentStartFailedTitle": "Nepodarilo sa spustit platbu",
+    "business.dashboard.paymentStartFailedBody": "Nepodarilo sa spustit bezpecnu platbu.",
+    "business.dashboard.openingStripeCheckout": "Otvára sa bezpecny Stripe checkout...",
+    "business.dashboard.paymentCancelledTitle": "Online platba zrusena",
+    "business.dashboard.paymentSuccessTitle": "Online platba spustena",
     "business.dashboard.manageSubscriptionCta": "Spravovat predplatne",
     "business.dashboard.manageSubscriptionTitle": "Sprava predplatneho",
     "business.dashboard.manageSubscriptionTodoBody":
@@ -6101,6 +6146,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.planSelection.enterprisePrice": "Individualni cena",
     "business.planSelection.enterpriseDisabled": "Kontaktujte nas",
     "business.planSelection.continueCta": "Pokracovat na registraci firmy",
+    "business.planSelection.savePlanCta": "Ulozit plan",
+    "business.planSelection.changePlanTitle": "Zmenit Business plan",
+    "business.planSelection.changePlanSubtitle":
+      "Vyberte Starter, Team nebo Company a ulozte pro online platbu.",
     "business.planSelection.selectPlanTitle": "Vyberte Business plan",
     "business.planSelection.selectPlanBody": "Pro pokracovani vyberte Starter, Team nebo Company.",
     "business.registration.alert.trialActivatedTitle": "Business aktivovan",
@@ -6134,6 +6183,17 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.payOnlineTitle": "Online platba",
     "business.dashboard.payOnlineTodoBody":
       "Online platba bude dostupna brzy. Zatim muzete pouzit bankovni prevod.",
+    "business.dashboard.changePlanCta": "Zmenit plan",
+    "business.dashboard.selectPlanFirstTitle": "Nejprve vyberte Business plan",
+    "business.dashboard.selectPlanFirstBody":
+      "Pred online platbou potrebujeme konkretni Business plan.",
+    "business.dashboard.planUpdatedTitle": "Plan aktualizovan",
+    "business.dashboard.planUpdatedBody": "Business plan byl uspesne aktualizovan.",
+    "business.dashboard.paymentStartFailedTitle": "Nepodarilo se spustit platbu",
+    "business.dashboard.paymentStartFailedBody": "Nepodarilo se spustit bezpecnou platbu.",
+    "business.dashboard.openingStripeCheckout": "Otevirame bezpecny Stripe checkout...",
+    "business.dashboard.paymentCancelledTitle": "Online platba zrusena",
+    "business.dashboard.paymentSuccessTitle": "Online platba spustena",
     "business.dashboard.manageSubscriptionCta": "Spravovat predplatne",
     "business.dashboard.manageSubscriptionTitle": "Sprava predplatneho",
     "business.dashboard.manageSubscriptionTodoBody":
@@ -7880,6 +7940,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.planSelection.enterprisePrice": "Precio individual",
     "business.planSelection.enterpriseDisabled": "Contactanos",
     "business.planSelection.continueCta": "Continuar al registro de empresa",
+    "business.planSelection.savePlanCta": "Guardar plan",
+    "business.planSelection.changePlanTitle": "Cambiar plan Business",
+    "business.planSelection.changePlanSubtitle":
+      "Selecciona Starter, Team o Company y guarda para pago online.",
     "business.planSelection.selectPlanTitle": "Selecciona plan Business",
     "business.planSelection.selectPlanBody": "Para continuar, elige Starter, Team o Company.",
     "business.registration.alert.trialActivatedTitle": "Business activado",
@@ -7913,6 +7977,17 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.payOnlineTitle": "Pago online",
     "business.dashboard.payOnlineTodoBody":
       "El pago online estara disponible pronto. Mientras tanto, usa transferencia bancaria.",
+    "business.dashboard.changePlanCta": "Cambiar plan",
+    "business.dashboard.selectPlanFirstTitle": "Primero selecciona un plan Business",
+    "business.dashboard.selectPlanFirstBody":
+      "Necesitamos un plan Business concreto antes del pago online.",
+    "business.dashboard.planUpdatedTitle": "Plan actualizado",
+    "business.dashboard.planUpdatedBody": "El plan Business se actualizo correctamente.",
+    "business.dashboard.paymentStartFailedTitle": "No se pudo iniciar el pago",
+    "business.dashboard.paymentStartFailedBody": "No se pudo iniciar el pago seguro.",
+    "business.dashboard.openingStripeCheckout": "Abriendo checkout seguro de Stripe...",
+    "business.dashboard.paymentCancelledTitle": "Pago online cancelado",
+    "business.dashboard.paymentSuccessTitle": "Pago online iniciado",
     "business.dashboard.manageSubscriptionCta": "Gestionar suscripcion",
     "business.dashboard.manageSubscriptionTitle": "Gestion de suscripcion",
     "business.dashboard.manageSubscriptionTodoBody":
@@ -8970,6 +9045,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.planSelection.enterprisePrice": "Prezzo individuale",
     "business.planSelection.enterpriseDisabled": "Contattaci",
     "business.planSelection.continueCta": "Continua alla registrazione azienda",
+    "business.planSelection.savePlanCta": "Salva piano",
+    "business.planSelection.changePlanTitle": "Cambia piano Business",
+    "business.planSelection.changePlanSubtitle":
+      "Seleziona Starter, Team o Company e salva per il pagamento online.",
     "business.planSelection.selectPlanTitle": "Seleziona piano Business",
     "business.planSelection.selectPlanBody": "Per continuare seleziona Starter, Team o Company.",
     "business.registration.alert.trialActivatedTitle": "Business attivato",
@@ -9003,6 +9082,17 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.payOnlineTitle": "Pagamento online",
     "business.dashboard.payOnlineTodoBody":
       "Il pagamento online sara disponibile presto. Per ora puoi usare il bonifico bancario.",
+    "business.dashboard.changePlanCta": "Cambia piano",
+    "business.dashboard.selectPlanFirstTitle": "Seleziona prima un piano Business",
+    "business.dashboard.selectPlanFirstBody":
+      "Serve un piano Business concreto prima del pagamento online.",
+    "business.dashboard.planUpdatedTitle": "Piano aggiornato",
+    "business.dashboard.planUpdatedBody": "Il piano Business e stato aggiornato con successo.",
+    "business.dashboard.paymentStartFailedTitle": "Impossibile avviare il pagamento",
+    "business.dashboard.paymentStartFailedBody": "Impossibile avviare il pagamento sicuro.",
+    "business.dashboard.openingStripeCheckout": "Apertura checkout Stripe sicuro...",
+    "business.dashboard.paymentCancelledTitle": "Pagamento online annullato",
+    "business.dashboard.paymentSuccessTitle": "Pagamento online avviato",
     "business.dashboard.manageSubscriptionCta": "Gestisci abbonamento",
     "business.dashboard.manageSubscriptionTitle": "Gestione abbonamento",
     "business.dashboard.manageSubscriptionTodoBody":
@@ -10541,6 +10631,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.planSelection.enterprisePrice": "Cena indywidualna",
     "business.planSelection.enterpriseDisabled": "Skontaktuj sie z nami",
     "business.planSelection.continueCta": "Przejdz do rejestracji firmy",
+    "business.planSelection.savePlanCta": "Zapisz plan",
+    "business.planSelection.changePlanTitle": "Zmien plan Business",
+    "business.planSelection.changePlanSubtitle":
+      "Wybierz Starter, Team lub Company i zapisz do platnosci online.",
     "business.planSelection.selectPlanTitle": "Wybierz plan Business",
     "business.planSelection.selectPlanBody": "Aby kontynuowac, wybierz Starter, Team albo Company.",
     "business.registration.alert.trialActivatedTitle": "Business aktywowany",
@@ -10574,6 +10668,17 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.payOnlineTitle": "Platnosc online",
     "business.dashboard.payOnlineTodoBody":
       "Platnosc online bedzie dostepna wkrotce. Na razie mozesz uzyc przelewu bankowego.",
+    "business.dashboard.changePlanCta": "Zmien plan",
+    "business.dashboard.selectPlanFirstTitle": "Najpierw wybierz plan Business",
+    "business.dashboard.selectPlanFirstBody":
+      "Przed platnoscia online potrzebny jest konkretny plan Business.",
+    "business.dashboard.planUpdatedTitle": "Plan zaktualizowany",
+    "business.dashboard.planUpdatedBody": "Plan Business zostal pomyslnie zaktualizowany.",
+    "business.dashboard.paymentStartFailedTitle": "Nie mozna uruchomic platnosci",
+    "business.dashboard.paymentStartFailedBody": "Nie mozna uruchomic bezpiecznej platnosci.",
+    "business.dashboard.openingStripeCheckout": "Otwieranie bezpiecznego Stripe checkout...",
+    "business.dashboard.paymentCancelledTitle": "Platnosc online anulowana",
+    "business.dashboard.paymentSuccessTitle": "Platnosc online uruchomiona",
     "business.dashboard.manageSubscriptionCta": "Zarzadzaj subskrypcja",
     "business.dashboard.manageSubscriptionTitle": "Zarzadzanie subskrypcja",
     "business.dashboard.manageSubscriptionTodoBody":

@@ -68,8 +68,8 @@ const styles = StyleSheet.create({
   content: {
     flexGrow: 1,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.xl,
-    paddingBottom: spacing.xl + 40,
+    paddingTop: spacing.xl + 24,
+    paddingBottom: spacing.xl + 72,
   },
   title: {
     fontSize: 28,
@@ -77,7 +77,7 @@ const styles = StyleSheet.create({
     color: colors.textOnDark,
     textAlign: "left",
     marginBottom: spacing.sm,
-    marginTop: spacing.md,
+    marginTop: spacing.lg,
   },
   subtitle: {
     fontSize: 15,

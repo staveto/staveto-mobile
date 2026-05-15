@@ -27,13 +27,33 @@ export function BusinessLandingScreen() {
         </TouchableOpacity>
       </View>
 
-      <View style={styles.planCard}>
+      <View style={[styles.planCard, styles.proCard]}>
+        <View style={styles.badgeRow}>
+          <View style={styles.proBadge}>
+            <Text style={styles.proBadgeText}>{t("business.landing.pro.badge")}</Text>
+          </View>
+        </View>
         <Text style={styles.planName}>{t("business.landing.pro.title")}</Text>
         <Text style={styles.planSubtitle}>{t("business.landing.pro.subtitle")}</Text>
+        <Text style={styles.proHighlight}>{t("business.landing.pro.highlight")}</Text>
         <Text style={styles.planPrice}>{t("business.landing.pro.price")}</Text>
         <Text style={styles.planDescription}>{t("business.landing.pro.description")}</Text>
+        <View style={styles.benefitChips}>
+          <View style={styles.benefitChip}>
+            <Text style={styles.benefitChipText}>{t("business.landing.pro.benefit.projects")}</Text>
+          </View>
+          <View style={styles.benefitChip}>
+            <Text style={styles.benefitChipText}>{t("business.landing.pro.benefit.costs")}</Text>
+          </View>
+          <View style={styles.benefitChip}>
+            <Text style={styles.benefitChipText}>{t("business.landing.pro.benefit.exports")}</Text>
+          </View>
+          <View style={styles.benefitChip}>
+            <Text style={styles.benefitChipText}>{t("business.landing.pro.benefit.personal")}</Text>
+          </View>
+        </View>
         <TouchableOpacity
-          style={styles.secondaryButton}
+          style={styles.proButton}
           activeOpacity={0.85}
           onPress={() => {
             try {
@@ -43,11 +63,16 @@ export function BusinessLandingScreen() {
             }
           }}
         >
-          <Text style={styles.secondaryButtonText}>{t("business.landing.pro.cta")}</Text>
+          <Text style={styles.proButtonText}>{t("business.landing.pro.cta")}</Text>
         </TouchableOpacity>
       </View>
 
       <View style={[styles.planCard, styles.businessCard]}>
+        <View style={styles.badgeRow}>
+          <View style={styles.businessBadge}>
+            <Text style={styles.businessBadgeText}>{t("business.landing.business.badge")}</Text>
+          </View>
+        </View>
         <Text style={styles.planName}>{t("business.landing.business.title")}</Text>
         <Text style={styles.planSubtitle}>{t("business.landing.business.subtitle")}</Text>
         <Text style={styles.planPrice}>{t("business.landing.business.price")}</Text>
@@ -100,6 +125,38 @@ const styles = StyleSheet.create({
     backgroundColor: "#f7e7df",
     marginBottom: spacing.xl,
   },
+  proCard: {
+    borderColor: "#4f6f96",
+    backgroundColor: "#eef4fc",
+  },
+  badgeRow: {
+    flexDirection: "row",
+    marginBottom: spacing.xs,
+  },
+  proBadge: {
+    backgroundColor: "#2f4f75",
+    borderRadius: 999,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+  },
+  proBadgeText: {
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+  },
+  businessBadge: {
+    backgroundColor: colors.primary,
+    borderRadius: 999,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+  },
+  businessBadgeText: {
+    color: "#fff",
+    fontSize: 11,
+    fontWeight: "700",
+    letterSpacing: 0.6,
+  },
   planName: {
     fontSize: 20,
     fontWeight: "700",
@@ -118,11 +175,36 @@ const styles = StyleSheet.create({
     color: colors.primary,
     marginBottom: spacing.sm,
   },
+  proHighlight: {
+    fontSize: 13,
+    color: "#2f4f75",
+    fontWeight: "600",
+    marginBottom: spacing.xs,
+  },
   planDescription: {
     fontSize: 14,
     lineHeight: 20,
     color: colors.text,
     marginBottom: spacing.md,
+  },
+  benefitChips: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    gap: spacing.xs,
+    marginBottom: spacing.md,
+  },
+  benefitChip: {
+    borderWidth: 1,
+    borderColor: "#b8c8dd",
+    backgroundColor: "#f8fbff",
+    borderRadius: 999,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: 4,
+  },
+  benefitChipText: {
+    color: "#2f4f75",
+    fontSize: 12,
+    fontWeight: "600",
   },
   primaryButton: {
     backgroundColor: colors.primary,
@@ -149,6 +231,20 @@ const styles = StyleSheet.create({
     fontSize: 15,
     fontWeight: "700",
     color: colors.primary,
+  },
+  proButton: {
+    borderColor: "#2f4f75",
+    borderWidth: 1,
+    borderRadius: radius,
+    backgroundColor: "#2f4f75",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: spacing.md,
+  },
+  proButtonText: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: "#fff",
   },
 });
 

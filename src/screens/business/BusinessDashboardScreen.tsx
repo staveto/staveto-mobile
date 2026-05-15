@@ -13,6 +13,7 @@ import { useNavigation } from "@react-navigation/native";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
 import { useI18n } from "../../i18n/I18nContext";
 import { translations } from "../../i18n/translations";
+import { getAuth } from "../../firebase";
 import { getBusinessOrder, type BusinessOrderDoc } from "../../services/organizations";
 import { listMembers, type MembershipDoc } from "../../services/businessMembers";
 import { createBusinessCheckoutSession } from "../../services/businessPayments";
@@ -69,18 +70,55 @@ function interpolate(template: string, params?: Record<string, string | number>)
   }, template);
 }
 
-function getMemberDisplay(member: MembershipDoc): string {
+function getEmailLocalPart(email: string): string {
+  const trimmed = email.trim();
+  if (!trimmed) return "";
+  const atIndex = trimmed.indexOf("@");
+  if (atIndex <= 0) return "";
+  return trimmed.slice(0, atIndex);
+}
+
+function getMemberDisplay(
+  member: MembershipDoc,
+  options?: {
+    currentUserUid?: string;
+    currentUserDisplayName?: string;
+    currentUserEmail?: string;
+    activeMembershipEmail?: string;
+  }
+): string {
   const displayName = ((member as { displayName?: string }).displayName ?? "").trim();
   if (displayName) return displayName;
   const name = ((member as { name?: string }).name ?? "").trim();
   if (name) return name;
-  const email = (
+
+  const emailValue = (
     (member as { email?: string; emailLower?: string }).email ??
     (member as { email?: string; emailLower?: string }).emailLower ??
     ""
   ).trim();
-  if (email) return email;
-  return member.userId || "—";
+  if (emailValue) return emailValue;
+
+  const emailLocalPart = getEmailLocalPart(emailValue);
+  if (emailLocalPart) return emailLocalPart;
+
+  const isCurrentUser = Boolean(options?.currentUserUid && member.userId === options.currentUserUid);
+  if (isCurrentUser) {
+    const currentUserDisplayName = (options?.currentUserDisplayName ?? "").trim();
+    if (currentUserDisplayName) return currentUserDisplayName;
+
+    const currentUserEmail = (options?.currentUserEmail ?? "").trim();
+    if (currentUserEmail) return currentUserEmail;
+    const currentEmailLocal = getEmailLocalPart(currentUserEmail);
+    if (currentEmailLocal) return currentEmailLocal;
+
+    const activeMembershipEmail = (options?.activeMembershipEmail ?? "").trim();
+    if (activeMembershipEmail) return activeMembershipEmail;
+    const activeMembershipEmailLocal = getEmailLocalPart(activeMembershipEmail);
+    if (activeMembershipEmailLocal) return activeMembershipEmailLocal;
+  }
+
+  return member.userId || member.id || "—";
 }
 
 function getInitials(source: string): string {
@@ -105,6 +143,7 @@ export function BusinessDashboardScreen() {
   const [membersLoading, setMembersLoading] = useState(false);
   const [membersReadBlocked, setMembersReadBlocked] = useState(false);
   const [showBusinessInfo, setShowBusinessInfo] = useState(false);
+  const authUser = getAuth()?.currentUser ?? null;
 
   const tr = (key: string, params?: Record<string, string | number>, fallback?: string): string => {
     const normalized = normalizeParams(params);
@@ -360,13 +399,13 @@ export function BusinessDashboardScreen() {
       {(isTrialing || isPendingPayment) && (
         <View style={styles.banner}>
           <Text style={styles.bannerTitle}>
-            {tr("business.dashboard.paymentBannerTitle", undefined, "Dokoncite aktivaciu")}
+            {tr("business.dashboard.paymentBannerTitle", undefined, "Activate Business")}
           </Text>
           <Text style={styles.bannerBody}>
             {tr(
               "business.dashboard.paymentBannerBody",
               undefined,
-              "Firemny ucet je pripraveny. Aktivujte predplatne, aby ste mohli pokracovat po skusobnom obdobi."
+              "Your business workspace is ready. You can activate the subscription now or after the trial period."
             )}
           </Text>
           <View style={styles.bannerActions}>
@@ -423,7 +462,15 @@ export function BusinessDashboardScreen() {
         ) : (
           <View style={styles.membersList}>
             {previewMembers.map((member) => (
-              <MemberRow key={member.id} member={member} tr={tr} />
+              <MemberRow
+                key={member.id}
+                member={member}
+                tr={tr}
+                currentUserUid={authUser?.uid}
+                currentUserDisplayName={authUser?.displayName ?? undefined}
+                currentUserEmail={authUser?.email ?? undefined}
+                activeMembershipEmail={(activeMembership as { emailLower?: string } | null)?.emailLower}
+              />
             ))}
           </View>
         )}
@@ -463,6 +510,7 @@ export function BusinessDashboardScreen() {
         <ActionCard
           title={tr("business.dashboard.actionTeamTitle", undefined, "Tim")}
           body={tr("business.dashboard.actionTeamBody", undefined, "Spravujte clenov a roly.")}
+          openLabel={tr("business.dashboard.actionOpen", undefined, "Open")}
           onPress={() =>
             Alert.alert(
               tr("business.dashboard.actionTeamTitle", undefined, "Tim"),
@@ -473,6 +521,7 @@ export function BusinessDashboardScreen() {
         <ActionCard
           title={tr("business.dashboard.actionProjectsTitle", undefined, "Projekty")}
           body={tr("business.dashboard.actionProjectsBody", undefined, "Firemne projekty a stavby.")}
+          openLabel={tr("business.dashboard.actionOpen", undefined, "Open")}
           onPress={() =>
             Alert.alert(
               tr("business.dashboard.actionProjectsTitle", undefined, "Projekty"),
@@ -483,6 +532,7 @@ export function BusinessDashboardScreen() {
         <ActionCard
           title={tr("business.dashboard.actionTasksTitle", undefined, "Ulohy")}
           body={tr("business.dashboard.actionTasksBody", undefined, "Prehlad timovych uloh.")}
+          openLabel={tr("business.dashboard.actionOpen", undefined, "Open")}
           onPress={() =>
             Alert.alert(
               tr("business.dashboard.actionTasksTitle", undefined, "Ulohy"),
@@ -493,6 +543,7 @@ export function BusinessDashboardScreen() {
         <ActionCard
           title={tr("business.dashboard.actionMessagesTitle", undefined, "Spravy")}
           body={tr("business.dashboard.actionMessagesBody", undefined, "Firemny inbox a chat.")}
+          openLabel={tr("business.dashboard.actionOpen", undefined, "Open")}
           onPress={() =>
             Alert.alert(
               tr("business.dashboard.actionMessagesTitle", undefined, "Spravy"),
@@ -538,11 +589,24 @@ export function BusinessDashboardScreen() {
 function MemberRow({
   member,
   tr,
+  currentUserUid,
+  currentUserDisplayName,
+  currentUserEmail,
+  activeMembershipEmail,
 }: {
   member: MembershipDoc;
   tr: (key: string, params?: Record<string, string | number>, fallback?: string) => string;
+  currentUserUid?: string;
+  currentUserDisplayName?: string;
+  currentUserEmail?: string;
+  activeMembershipEmail?: string;
 }) {
-  const display = getMemberDisplay(member);
+  const display = getMemberDisplay(member, {
+    currentUserUid,
+    currentUserDisplayName,
+    currentUserEmail,
+    activeMembershipEmail,
+  });
   const role = member.role || "viewer";
   const roleKey = `business.dashboard.teamLicenses.role.${role}`;
   const statusKey =
@@ -566,10 +630,23 @@ function MemberRow({
   );
 }
 
-function ActionCard({ title, body, onPress }: { title: string; body: string; onPress: () => void }) {
+function ActionCard({
+  title,
+  body,
+  openLabel,
+  onPress,
+}: {
+  title: string;
+  body: string;
+  openLabel: string;
+  onPress: () => void;
+}) {
   return (
     <TouchableOpacity style={styles.actionCard} onPress={onPress}>
-      <Text style={styles.actionTitle}>{title}</Text>
+      <View style={styles.actionHeader}>
+        <Text style={styles.actionTitle}>{title}</Text>
+        <Text style={styles.actionOpen}>{openLabel} ›</Text>
+      </View>
       <Text style={styles.actionBody}>{body}</Text>
     </TouchableOpacity>
   );
@@ -743,10 +820,21 @@ const styles = StyleSheet.create({
     borderRadius: 14,
     padding: 14,
   },
+  actionHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    gap: 8,
+  },
   actionTitle: {
     fontSize: 16,
     fontWeight: "700",
     color: "#0F172A",
+  },
+  actionOpen: {
+    fontSize: 13,
+    color: "#334155",
+    fontWeight: "700",
   },
   actionBody: {
     marginTop: 4,

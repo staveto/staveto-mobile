@@ -341,21 +341,11 @@ export function BusinessRegistrationScreen() {
       });
 
       setActiveBusinessOrgId(result.orgId);
-      (navigation as { navigate: (name: string, params?: object) => void }).navigate(
-        "BusinessOrderPending",
-        {
-          orgId: result.orgId,
-          orderId: result.orderId,
-          companyName: form.companyName.trim(),
-          requestedSeats: selectedBusinessPlan!.seatsIncluded,
-          countryCode: normalizedCountry,
-          billingEmail: form.billingEmail.trim(),
-          orderNumber: result.orderNumber,
-          variableSymbol: result.variableSymbol,
-          paymentReference: result.paymentReference,
-          status: result.status,
-        }
+      Alert.alert(
+        t("business.registration.alert.trialActivatedTitle"),
+        t("business.registration.alert.trialActivatedBody")
       );
+      (navigation as { navigate: (name: string, params?: object) => void }).navigate("BusinessDashboard");
     } catch (error) {
       const details = getErrorDetails(error);
       console.warn("[BusinessRegistration] createBusinessOrg error", details);

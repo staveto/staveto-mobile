@@ -41,6 +41,7 @@ import { paths } from "../lib/firestorePaths";
  * docs/firestore-rules-business-phase1.md rejects any client mutation.
  */
 export type OrgStatus =
+  | "trialing"
   | "pending_payment"
   | "active"
   | "past_due"
@@ -73,6 +74,7 @@ export type OrganizationDoc = {
   id: string;
   /** Display name of the organization (editable by owner/admin). */
   name: string;
+  billingEmail?: string;
   /** Auth uid of the user who created the org. Immutable. */
   ownerUid: string;
   /** Licence lifecycle — SERVER-ONLY. */
@@ -83,6 +85,11 @@ export type OrganizationDoc = {
   seatsLimit: number;
   /** Denormalised active-member count, maintained by CF. SERVER-ONLY. */
   seatsUsed: number;
+  trialStartedAt?: FirebaseFirestoreTypes.Timestamp | string | null;
+  trialEndsAt?: FirebaseFirestoreTypes.Timestamp | string | null;
+  planCode?: string;
+  billingPeriod?: string;
+  activeBusinessOrderId?: string | null;
   /** When the Business surface was first activated. SERVER-ONLY. */
   businessActivatedAt?: FirebaseFirestoreTypes.Timestamp | string | null;
   /** uid of the admin/staff who flipped `businessEnabled`. SERVER-ONLY. */
@@ -129,11 +136,45 @@ export type MembershipDoc = {
   hourlyRateEur?: number;
 };
 
+export type BusinessOrderDoc = {
+  id: string;
+  orgId: string;
+  orderNumber: string;
+  variableSymbol: string;
+  paymentReference: string;
+  status: string;
+  planCode?: string;
+  billingPeriod?: string;
+  requestedSeats?: number;
+  dueAt?: FirebaseFirestoreTypes.Timestamp | string | null;
+  priceSnapshot?: {
+    planCode?: string;
+    planName?: string;
+    billingPeriod?: string;
+    seatsIncluded?: number;
+    totalGross?: number;
+    currency?: string;
+  };
+  paymentInstructions?: {
+    method?: string;
+    beneficiaryName?: string;
+    iban?: string;
+    bic?: string;
+    bankName?: string;
+    currency?: string;
+    amountGross?: number;
+    variableSymbol?: string;
+    paymentReference?: string;
+    dueDays?: number;
+  };
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Parsers (exported so businessMembers.ts can reuse without duplication)
 // ─────────────────────────────────────────────────────────────────────────────
 
 const VALID_STATUSES: ReadonlySet<OrgStatus> = new Set<OrgStatus>([
+  "trialing",
   "pending_payment",
   "active",
   "past_due",
@@ -216,6 +257,7 @@ export function parseOrganizationDoc(
   return {
     id,
     name: typeof data.name === "string" ? data.name : "",
+    billingEmail: typeof data.billingEmail === "string" ? data.billingEmail : undefined,
     ownerUid: typeof data.ownerUid === "string" ? data.ownerUid : "",
     status: parseOrgStatus(data.status),
     businessEnabled: data.businessEnabled === true,
@@ -227,6 +269,22 @@ export function parseOrganizationDoc(
       typeof seatsUsedRaw === "number" && Number.isFinite(seatsUsedRaw) && seatsUsedRaw >= 0
         ? seatsUsedRaw
         : 0,
+    trialStartedAt:
+      data.trialStartedAt === null
+        ? null
+        : (data.trialStartedAt as OrganizationDoc["trialStartedAt"]) ?? undefined,
+    trialEndsAt:
+      data.trialEndsAt === null
+        ? null
+        : (data.trialEndsAt as OrganizationDoc["trialEndsAt"]) ?? undefined,
+    planCode: typeof data.planCode === "string" ? data.planCode : undefined,
+    billingPeriod: typeof data.billingPeriod === "string" ? data.billingPeriod : undefined,
+    activeBusinessOrderId:
+      typeof data.activeBusinessOrderId === "string"
+        ? data.activeBusinessOrderId
+        : data.activeBusinessOrderId === null
+        ? null
+        : undefined,
     businessActivatedAt:
       data.businessActivatedAt === null
         ? null
@@ -346,6 +404,51 @@ export async function getMembership(
       return null;
     }
     console.error("[organizations] getMembership error:", error);
+    throw error;
+  }
+}
+
+export async function getBusinessOrder(orderId: string): Promise<BusinessOrderDoc | null> {
+  if (typeof orderId !== "string" || orderId.trim().length === 0) return null;
+  requireSignedInUid();
+  try {
+    const ref = doc(db, `businessOrders/${orderId}`);
+    const snap = await getDocSmart(ref);
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    if (!data || typeof data !== "object") return null;
+    const row = data as Record<string, unknown>;
+    return {
+      id: snap.id,
+      orgId: typeof row.orgId === "string" ? row.orgId : "",
+      orderNumber: typeof row.orderNumber === "string" ? row.orderNumber : "",
+      variableSymbol: typeof row.variableSymbol === "string" ? row.variableSymbol : "",
+      paymentReference: typeof row.paymentReference === "string" ? row.paymentReference : "",
+      status: typeof row.status === "string" ? row.status : "pending_payment",
+      planCode: typeof row.planCode === "string" ? row.planCode : undefined,
+      billingPeriod: typeof row.billingPeriod === "string" ? row.billingPeriod : undefined,
+      requestedSeats: typeof row.requestedSeats === "number" ? row.requestedSeats : undefined,
+      dueAt:
+        row.dueAt === null
+          ? null
+          : (row.dueAt as BusinessOrderDoc["dueAt"]) ?? undefined,
+      priceSnapshot:
+        row.priceSnapshot && typeof row.priceSnapshot === "object"
+          ? (row.priceSnapshot as BusinessOrderDoc["priceSnapshot"])
+          : undefined,
+      paymentInstructions:
+        row.paymentInstructions && typeof row.paymentInstructions === "object"
+          ? (row.paymentInstructions as BusinessOrderDoc["paymentInstructions"])
+          : undefined,
+    };
+  } catch (error) {
+    if (isPermissionDenied(error)) {
+      if (__DEV__) {
+        console.warn("[organizations] getBusinessOrder: permission denied for order", orderId);
+      }
+      return null;
+    }
+    console.error("[organizations] getBusinessOrder error:", error);
     throw error;
   }
 }

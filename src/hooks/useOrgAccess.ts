@@ -1,6 +1,23 @@
 import { useMemo } from "react";
 import { useActiveOrg } from "./useActiveOrg";
 
+function toMillis(raw: unknown): number | null {
+  if (!raw) return null;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string") {
+    const parsed = new Date(raw).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (typeof raw === "object" && raw !== null) {
+    const maybeTimestamp = raw as { toDate?: () => Date };
+    if (typeof maybeTimestamp.toDate === "function") {
+      const parsed = maybeTimestamp.toDate().getTime();
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+  }
+  return null;
+}
+
 export function useOrgAccess() {
   const { activeBusinessOrgId, activeMembership, activeOrganization } = useActiveOrg();
 
@@ -11,6 +28,8 @@ export function useOrgAccess() {
     const businessEnabled = activeOrganization?.businessEnabled === true;
     const seatsLimit = activeOrganization?.seatsLimit ?? 0;
     const seatsUsed = activeOrganization?.seatsUsed ?? 0;
+    const trialEndsAtMs = toMillis(activeOrganization?.trialEndsAt);
+    const trialIsValid = trialEndsAtMs !== null && trialEndsAtMs > Date.now();
 
     const isOwner = role === "owner";
     const isAdmin = role === "admin";
@@ -22,7 +41,9 @@ export function useOrgAccess() {
     const canAccessBusiness =
       !!activeBusinessOrgId &&
       isActiveMember &&
-      orgStatus === "active" &&
+      (orgStatus === "active" ||
+        orgStatus === "trialing" ||
+        (orgStatus === "pending_payment" && trialIsValid)) &&
       businessEnabled;
 
     return {
@@ -38,6 +59,7 @@ export function useOrgAccess() {
       orgStatus,
       seatsLimit,
       seatsUsed,
+      trialIsValid,
       canAccessBusiness,
     };
   }, [activeBusinessOrgId, activeMembership, activeOrganization]);

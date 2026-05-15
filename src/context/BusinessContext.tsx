@@ -10,6 +10,7 @@ import React, {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "./AuthContext";
 import {
+  findPreferredBusinessOrgForUser,
   getMembership,
   getOrganization,
   type MembershipDoc,
@@ -85,16 +86,48 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
+  const resolveAndSetPreferredOrg = useCallback(
+    async (userIdForLookup: string): Promise<boolean> => {
+      const preferred = await findPreferredBusinessOrgForUser(userIdForLookup);
+      if (!preferred) {
+        setActiveBusinessOrgIdState(null);
+        setActiveOrganization(null);
+        setActiveMembership(null);
+        await persistActiveBusinessOrgId(null);
+        return false;
+      }
+      setActiveBusinessOrgIdState(preferred.org.id);
+      setActiveOrganization(preferred.org);
+      setActiveMembership(preferred.membership);
+      await persistActiveBusinessOrgId(preferred.org.id);
+      return true;
+    },
+    []
+  );
+
   const refreshActiveBusinessOrg = useCallback(async () => {
     if (!storageHydrated || authLoading) {
       setLoading(true);
       return;
     }
 
-    if (!user?.id || !activeBusinessOrgId) {
+    if (!user?.id) {
       setActiveOrganization(null);
       setActiveMembership(null);
       setLoading(false);
+      return;
+    }
+
+    if (!activeBusinessOrgId) {
+      setLoading(true);
+      try {
+        await resolveAndSetPreferredOrg(user.id);
+      } catch (e) {
+        const message = e instanceof Error ? e.message : String(e);
+        setError(`BusinessContext resolve preferred org failed: ${message}`);
+      } finally {
+        setLoading(false);
+      }
       return;
     }
 
@@ -114,10 +147,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (!organization || !membership) {
-        setActiveBusinessOrgIdState(null);
-        setActiveOrganization(null);
-        setActiveMembership(null);
-        await persistActiveBusinessOrgId(null);
+        await resolveAndSetPreferredOrg(expectedUserId ?? "");
         setLoading(false);
         return;
       }
@@ -133,7 +163,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       setError(`BusinessContext refresh failed: ${message}`);
       setLoading(false);
     }
-  }, [activeBusinessOrgId, authLoading, storageHydrated, user?.id]);
+  }, [activeBusinessOrgId, authLoading, resolveAndSetPreferredOrg, storageHydrated, user?.id]);
 
   useEffect(() => {
     refreshActiveBusinessOrg().catch(() => {

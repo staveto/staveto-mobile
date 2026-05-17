@@ -193,15 +193,11 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.contactSupportCta": "Contact support",
     "onboarding.usageMode.title": "How will you use Staveto?",
     "onboarding.usageMode.subtitle":
-      "Pick whether you work on your own or are joining a company.",
+      "Choose whether you are joining a company or want to try Staveto.",
     "onboarding.usageMode.joinCompany.title": "I'm part of a company",
     "onboarding.usageMode.joinCompany.body": "I have a code or QR from my employer.",
-    "onboarding.usageMode.solo.title": "I work independently",
-    "onboarding.usageMode.solo.body":
-      "I'm a tradesperson or manage my own jobs.",
-    "onboarding.usageMode.createCompany.title": "I want to create a company",
-    "onboarding.usageMode.createCompany.body":
-      "I want to manage a team, licenses and business projects.",
+    "onboarding.usageMode.solo.title": "I want to try Staveto",
+    "onboarding.usageMode.solo.body": "Continue as an individual user.",
     "onboarding.joinCompany.title": "Join a company",
     "onboarding.joinCompany.subtitle": "Enter the company code from your employer.",
     "onboarding.joinCompany.codePlaceholder": "e.g. AB12CD34",
@@ -2552,16 +2548,12 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.contactSupportCta": "Support kontaktieren",
     "onboarding.usageMode.title": "Wie wirst du Staveto nutzen?",
     "onboarding.usageMode.subtitle":
-      "Wahle, ob du allein arbeitest oder einer Firma beitrittst.",
+      "Wahle, ob du einer Firma beitrittst oder Staveto ausprobieren mochtest.",
     "onboarding.usageMode.joinCompany.title": "Ich bin Teil einer Firma",
     "onboarding.usageMode.joinCompany.body":
       "Ich habe einen Code oder QR von meinem Arbeitgeber.",
-    "onboarding.usageMode.solo.title": "Ich arbeite selbststandig",
-    "onboarding.usageMode.solo.body":
-      "Ich bin Handwerker oder verwalte meine eigenen Auftrage.",
-    "onboarding.usageMode.createCompany.title": "Ich mochte eine Firma erstellen",
-    "onboarding.usageMode.createCompany.body":
-      "Ich mochte Team, Lizenzen und Firmenprojekte verwalten.",
+    "onboarding.usageMode.solo.title": "Ich mochte Staveto ausprobieren",
+    "onboarding.usageMode.solo.body": "Als Einzelnutzer fortfahren.",
     "onboarding.joinCompany.title": "Firma beitreten",
     "onboarding.joinCompany.subtitle": "Gib den Firmen-Code deines Arbeitgebers ein.",
     "onboarding.joinCompany.codePlaceholder": "z. B. AB12CD34",
@@ -4439,17 +4431,13 @@ export const translations: Record<Locale, Record<string, string>> = {
       "Vas ucet je pripraveny. Dokoncite platbu pre plny Business pristup.",
     "business.dashboard.billingManual": "Manualna fakturacia",
     "business.dashboard.contactSupportCta": "Kontaktovat podporu",
-    "onboarding.usageMode.title": "Ako budes pouzivat Staveto?",
+    "onboarding.usageMode.title": "Ako budeš používať Staveto?",
     "onboarding.usageMode.subtitle":
-      "Vyber, ci pracujes samostatne, alebo sa pripajas k firme.",
-    "onboarding.usageMode.joinCompany.title": "Som sucastou firmy",
-    "onboarding.usageMode.joinCompany.body": "Mam kod alebo QR od zamestnavatela.",
-    "onboarding.usageMode.solo.title": "Pracujem samostatne",
-    "onboarding.usageMode.solo.body":
-      "Som remeselnik alebo si spravujem vlastne zakazky.",
-    "onboarding.usageMode.createCompany.title": "Chcem vytvorit firmu",
-    "onboarding.usageMode.createCompany.body":
-      "Chcem spravovat tim, licencie a firemne projekty.",
+      "Vyber, či sa pripájaš k firme, alebo chceš Staveto vyskúšať.",
+    "onboarding.usageMode.joinCompany.title": "Som súčasťou firmy",
+    "onboarding.usageMode.joinCompany.body": "Mám kód alebo QR od zamestnávateľa.",
+    "onboarding.usageMode.solo.title": "Chcem vyskúšať Staveto",
+    "onboarding.usageMode.solo.body": "Pokračovať ako samostatný používateľ.",
     "onboarding.joinCompany.title": "Pripojit sa k firme",
     "onboarding.joinCompany.subtitle": "Zadaj firemny kod od zamestnavatela.",
     "onboarding.joinCompany.codePlaceholder": "napr. AB12CD34",
@@ -6697,15 +6685,11 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.contactSupportCta": "Kontaktovat podporu",
     "onboarding.usageMode.title": "Jak budes pouzivat Staveto?",
     "onboarding.usageMode.subtitle":
-      "Vyber, jestli pracujes samostatne, nebo se pripojujes k firme.",
+      "Vyber, zda se pripojujes k firme, nebo chces Staveto vyzkouset.",
     "onboarding.usageMode.joinCompany.title": "Jsem soucast firmy",
     "onboarding.usageMode.joinCompany.body": "Mam kod nebo QR od zamestnavatele.",
-    "onboarding.usageMode.solo.title": "Pracuji samostatne",
-    "onboarding.usageMode.solo.body":
-      "Jsem remeslnik nebo si spravuji vlastni zakazky.",
-    "onboarding.usageMode.createCompany.title": "Chci zalozit firmu",
-    "onboarding.usageMode.createCompany.body":
-      "Chci spravovat tym, licence a firemni projekty.",
+    "onboarding.usageMode.solo.title": "Chci vyzkouset Staveto",
+    "onboarding.usageMode.solo.body": "Pokracovat jako samostatny uzivatel.",
     "onboarding.joinCompany.title": "Pripojit se k firme",
     "onboarding.joinCompany.subtitle": "Zadej firemni kod od zamestnavatele.",
     "onboarding.joinCompany.codePlaceholder": "napr. AB12CD34",
@@ -8629,16 +8613,12 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.contactSupportCta": "Contactar soporte",
     "onboarding.usageMode.title": "Como usaras Staveto?",
     "onboarding.usageMode.subtitle":
-      "Elige si trabajas por tu cuenta o si te unes a una empresa.",
+      "Elige si te unes a una empresa o quieres probar Staveto.",
     "onboarding.usageMode.joinCompany.title": "Formo parte de una empresa",
     "onboarding.usageMode.joinCompany.body":
       "Tengo un codigo o QR de mi empleador.",
-    "onboarding.usageMode.solo.title": "Trabajo por mi cuenta",
-    "onboarding.usageMode.solo.body":
-      "Soy autonomo o gestiono mis propios trabajos.",
-    "onboarding.usageMode.createCompany.title": "Quiero crear una empresa",
-    "onboarding.usageMode.createCompany.body":
-      "Quiero gestionar equipo, licencias y proyectos empresariales.",
+    "onboarding.usageMode.solo.title": "Quiero probar Staveto",
+    "onboarding.usageMode.solo.body": "Continuar como usuario individual.",
     "onboarding.joinCompany.title": "Unirse a una empresa",
     "onboarding.joinCompany.subtitle": "Introduce el codigo de empresa de tu empleador.",
     "onboarding.joinCompany.codePlaceholder": "p. ej. AB12CD34",
@@ -9873,16 +9853,12 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.contactSupportCta": "Contatta supporto",
     "onboarding.usageMode.title": "Come userai Staveto?",
     "onboarding.usageMode.subtitle":
-      "Scegli se lavori in autonomia o ti unisci a un'azienda.",
+      "Scegli se ti unisci a un'azienda o vuoi provare Staveto.",
     "onboarding.usageMode.joinCompany.title": "Faccio parte di un'azienda",
     "onboarding.usageMode.joinCompany.body":
       "Ho un codice o un QR dal mio datore di lavoro.",
-    "onboarding.usageMode.solo.title": "Lavoro in autonomia",
-    "onboarding.usageMode.solo.body":
-      "Sono un artigiano o gestisco i miei lavori.",
-    "onboarding.usageMode.createCompany.title": "Voglio creare un'azienda",
-    "onboarding.usageMode.createCompany.body":
-      "Voglio gestire team, licenze e progetti aziendali.",
+    "onboarding.usageMode.solo.title": "Voglio provare Staveto",
+    "onboarding.usageMode.solo.body": "Continua come utente individuale.",
     "onboarding.joinCompany.title": "Unisciti a un'azienda",
     "onboarding.joinCompany.subtitle":
       "Inserisci il codice aziendale del tuo datore di lavoro.",
@@ -11599,16 +11575,12 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.contactSupportCta": "Kontakt z supportem",
     "onboarding.usageMode.title": "Jak bedziesz korzystac ze Staveto?",
     "onboarding.usageMode.subtitle":
-      "Wybierz, czy pracujesz samodzielnie, czy dolaczasz do firmy.",
+      "Wybierz, czy dolaczasz do firmy, czy chcesz wyprobowac Staveto.",
     "onboarding.usageMode.joinCompany.title": "Jestem czesc firmy",
     "onboarding.usageMode.joinCompany.body":
       "Mam kod lub QR od pracodawcy.",
-    "onboarding.usageMode.solo.title": "Pracuje samodzielnie",
-    "onboarding.usageMode.solo.body":
-      "Jestem rzemieslnikiem lub prowadze wlasne zlecenia.",
-    "onboarding.usageMode.createCompany.title": "Chce zalozyc firme",
-    "onboarding.usageMode.createCompany.body":
-      "Chce zarzadzac zespolem, licencjami i projektami firmowymi.",
+    "onboarding.usageMode.solo.title": "Chce wyprobowac Staveto",
+    "onboarding.usageMode.solo.body": "Kontynuuj jako uzytkownik indywidualny.",
     "onboarding.joinCompany.title": "Dolacz do firmy",
     "onboarding.joinCompany.subtitle": "Wpisz kod firmy od pracodawcy.",
     "onboarding.joinCompany.codePlaceholder": "np. AB12CD34",

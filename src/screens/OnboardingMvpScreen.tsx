@@ -42,10 +42,9 @@ const PENDING_ONBOARDING_KEY = "pending_onboarding";
 /**
  * High-level branch the user picked on the very first onboarding screen.
  * - `join_company`: employee joining an existing org via invite code/QR
- * - `solo`: independent professional, follows the existing solo onboarding
- * - `create_company`: owner who wants to create a new business org
+ * - `solo`: try Staveto as an individual (existing solo onboarding path)
  */
-type UsageMode = "join_company" | "solo" | "create_company";
+type UsageMode = "join_company" | "solo";
 
 /**
  * Steps:
@@ -298,7 +297,7 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
 
   /**
    * Lightweight onboarding completion for flows that do NOT collect solo profiling
-   * data (employee join, owner who wants to create a company first).
+   * data (e.g. employee join via invite code).
    *
    * Unlike `completeActivation()`, this does NOT require `mode` or `primaryCountry`
    * and does NOT call `updateUserProfileFromOnboarding` when nothing was collected.
@@ -388,30 +387,13 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
     }
   };
 
-  /**
-   * Routes the user away from the new step 0 (usage mode picker) into the
-   * appropriate branch of the onboarding flow.
-   */
-  const onSelectUsageMode = useCallback(
-    async (selected: UsageMode) => {
-      setError("");
-      setUsageMode(selected);
-      if (selected === "join_company") {
-        setStep(8);
-        return;
-      }
-      if (selected === "solo") {
-        setStep(1);
-        return;
-      }
-      // create_company: skip personal profiling, finish onboarding and route
-      // the gate to the Business stack so the user picks plan / fills the org.
-      await finishMinimalOnboarding(() => {
-        onBusinessFlowRequested?.();
-      });
-    },
-    [finishMinimalOnboarding, onBusinessFlowRequested]
-  );
+  /** Step 0: company join vs try Staveto solo (Business org creation is from Profile later). */
+  const onSelectUsageMode = useCallback((selected: UsageMode) => {
+    setError("");
+    setUsageMode(selected);
+    if (selected === "join_company") setStep(8);
+    else setStep(1);
+  }, []);
 
   // TODO(business-join-deeplink): keep deep-link handoff/prefill for a dedicated PR
   // that can safely update global linking setup in AppShell/RootNavigator.
@@ -472,7 +454,7 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
             <View style={styles.usageModeOptions}>
               <TouchableOpacity
                 style={styles.usageModeCard}
-                onPress={() => void onSelectUsageMode("join_company")}
+                onPress={() => onSelectUsageMode("join_company")}
                 disabled={saving}
                 accessibilityRole="button"
                 accessibilityLabel={t("onboarding.usageMode.joinCompany.title")}
@@ -493,7 +475,7 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
 
               <TouchableOpacity
                 style={styles.usageModeCard}
-                onPress={() => void onSelectUsageMode("solo")}
+                onPress={() => onSelectUsageMode("solo")}
                 disabled={saving}
                 accessibilityRole="button"
                 accessibilityLabel={t("onboarding.usageMode.solo.title")}
@@ -507,27 +489,6 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
                   </Text>
                   <Text style={styles.usageModeBody}>
                     {t("onboarding.usageMode.solo.body")}
-                  </Text>
-                </View>
-                <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-              </TouchableOpacity>
-
-              <TouchableOpacity
-                style={styles.usageModeCard}
-                onPress={() => void onSelectUsageMode("create_company")}
-                disabled={saving}
-                accessibilityRole="button"
-                accessibilityLabel={t("onboarding.usageMode.createCompany.title")}
-              >
-                <View style={styles.usageModeIconWrap}>
-                  <Ionicons name="business-outline" size={26} color={colors.primary} />
-                </View>
-                <View style={styles.usageModeTextWrap}>
-                  <Text style={styles.usageModeTitle}>
-                    {t("onboarding.usageMode.createCompany.title")}
-                  </Text>
-                  <Text style={styles.usageModeBody}>
-                    {t("onboarding.usageMode.createCompany.body")}
                   </Text>
                 </View>
                 <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />

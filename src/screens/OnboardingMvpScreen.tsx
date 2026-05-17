@@ -506,7 +506,7 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
                 onPress={onBack}
                 disabled={saving}
               >
-                <Text style={styles.textLink}>{t("onboardingMvp.back")}</Text>
+                <Text style={styles.textLink}>{t("consent.backToRegister")}</Text>
               </TouchableOpacity>
             ) : null}
           </>
@@ -864,6 +864,18 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
               ) : (
                 <Text style={styles.buttonText}>{t("business.join.submit")}</Text>
               )}
+            </TouchableOpacity>
+            <TouchableOpacity
+              style={[styles.secondaryBtnFull, { marginTop: spacing.md }]}
+              onPress={() => {
+                setError("");
+                setJoinCode("");
+                setUsageMode("solo");
+                setStep(1);
+              }}
+              disabled={saving || joinBusy}
+            >
+              <Text style={styles.secondaryText}>{t("onboarding.joinCompany.continueWithoutCode")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
               style={[styles.textLinkBtn, { marginTop: spacing.md }]}

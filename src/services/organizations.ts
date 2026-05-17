@@ -55,7 +55,7 @@ export type OrgStatus =
 export type OrgRole = "owner" | "admin" | "manager" | "worker" | "viewer";
 
 /** Membership lifecycle. Only `'active'` members count toward `seatsUsed`. */
-export type MembershipStatus = "invited" | "active" | "suspended" | "removed";
+export type MembershipStatus = "invited" | "pending" | "active" | "suspended" | "removed";
 
 /**
  * `organizations/{orgId}` document.
@@ -128,6 +128,8 @@ export type MembershipDoc = {
   role: OrgRole;
   /** Lifecycle. Only `active` counts toward seats. */
   status: MembershipStatus;
+  /** Denormalized from `organizations/{orgId}.name` when joining (esp. pending approval). */
+  organizationName?: string;
   /** When this membership became active. */
   joinedAt?: FirebaseFirestoreTypes.Timestamp | string;
   /** When the underlying doc was first created (server timestamp). */
@@ -197,6 +199,7 @@ const VALID_ROLES: ReadonlySet<OrgRole> = new Set<OrgRole>([
 
 const VALID_MEMBERSHIP_STATUSES: ReadonlySet<MembershipStatus> = new Set<MembershipStatus>([
   "invited",
+  "pending",
   "active",
   "suspended",
   "removed",
@@ -328,6 +331,10 @@ export function parseMembershipDoc(
       typeof hourlyRaw === "number" && Number.isFinite(hourlyRaw) && hourlyRaw >= 0
         ? hourlyRaw
         : undefined,
+    organizationName:
+      typeof data.organizationName === "string" && data.organizationName.trim().length > 0
+        ? data.organizationName.trim()
+        : undefined,
   };
 }
 
@@ -370,9 +377,73 @@ function getOrgPriorityScore(org: OrganizationDoc): number {
   if (org.status === "trialing") return 200;
   if (org.status === "pending_payment") {
     const trialEndsAtMs = toMillis(org.trialEndsAt);
-    if (trialEndsAtMs !== null && trialEndsAtMs > Date.now()) return 100;
+    const trialOk = trialEndsAtMs !== null && trialEndsAtMs > Date.now();
+    if (trialOk) return 100;
+    // Match `useOrgAccess.pendingCanAccess`: org may be waiting on Stripe/bank while
+    // `trialEndsAt` is missing or already passed, but checkout / licence flag still applies.
+    if (org.businessEnabled === true) return 95;
+    if (typeof org.activeBusinessOrderId === "string" && org.activeBusinessOrderId.trim().length > 0) {
+      return 90;
+    }
   }
   return -1;
+}
+
+/**
+ * When the org document lags behind Stripe (common right after checkout), the
+ * linked `businessOrders/{id}` row may still carry `stripeCheckoutSessionId` or
+ * `paidAt` while `organizations/{orgId}` has no `activeBusinessOrderId` / trial.
+ * Those signals are used only to pick a default active org and to mirror
+ * `useOrgAccess.pendingCanAccess` while the org doc lags — active membership
+ * is still required (`BusinessGate`).
+ */
+/** Minimum boost from `deriveBusinessOrderOrgSurfaceBoost` for checkout / paid rows. */
+export const BILLING_ORDER_SURFACE_BOOST_ACCESS_THRESHOLD = 92;
+
+function deriveBusinessOrderOrgSurfaceBoost(order: Record<string, unknown>): number {
+  if (order.paidAt != null) return 110;
+  const st = typeof order.status === "string" ? order.status.toLowerCase() : "";
+  if (st === "paid" || st === "completed" || st === "fulfilled") return 108;
+  if (
+    typeof order.stripeCheckoutSessionId === "string" &&
+    order.stripeCheckoutSessionId.trim().length > 0
+  ) {
+    return 92;
+  }
+  return -1;
+}
+
+/** Per-org boost for the signed-in billing owner (empty map on permission denied). */
+export async function fetchBillingOwnerOrderOrgSurfaceBoostsByOrgId(
+  userId: string
+): Promise<Map<string, number>> {
+  const out = new Map<string, number>();
+  const currentUid = requireSignedInUid();
+  if (currentUid !== userId) return out;
+  try {
+    const q = query(collection(db, "businessOrders"), where("billingOwnerUid", "==", userId));
+    const snap = await getDocsSmart(q);
+    for (const d of snap.docs) {
+      const data = d.data();
+      if (!data || typeof data !== "object") continue;
+      const row = data as Record<string, unknown>;
+      const orgId = typeof row.orgId === "string" ? row.orgId.trim() : "";
+      if (!orgId) continue;
+      const boost = deriveBusinessOrderOrgSurfaceBoost(row);
+      if (boost < 0) continue;
+      out.set(orgId, Math.max(out.get(orgId) ?? 0, boost));
+    }
+  } catch (e) {
+    if (isPermissionDenied(e)) {
+      if (__DEV__) {
+        console.warn("[organizations] fetchBillingOwnerOrderOrgSurfaceBoostsByOrgId: permission denied");
+      }
+      return out;
+    }
+    console.error("[organizations] fetchBillingOwnerOrderOrgSurfaceBoostsByOrgId error:", e);
+    throw e;
+  }
+  return out;
 }
 
 /**
@@ -556,9 +627,28 @@ export async function findPreferredBusinessOrgForUser(
   userId: string
 ): Promise<PreferredBusinessOrg | null> {
   if (!userId) return null;
+
+  const orderOrgBoost = await fetchBillingOwnerOrderOrgSurfaceBoostsByOrgId(userId);
+
   const memberships = await listMyMemberships(userId);
   const activeMemberships = memberships.filter((membership) => membership.status === "active");
-  if (activeMemberships.length === 0) return null;
+  if (activeMemberships.length === 0 && orderOrgBoost.size === 0) return null;
+
+  type Cand = { org: OrganizationDoc; membership: MembershipDoc; score: number; freshness: number };
+  const candByOrg = new Map<string, Cand>();
+
+  const consider = (org: OrganizationDoc | null, membership: MembershipDoc | null) => {
+    if (!org || !membership || membership.status !== "active") return;
+    const base = getOrgPriorityScore(org);
+    const boost = orderOrgBoost.get(org.id) ?? -1;
+    const score = Math.max(base, boost);
+    if (score < 0) return;
+    const freshness = toMillis(org.updatedAt) ?? toMillis(org.createdAt) ?? 0;
+    const prev = candByOrg.get(org.id);
+    if (!prev || score > prev.score || (score === prev.score && freshness > prev.freshness)) {
+      candByOrg.set(org.id, { org, membership, score, freshness });
+    }
+  };
 
   const orgRows = await Promise.all(
     activeMemberships.map(async (membership) => {
@@ -566,21 +656,21 @@ export async function findPreferredBusinessOrgForUser(
       return { membership, org };
     })
   );
-
-  let best: { org: OrganizationDoc; membership: MembershipDoc; score: number; freshness: number } | null =
-    null;
-
   for (const row of orgRows) {
-    if (!row.org) continue;
-    if (!row.org.businessEnabled) continue;
-    const score = getOrgPriorityScore(row.org);
-    if (score < 0) continue;
-    const freshness =
-      toMillis(row.org.updatedAt) ??
-      toMillis(row.org.createdAt) ??
-      0;
-    if (!best || score > best.score || (score === best.score && freshness > best.freshness)) {
-      best = { org: row.org, membership: row.membership, score, freshness };
+    consider(row.org, row.membership);
+  }
+
+  for (const orgId of orderOrgBoost.keys()) {
+    if (candByOrg.has(orgId)) continue;
+    const membership = await getMembership(orgId, userId);
+    const org = await getOrganization(orgId);
+    consider(org, membership);
+  }
+
+  let best: Cand | null = null;
+  for (const c of candByOrg.values()) {
+    if (!best || c.score > best.score || (c.score === best.score && c.freshness > best.freshness)) {
+      best = c;
     }
   }
 

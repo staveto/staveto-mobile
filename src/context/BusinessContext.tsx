@@ -10,6 +10,7 @@ import React, {
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "./AuthContext";
 import {
+  fetchBillingOwnerOrderOrgSurfaceBoostsByOrgId,
   findPreferredBusinessOrgForUser,
   getMembership,
   getOrganization,
@@ -33,6 +34,8 @@ type BusinessContextValue = {
   setActiveBusinessOrgId: (orgId: string | null) => void;
   activeOrganization: OrganizationDoc | null;
   activeMembership: MembershipDoc | null;
+  /** Boost score from `businessOrders` for this user as billing owner; -1 = none / not loaded. */
+  billingOwnerOrderSurfaceBoostScore: number;
   loading: boolean;
   error: string | null;
   refreshActiveBusinessOrg: () => Promise<void>;
@@ -54,6 +57,8 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
   const [activeBusinessOrgId, setActiveBusinessOrgIdState] = useState<string | null>(null);
   const [activeOrganization, setActiveOrganization] = useState<OrganizationDoc | null>(null);
   const [activeMembership, setActiveMembership] = useState<MembershipDoc | null>(null);
+  const [billingOwnerOrderSurfaceBoostScore, setBillingOwnerOrderSurfaceBoostScore] =
+    useState<number>(-1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [storageHydrated, setStorageHydrated] = useState(false);
@@ -92,6 +97,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     setError(null);
     setActiveOrganization(null);
     setActiveMembership(null);
+    setBillingOwnerOrderSurfaceBoostScore(-1);
     persistActiveBusinessOrgId(orgId).catch((e) => {
       const message = e instanceof Error ? e.message : String(e);
       setError(`BusinessContext storage write failed: ${message}`);
@@ -110,6 +116,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
         setActiveBusinessOrgIdState(null);
         setActiveOrganization(null);
         setActiveMembership(null);
+        setBillingOwnerOrderSurfaceBoostScore(-1);
         await persistActiveBusinessOrgId(null);
         return false;
       }
@@ -117,11 +124,15 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       setActiveOrganization(preferred.org);
       setActiveMembership(preferred.membership);
       await persistActiveBusinessOrgId(preferred.org.id);
+      try {
+        const boosts = await fetchBillingOwnerOrderOrgSurfaceBoostsByOrgId(userIdForLookup);
+        setBillingOwnerOrderSurfaceBoostScore(boosts.get(preferred.org.id) ?? -1);
+      } catch {
+        setBillingOwnerOrderSurfaceBoostScore(-1);
+      }
       debugBusinessContext("preferred org found - showing dashboard", {
         orgId: preferred.org.id,
         orgStatus: preferred.org.status,
-        source: preferred.source,
-        reason: preferred.reason,
       });
       return true;
     },
@@ -137,6 +148,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     if (!user?.id) {
       setActiveOrganization(null);
       setActiveMembership(null);
+      setBillingOwnerOrderSurfaceBoostScore(-1);
       setLoading(false);
       return;
     }
@@ -189,6 +201,12 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       });
       setActiveOrganization(organization);
       setActiveMembership(membership);
+      try {
+        const boosts = await fetchBillingOwnerOrderOrgSurfaceBoostsByOrgId(expectedUserId);
+        setBillingOwnerOrderSurfaceBoostScore(boosts.get(expectedOrgId) ?? -1);
+      } catch {
+        setBillingOwnerOrderSurfaceBoostScore(-1);
+      }
       setLoading(false);
     } catch (e) {
       if (runId !== refreshRunRef.current) {
@@ -218,6 +236,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       setActiveBusinessOrgIdState(null);
       setActiveOrganization(null);
       setActiveMembership(null);
+      setBillingOwnerOrderSurfaceBoostScore(-1);
       setError(null);
       setLoading(false);
       persistActiveBusinessOrgId(null).catch((e) => {
@@ -234,6 +253,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       setActiveBusinessOrgId,
       activeOrganization,
       activeMembership,
+      billingOwnerOrderSurfaceBoostScore,
       loading,
       error,
       refreshActiveBusinessOrg,
@@ -243,6 +263,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       setActiveBusinessOrgId,
       activeOrganization,
       activeMembership,
+      billingOwnerOrderSurfaceBoostScore,
       loading,
       error,
       refreshActiveBusinessOrg,

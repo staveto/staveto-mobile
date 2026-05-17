@@ -59,6 +59,52 @@ export type RevokeBusinessInviteResult = {
   status: "revoked";
 };
 
+export type TranslateFn = (
+  key: string,
+  params?: Record<string, string | number>,
+  fallback?: string
+) => string;
+
+/**
+ * Maps Firebase callable / HttpsError to a user-facing invite message.
+ */
+export function formatCreateBusinessInviteError(error: unknown, tr: TranslateFn): string {
+  const err = error as { code?: string; message?: string };
+  const code = String(err?.code ?? "");
+  const msg = String(err?.message ?? "");
+  const msgLower = msg.toLowerCase();
+
+  if (msgLower.includes("organization not found")) {
+    return tr(
+      "business.invites.error.orgNotFound",
+      undefined,
+      "The company workspace was not found on the server."
+    );
+  }
+  if (code === "functions/permission-denied" || msgLower.includes("permission-denied")) {
+    return tr("business.invites.error.permissionDenied", undefined, "You cannot create invites.");
+  }
+  if (code === "functions/failed-precondition" || msgLower.includes("exceeds")) {
+    return tr("business.invites.error.seatsExceeded", undefined, "Not enough free licenses.");
+  }
+  const isNotFound = code === "functions/not-found" || code === "not-found";
+  if (
+    isNotFound &&
+    !msgLower.includes("organization") &&
+    !msgLower.includes("invite code") &&
+    !msgLower.includes("invalid")
+  ) {
+    return tr(
+      "business.invites.error.functionNotDeployed",
+      undefined,
+      "Invite service unavailable. Deploy Cloud Functions or try again later."
+    );
+  }
+  const detail = code && msg ? `${code}: ${msg}` : msg || code;
+  const generic = tr("business.invites.error.generic", undefined, "Could not create the invite. Please try again.");
+  return __DEV__ && detail ? `${generic}\n${detail}` : generic;
+}
+
 function parseCreateInviteResult(raw: unknown): CreateBusinessInviteCodeResult {
   const data = (raw ?? {}) as Partial<CreateBusinessInviteCodeResult>;
   if (typeof data.inviteId !== "string" || typeof data.code !== "string" || typeof data.deepLink !== "string") {
@@ -103,7 +149,10 @@ export async function createBusinessInviteCode(
   input: CreateBusinessInviteCodeInput
 ): Promise<CreateBusinessInviteCodeResult> {
   ensureSignedIn();
-  const call = getCallable<CreateBusinessInviteCodeInput, { data?: unknown }>("createBusinessInviteCode");
+  const call = getCallable<CreateBusinessInviteCodeInput, { data?: unknown }>(
+    "createBusinessInviteCode",
+    { timeoutMs: 25000 }
+  );
   const res = await call(input);
   return parseCreateInviteResult((res as { data?: unknown })?.data ?? res);
 }
@@ -112,7 +161,10 @@ export async function redeemBusinessInviteCode(
   input: RedeemBusinessInviteCodeInput
 ): Promise<RedeemBusinessInviteCodeResult> {
   ensureSignedIn();
-  const call = getCallable<RedeemBusinessInviteCodeInput, { data?: unknown }>("redeemBusinessInviteCode");
+  const call = getCallable<RedeemBusinessInviteCodeInput, { data?: unknown }>(
+    "redeemBusinessInviteCode",
+    { timeoutMs: 25000 }
+  );
   const res = await call(input);
   return parseRedeemResult((res as { data?: unknown })?.data ?? res);
 }

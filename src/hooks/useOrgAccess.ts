@@ -1,4 +1,6 @@
 import { useMemo } from "react";
+import { useBusiness } from "../context/BusinessContext";
+import { BILLING_ORDER_SURFACE_BOOST_ACCESS_THRESHOLD } from "../services/organizations";
 import { useActiveOrg } from "./useActiveOrg";
 
 function toMillis(raw: unknown): number | null {
@@ -20,6 +22,7 @@ function toMillis(raw: unknown): number | null {
 
 export function useOrgAccess() {
   const { activeBusinessOrgId, activeMembership, activeOrganization } = useActiveOrg();
+  const { billingOwnerOrderSurfaceBoostScore } = useBusiness();
 
   return useMemo(() => {
     const role = activeMembership?.role ?? null;
@@ -38,8 +41,12 @@ export function useOrgAccess() {
     const trialEndsAtMs = toMillis(activeOrganization?.trialEndsAt);
     const trialIsValid = trialEndsAtMs !== null && trialEndsAtMs > Date.now();
     const hasActiveOrderLink = !!activeOrganization?.activeBusinessOrderId;
+    const orderSurfaceAllowsPending =
+      typeof billingOwnerOrderSurfaceBoostScore === "number" &&
+      billingOwnerOrderSurfaceBoostScore >= BILLING_ORDER_SURFACE_BOOST_ACCESS_THRESHOLD;
     const pendingCanAccess =
-      orgStatus === "pending_payment" && (trialIsValid || businessEnabled || hasActiveOrderLink);
+      orgStatus === "pending_payment" &&
+      (trialIsValid || businessEnabled || hasActiveOrderLink || orderSurfaceAllowsPending);
     const statusCanAccess = orgStatus === "active" || orgStatus === "trialing" || pendingCanAccess;
 
     const canAccessBusiness =
@@ -64,6 +71,6 @@ export function useOrgAccess() {
       pendingCanAccess,
       canAccessBusiness,
     };
-  }, [activeBusinessOrgId, activeMembership, activeOrganization]);
+  }, [activeBusinessOrgId, activeMembership, activeOrganization, billingOwnerOrderSurfaceBoostScore]);
 }
 

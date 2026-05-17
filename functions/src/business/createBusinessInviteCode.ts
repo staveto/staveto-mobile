@@ -1,5 +1,5 @@
 import * as admin from "firebase-admin";
-import { createHash, randomBytes } from "crypto";
+import { createHash, createHmac, randomBytes } from "crypto";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 
 if (!admin.apps.length) {
@@ -82,6 +82,36 @@ function generateInviteCode(): string {
   return out;
 }
 
+/** Prefer `JOIN_CODE_HMAC_SECRET` in prod for stronger codes; fallback uses project id (public). */
+function joinHmacSecret(): string {
+  const explicit = process.env.JOIN_CODE_HMAC_SECRET;
+  if (typeof explicit === "string" && explicit.trim().length >= 8) {
+    return explicit.trim();
+  }
+  const project = process.env.GCLOUD_PROJECT || process.env.GCP_PROJECT || "";
+  return `staveto-primary-invite|v1|${project || "unknown"}`;
+}
+
+/**
+ * One stable join code per (org, role) for the non-email flow. Plaintext is not stored;
+ * it is recomputed here and must match the stored hash after the first write.
+ */
+function stableJoinCodeForOrgAndRole(orgId: string, role: OrgRole): string {
+  const mac = createHmac("sha256", joinHmacSecret());
+  mac.update(`v1|${orgId}|${role}`);
+  const digest = mac.digest();
+  const chars = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789";
+  let out = "";
+  for (let i = 0; i < 10; i += 1) {
+    out += chars[digest[i] % chars.length];
+  }
+  return out;
+}
+
+function primaryCompanyInviteDocId(role: OrgRole): string {
+  return `primary_join_${role}`;
+}
+
 function requireAuth(
   request: { auth?: { uid?: string; token?: Record<string, unknown> } | null }
 ): { uid: string; email: string | null } {
@@ -118,16 +148,25 @@ export const createBusinessInviteCode = onCall(
     const db = admin.firestore();
     const orgRef = db.collection("organizations").doc(orgId);
     const memberRef = orgRef.collection("members").doc(actor.uid);
-    const inviteRef = orgRef.collection("invites").doc();
-    const auditRef = db.collection("adminActivityLogs").doc();
-    const now = admin.firestore.FieldValue.serverTimestamp();
-    const expiresAtDate = new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
-    const expiresAt = admin.firestore.Timestamp.fromDate(expiresAtDate);
-    const inviteCode = generateInviteCode();
+    const isDirectEmail = Boolean(emailLower);
+    const inviteRef = isDirectEmail
+      ? orgRef.collection("invites").doc()
+      : orgRef.collection("invites").doc(primaryCompanyInviteDocId(role));
+    const inviteCode = isDirectEmail ? generateInviteCode() : stableJoinCodeForOrgAndRole(orgId, role);
     const inviteType: InviteType = emailLower ? "direct_email" : "join_code";
 
+    const auditRef = db.collection("adminActivityLogs").doc();
+    const now = admin.firestore.FieldValue.serverTimestamp();
+
+    let resultExpiresAt = new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
+    let resultMaxUses = maxUses;
+
     await db.runTransaction(async (tx) => {
-      const [orgSnap, memberSnap] = await Promise.all([tx.get(orgRef), tx.get(memberRef)]);
+      const [orgSnap, memberSnap, inviteSnap] = await Promise.all([
+        tx.get(orgRef),
+        tx.get(memberRef),
+        tx.get(inviteRef),
+      ]);
       if (!orgSnap.exists) {
         throw new HttpsError("not-found", "Organization not found.");
       }
@@ -152,8 +191,20 @@ export const createBusinessInviteCode = onCall(
         throw new HttpsError("permission-denied", "Only owner/admin can create invites.");
       }
 
-      if (seatsLimit > 0) {
-        const freeSeats = Math.max(seatsLimit - seatsUsed, 0);
+      const freeSeats = seatsLimit > 0 ? Math.max(seatsLimit - seatsUsed, 0) : 999999;
+      let effectiveMaxUses = maxUses;
+      let expiresAtDate = new Date(Date.now() + expiresInHours * 60 * 60 * 1000);
+
+      if (!isDirectEmail) {
+        effectiveMaxUses = requiresApproval ? 999999 : Math.max(1, freeSeats);
+        expiresAtDate = new Date(Date.now() + 10 * 365 * 24 * 60 * 60 * 1000);
+        if (seatsLimit > 0 && !requiresApproval && effectiveMaxUses > freeSeats) {
+          throw new HttpsError(
+            "failed-precondition",
+            "Invite maxUses exceeds currently available seats."
+          );
+        }
+      } else if (seatsLimit > 0) {
         if (!requiresApproval && maxUses > freeSeats) {
           throw new HttpsError(
             "failed-precondition",
@@ -162,21 +213,37 @@ export const createBusinessInviteCode = onCall(
         }
       }
 
+      const expiresAt = admin.firestore.Timestamp.fromDate(expiresAtDate);
+      const expectedHash = hashCode(inviteCode);
+      const existing = inviteSnap.exists ? ((inviteSnap.data() ?? {}) as Record<string, unknown>) : null;
+      const existingUsed =
+        typeof existing?.usedCount === "number" && Number.isFinite(existing.usedCount)
+          ? Math.max(0, Math.floor(existing.usedCount))
+          : 0;
+
       tx.set(inviteRef, {
         orgId,
-        codeHash: hashCode(inviteCode),
+        codeHash: expectedHash,
         codePrefix: inviteCode.slice(0, 4),
         createdByUid: actor.uid,
         createdByEmail: actor.email,
-        createdAt: now,
+        createdAt: inviteSnap.exists ? (existing?.createdAt as unknown) ?? now : now,
         expiresAt,
-        maxUses,
-        usedCount: 0,
+        maxUses: effectiveMaxUses,
+        usedCount: !isDirectEmail && inviteSnap.exists ? existingUsed : 0,
         status: "active",
         role,
         emailLower,
         requiresApproval,
         type: inviteType,
+      });
+
+      // O(1) redeem lookup — avoids collectionGroup("invites") + codeHash indexes.
+      const lookupRef = db.collection("businessInviteLookup").doc(expectedHash);
+      tx.set(lookupRef, {
+        orgId,
+        inviteId: inviteRef.id,
+        updatedAt: now,
       });
 
       tx.set(auditRef, {
@@ -188,18 +255,21 @@ export const createBusinessInviteCode = onCall(
         role,
         emailLower,
         requiresApproval,
-        maxUses,
+        maxUses: effectiveMaxUses,
         createdAt: now,
         source: "create_business_invite_code_callable",
       });
+
+      resultExpiresAt = expiresAtDate;
+      resultMaxUses = effectiveMaxUses;
     });
 
     return {
       inviteId: inviteRef.id,
       code: inviteCode,
       deepLink: `staveto://business/join?code=${encodeURIComponent(inviteCode)}`,
-      expiresAt: expiresAtDate.toISOString(),
-      maxUses,
+      expiresAt: resultExpiresAt.toISOString(),
+      maxUses: resultMaxUses,
       requiresApproval,
     };
   }

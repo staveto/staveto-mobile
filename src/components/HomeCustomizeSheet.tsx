@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -8,13 +8,10 @@ import {
   Alert,
   Modal,
   Pressable,
+  ScrollView,
+  Platform,
 } from "react-native";
 import { BottomSheetModal, BottomSheetBackdrop } from "@gorhom/bottom-sheet";
-import DraggableFlatList, {
-  RenderItemParams,
-  ScaleDecorator,
-} from "react-native-draggable-flatlist";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, spacing } from "../theme";
@@ -52,16 +49,12 @@ type Props = {
   onDismiss?: () => void;
 };
 
-function SectionRow({
+function SectionToggleRow({
   item,
-  drag,
-  isActive,
   onToggle,
   t,
 }: {
   item: HomeSectionConfig;
-  drag: () => void;
-  isActive: boolean;
   onToggle: (id: HomeSectionId, enabled: boolean) => void;
   t: (key: string) => string;
 }) {
@@ -69,34 +62,29 @@ function SectionRow({
   const isLocked = item.locked === true;
 
   return (
-    <ScaleDecorator>
-      <TouchableOpacity
-        onLongPress={drag}
-        disabled={isActive}
-        activeOpacity={1}
-        style={[styles.row, isActive && styles.rowActive]}
-        accessibilityRole="button"
-        accessibilityLabel={t(labelKey)}
-        accessibilityHint={isLocked ? "Locked section" : "Long press and drag to reorder"}
-      >
-        <View style={styles.dragHandle}>
-          <Ionicons name="reorder-three" size={24} color="rgba(255,255,255,0.6)" />
-        </View>
-        <Text style={styles.rowLabel} maxFontSizeMultiplier={1.2} numberOfLines={2}>
-          {t(labelKey)}
-        </Text>
-        {isLocked ? (
-          <Ionicons name="lock-closed" size={20} color="rgba(255,255,255,0.6)" />
-        ) : (
-          <Switch
-            value={item.enabled}
-            onValueChange={(v) => onToggle(item.id, v)}
-            trackColor={{ false: "rgba(255,255,255,0.3)", true: "#22c55e" }}
-            thumbColor="#fff"
-          />
-        )}
-      </TouchableOpacity>
-    </ScaleDecorator>
+    <Pressable
+      style={({ pressed }) => [styles.row, pressed && !isLocked ? styles.rowPressed : null]}
+      accessibilityRole="button"
+      accessibilityLabel={t(labelKey)}
+      accessibilityHint={isLocked ? "Locked section" : "Toggle home section visibility"}
+      onPress={() => {
+        if (!isLocked) onToggle(item.id, !item.enabled);
+      }}
+    >
+      <Text style={styles.rowLabel} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+        {t(labelKey)}
+      </Text>
+      {isLocked ? (
+        <Ionicons name="lock-closed" size={20} color="rgba(255,255,255,0.6)" />
+      ) : (
+        <Switch
+          value={item.enabled}
+          onValueChange={(v) => onToggle(item.id, v)}
+          trackColor={{ false: "rgba(255,255,255,0.3)", true: "#22c55e" }}
+          thumbColor="#fff"
+        />
+      )}
+    </Pressable>
   );
 }
 
@@ -173,6 +161,10 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
     ),
     []
   );
+  const snapPoints = useMemo(() => ["70%", "95%"], []);
+
+  const visibleSections = sections.filter((s) => s.id !== "kpis");
+  const sectionRows = visibleSections.length > 0 ? visibleSections : getDefaultLayout().sections;
 
   const renderContent = () => (
     <>
@@ -205,13 +197,23 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
             </TouchableOpacity>
           </View>
         ) : (
-          <GestureHandlerRootView style={{ flex: 1 }}>
+          <ScrollView
+            style={styles.sectionsList}
+            contentContainerStyle={styles.sectionsListContent}
+            showsVerticalScrollIndicator={false}
+            nestedScrollEnabled
+            keyboardShouldPersistTaps="handled"
+            decelerationRate={Platform.OS === "ios" ? "fast" : 0.985}
+            overScrollMode="always"
+          >
             <View style={styles.widgetsSection}>
               <Text style={styles.widgetsSectionTitle}>{t("home.customizeAdditionalWidgets")}</Text>
               <ToggleRow
                 label={t("home.customize.showHeaderChatShortcut")}
                 value={widgets.showHeaderChatShortcut}
-                onChange={(value) => setWidgets((prev) => ({ ...prev, showHeaderChatShortcut: value }))}
+                onChange={(value) =>
+                  setWidgets((prev) => ({ ...prev, showHeaderChatShortcut: value }))
+                }
               />
               <ToggleRow
                 label={t("home.customize.showQuickTime")}
@@ -221,29 +223,25 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
               <ToggleRow
                 label={t("home.customize.showTodayPriorities")}
                 value={widgets.showTodayPriorities}
-                onChange={(value) => setWidgets((prev) => ({ ...prev, showTodayPriorities: value }))}
+                onChange={(value) =>
+                  setWidgets((prev) => ({ ...prev, showTodayPriorities: value }))
+                }
               />
               <ToggleRow
                 label={t("home.customize.showBottomQuickActions")}
                 value={widgets.showBottomQuickActions}
-                onChange={(value) => setWidgets((prev) => ({ ...prev, showBottomQuickActions: value }))}
+                onChange={(value) =>
+                  setWidgets((prev) => ({ ...prev, showBottomQuickActions: value }))
+                }
               />
             </View>
-            <DraggableFlatList
-              data={sections.filter((s) => s.id !== "kpis")}
-              onDragEnd={({ data }) => setSections(data)}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item, drag, isActive }: RenderItemParams<HomeSectionConfig>) => (
-                <SectionRow
-                  item={item}
-                  drag={drag}
-                  isActive={isActive}
-                  onToggle={handleToggle}
-                  t={t}
-                />
-              )}
-            />
-          </GestureHandlerRootView>
+            <View style={styles.widgetsSection}>
+              <Text style={styles.widgetsSectionTitle}>Home sections</Text>
+              {sectionRows.map((item) => (
+                <SectionToggleRow key={item.id} item={item} onToggle={handleToggle} t={t} />
+              ))}
+            </View>
+          </ScrollView>
         )}
       </View>
     </>
@@ -272,7 +270,7 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
     <BottomSheetModal
       ref={sheetRef}
       enablePanDownToClose
-      snapPoints={["70%"]}
+      snapPoints={snapPoints}
       backdropComponent={renderBackdrop}
       handleIndicatorStyle={{ backgroundColor: "rgba(255,255,255,0.5)" }}
       backgroundStyle={styles.sheet}
@@ -292,7 +290,10 @@ function ToggleRow({
   onChange: (value: boolean) => void;
 }) {
   return (
-    <View style={styles.toggleRow}>
+    <Pressable
+      style={({ pressed }) => [styles.toggleRow, pressed ? styles.rowPressed : null]}
+      onPress={() => onChange(!value)}
+    >
       <Text style={styles.toggleLabel} maxFontSizeMultiplier={1.2} numberOfLines={2}>
         {label}
       </Text>
@@ -302,7 +303,7 @@ function ToggleRow({
         trackColor={{ false: "rgba(255,255,255,0.3)", true: "#22c55e" }}
         thumbColor="#fff"
       />
-    </View>
+    </Pressable>
   );
 }
 
@@ -367,6 +368,14 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xl,
   },
+  sectionsList: {
+    flex: 1,
+    minHeight: 0,
+  },
+  sectionsListContent: {
+    paddingBottom: spacing.xl + spacing.lg,
+    flexGrow: 1,
+  },
   widgetsSection: {
     marginTop: spacing.md,
     marginBottom: spacing.sm,
@@ -394,10 +403,15 @@ const styles = StyleSheet.create({
   row: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     paddingVertical: spacing.md,
+    gap: spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: SHEET_BORDER,
     minHeight: 56,
+  },
+  rowPressed: {
+    backgroundColor: "rgba(255,255,255,0.06)",
   },
   rowActive: {
     backgroundColor: "rgba(255,255,255,0.08)",

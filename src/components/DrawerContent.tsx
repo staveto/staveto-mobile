@@ -12,7 +12,7 @@ import {
   Platform,
   ActivityIndicator,
 } from "react-native";
-import { DrawerContentScrollView, DrawerContentComponentProps } from "@react-navigation/drawer";
+import { DrawerContentScrollView, DrawerContentComponentProps, useDrawerStatus } from "@react-navigation/drawer";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../context/AuthContext";
@@ -28,6 +28,9 @@ import { useUnreadCount } from "../hooks/useUnreadCount";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
 import { isAdminEmail, isBusinessFeatureEnabled } from "../lib/featureFlags";
 import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
+import { useActiveOrg } from "../hooks/useActiveOrg";
+import { useOrgAccess } from "../hooks/useOrgAccess";
+import { listMyMemberships, type MembershipDoc } from "../services/organizations";
 
 type NavItem = {
   id: string;
@@ -59,6 +62,10 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const businessEnabled = isBusinessFeatureEnabled();
   const adminEnabled = isAdminEmail(user?.email);
+  const drawerStatus = useDrawerStatus();
+  const { activeOrganization, activeMembership } = useActiveOrg();
+  const { canAccessBusiness } = useOrgAccess();
+  const [pendingBusinessMemberships, setPendingBusinessMemberships] = useState<MembershipDoc[]>([]);
 
   const sendAgentDebugLog = useCallback(
     (hypothesisId: string, location: string, message: string, data: Record<string, unknown> = {}, runId = "profile-photo-upload") => {
@@ -107,6 +114,27 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       setPlanTier(sub?.tier);
     });
   }, [user?.id]);
+
+  useEffect(() => {
+    if (!user?.id) {
+      setPendingBusinessMemberships([]);
+      return;
+    }
+    if (drawerStatus !== "open") return;
+    let cancelled = false;
+    listMyMemberships(user.id)
+      .then((rows) => {
+        if (!cancelled) {
+          setPendingBusinessMemberships(rows.filter((m) => m.userId === user.id && m.status === "pending"));
+        }
+      })
+      .catch(() => {
+        if (!cancelled) setPendingBusinessMemberships([]);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id, drawerStatus]);
 
   const closeDrawer = useCallback(() => {
     navigation.closeDrawer();
@@ -296,6 +324,30 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const initials = displayName !== "—" ? displayName.slice(0, 2).toUpperCase() : "?";
   const isProTier = planTier === "PRO";
 
+  const firstPendingMembership = pendingBusinessMemberships[0];
+  const pendingCompanyLabel = firstPendingMembership
+    ? (firstPendingMembership.organizationName?.trim() || t("home.businessCompanyFallback")).trim()
+    : null;
+  const orgNameActive = activeOrganization?.name?.trim() || null;
+
+  let drawerAffiliation: { variant: "active" | "pending" | "member"; text: string } | null = null;
+  if (canAccessBusiness && orgNameActive) {
+    drawerAffiliation = {
+      variant: "active",
+      text: t("home.businessWorkspaceChip", { company: orgNameActive }),
+    };
+  } else if (pendingCompanyLabel) {
+    drawerAffiliation = {
+      variant: "pending",
+      text: t("nav.drawerCompanyPending", { company: pendingCompanyLabel }),
+    };
+  } else if (activeMembership?.status === "active" && orgNameActive) {
+    drawerAffiliation = {
+      variant: "member",
+      text: t("nav.drawerCompanyMember", { company: orgNameActive }),
+    };
+  }
+
   const mainNavItems: NavItem[] = [
     { id: "projects", icon: "folder-open-outline", labelKey: "tabs.projects", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Projects" }); } },
     { id: "quickNotes", icon: "create-outline", labelKey: "quickNotes.title", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Home", params: { screen: "QuickNotesInbox" } }); } },
@@ -392,6 +444,40 @@ export function DrawerContent(props: DrawerContentComponentProps) {
         <Text style={styles.userName} numberOfLines={1} maxFontSizeMultiplier={1.2}>
           {displayName}
         </Text>
+        {drawerAffiliation ? (
+          <View
+            style={[
+              styles.drawerAffiliationRow,
+              drawerAffiliation.variant === "pending" && styles.drawerAffiliationRowPending,
+              drawerAffiliation.variant === "member" && styles.drawerAffiliationRowMember,
+            ]}
+            accessibilityRole="text"
+          >
+            <Ionicons
+              name={drawerAffiliation.variant === "pending" ? "hourglass-outline" : "business-outline"}
+              size={16}
+              color={
+                drawerAffiliation.variant === "pending"
+                  ? "#92400E"
+                  : drawerAffiliation.variant === "member"
+                    ? "rgba(255,255,255,0.85)"
+                    : colors.textOnDark
+              }
+              style={{ marginRight: 6 }}
+            />
+            <Text
+              style={[
+                styles.drawerAffiliationText,
+                drawerAffiliation.variant === "pending" && styles.drawerAffiliationTextPending,
+                drawerAffiliation.variant === "member" && styles.drawerAffiliationTextMember,
+              ]}
+              numberOfLines={2}
+              maxFontSizeMultiplier={1.15}
+            >
+              {drawerAffiliation.text}
+            </Text>
+          </View>
+        ) : null}
         <View style={[styles.planBadge, isProTier && styles.planBadgePro]}>
           <Text style={[styles.planText, isProTier && styles.planTextPro]} maxFontSizeMultiplier={1.1} numberOfLines={1}>
             {getPlanLabel(planTier)}
@@ -545,6 +631,37 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.textOnDark,
     marginBottom: spacing.xs,
+  },
+  drawerAffiliationRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "stretch",
+    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    paddingVertical: spacing.xs,
+    borderRadius: 10,
+    backgroundColor: "rgba(255,255,255,0.14)",
+  },
+  drawerAffiliationRowPending: {
+    backgroundColor: "#FFFBEB",
+    borderWidth: 1,
+    borderColor: "rgba(180,83,9,0.35)",
+  },
+  drawerAffiliationRowMember: {
+    backgroundColor: "rgba(255,255,255,0.1)",
+  },
+  drawerAffiliationText: {
+    flex: 1,
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textOnDark,
+    lineHeight: 16,
+  },
+  drawerAffiliationTextPending: {
+    color: "#92400E",
+  },
+  drawerAffiliationTextMember: {
+    color: "rgba(255,255,255,0.92)",
   },
   planBadge: {
     backgroundColor: "rgba(255,255,255,0.2)",

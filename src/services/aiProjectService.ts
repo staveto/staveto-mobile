@@ -19,6 +19,27 @@ export type AiCallableName =
   | "generateProjectStructure"
   | "createProjectFromAiPlan"
   | "refineGeneratedProjectNode";
+
+/**
+ * Status events emitted during long AI calls so the UI can show
+ * meaningful progress instead of just "loading…".
+ */
+export type AiGenerationStatus =
+  | { phase: "uploading_docs"; current?: number; total?: number }
+  | { phase: "connecting" }
+  | { phase: "thinking" }
+  | { phase: "saving" }
+  | { phase: "validating" }
+  | {
+      phase: "retrying";
+      attempt: number;
+      maxAttempts: number;
+      reason: "network" | "cold_start" | "timeout" | "unknown";
+      delayMs: number;
+    };
+
+export type AiStatusCallback = (status: AiGenerationStatus) => void;
+
 import { createProjectCreatedNotification } from "./notifications";
 import { getStorage, getAuth, getFunctionsInstance } from "../firebase";
 import { getExtraEnv } from "../lib/env";
@@ -154,7 +175,8 @@ function mapCallableWireError(errBody: CallableWireError): Error & { code?: stri
 async function postFirebaseCallable<TReq, TRes>(
   functionName: AiCallableName,
   data: TReq,
-  idToken: string
+  idToken: string,
+  onStatus?: AiStatusCallback
 ): Promise<TRes> {
   let url = getCallableHttpUrl(functionName);
   const bodyStr = JSON.stringify({ data });
@@ -164,7 +186,8 @@ async function postFirebaseCallable<TReq, TRes>(
     Authorization: `Bearer ${idToken}`,
   });
 
-  const AI_CALLABLE_TIMEOUT_MS = 120_000;
+  // 4 minutes — gives Gemini + slow mobile networks enough headroom.
+  const AI_CALLABLE_TIMEOUT_MS = 240_000;
 
   for (let hop = 0; hop < 8; hop++) {
     if (__DEV__ && hop === 0) {
@@ -173,6 +196,14 @@ async function postFirebaseCallable<TReq, TRes>(
         functionName,
         url.replace(/https:\/\/[^/]+/, "https://…")
       );
+    }
+
+    if (hop === 0) {
+      try {
+        onStatus?.({ phase: "connecting" });
+      } catch {
+        // status callbacks must never break the flow
+      }
     }
 
     const ctrl = new AbortController();
@@ -186,6 +217,15 @@ async function postFirebaseCallable<TReq, TRes>(
         redirect: "manual",
         signal: ctrl.signal,
       });
+      if (hop === 0) {
+        try {
+          onStatus?.({
+            phase: functionName === "createProjectFromAiPlan" ? "saving" : "thinking",
+          });
+        } catch {
+          // ignore
+        }
+      }
     } finally {
       clearTimeout(to);
     }
@@ -270,18 +310,48 @@ function isTransientCallableError(e: unknown): boolean {
   return false;
 }
 
-const COLD_START_MAX_RETRIES = 2;
+/**
+ * Be generous with retries on weak mobile signals + Gen2 cold-start.
+ * Backoff: 1.5s, 3s, 6s, 12s — total worst-case extra wait ~22s on top of timeouts.
+ */
+const COLD_START_MAX_RETRIES = 4;
 const COLD_START_BASE_DELAY_MS = 1500;
+const COLD_START_MAX_DELAY_MS = 15_000;
+
+function classifyTransientReason(
+  e: unknown
+): "network" | "cold_start" | "timeout" | "unknown" {
+  const err = e as { code?: string; message?: string; name?: string };
+  const code = normalizeCallableErrorCode(err?.code);
+  const msg = String(err?.message ?? "").toLowerCase();
+  const name = String(err?.name ?? "").toLowerCase();
+  if (code === "deadline-exceeded" || msg.includes("timed out") || msg.includes("timeout")) {
+    return "timeout";
+  }
+  if (code === "unavailable" || /\b50[234]\b/.test(msg)) return "cold_start";
+  if (
+    name === "aborterror" ||
+    code === "aborted" ||
+    msg.includes("network request failed") ||
+    msg.includes("failed to fetch") ||
+    msg.includes("econnreset") ||
+    msg.includes("socket hang up")
+  ) {
+    return "network";
+  }
+  return "unknown";
+}
 
 async function invokeAiCallable<TReq, TRes>(
   functionName: AiCallableName,
   payload: TReq,
-  idToken: string
+  idToken: string,
+  onStatus?: AiStatusCallback
 ): Promise<TRes> {
   let lastError: unknown;
   for (let attempt = 0; attempt <= COLD_START_MAX_RETRIES; attempt++) {
     try {
-      return await postFirebaseCallable<TReq, TRes>(functionName, payload, idToken);
+      return await postFirebaseCallable<TReq, TRes>(functionName, payload, idToken, onStatus);
     } catch (e) {
       lastError = e;
       const msg = String((e as Error)?.message ?? e ?? "");
@@ -309,10 +379,25 @@ async function invokeAiCallable<TReq, TRes>(
         throw e;
       }
 
-      const delay = COLD_START_BASE_DELAY_MS * Math.pow(2, attempt);
+      const delay = Math.min(
+        COLD_START_BASE_DELAY_MS * Math.pow(2, attempt),
+        COLD_START_MAX_DELAY_MS
+      );
+      const reason = classifyTransientReason(lastError);
+      try {
+        onStatus?.({
+          phase: "retrying",
+          attempt: attempt + 1,
+          maxAttempts: COLD_START_MAX_RETRIES,
+          reason,
+          delayMs: delay,
+        });
+      } catch {
+        // ignore status callback errors
+      }
       if (__DEV__) {
         console.warn(
-          `[aiProject] transient failure, retry ${attempt + 1}/${COLD_START_MAX_RETRIES} in ${delay}ms:`,
+          `[aiProject] transient failure (${reason}), retry ${attempt + 1}/${COLD_START_MAX_RETRIES} in ${delay}ms:`,
           code || msg.slice(0, 120)
         );
       }
@@ -348,6 +433,8 @@ export interface GenerateProjectStructureOptions {
   jobWorkflowKind?: "STANDARD" | "SERVICE" | null;
   /** When SERVICE: property vs equipment maintenance. */
   serviceMaintenanceScope?: "PROPERTY" | "EQUIPMENT" | null;
+  /** Optional progress callback so the UI can show meaningful status text + retry hints. */
+  onStatus?: AiStatusCallback;
 }
 
 export interface AiDraftDocument {
@@ -443,7 +530,8 @@ export async function generateProjectStructureWithAI(
         jobWorkflowKind: options?.jobWorkflowKind ?? undefined,
         serviceMaintenanceScope: options?.serviceMaintenanceScope ?? undefined,
       },
-      idToken
+      idToken,
+      options?.onStatus
     );
   } catch (e: unknown) {
     const err = e as { code?: string; message?: string; details?: unknown };
@@ -464,6 +552,12 @@ export async function generateProjectStructureWithAI(
     throw new Error("AI returned empty response. Please try again or create manually.");
   }
 
+  try {
+    options?.onStatus?.({ phase: "validating" });
+  } catch {
+    // ignore
+  }
+
   const validationErrors = validateAiProjectPlan(data.plan);
   if (validationErrors) {
     const msg = validationErrors.map((e) => `${e.path}: ${e.message}`).join("; ");
@@ -482,6 +576,8 @@ export interface CreateProjectFromAiPlanParams {
   countryCode?: string;
   city?: string;
   projectNumber?: string;
+  /** Optional progress callback for the UI (same shape as AI generation). */
+  onStatus?: AiStatusCallback;
 }
 
 /**
@@ -517,7 +613,8 @@ export async function createProjectFromAiPlan(
       city: params.city?.trim() || undefined,
       projectNumber: pn ? pn.slice(0, 120) : undefined,
     },
-    idToken
+    idToken,
+    params.onStatus
   );
 
   const projectId = resultData?.projectId;

@@ -208,6 +208,11 @@ service cloud.firestore {
       }
     }
 
+    // Server-only: SHA256 invite code → org + invite doc id (Cloud Functions; redeem O(1) lookup).
+    match /businessInviteLookup/{docId} {
+      allow read, write: if false;
+    }
+
     // B2B Organizations
     match /organizations/{orgId} {
       allow read: if signedIn() && isOrgMemberActive(orgId);

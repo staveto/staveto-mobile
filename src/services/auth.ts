@@ -319,6 +319,14 @@ export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string
     });
     // #endregion
 
+    // Clear the SDK's cached Google account so the user always gets the account
+    // picker instead of being signed straight into the last-used profile.
+    try {
+      await GoogleSignin.signOut();
+    } catch (signOutErr) {
+      if (__DEV__) console.warn("[auth] loginWithGoogle: signOut before signIn skipped:", signOutErr);
+    }
+
     const response = await GoogleSignin.signIn();
 
     if (response.type === "cancelled") {

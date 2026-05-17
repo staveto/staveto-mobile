@@ -67,6 +67,7 @@ import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
 import { readStoredPrimaryUsageMode } from "../lib/primaryUsageMode";
 import { showToast } from "../helpers/toast";
 import { getUnreadChatCount } from "../services/businessChat";
+import { listMyMemberships, type MembershipDoc } from "../services/organizations";
 
 // Conditional imports for image/document picker
 let ImagePicker: typeof import('expo-image-picker') | null = null;
@@ -663,6 +664,33 @@ export function HomeScreen() {
       }
     });
   }, []);
+
+  const [pendingBusinessMemberships, setPendingBusinessMemberships] = useState<MembershipDoc[]>([]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      const uid = user?.id;
+      if (!uid) {
+        setPendingBusinessMemberships([]);
+        return () => {
+          cancelled = true;
+        };
+      }
+      listMyMemberships(uid)
+        .then((rows) => {
+          if (!cancelled) {
+            setPendingBusinessMemberships(rows.filter((m) => m.userId === uid && m.status === "pending"));
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setPendingBusinessMemberships([]);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [user?.id])
+  );
 
   const greetingName = user?.firstName ?? user?.name ?? onboardingFirstName ?? onboardingDisplayName ?? user?.email ?? t("home.userFallback");
 
@@ -1594,6 +1622,14 @@ export function HomeScreen() {
                   : "home.headerHint"
             )}
           </Text>
+          {canAccessBusiness && activeOrganization?.name ? (
+            <View style={styles.businessWorkspaceChip} accessibilityRole="text">
+              <Ionicons name="business-outline" size={14} color="rgba(255,255,255,0.92)" />
+              <Text style={styles.businessWorkspaceChipText} numberOfLines={1}>
+                {t("home.businessWorkspaceChip", { company: activeOrganization.name })}
+              </Text>
+            </View>
+          ) : null}
         </View>
         <View style={styles.headerActionsRow}>
           {showHeaderChatShortcut ? (
@@ -1625,6 +1661,22 @@ export function HomeScreen() {
           </Pressable>
         </View>
       </View>
+
+      {pendingBusinessMemberships.length > 0 ? (
+        <View style={[styles.businessPendingBannerWrap, { paddingHorizontal: spacing.lg }]}>
+          {pendingBusinessMemberships.map((m) => {
+            const companyLabel = (m.organizationName?.trim() || t("home.businessCompanyFallback")).trim();
+            return (
+              <View key={m.orgId} style={styles.businessPendingBannerCard} accessibilityRole="alert">
+                <Ionicons name="time-outline" size={20} color="#B45309" style={{ marginRight: spacing.sm }} />
+                <Text style={styles.businessPendingBannerText}>
+                  {t("home.businessPendingBanner", { company: companyLabel })}
+                </Text>
+              </View>
+            );
+          })}
+        </View>
+      ) : null}
 
       {user?.id && (showQuickTime || (orgId && enabledSectionIds.has("quick_capture_card"))) ? (
         <View style={[styles.homeQuickTilesWrap, { paddingHorizontal: spacing.lg }]}>
@@ -1744,7 +1796,8 @@ export function HomeScreen() {
         extraData={homeListExtraData}
         contentContainerStyle={[
           styles.content,
-          { paddingTop: spacing.sm, paddingBottom: insets.bottom + (showBottomQuickActions ? 100 : spacing.xl) },
+          // Reserve extra space when bottom dock is visible so lower controls stay tappable above it.
+          { paddingTop: spacing.sm, paddingBottom: insets.bottom + (showBottomQuickActions ? 168 : spacing.xl) },
         ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
@@ -2835,6 +2888,46 @@ const styles = StyleSheet.create({
     color: "rgba(255,255,255,0.72)",
     fontWeight: "500",
   },
+  businessWorkspaceChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 6,
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    maxWidth: "100%",
+  },
+  businessWorkspaceChipText: {
+    flexShrink: 1,
+    fontSize: 11,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.95)",
+  },
+  businessPendingBannerWrap: {
+    marginTop: -spacing.sm,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  businessPendingBannerCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#FFFBEB",
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(180,83,9,0.35)",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  businessPendingBannerText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
+    color: "#92400E",
+  },
   headerRow: {
     flexDirection: "row",
     alignItems: "center",
@@ -3921,8 +4014,8 @@ const styles = StyleSheet.create({
   fabDockInner: {
     flexDirection: "row",
     alignItems: "center",
-    width: "100%",
-    maxWidth: 400,
+    width: "92%",
+    maxWidth: 360,
     minHeight: 58,
     backgroundColor: colors.card,
     borderRadius: 29,

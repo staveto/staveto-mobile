@@ -5,6 +5,7 @@ import {
   FlatList,
   Image,
   ImageBackground,
+  Modal,
   Pressable,
   ScrollView,
   StyleSheet,
@@ -16,10 +17,28 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import type { Locale } from "../i18n/translations";
+import { LOCALE_NAMES } from "../i18n/translations";
 import { colors, radius, spacing } from "../theme";
+
+const ALL_LOCALES: Locale[] = ["en", "de", "sk", "cs", "es", "it", "pl"];
+
+/**
+ * Must match `RootNavigator.LANGUAGE_SELECTION_DONE_KEY`. The post-login gate
+ * uses it to decide whether to show the legacy `LanguageSelectionScreen`.
+ * Hero onboarding already exposes a language picker (quick pills + modal),
+ * so any interaction here is treated as a valid language choice.
+ */
+const LANGUAGE_SELECTION_DONE_KEY = "language_selection_done";
+
+const markLanguageSelectionDone = (): void => {
+  AsyncStorage.setItem(LANGUAGE_SELECTION_DONE_KEY, "1").catch(() => {
+    // best-effort; failure here only re-shows the legacy picker, never blocks
+  });
+};
 
 /** Rýchly výber na hero welcome (zvyšok cez „Ďalšie jazyky“). */
 const HERO_BAR_LOCALES: Locale[] = ["en", "de", "es", "pl"];
@@ -66,6 +85,7 @@ export function OnboardingEvolutionScreen() {
   const [phase, setPhase] = useState<Phase>("hero");
   const [ctaBusy, setCtaBusy] = useState(false);
   const [activeIndex, setActiveIndex] = useState(0);
+  const [langPickerOpen, setLangPickerOpen] = useState(false);
   const listRef = useRef<FlatList<OnboardingStep> | null>(null);
 
   const horizontalPad = spacing.lg;
@@ -124,6 +144,9 @@ export function OnboardingEvolutionScreen() {
   );
 
   const onHeroPrimaryCta = useCallback(() => {
+    // Treat reaching the carousel as an implicit confirmation of the current
+    // locale (default `en` or whatever the user already changed it to).
+    markLanguageSelectionDone();
     setPhase("carousel");
     setActiveIndex(0);
     requestAnimationFrame(() => {
@@ -135,6 +158,7 @@ export function OnboardingEvolutionScreen() {
     if (ctaBusy) return;
     setCtaBusy(true);
     try {
+      markLanguageSelectionDone();
       await finishOnboarding();
       (navigation as { navigate: (screen: string) => void }).navigate("Register");
     } finally {
@@ -143,12 +167,35 @@ export function OnboardingEvolutionScreen() {
   }, [ctaBusy, finishOnboarding, navigation]);
 
   const onLogin = useCallback(() => {
+    // User skipping onboarding to log in already has a locale active.
+    markLanguageSelectionDone();
     (navigation as { navigate: (screen: string) => void }).navigate("Login");
   }, [navigation]);
 
+  const onHeroQuickPickLocale = useCallback(
+    (code: Locale) => {
+      setLocale(code);
+      markLanguageSelectionDone();
+    },
+    [setLocale]
+  );
+
   const onMoreLanguages = useCallback(() => {
-    (navigation as { navigate: (screen: string) => void }).navigate("LanguageSelect");
-  }, [navigation]);
+    setLangPickerOpen(true);
+  }, []);
+
+  const onPickLanguage = useCallback(
+    (code: Locale) => {
+      setLocale(code);
+      markLanguageSelectionDone();
+      setLangPickerOpen(false);
+    },
+    [setLocale]
+  );
+
+  const onCloseLangPicker = useCallback(() => {
+    setLangPickerOpen(false);
+  }, []);
 
   const goToStep = useCallback((nextIndex: number) => {
     const clamped = Math.max(0, Math.min(STEPS.length - 1, nextIndex));
@@ -270,7 +317,7 @@ export function OnboardingEvolutionScreen() {
                     return (
                       <Pressable
                         key={code}
-                        onPress={() => setLocale(code)}
+                        onPress={() => onHeroQuickPickLocale(code)}
                         hitSlop={6}
                         style={[styles.langPill, active && styles.langPillActive]}
                         accessibilityRole="button"
@@ -332,6 +379,70 @@ export function OnboardingEvolutionScreen() {
             </View>
           </SafeAreaView>
         </ImageBackground>
+
+        <Modal
+          visible={langPickerOpen}
+          transparent
+          animationType="fade"
+          onRequestClose={onCloseLangPicker}
+          statusBarTranslucent
+        >
+          <Pressable
+            style={styles.langModalBackdrop}
+            onPress={onCloseLangPicker}
+            accessibilityLabel={t("common.close")}
+          >
+            <Pressable
+              style={styles.langModalCard}
+              onPress={(e) => e.stopPropagation()}
+              accessibilityRole="menu"
+            >
+              <View style={styles.langModalHeader}>
+                <Text style={styles.langModalTitle}>{t("welcomeHero.moreLanguages")}</Text>
+                <Pressable
+                  onPress={onCloseLangPicker}
+                  hitSlop={10}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("common.close")}
+                >
+                  <Ionicons name="close" size={22} color={colors.text} />
+                </Pressable>
+              </View>
+              <ScrollView
+                style={styles.langModalList}
+                contentContainerStyle={styles.langModalListContent}
+                showsVerticalScrollIndicator={false}
+              >
+                {ALL_LOCALES.map((code) => {
+                  const active = locale === code;
+                  return (
+                    <Pressable
+                      key={code}
+                      onPress={() => onPickLanguage(code)}
+                      style={({ pressed }) => [
+                        styles.langModalRow,
+                        active && styles.langModalRowActive,
+                        pressed && styles.langModalRowPressed,
+                      ]}
+                      accessibilityRole="menuitem"
+                      accessibilityState={{ selected: active }}
+                    >
+                      <Text style={styles.langModalCode}>{code.toUpperCase()}</Text>
+                      <Text style={[styles.langModalName, active && styles.langModalNameActive]}>
+                        {LOCALE_NAMES[code]}
+                      </Text>
+                      {active ? (
+                        <Ionicons name="checkmark" size={20} color={colors.primary} />
+                      ) : (
+                        <View style={styles.langModalCheckSpacer} />
+                      )}
+                    </Pressable>
+                  );
+                })}
+              </ScrollView>
+            </Pressable>
+          </Pressable>
+        </Modal>
       </View>
     );
   }
@@ -612,6 +723,81 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     textDecorationLine: "underline",
+  },
+  langModalBackdrop: {
+    flex: 1,
+    backgroundColor: "rgba(0,0,0,0.55)",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingHorizontal: spacing.lg,
+  },
+  langModalCard: {
+    width: "100%",
+    maxWidth: 360,
+    backgroundColor: "#fff",
+    borderRadius: radius + 4,
+    paddingTop: spacing.md,
+    paddingBottom: spacing.sm,
+    shadowColor: "#000",
+    shadowOpacity: 0.25,
+    shadowRadius: 16,
+    shadowOffset: { width: 0, height: 8 },
+    elevation: 8,
+    overflow: "hidden",
+  },
+  langModalHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.lg,
+    paddingBottom: spacing.sm,
+  },
+  langModalTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  langModalList: {
+    maxHeight: 380,
+  },
+  langModalListContent: {
+    paddingHorizontal: spacing.sm,
+    paddingBottom: spacing.sm,
+  },
+  langModalRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius - 2,
+    gap: spacing.md,
+  },
+  langModalRowActive: {
+    backgroundColor: colors.primary + "12",
+  },
+  langModalRowPressed: {
+    backgroundColor: "rgba(0,0,0,0.05)",
+  },
+  langModalCode: {
+    fontSize: 13,
+    fontWeight: "700",
+    letterSpacing: 0.5,
+    color: colors.textMuted,
+    minWidth: 32,
+  },
+  langModalName: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "500",
+    color: colors.text,
+  },
+  langModalNameActive: {
+    color: colors.primary,
+    fontWeight: "700",
+  },
+  langModalCheckSpacer: {
+    width: 20,
+    height: 20,
   },
 
   carouselRoot: {

@@ -14,9 +14,11 @@ import {
 type Props = {
   onAccepted: () => void;
   onBack?: () => void;
+  /** Shown on the back button; defaults to `common.back`. */
+  backLabel?: string;
 };
 
-export function ConsentRequiredScreen({ onAccepted, onBack }: Props) {
+export function ConsentRequiredScreen({ onAccepted, onBack, backLabel }: Props) {
   const { locale, t } = useI18n();
   const [checked, setChecked] = useState(false);
   const [submitting, setSubmitting] = useState(false);
@@ -96,7 +98,7 @@ export function ConsentRequiredScreen({ onAccepted, onBack }: Props) {
       <View style={styles.actions}>
         {onBack ? (
           <TouchableOpacity style={styles.secondaryBtn} onPress={onBack} disabled={submitting}>
-            <Text style={styles.secondaryText}>{t("common.back")}</Text>
+            <Text style={styles.secondaryText}>{backLabel ?? t("common.back")}</Text>
           </TouchableOpacity>
         ) : null}
         <TouchableOpacity
@@ -158,7 +160,8 @@ const styles = StyleSheet.create({
     fontWeight: "700",
   },
   consentText: {
-    flex: 1,    color: colors.textOnDark,
+    flex: 1,
+    color: colors.textOnDark,
     fontSize: 13,
     lineHeight: 18,
   },
@@ -176,16 +179,16 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
   },
   secondaryBtn: {
-    backgroundColor: colors.card,
+    backgroundColor: colors.formPanel,
     padding: spacing.md,
     borderRadius: radius,
     alignItems: "center",
     justifyContent: "center",
-    minWidth: 80,
+    minWidth: 100,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
   },
-  secondaryText: { color: colors.text },
+  secondaryText: { color: colors.text, fontWeight: "600" },
   button: {
     backgroundColor: colors.primary,
     padding: spacing.md,

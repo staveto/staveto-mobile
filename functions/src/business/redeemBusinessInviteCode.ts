@@ -91,25 +91,69 @@ export const redeemBusinessInviteCode = onCall(
     }
 
     const db = admin.firestore();
-    const inviteSnap = await db
-      .collectionGroup("invites")
-      .where("codeHash", "==", hashCode(code))
-      .limit(1)
-      .get();
-    if (inviteSnap.empty) {
-      throw new HttpsError("not-found", "Invite code is invalid.");
+    const digest = hashCode(code);
+
+    const lookupRef = db.collection("businessInviteLookup").doc(digest);
+    const lookupSnap = await lookupRef.get();
+
+    let inviteRef: admin.firestore.DocumentReference;
+    let invitePreview: Record<string, unknown>;
+
+    if (lookupSnap.exists) {
+      const lu = (lookupSnap.data() ?? {}) as Record<string, unknown>;
+      const oid = asString(lu.orgId);
+      const iid = asString(lu.inviteId);
+      if (!oid || !iid) {
+        throw new HttpsError("not-found", "Invite code is invalid.");
+      }
+      inviteRef = db.collection("organizations").doc(oid).collection("invites").doc(iid);
+      const invSnap = await inviteRef.get();
+      if (!invSnap.exists) {
+        throw new HttpsError("not-found", "Invite code is invalid.");
+      }
+      invitePreview = (invSnap.data() ?? {}) as Record<string, unknown>;
+    } else {
+      let inviteSnap;
+      try {
+        inviteSnap = await db
+          .collectionGroup("invites")
+          .where("codeHash", "==", digest)
+          .limit(10)
+          .get();
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e);
+        console.error("[redeemBusinessInviteCode] collectionGroup invite lookup failed:", msg);
+        if (/index|FAILED_PRECONDITION|failed[_-]precondition/i.test(msg)) {
+          throw new HttpsError(
+            "not-found",
+            "Invite code is invalid or out of date. Ask the company admin to open the company code once in Business (refreshes the invite)."
+          );
+        }
+        throw new HttpsError("internal", `Invite lookup failed: ${msg}`);
+      }
+      const orgInviteDocs = inviteSnap.docs.filter(
+        (d) => d.ref.path.startsWith("organizations/") && d.ref.path.includes("/invites/")
+      );
+      if (orgInviteDocs.length === 0) {
+        throw new HttpsError(
+          "not-found",
+          "Invite code is invalid or out of date. Ask the company admin to open the company code once in Business."
+        );
+      }
+      const d0 = orgInviteDocs[0];
+      inviteRef = d0.ref;
+      invitePreview = (d0.data() ?? {}) as Record<string, unknown>;
     }
 
-    const inviteDoc = inviteSnap.docs[0];
-    const invite = (inviteDoc.data() ?? {}) as Record<string, unknown>;
-    const orgId = asString(invite.orgId);
+    const orgId = asString(invitePreview.orgId);
     if (!orgId) {
       throw new HttpsError("failed-precondition", "Invite has invalid organization.");
     }
 
-    const role = normalizeRole(invite.role);
-    const requiresApproval = invite.requiresApproval === true;
+    const role = normalizeRole(invitePreview.role);
+    const requiresApproval = invitePreview.requiresApproval === true;
     const membershipStatus: MembershipStatus = requiresApproval ? "pending" : "active";
+    const inviteId = inviteRef.id;
     const orgRef = db.collection("organizations").doc(orgId);
     const memberRef = orgRef.collection("members").doc(actor.uid);
     const auditRef = db.collection("adminActivityLogs").doc();
@@ -121,7 +165,7 @@ export const redeemBusinessInviteCode = onCall(
       const [orgSnap, membershipSnap, inviteTxSnap] = await Promise.all([
         tx.get(orgRef),
         tx.get(memberRef),
-        tx.get(inviteDoc.ref),
+        tx.get(inviteRef),
       ]);
       if (!orgSnap.exists) {
         throw new HttpsError("not-found", "Organization not found.");
@@ -141,6 +185,8 @@ export const redeemBusinessInviteCode = onCall(
           : 1;
 
       const org = (orgSnap.data() ?? {}) as Record<string, unknown>;
+      const organizationName =
+        typeof org.name === "string" && org.name.trim().length > 0 ? org.name.trim().slice(0, 200) : "";
       const seatsLimit =
         typeof org.seatsLimit === "number" && Number.isFinite(org.seatsLimit)
           ? Math.floor(org.seatsLimit)
@@ -163,7 +209,7 @@ export const redeemBusinessInviteCode = onCall(
           tx.set(auditRef, {
             action: "business_invite_redeem_already_member",
             orgId,
-            inviteId: inviteDoc.id,
+            inviteId,
             actorUid: actor.uid,
             actorEmail: actor.emailLower,
             status: transactionStatus,
@@ -207,7 +253,8 @@ export const redeemBusinessInviteCode = onCall(
             joinedAt: membershipStatus === "active" ? now : null,
             requestedAt: now,
             invitedByUid: asString(inviteTx.createdByUid) || null,
-            inviteId: inviteDoc.id,
+            inviteId,
+            organizationName: organizationName || null,
             source: membershipSource,
             updatedAt: now,
           },
@@ -225,7 +272,8 @@ export const redeemBusinessInviteCode = onCall(
           joinedAt: membershipStatus === "active" ? now : null,
           requestedAt: now,
           invitedByUid: asString(inviteTx.createdByUid) || null,
-          inviteId: inviteDoc.id,
+          inviteId,
+          organizationName: organizationName || null,
           source: membershipSource,
           createdAt: now,
           updatedAt: now,
@@ -241,7 +289,7 @@ export const redeemBusinessInviteCode = onCall(
       if (nextUsedCount >= maxTx) {
         inviteUpdate.status = "expired";
       }
-      tx.update(inviteDoc.ref, inviteUpdate);
+      tx.update(inviteRef, inviteUpdate);
 
       if (!requiresApproval && transactionStatus === "active") {
         tx.update(orgRef, {
@@ -253,7 +301,7 @@ export const redeemBusinessInviteCode = onCall(
       tx.set(auditRef, {
         action: "redeem_business_invite",
         orgId,
-        inviteId: inviteDoc.id,
+        inviteId,
         actorUid: actor.uid,
         actorEmail: actor.emailLower,
         role,

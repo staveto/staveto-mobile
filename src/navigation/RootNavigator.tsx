@@ -95,7 +95,9 @@ export function RootNavigator() {
     } catch {}
   }, []);
   // #endregion
-  const { token, loading, onboardingDone, onboardingLoaded, user } = useAuth();
+  const { token, loading, onboardingDone, onboardingLoaded, user, logout } = useAuth();
+  /** After logout from first-time GDPR, open Register instead of intro/login. */
+  const [postSignOutInitialAuth, setPostSignOutInitialAuth] = useState<null | "Register">(null);
   const { t } = useI18n();
   const [gateLoading, setGateLoading] = useState(true);
   const [consentOk, setConsentOk] = useState(false);
@@ -105,11 +107,21 @@ export function RootNavigator() {
   const [openBusinessAfterOnboarding, setOpenBusinessAfterOnboarding] = useState(false);
   const hasShownTrialPopup = useRef(false);
 
+  /**
+   * Re-read the language-selection flag whenever auth state changes. The hero
+   * onboarding can set this flag mid-session (after the user picks a locale or
+   * advances past the welcome screen), and the gate must pick it up before
+   * deciding whether to show the legacy LanguageSelectionScreen.
+   */
   useEffect(() => {
     AsyncStorage.getItem(LANGUAGE_SELECTION_DONE_KEY).then((v) => {
       setLanguageSelectionDone(v === "1");
     });
-  }, []);
+  }, [token, user?.id]);
+
+  useEffect(() => {
+    if (token) setPostSignOutInitialAuth(null);
+  }, [token]);
 
   const checkGate = useCallback(async () => {
     if (!token || !user?.id) return;
@@ -119,6 +131,10 @@ export function RootNavigator() {
     }
     setGateLoading(true);
     try {
+      const langDone = await AsyncStorage.getItem(LANGUAGE_SELECTION_DONE_KEY);
+      if (langDone === "1") {
+        setLanguageSelectionDone(true);
+      }
       const pendingConsentRaw = await AsyncStorage.getItem(PENDING_CONSENT_KEY);
       let hasPendingConsent = false;
       if (pendingConsentRaw) {
@@ -265,11 +281,17 @@ export function RootNavigator() {
     return <LoadingScreen />;
   }
   if (!token) {
+    const signedOutInitialRoute =
+      postSignOutInitialAuth === "Register"
+        ? "Register"
+        : onboardingDone
+          ? "Login"
+          : "OnboardingIntro";
     return (
       <Stack.Navigator
-        key={onboardingDone ? "signed-out-intro-done" : "signed-out-intro-pending"}
+        key={`signed-out-${onboardingDone ? "done" : "pending"}-${postSignOutInitialAuth ?? "default"}`}
         screenOptions={{ headerShown: false }}
-        initialRouteName={onboardingDone ? "Login" : "OnboardingIntro"}
+        initialRouteName={signedOutInitialRoute}
       >
         <Stack.Screen name="LanguageSelect" component={LanguageSelectionScreen} />
         <Stack.Screen name="OnboardingIntro" component={OnboardingEvolutionScreen} />
@@ -298,11 +320,18 @@ export function RootNavigator() {
           setShowConsentAgain(false);
           checkGate();
         }}
-        onBack={async () => {
-          setShowConsentAgain(false);
-          await AsyncStorage.setItem(LANGUAGE_SELECTION_DONE_KEY, "");
-          setLanguageSelectionDone(false);
-        }}
+        backLabel={consentOk ? t("common.back") : t("consent.backToRegister")}
+        onBack={
+          consentOk
+            ? async () => {
+                setShowConsentAgain(false);
+              }
+            : async () => {
+                setShowConsentAgain(false);
+                setPostSignOutInitialAuth("Register");
+                await logout();
+              }
+        }
       />
     );
   }
@@ -310,7 +339,11 @@ export function RootNavigator() {
     return (
       <OnboardingMvpScreen
         onFinished={checkGate}
-        onBack={() => setShowConsentAgain(true)}
+        onBack={async () => {
+          setShowConsentAgain(false);
+          setPostSignOutInitialAuth("Register");
+          await logout();
+        }}
         onBusinessFlowRequested={() => setOpenBusinessAfterOnboarding(true)}
       />
     );

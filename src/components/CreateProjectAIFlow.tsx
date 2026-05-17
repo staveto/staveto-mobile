@@ -2,7 +2,7 @@
  * AI project creation: brief → generated draft plan → user review/edit → create in Firestore (callable).
  */
 
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -29,8 +29,12 @@ import {
   normalizeCallableErrorCode,
   type CreateProjectFromAiPlanParams,
   type AiDraftDocument,
+  type AiGenerationStatus,
 } from "../services/aiProjectService";
 import { patchProjectDocument } from "../services/projects";
+import { uploadAttachment } from "../services/attachments";
+import { createProjectDocument } from "../services/projectDocuments";
+import { getAuth } from "../firebase";
 import type { AiProjectPlan, AiTask } from "../lib/aiProjectSchema";
 import type { AiProjectDraft } from "../lib/aiProjectDraft";
 import {
@@ -392,6 +396,9 @@ export function CreateProjectAIFlow({
   const [lastAiDiagnostic, setLastAiDiagnostic] = useState<string | null>(null);
   const [submitting, setSubmitting] = useState(false);
   const [uploadingDocs, setUploadingDocs] = useState(false);
+  const [aiStatus, setAiStatus] = useState<AiGenerationStatus | null>(null);
+  const [aiBusyStartedAt, setAiBusyStartedAt] = useState<number | null>(null);
+  const [aiElapsedMs, setAiElapsedMs] = useState(0);
   const [showOptionalDetails, setShowOptionalDetails] = useState(false);
   const [unifiedName, setUnifiedName] = useState("");
   const [unifiedDescription, setUnifiedDescription] = useState("");
@@ -413,6 +420,32 @@ export function CreateProjectAIFlow({
       setBrief((prev) => (prev.trim() ? prev : seed));
     }
   }, [initialBrief, isUnified]);
+
+  /**
+   * Tick elapsed time while the AI flow is busy (generating or saving) so the UI
+   * can show "this is taking longer than usual" hints after ~15s.
+   */
+  useEffect(() => {
+    if (aiBusyStartedAt == null) {
+      setAiElapsedMs(0);
+      return;
+    }
+    setAiElapsedMs(Date.now() - aiBusyStartedAt);
+    const id = setInterval(() => {
+      setAiElapsedMs(Date.now() - aiBusyStartedAt);
+    }, 1000);
+    return () => clearInterval(id);
+  }, [aiBusyStartedAt]);
+
+  const beginAiBusy = useCallback(() => {
+    setAiStatus(null);
+    setAiBusyStartedAt(Date.now());
+  }, []);
+
+  const endAiBusy = useCallback(() => {
+    setAiStatus(null);
+    setAiBusyStartedAt(null);
+  }, []);
 
   const isTradeAi = !isUnified && engineType === "TRADE";
 
@@ -458,6 +491,39 @@ export function CreateProjectAIFlow({
     }
   };
 
+  const takePhoto = async () => {
+    if (!ImagePicker) {
+      Alert.alert(t("common.error"), t("createProject.ai.imagePickerNotInstalled"));
+      return;
+    }
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(t("common.error"), t("createProject.ai.cameraPermissionDenied"));
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"],
+        quality: 0.8,
+      });
+      const asset = result?.assets?.[0];
+      if (!result.canceled && asset?.uri) {
+        const newDoc: DraftAttachment = {
+          id: `img_${Date.now()}_${Math.random().toString(36).slice(2, 9)}`,
+          localUri: asset.uri,
+          fileName: asset.fileName ?? `foto_${Date.now()}.jpg`,
+          mimeType: asset.mimeType ?? "image/jpeg",
+          status: "local",
+        };
+        setDocuments((prev) => [...prev, newDoc]);
+      }
+    } catch (err) {
+      console.error("[CreateProjectAIFlow] Photo capture error:", err);
+      Alert.alert(t("common.error"), t("createProject.ai.takePhotoFailed"));
+    }
+  };
+
+
   const pickDocument = async () => {
     if (!DocumentPicker) {
       Alert.alert(t("common.error"), t("createProject.ai.documentPickerNotInstalled"));
@@ -491,6 +557,65 @@ export function CreateProjectAIFlow({
 
   const removeDocument = (id: string) => {
     setDocuments((prev) => prev.filter((d) => d.id !== id));
+  };
+
+  /**
+   * After project creation, copy draft files (photos + PDFs) into the project
+   * so the user finds them in the project's photo gallery / Documents tab.
+   *
+   * Best-effort: failures per file are logged but do not block the flow,
+   * because the project itself was created successfully.
+   */
+  const attachDraftFilesToProject = async (projectId: string): Promise<void> => {
+    const filesToAttach = documents.filter((d) => !!d.localUri && d.status !== "failed");
+    if (filesToAttach.length === 0) return;
+
+    const ownerId = getAuth()?.currentUser?.uid ?? null;
+    const total = filesToAttach.length;
+    let done = 0;
+
+    for (const file of filesToAttach) {
+      try {
+        const mime = (file.mimeType ?? "").toLowerCase();
+        const isImage = mime.startsWith("image/");
+        const isPdf = mime === "application/pdf" || file.fileName?.toLowerCase().endsWith(".pdf");
+        const kind: "image" | "pdf" | "other" = isImage ? "image" : isPdf ? "pdf" : "other";
+
+        const attachment = await uploadAttachment(projectId, {
+          localUri: file.localUri,
+          fileName: file.fileName,
+          mimeType: file.mimeType,
+          kind,
+        });
+
+        if ((kind === "pdf" || kind === "other") && ownerId) {
+          try {
+            await createProjectDocument(ownerId, projectId, {
+              name: file.fileName,
+              type: "other",
+              attachmentId: attachment.id,
+            });
+          } catch (docErr) {
+            if (__DEV__) {
+              console.warn(
+                `[CreateProjectAIFlow] createProjectDocument failed for ${file.fileName}:`,
+                docErr
+              );
+            }
+          }
+        }
+      } catch (err) {
+        if (__DEV__) {
+          console.warn(
+            `[CreateProjectAIFlow] Failed to attach draft file ${file.fileName} to project ${projectId}:`,
+            err
+          );
+        }
+      } finally {
+        done += 1;
+        setAiStatus({ phase: "uploading_docs", current: done, total });
+      }
+    }
   };
 
   const ensureDraftId = (): string => {
@@ -547,6 +672,7 @@ export function CreateProjectAIFlow({
 
     clearAiUiError();
     setStep("generating");
+    beginAiBusy();
 
     try {
       let documentStoragePaths: string[] = [];
@@ -554,11 +680,24 @@ export function CreateProjectAIFlow({
         setUploadingDocs(true);
         const toUpload = documents.filter((d) => d.status !== "uploaded");
         const alreadyUploaded = documents.filter((d) => d.status === "uploaded" && !!d.storagePath);
+        const totalToUpload = toUpload.length;
 
+        let uploadedCount = 0;
+        if (totalToUpload > 0) {
+          setAiStatus({ phase: "uploading_docs", current: 0, total: totalToUpload });
+        }
         for (const d of toUpload) {
           const updated = await uploadSingleDoc(d);
+          uploadedCount += 1;
           if (updated.status === "uploaded" && updated.storagePath) {
             documentStoragePaths.push(updated.storagePath);
+          }
+          if (totalToUpload > 0) {
+            setAiStatus({
+              phase: "uploading_docs",
+              current: uploadedCount,
+              total: totalToUpload,
+            });
           }
         }
         for (const d of alreadyUploaded) {
@@ -586,6 +725,7 @@ export function CreateProjectAIFlow({
         ...aiOptionsBase,
         documentStoragePaths: documentStoragePaths.length > 0 ? documentStoragePaths : undefined,
         projectDetails,
+        onStatus: setAiStatus,
       });
       const draft = aiPlanToDraft(result, {
         projectNumber: projectNumberInput.trim() || undefined,
@@ -605,6 +745,8 @@ export function CreateProjectAIFlow({
       setError(getAiErrorMessage(code, msg, t));
       setStep("brief");
       setUploadingDocs(false);
+    } finally {
+      endAiBusy();
     }
   };
 
@@ -639,16 +781,30 @@ export function CreateProjectAIFlow({
     if (!trimmedAgain) return;
     clearAiUiError();
     setStep("generating");
+    beginAiBusy();
     try {
       let documentStoragePaths: string[] = [];
       if (documents.length > 0) {
         setUploadingDocs(true);
         const toUpload = documents.filter((d) => d.status !== "uploaded");
         const alreadyUploaded = documents.filter((d) => d.status === "uploaded" && !!d.storagePath);
+        const totalToUpload = toUpload.length;
+        let uploadedCount = 0;
+        if (totalToUpload > 0) {
+          setAiStatus({ phase: "uploading_docs", current: 0, total: totalToUpload });
+        }
         for (const d of toUpload) {
           const updated = await uploadSingleDoc(d);
+          uploadedCount += 1;
           if (updated.status === "uploaded" && updated.storagePath) {
             documentStoragePaths.push(updated.storagePath);
+          }
+          if (totalToUpload > 0) {
+            setAiStatus({
+              phase: "uploading_docs",
+              current: uploadedCount,
+              total: totalToUpload,
+            });
           }
         }
         for (const d of alreadyUploaded) {
@@ -675,6 +831,7 @@ export function CreateProjectAIFlow({
         ...aiOptionsBase,
         documentStoragePaths: documentStoragePaths.length > 0 ? documentStoragePaths : undefined,
         projectDetails,
+        onStatus: setAiStatus,
       });
       setDraftPlan(
         aiPlanToDraft(result, {
@@ -695,6 +852,8 @@ export function CreateProjectAIFlow({
       setError(getAiErrorMessage(code, msg, t));
       setStep("review");
       setUploadingDocs(false);
+    } finally {
+      endAiBusy();
     }
   };
 
@@ -795,6 +954,8 @@ export function CreateProjectAIFlow({
 
     clearAiUiError();
     setSubmitting(true);
+    beginAiBusy();
+    setAiStatus({ phase: "saving" });
 
     try {
       const mergedPlan = draftToAiProjectPlan({
@@ -808,6 +969,7 @@ export function CreateProjectAIFlow({
         plan: mergedPlan,
         originalBrief,
         projectNumber: draftPlan.projectNumber?.trim() || undefined,
+        onStatus: setAiStatus,
       };
       const projectId = await createProjectFromAiPlan(params);
 
@@ -828,6 +990,23 @@ export function CreateProjectAIFlow({
         }
       }
 
+      // Re-upload AI draft files into the project itself so the user can find
+      // them later under photos / documents. Best-effort, never blocks success.
+      const filesToReupload = documents.filter((d) => !!d.localUri && d.status !== "failed");
+      if (filesToReupload.length > 0) {
+        try {
+          setUploadingDocs(true);
+          setAiStatus({
+            phase: "uploading_docs",
+            current: 0,
+            total: filesToReupload.length,
+          });
+          await attachDraftFilesToProject(projectId);
+        } finally {
+          setUploadingDocs(false);
+        }
+      }
+
       onCreated(projectId);
     } catch (e) {
       const msg = normalizeAiErrorMessage(e instanceof Error ? e.message : String(e));
@@ -839,16 +1018,63 @@ export function CreateProjectAIFlow({
       setError(getAiErrorMessage(code, msg, t));
     } finally {
       setSubmitting(false);
+      endAiBusy();
     }
   };
 
   if (step === "generating") {
+    const elapsedSeconds = Math.floor(aiElapsedMs / 1000);
+    const showSlowHint = elapsedSeconds >= 15;
+    const showRetryDetail = aiStatus?.phase === "retrying";
+
+    const statusLine = (() => {
+      if (uploadingDocs && (!aiStatus || aiStatus.phase === "uploading_docs")) {
+        const cur = aiStatus?.phase === "uploading_docs" ? aiStatus.current : undefined;
+        const tot = aiStatus?.phase === "uploading_docs" ? aiStatus.total : undefined;
+        if (typeof cur === "number" && typeof tot === "number" && tot > 0) {
+          return t("createProject.ai.statusUploadingDocsProgress", {
+            current: String(cur),
+            total: String(tot),
+          });
+        }
+        return t("createProject.ai.uploadingDocs");
+      }
+      switch (aiStatus?.phase) {
+        case "connecting":
+          return t("createProject.ai.statusConnecting");
+        case "thinking":
+          return t("createProject.ai.statusThinking");
+        case "saving":
+          return t("createProject.ai.statusSaving");
+        case "validating":
+          return t("createProject.ai.statusValidating");
+        case "retrying":
+          return t("createProject.ai.statusRetrying", {
+            attempt: String(aiStatus.attempt),
+            max: String(aiStatus.maxAttempts),
+          });
+        default:
+          return t("createProject.ai.generating");
+      }
+    })();
+
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={colors.primary} />
-        <Text style={styles.generatingText}>
-          {uploadingDocs ? t("createProject.ai.uploadingDocs") : t("createProject.ai.generating")}
-        </Text>
+        <Text style={styles.generatingText}>{statusLine}</Text>
+        {elapsedSeconds > 3 ? (
+          <Text style={styles.generatingElapsed}>
+            {t("createProject.ai.statusElapsedSeconds", { seconds: String(elapsedSeconds) })}
+          </Text>
+        ) : null}
+        {showRetryDetail ? (
+          <Text style={styles.generatingRetryHint}>
+            {t("createProject.ai.statusRetryHint")}
+          </Text>
+        ) : null}
+        {showSlowHint && !showRetryDetail ? (
+          <Text style={styles.generatingSlowHint}>{t("createProject.ai.statusSlowHint")}</Text>
+        ) : null}
       </View>
     );
   }
@@ -1076,13 +1302,34 @@ export function CreateProjectAIFlow({
                   : t("createProject.ai.attachHint")}
             </Text>
             <View style={styles.attachButtons}>
-              <TouchableOpacity style={styles.attachBtn} onPress={pickPhoto}>
+              <TouchableOpacity
+                style={styles.attachBtn}
+                onPress={takePhoto}
+                accessibilityRole="button"
+                accessibilityLabel={t("createProject.ai.takePhoto")}
+              >
                 <View style={styles.attachIconWrap}>
                   <Ionicons name="camera-outline" size={28} color={colors.primary} />
                 </View>
-                <Text style={styles.attachBtnText}>{t("createProject.ai.addPhoto")}</Text>
+                <Text style={styles.attachBtnText}>{t("createProject.ai.takePhoto")}</Text>
               </TouchableOpacity>
-              <TouchableOpacity style={styles.attachBtn} onPress={pickDocument}>
+              <TouchableOpacity
+                style={styles.attachBtn}
+                onPress={pickPhoto}
+                accessibilityRole="button"
+                accessibilityLabel={t("createProject.ai.chooseFromGallery")}
+              >
+                <View style={styles.attachIconWrap}>
+                  <Ionicons name="images-outline" size={28} color={colors.primary} />
+                </View>
+                <Text style={styles.attachBtnText}>{t("createProject.ai.chooseFromGallery")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.attachBtn}
+                onPress={pickDocument}
+                accessibilityRole="button"
+                accessibilityLabel={t("createProject.ai.addDocument")}
+              >
                 <View style={styles.attachIconWrap}>
                   <Ionicons name="document-text-outline" size={28} color={colors.primary} />
                 </View>
@@ -1704,15 +1951,16 @@ const styles = StyleSheet.create({
   },
   attachButtons: {
     flexDirection: "row",
-    gap: spacing.lg,
+    gap: spacing.sm,
   },
   attachBtn: {
     alignItems: "center",
     flex: 1,
+    paddingVertical: spacing.xs,
   },
   attachIconWrap: {
-    width: 56,
-    height: 56,
+    width: 52,
+    height: 52,
     borderRadius: 12,
     backgroundColor: colors.primary + "10",
     alignItems: "center",
@@ -1720,7 +1968,7 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   attachBtnText: {
-    fontSize: 13,
+    fontSize: 12,
     fontWeight: "500",
     color: colors.text,
     textAlign: "center",
@@ -1816,8 +2064,32 @@ const styles = StyleSheet.create({
   },
   generatingText: {
     marginTop: spacing.md,
-    fontSize: 14,
+    fontSize: 15,
+    fontWeight: "500",
+    color: colors.text,
+    textAlign: "center",
+  },
+  generatingElapsed: {
+    marginTop: spacing.xs,
+    fontSize: 12,
     color: colors.textMuted,
+    textAlign: "center",
+  },
+  generatingSlowHint: {
+    marginTop: spacing.md,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.textMuted,
+    textAlign: "center",
+    maxWidth: 320,
+  },
+  generatingRetryHint: {
+    marginTop: spacing.md,
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#b58400",
+    textAlign: "center",
+    maxWidth: 320,
   },
   errorText: {
     fontSize: 13,

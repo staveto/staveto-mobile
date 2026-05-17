@@ -21,6 +21,7 @@ import { listMembers, type MembershipDoc } from "../../services/businessMembers"
 import { createBusinessCheckoutSession } from "../../services/businessPayments";
 import {
   createBusinessInviteCode,
+  formatCreateBusinessInviteError,
   type BusinessInviteRole,
   type CreateBusinessInviteCodeResult,
 } from "../../services/businessInvites";
@@ -396,10 +397,9 @@ export function BusinessDashboardScreen() {
       });
       setInviteResult(result);
     } catch (error) {
-      const details = getErrorDetails(error);
       Alert.alert(
         tr("common.error", undefined, "Error"),
-        `${tr("business.registration.alert.submitFailedBody", undefined, "Please try again.")}\n${details.code}: ${details.message}`
+        formatCreateBusinessInviteError(error, tr)
       );
     } finally {
       setInviteBusy(false);
@@ -680,13 +680,19 @@ export function BusinessDashboardScreen() {
               keyboardType="email-address"
             />
 
+            {!inviteEmail.trim() ? (
+              <Text style={styles.inviteHint}>{tr("business.invites.stableCodeHint", undefined, "")}</Text>
+            ) : null}
+
             <TouchableOpacity
               style={[styles.primaryButton, inviteBusy && styles.buttonDisabled]}
               disabled={inviteBusy}
               onPress={onGenerateInviteCode}
             >
               <Text style={styles.primaryButtonText}>
-                {tr("business.invites.generateCode", undefined, "Vygenerovat kod")}
+                {inviteEmail.trim()
+                  ? tr("business.invites.generateCode", undefined, "Generate code")
+                  : tr("business.invites.showJoinCode", undefined, "Show company code")}
               </Text>
             </TouchableOpacity>
 
@@ -1117,6 +1123,12 @@ const styles = StyleSheet.create({
     paddingVertical: 10,
     color: "#0F172A",
     backgroundColor: "#FFFFFF",
+  },
+  inviteHint: {
+    fontSize: 13,
+    lineHeight: 18,
+    color: "#64748B",
+    marginBottom: 10,
   },
   inviteResultWrap: {
     marginTop: 10,

@@ -79,7 +79,7 @@ export function BusinessChatRoomScreen() {
   const routeChatId = params.chatId ?? (chatType === "general" ? "general" : "");
   const otherUserId = params.otherUserId ?? "";
   const chatTitle =
-    params.title || (chatType === "direct" ? t("business.chat.directChat") : t("business.chat.generalTitle"));
+    params.title || (chatType === "direct" ? t("business.chat.directChat") : t("business.chat.companyChatTitle"));
   const uid = getAuth()?.currentUser?.uid ?? "";
   const canOpenBusinessChat = Boolean(
     activeBusinessOrgId &&

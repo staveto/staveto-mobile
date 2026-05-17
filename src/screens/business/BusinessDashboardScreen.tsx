@@ -598,9 +598,9 @@ export function BusinessDashboardScreen() {
         />
         <ActionCard
           icon="chatbubbles-outline"
-          title={tr("business.dashboard.actions.messages.title", undefined, "Spravy")}
-          body={tr("business.dashboard.actions.messages.body", undefined, "Firemny inbox a chat.")}
-          openLabel={tr("business.dashboard.actionOpen", undefined, "Open")}
+          title={tr("business.dashboard.actions.messages.title", undefined, "Inbox")}
+          body={tr("business.dashboard.actions.messages.body", undefined, "Firemna komunikacia na jednom mieste.")}
+          openLabel={tr("business.dashboard.actions.messages.cta", undefined, "Open inbox")}
           onPress={() => nav.navigate("BusinessChatList")}
         />
       </View>

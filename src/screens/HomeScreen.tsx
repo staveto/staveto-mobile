@@ -1600,7 +1600,8 @@ export function HomeScreen() {
             <Pressable
               style={styles.headerChatBtn}
               onPress={openBusinessChat}
-              accessibilityLabel={t("business.chat.title")}
+              accessibilityLabel={t("business.chat.inboxTitle")}
+              accessibilityHint={t("business.chat.inboxSubtitle")}
               accessibilityRole="button"
               hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
             >

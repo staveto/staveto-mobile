@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useState } from "react";
-import { ActivityIndicator, Pressable, StyleSheet, Text, View } from "react-native";
+import { ActivityIndicator, Pressable, ScrollView, StyleSheet, Text, View } from "react-native";
 import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../../i18n/I18nContext";
@@ -142,7 +142,7 @@ export function BusinessChatListScreen() {
       id: "general",
       orgId: activeBusinessOrgId,
       type: "general",
-      title: t("business.chat.generalTitle"),
+      title: t("business.chat.companyChatTitle"),
       createdAt: null,
       updatedAt: null,
       lastMessageText: "",
@@ -170,7 +170,7 @@ export function BusinessChatListScreen() {
       orgId: companyChat.orgId,
       chatId: companyChat.id,
       chatType: "general",
-      title: companyChat.title || t("business.chat.generalTitle"),
+      title: companyChat.title || t("business.chat.companyChatTitle"),
     });
   }, [companyChat, nav, t]);
 
@@ -199,7 +199,7 @@ export function BusinessChatListScreen() {
   if (!canOpenBusinessChat) {
     return (
       <View style={styles.container}>
-        <Text style={styles.title}>{t("business.chat.noAccessTitle")}</Text>
+        <Text style={styles.title}>{t("business.chat.inboxTitle")}</Text>
         <View style={styles.infoCard}>
           <Text style={styles.infoBody}>{t("business.chat.noAccessBody")}</Text>
         </View>
@@ -208,10 +208,22 @@ export function BusinessChatListScreen() {
   }
 
   return (
-    <View style={styles.container}>
-      <Text style={styles.title}>{t("business.chat.title")}</Text>
+    <ScrollView
+      style={styles.container}
+      contentContainerStyle={styles.scrollContent}
+      showsVerticalScrollIndicator={false}
+    >
+      <Text
+        style={styles.title}
+        accessibilityRole="header"
+        accessibilityLabel={t("business.chat.inboxTitle")}
+      >
+        {t("business.chat.inboxTitle")}
+      </Text>
+      <Text style={styles.subtitle}>{t("business.chat.inboxSubtitle")}</Text>
       {error ? <Text style={styles.errorText}>{error}</Text> : null}
 
+      <Text style={styles.sectionTitle}>{t("business.chat.workCommunication")}</Text>
       {companyChat ? (
         <Pressable style={styles.card} onPress={openGeneralChat}>
           <View style={styles.cardHead}>
@@ -219,7 +231,7 @@ export function BusinessChatListScreen() {
               <Ionicons name="chatbubbles-outline" size={20} color="#1E3A8A" />
             </View>
             <View style={styles.mainCol}>
-              <Text style={styles.chatTitle}>{t("business.chat.generalTitle")}</Text>
+              <Text style={styles.chatTitle}>{t("business.chat.companyChatTitle")}</Text>
               <Text style={styles.lastMessage} numberOfLines={1}>
                 {companyChat.lastMessageText || t("business.chat.companyChatSubtitle")}
               </Text>
@@ -253,7 +265,15 @@ export function BusinessChatListScreen() {
           </Pressable>
         ))
       )}
-    </View>
+
+      <View style={styles.comingSoonCard}>
+        <View style={styles.comingSoonHead}>
+          <Ionicons name="sparkles-outline" size={16} color="#CBD5E1" />
+          <Text style={styles.comingSoonTitle}>{t("business.chat.comingSoonTitle")}</Text>
+        </View>
+        <Text style={styles.comingSoonBody}>{t("business.chat.comingSoonBody")}</Text>
+      </View>
+    </ScrollView>
   );
 }
 
@@ -263,6 +283,10 @@ const styles = StyleSheet.create({
     backgroundColor: "#0E1D3A",
     paddingHorizontal: 16,
     paddingVertical: 18,
+    gap: 10,
+  },
+  scrollContent: {
+    paddingBottom: 24,
     gap: 10,
   },
   loadingWrap: {
@@ -281,7 +305,13 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 24,
     fontWeight: "800",
-    marginBottom: 6,
+    marginBottom: 4,
+  },
+  subtitle: {
+    color: "#CBD5E1",
+    fontSize: 13,
+    lineHeight: 18,
+    marginBottom: 4,
   },
   infoCard: {
     backgroundColor: "rgba(255,255,255,0.08)",
@@ -413,5 +443,32 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 13,
     marginLeft: 8,
+  },
+  comingSoonCard: {
+    marginTop: 14,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.10)",
+    borderRadius: 12,
+    paddingVertical: 12,
+    paddingHorizontal: 12,
+  },
+  comingSoonHead: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 6,
+    marginBottom: 4,
+  },
+  comingSoonTitle: {
+    color: "#E2E8F0",
+    fontSize: 12,
+    fontWeight: "700",
+    letterSpacing: 0.4,
+    textTransform: "uppercase",
+  },
+  comingSoonBody: {
+    color: "#CBD5E1",
+    fontSize: 13,
+    lineHeight: 18,
   },
 });

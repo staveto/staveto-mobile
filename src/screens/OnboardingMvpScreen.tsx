@@ -39,8 +39,27 @@ type Props = {
 type Mode = PrimaryUsageMode;
 const PENDING_ONBOARDING_KEY = "pending_onboarding";
 
-/** Steps: 1=mode, 2=country, 3=name, 4=phone, 5=first project, 6=first equipment, 7=company choice, 8=join by code */
-type OnboardingStep = 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
+/**
+ * High-level branch the user picked on the very first onboarding screen.
+ * - `join_company`: employee joining an existing org via invite code/QR
+ * - `solo`: independent professional, follows the existing solo onboarding
+ * - `create_company`: owner who wants to create a new business org
+ */
+type UsageMode = "join_company" | "solo" | "create_company";
+
+/**
+ * Steps:
+ *   0 = usage mode picker (NEW first step)
+ *   1 = build/trade mode (solo only)
+ *   2 = country (solo only)
+ *   3 = name (solo only)
+ *   4 = phone (solo only)
+ *   5 = first project (solo only)
+ *   6 = first equipment (solo only)
+ *   7 = legacy company choice (kept as defensive fallback, no longer in main flow)
+ *   8 = join by code (employee flow; reached directly from step 0)
+ */
+type OnboardingStep = 0 | 1 | 2 | 3 | 4 | 5 | 6 | 7 | 8;
 
 const EQ_CATEGORIES: { value: EquipmentCategory; icon: React.ComponentProps<typeof Ionicons>["name"] }[] = [
   { value: "tool", icon: "hammer-outline" },
@@ -84,7 +103,8 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
   const { user, finishOnboarding } = useAuth();
   const { setActiveBusinessOrgId, refreshActiveBusinessOrg } = useBusinessContext();
   const insets = useSafeAreaInsets();
-  const [step, setStep] = useState<OnboardingStep>(1);
+  const [step, setStep] = useState<OnboardingStep>(0);
+  const [usageMode, setUsageMode] = useState<UsageMode | null>(null);
   const [mode, setMode] = useState<Mode | null>(null);
   const [primaryCountry, setPrimaryCountry] = useState<string>(() => {
     const region = getDeviceRegionCode();
@@ -261,7 +281,9 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
 
   const onSkipEquipment = () => {
     setError("");
-    setStep(7);
+    // Solo flow finishes here; the legacy step 7 (company choice) is no longer
+    // shown after equipment because the choice is now the FIRST onboarding step.
+    void completeActivation();
   };
 
   const continueAlone = async () => {
@@ -273,6 +295,66 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
       onBusinessFlowRequested?.();
     });
   };
+
+  /**
+   * Lightweight onboarding completion for flows that do NOT collect solo profiling
+   * data (employee join, owner who wants to create a company first).
+   *
+   * Unlike `completeActivation()`, this does NOT require `mode` or `primaryCountry`
+   * and does NOT call `updateUserProfileFromOnboarding` when nothing was collected.
+   * It only flips the AsyncStorage flags + `finishOnboarding()` so the gate can
+   * route the user to Home / Business workspace.
+   */
+  const finishMinimalOnboarding = useCallback(
+    async (afterFinished?: () => void) => {
+      setSaving(true);
+      setError("");
+      try {
+        const payload = {
+          mode: null,
+          firstName: (user?.firstName ?? "").trim(),
+          lastName: (user?.lastName ?? "").trim(),
+          displayName: (user?.name ?? "").trim(),
+          phoneE164: undefined,
+          completedAt: new Date().toISOString(),
+          activationComplete: true,
+          createdProject: false,
+          createdEquipment: false,
+          usageMode,
+        };
+        await AsyncStorage.setItem(PENDING_ONBOARDING_KEY, JSON.stringify(payload));
+
+        if (user?.id) {
+          try {
+            // Only persist the timezone server-side and any name fields we may
+            // already know (e.g. from Apple Sign-In). The Firestore helper
+            // intentionally skips empty values so this is safe for employees
+            // who haven't typed anything in the onboarding flow.
+            await updateUserProfileFromOnboarding(user.id, {
+              firstName: (user.firstName ?? "").trim(),
+              lastName: (user.lastName ?? "").trim(),
+              displayName: (user.name ?? "").trim(),
+              timezone: getDeviceTimezone(),
+            });
+          } catch (e) {
+            console.warn("[OnboardingMvp] minimal Firestore profile sync failed:", e);
+          }
+        }
+
+        await finishOnboarding();
+        onFinished();
+        if (afterFinished) {
+          setTimeout(afterFinished, 50);
+        }
+      } catch (e) {
+        console.error("ONBOARDING minimal activation error", e);
+        setError(t("onboardingMvp.errorSaveFailed"));
+      } finally {
+        setSaving(false);
+      }
+    },
+    [user?.id, user?.firstName, user?.lastName, user?.name, usageMode, finishOnboarding, onFinished, t]
+  );
 
   const redeemCodeAndFinish = async () => {
     const normalizedCode = joinCode.trim().toUpperCase();
@@ -288,12 +370,15 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
         setActiveBusinessOrgId(result.orgId);
         await refreshActiveBusinessOrg();
         Alert.alert(t("business.join.successActiveTitle"), t("business.join.successActiveBody"));
-        await completeActivation(() => {
+        // Employee never creates a personal first project. Land on the Business
+        // workspace right away so the user sees the org they just joined.
+        await finishMinimalOnboarding(() => {
           onBusinessFlowRequested?.();
         });
       } else {
         Alert.alert(t("business.join.pendingTitle"), t("business.join.pendingBody"));
-        await completeActivation();
+        // Request pending approval -> finish onboarding silently and land on Home.
+        await finishMinimalOnboarding();
       }
     } catch (error) {
       const message = error instanceof Error ? error.message : String(error);
@@ -302,6 +387,31 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
       setJoinBusy(false);
     }
   };
+
+  /**
+   * Routes the user away from the new step 0 (usage mode picker) into the
+   * appropriate branch of the onboarding flow.
+   */
+  const onSelectUsageMode = useCallback(
+    async (selected: UsageMode) => {
+      setError("");
+      setUsageMode(selected);
+      if (selected === "join_company") {
+        setStep(8);
+        return;
+      }
+      if (selected === "solo") {
+        setStep(1);
+        return;
+      }
+      // create_company: skip personal profiling, finish onboarding and route
+      // the gate to the Business stack so the user picks plan / fills the org.
+      await finishMinimalOnboarding(() => {
+        onBusinessFlowRequested?.();
+      });
+    },
+    [finishMinimalOnboarding, onBusinessFlowRequested]
+  );
 
   // TODO(business-join-deeplink): keep deep-link handoff/prefill for a dedicated PR
   // that can safely update global linking setup in AppShell/RootNavigator.
@@ -324,7 +434,9 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
         status: "available",
       });
       createdEquipmentRef.current = true;
-      setStep(7);
+      // Solo flow finishes right after equipment now that the company-choice
+      // step has moved to the very beginning of onboarding.
+      await completeActivation();
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e ?? "");
       Alert.alert(t("common.error"), msg || t("onboardingMvp.errorSaveFailed"));
@@ -352,7 +464,93 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
 
   return (
     <View style={[styles.screen, { paddingTop: insets.top + spacing.sm }]}>
-      {step === 1 ? (
+      {step === 0 ? (
+        wrap(
+          <>
+            <Text style={styles.title}>{t("onboarding.usageMode.title")}</Text>
+            <Text style={styles.subtitle}>{t("onboarding.usageMode.subtitle")}</Text>
+            <View style={styles.usageModeOptions}>
+              <TouchableOpacity
+                style={styles.usageModeCard}
+                onPress={() => void onSelectUsageMode("join_company")}
+                disabled={saving}
+                accessibilityRole="button"
+                accessibilityLabel={t("onboarding.usageMode.joinCompany.title")}
+              >
+                <View style={styles.usageModeIconWrap}>
+                  <Ionicons name="people-outline" size={26} color={colors.primary} />
+                </View>
+                <View style={styles.usageModeTextWrap}>
+                  <Text style={styles.usageModeTitle}>
+                    {t("onboarding.usageMode.joinCompany.title")}
+                  </Text>
+                  <Text style={styles.usageModeBody}>
+                    {t("onboarding.usageMode.joinCompany.body")}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.usageModeCard}
+                onPress={() => void onSelectUsageMode("solo")}
+                disabled={saving}
+                accessibilityRole="button"
+                accessibilityLabel={t("onboarding.usageMode.solo.title")}
+              >
+                <View style={styles.usageModeIconWrap}>
+                  <Ionicons name="person-outline" size={26} color={colors.primary} />
+                </View>
+                <View style={styles.usageModeTextWrap}>
+                  <Text style={styles.usageModeTitle}>
+                    {t("onboarding.usageMode.solo.title")}
+                  </Text>
+                  <Text style={styles.usageModeBody}>
+                    {t("onboarding.usageMode.solo.body")}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+              </TouchableOpacity>
+
+              <TouchableOpacity
+                style={styles.usageModeCard}
+                onPress={() => void onSelectUsageMode("create_company")}
+                disabled={saving}
+                accessibilityRole="button"
+                accessibilityLabel={t("onboarding.usageMode.createCompany.title")}
+              >
+                <View style={styles.usageModeIconWrap}>
+                  <Ionicons name="business-outline" size={26} color={colors.primary} />
+                </View>
+                <View style={styles.usageModeTextWrap}>
+                  <Text style={styles.usageModeTitle}>
+                    {t("onboarding.usageMode.createCompany.title")}
+                  </Text>
+                  <Text style={styles.usageModeBody}>
+                    {t("onboarding.usageMode.createCompany.body")}
+                  </Text>
+                </View>
+                <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
+              </TouchableOpacity>
+            </View>
+            {error ? <Text style={styles.error}>{error}</Text> : null}
+            {saving ? (
+              <View style={{ marginTop: spacing.md, alignItems: "center" }}>
+                <ActivityIndicator color={colors.primary} />
+              </View>
+            ) : null}
+            {onBack ? (
+              <TouchableOpacity
+                style={[styles.textLinkBtn, { marginTop: spacing.md }]}
+                onPress={onBack}
+                disabled={saving}
+              >
+                <Text style={styles.textLink}>{t("onboardingMvp.back")}</Text>
+              </TouchableOpacity>
+            ) : null}
+          </>
+        )
+      ) : step === 1 ? (
         wrap(
           <>
             <Text style={styles.title}>{t("onboardingMvp.step1Title")}</Text>
@@ -376,13 +574,17 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
             </View>
             {error ? <Text style={styles.error}>{error}</Text> : null}
             <View style={styles.actions}>
-              {onBack ? (
-                <TouchableOpacity style={styles.secondaryBtn} onPress={onBack}>
-                  <Text style={styles.secondaryText}>{t("onboardingMvp.back")}</Text>
-                </TouchableOpacity>
-              ) : null}
               <TouchableOpacity
-                style={[styles.button, onBack ? { flex: 1 } : undefined]}
+                style={styles.secondaryBtn}
+                onPress={() => {
+                  setError("");
+                  setStep(0);
+                }}
+              >
+                <Text style={styles.secondaryText}>{t("onboardingMvp.back")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.button, { flex: 1 }]}
                 onPress={() => {
                   if (!mode) {
                     setError(t("onboardingMvp.errorSelectOption"));
@@ -706,7 +908,9 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
               style={[styles.textLinkBtn, { marginTop: spacing.md }]}
               onPress={() => {
                 setError("");
-                setStep(7);
+                // Always return to the mode picker; legacy step 7 is no longer
+                // part of the main flow.
+                setStep(0);
               }}
               disabled={saving || joinBusy}
             >
@@ -857,4 +1061,32 @@ const styles = StyleSheet.create({
   chipTextActive: { color: colors.primary, fontWeight: "600" },
   textLinkBtn: { alignItems: "center" },
   textLink: { color: colors.primary, fontSize: 15, fontWeight: "600" },
+  usageModeOptions: { gap: spacing.sm, marginBottom: spacing.md },
+  usageModeCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.md,
+    backgroundColor: colors.formPanel,
+    borderWidth: 1,
+    borderColor: colors.formPanelBorder,
+    borderRadius: radius,
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.md,
+  },
+  usageModeIconWrap: {
+    width: 44,
+    height: 44,
+    borderRadius: 22,
+    backgroundColor: colors.primary + "12",
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  usageModeTextWrap: { flex: 1 },
+  usageModeTitle: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: 2,
+  },
+  usageModeBody: { fontSize: 13, color: colors.textMuted, lineHeight: 18 },
 });

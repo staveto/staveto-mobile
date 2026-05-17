@@ -191,6 +191,29 @@ export const translations: Record<Locale, Record<string, string>> = {
       "Your account is ready. Complete payment to keep full Business access.",
     "business.dashboard.billingManual": "Manual billing",
     "business.dashboard.contactSupportCta": "Contact support",
+    "onboarding.usageMode.title": "How will you use Staveto?",
+    "onboarding.usageMode.subtitle":
+      "Pick whether you work on your own or are joining a company.",
+    "onboarding.usageMode.joinCompany.title": "I'm part of a company",
+    "onboarding.usageMode.joinCompany.body": "I have a code or QR from my employer.",
+    "onboarding.usageMode.solo.title": "I work independently",
+    "onboarding.usageMode.solo.body":
+      "I'm a tradesperson or manage my own jobs.",
+    "onboarding.usageMode.createCompany.title": "I want to create a company",
+    "onboarding.usageMode.createCompany.body":
+      "I want to manage a team, licenses and business projects.",
+    "onboarding.joinCompany.title": "Join a company",
+    "onboarding.joinCompany.subtitle": "Enter the company code from your employer.",
+    "onboarding.joinCompany.codePlaceholder": "e.g. AB12CD34",
+    "onboarding.joinCompany.submit": "Join",
+    "onboarding.joinCompany.pendingTitle": "Request pending approval",
+    "onboarding.joinCompany.pendingBody":
+      "Once an admin approves it you'll get access to the business workspace.",
+    "onboarding.joinCompany.activeTitle": "Joined the company",
+    "onboarding.joinCompany.activeBody":
+      "You were added to the business workspace.",
+    "onboarding.joinCompany.invalidCode": "Invalid company code",
+    "onboarding.joinCompany.skipForNow": "Skip for now",
     "business.join.title": "Do you belong to a company?",
     "business.join.subtitle":
       "If your employer invited you, enter the company code. Otherwise continue independently.",
@@ -1089,6 +1112,15 @@ export const translations: Record<Locale, Record<string, string>> = {
     "createProject.ai.documentsLabel": "Technical documents (optional)",
     "createProject.ai.addDocuments": "Add PDF or images for better planning",
     "createProject.ai.uploadingDocs": "Uploading documents…",
+    "createProject.ai.statusUploadingDocsProgress": "Uploading documents… ({{current}}/{{total}})",
+    "createProject.ai.statusConnecting": "Connecting to AI…",
+    "createProject.ai.statusThinking": "AI is preparing your project plan…",
+    "createProject.ai.statusValidating": "Almost done — checking the plan…",
+    "createProject.ai.statusSaving": "Creating the project on the server…",
+    "createProject.ai.statusRetrying": "Slow connection — retrying ({{attempt}}/{{max}})…",
+    "createProject.ai.statusRetryHint": "Weak signal detected. We will keep trying — please don't close the app.",
+    "createProject.ai.statusSlowHint": "This is taking longer than usual. AI may need up to 2 minutes on slow networks. Please keep the app open.",
+    "createProject.ai.statusElapsedSeconds": "Elapsed: {{seconds}} s",
     "createProject.ai.documentPickerNotInstalled": "Document picker is not available.",
     "createProject.ai.documentPickFailed": "Failed to select document.",
     "createProject.ai.imagePickerNotInstalled": "Image picker is not available.",
@@ -1117,6 +1149,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "createProject.ai.attachHint": "Site photos, quote PDFs, plans or technical sheets help AI prepare a more accurate draft.",
     "createProject.ai.addPhoto": "Add photo",
     "createProject.ai.addDocument": "Add document",
+    "createProject.ai.takePhoto": "Take photo",
+    "createProject.ai.chooseFromGallery": "From gallery",
+    "createProject.ai.cameraPermissionDenied": "Camera access was denied.",
+    "createProject.ai.takePhotoFailed": "Failed to take photo.",
     "createProject.ai.disclaimer": "AI works with the entered text and attached files and may make mistakes. Review and adjust the project after creation.",
     "createProject.ai.uploadStatusPending": "Ready to upload",
     "createProject.ai.uploadStatusUploading": "Uploading…",
@@ -2514,6 +2550,30 @@ export const translations: Record<Locale, Record<string, string>> = {
       "Ihr Konto ist bereit. Schliessen Sie die Zahlung fur vollen Business-Zugang ab.",
     "business.dashboard.billingManual": "Manuelle Abrechnung",
     "business.dashboard.contactSupportCta": "Support kontaktieren",
+    "onboarding.usageMode.title": "Wie wirst du Staveto nutzen?",
+    "onboarding.usageMode.subtitle":
+      "Wahle, ob du allein arbeitest oder einer Firma beitrittst.",
+    "onboarding.usageMode.joinCompany.title": "Ich bin Teil einer Firma",
+    "onboarding.usageMode.joinCompany.body":
+      "Ich habe einen Code oder QR von meinem Arbeitgeber.",
+    "onboarding.usageMode.solo.title": "Ich arbeite selbststandig",
+    "onboarding.usageMode.solo.body":
+      "Ich bin Handwerker oder verwalte meine eigenen Auftrage.",
+    "onboarding.usageMode.createCompany.title": "Ich mochte eine Firma erstellen",
+    "onboarding.usageMode.createCompany.body":
+      "Ich mochte Team, Lizenzen und Firmenprojekte verwalten.",
+    "onboarding.joinCompany.title": "Firma beitreten",
+    "onboarding.joinCompany.subtitle": "Gib den Firmen-Code deines Arbeitgebers ein.",
+    "onboarding.joinCompany.codePlaceholder": "z. B. AB12CD34",
+    "onboarding.joinCompany.submit": "Beitreten",
+    "onboarding.joinCompany.pendingTitle": "Anfrage wartet auf Freigabe",
+    "onboarding.joinCompany.pendingBody":
+      "Sobald ein Admin sie genehmigt, bekommst du Zugriff auf den Firmen-Workspace.",
+    "onboarding.joinCompany.activeTitle": "Firma beigetreten",
+    "onboarding.joinCompany.activeBody":
+      "Du wurdest zum Firmen-Workspace hinzugefugt.",
+    "onboarding.joinCompany.invalidCode": "Ungultiger Firmen-Code",
+    "onboarding.joinCompany.skipForNow": "Spater",
     "business.join.title": "Gehoren Sie zu einer Firma?",
     "business.join.subtitle":
       "Wenn Sie eingeladen wurden, geben Sie den Firmen-Code ein. Sonst fahren Sie alleine fort.",
@@ -3265,6 +3325,15 @@ export const translations: Record<Locale, Record<string, string>> = {
     "createProject.ai.documentsLabel": "Technische Dokumente (optional)",
     "createProject.ai.addDocuments": "PDF oder Bilder für bessere Planung hinzufügen",
     "createProject.ai.uploadingDocs": "Dokumente werden hochgeladen…",
+    "createProject.ai.statusUploadingDocsProgress": "Dokumente werden hochgeladen… ({{current}}/{{total}})",
+    "createProject.ai.statusConnecting": "Verbindung zur KI wird aufgebaut…",
+    "createProject.ai.statusThinking": "KI erstellt deinen Projektplan…",
+    "createProject.ai.statusValidating": "Fast fertig — Plan wird geprüft…",
+    "createProject.ai.statusSaving": "Projekt wird auf dem Server angelegt…",
+    "createProject.ai.statusRetrying": "Langsame Verbindung — neuer Versuch ({{attempt}}/{{max}})…",
+    "createProject.ai.statusRetryHint": "Schwaches Signal erkannt. Wir versuchen es weiter — bitte die App nicht schließen.",
+    "createProject.ai.statusSlowHint": "Dauert länger als üblich. Bei langsamem Netz kann die KI bis zu 2 Minuten brauchen. Bitte halte die App geöffnet.",
+    "createProject.ai.statusElapsedSeconds": "Verstrichen: {{seconds}} s",
     "createProject.ai.documentPickerNotInstalled": "Dokumentenauswahl ist nicht verfügbar.",
     "createProject.ai.documentPickFailed": "Dokument konnte nicht ausgewählt werden.",
     "createProject.ai.imagePickerNotInstalled": "Bildauswahl ist nicht verfügbar.",
@@ -3293,6 +3362,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "createProject.ai.attachHint": "Fotos und Dokumente erhöhen die Genauigkeit der Projekterstellung.",
     "createProject.ai.addPhoto": "Foto hinzufügen",
     "createProject.ai.addDocument": "Dokument hinzufügen",
+    "createProject.ai.takePhoto": "Foto aufnehmen",
+    "createProject.ai.chooseFromGallery": "Aus Galerie",
+    "createProject.ai.cameraPermissionDenied": "Kamerazugriff wurde verweigert.",
+    "createProject.ai.takePhotoFailed": "Foto konnte nicht aufgenommen werden.",
     "createProject.ai.category.construction": "Bau",
     "createProject.ai.category.renovation": "Renovierung",
     "createProject.ai.category.trade_installation": "Handwerksinstallation",
@@ -4366,6 +4439,29 @@ export const translations: Record<Locale, Record<string, string>> = {
       "Vas ucet je pripraveny. Dokoncite platbu pre plny Business pristup.",
     "business.dashboard.billingManual": "Manualna fakturacia",
     "business.dashboard.contactSupportCta": "Kontaktovat podporu",
+    "onboarding.usageMode.title": "Ako budes pouzivat Staveto?",
+    "onboarding.usageMode.subtitle":
+      "Vyber, ci pracujes samostatne, alebo sa pripajas k firme.",
+    "onboarding.usageMode.joinCompany.title": "Som sucastou firmy",
+    "onboarding.usageMode.joinCompany.body": "Mam kod alebo QR od zamestnavatela.",
+    "onboarding.usageMode.solo.title": "Pracujem samostatne",
+    "onboarding.usageMode.solo.body":
+      "Som remeselnik alebo si spravujem vlastne zakazky.",
+    "onboarding.usageMode.createCompany.title": "Chcem vytvorit firmu",
+    "onboarding.usageMode.createCompany.body":
+      "Chcem spravovat tim, licencie a firemne projekty.",
+    "onboarding.joinCompany.title": "Pripojit sa k firme",
+    "onboarding.joinCompany.subtitle": "Zadaj firemny kod od zamestnavatela.",
+    "onboarding.joinCompany.codePlaceholder": "napr. AB12CD34",
+    "onboarding.joinCompany.submit": "Pripojit sa",
+    "onboarding.joinCompany.pendingTitle": "Ziadost caka na schvalenie",
+    "onboarding.joinCompany.pendingBody":
+      "Po schvaleni adminom ziskas pristup k firemnemu priestoru.",
+    "onboarding.joinCompany.activeTitle": "Pripojenie uspesne",
+    "onboarding.joinCompany.activeBody":
+      "Boli ste pridany do firemneho priestoru.",
+    "onboarding.joinCompany.invalidCode": "Neplatny firemny kod",
+    "onboarding.joinCompany.skipForNow": "Preskocit",
     "business.join.title": "Patrite k firme?",
     "business.join.subtitle":
       "Ak vas pozval zamestnavatel, zadajte firemny kod. Inak pokracujte samostatne.",
@@ -5055,6 +5151,15 @@ export const translations: Record<Locale, Record<string, string>> = {
     "createProject.ai.documentsLabel": "Technické dokumenty (voliteľné)",
     "createProject.ai.addDocuments": "Pridať PDF alebo obrázky pre lepšie vytvorenie projektu",
     "createProject.ai.uploadingDocs": "Nahrávam dokumenty…",
+    "createProject.ai.statusUploadingDocsProgress": "Nahrávam dokumenty… ({{current}}/{{total}})",
+    "createProject.ai.statusConnecting": "Pripájam sa k AI…",
+    "createProject.ai.statusThinking": "AI pripravuje plán tvojho projektu…",
+    "createProject.ai.statusValidating": "Skoro hotovo — kontrolujem plán…",
+    "createProject.ai.statusSaving": "Vytváram projekt na serveri…",
+    "createProject.ai.statusRetrying": "Pomalé pripojenie — opakujem ({{attempt}}/{{max}})…",
+    "createProject.ai.statusRetryHint": "Slabý signál. Skúšame to znova — prosím nezatvor aplikáciu.",
+    "createProject.ai.statusSlowHint": "Trvá to dlhšie ako zvyčajne. Pri slabom signáli môže AI potrebovať až 2 minúty. Nezatváraj aplikáciu.",
+    "createProject.ai.statusElapsedSeconds": "Uplynulo: {{seconds}} s",
     "createProject.ai.documentPickerNotInstalled": "Výber dokumentov nie je k dispozícii.",
     "createProject.ai.documentPickFailed": "Nepodarilo sa vybrať dokument.",
     "createProject.ai.imagePickerNotInstalled": "Výber obrázkov nie je k dispozícii.",
@@ -5083,6 +5188,10 @@ export const translations: Record<Locale, Record<string, string>> = {
     "createProject.ai.attachHint": "Fotografie a dokumenty zvyšujú presnosť vytvorenia projektu.",
     "createProject.ai.addPhoto": "Pridať fotku",
     "createProject.ai.addDocument": "Pridať dokument",
+    "createProject.ai.takePhoto": "Odfotiť",
+    "createProject.ai.chooseFromGallery": "Z galérie",
+    "createProject.ai.cameraPermissionDenied": "Prístup ku kamere bol zamietnutý.",
+    "createProject.ai.takePhotoFailed": "Nepodarilo sa odfotiť.",
     "createProject.ai.disclaimer": "AI pracuje s textom a priloženými súbormi a môže sa mýliť. Po vytvorení si projekt skontroluj a uprav.",
     "createProject.ai.uploadStatusPending": "Pripravené na upload",
     "createProject.ai.uploadStatusUploading": "Nahrávam…",
@@ -6586,6 +6695,29 @@ export const translations: Record<Locale, Record<string, string>> = {
       "Vas ucet je pripraven. Dokoncete platbu pro plny Business pristup.",
     "business.dashboard.billingManual": "Manualni fakturace",
     "business.dashboard.contactSupportCta": "Kontaktovat podporu",
+    "onboarding.usageMode.title": "Jak budes pouzivat Staveto?",
+    "onboarding.usageMode.subtitle":
+      "Vyber, jestli pracujes samostatne, nebo se pripojujes k firme.",
+    "onboarding.usageMode.joinCompany.title": "Jsem soucast firmy",
+    "onboarding.usageMode.joinCompany.body": "Mam kod nebo QR od zamestnavatele.",
+    "onboarding.usageMode.solo.title": "Pracuji samostatne",
+    "onboarding.usageMode.solo.body":
+      "Jsem remeslnik nebo si spravuji vlastni zakazky.",
+    "onboarding.usageMode.createCompany.title": "Chci zalozit firmu",
+    "onboarding.usageMode.createCompany.body":
+      "Chci spravovat tym, licence a firemni projekty.",
+    "onboarding.joinCompany.title": "Pripojit se k firme",
+    "onboarding.joinCompany.subtitle": "Zadej firemni kod od zamestnavatele.",
+    "onboarding.joinCompany.codePlaceholder": "napr. AB12CD34",
+    "onboarding.joinCompany.submit": "Pripojit se",
+    "onboarding.joinCompany.pendingTitle": "Zadost ceka na schvaleni",
+    "onboarding.joinCompany.pendingBody":
+      "Po schvaleni adminem ziskas pristup k firemnimu prostoru.",
+    "onboarding.joinCompany.activeTitle": "Pripojeni uspesne",
+    "onboarding.joinCompany.activeBody":
+      "Byli jste pridani do firemniho prostoru.",
+    "onboarding.joinCompany.invalidCode": "Neplatny firemni kod",
+    "onboarding.joinCompany.skipForNow": "Preskocit",
     "business.join.title": "Patrite k firme?",
     "business.join.subtitle":
       "Pokud vas pozval zamestnavatel, zadejte firemni kod. Jinak pokracujte samostatne.",
@@ -8495,6 +8627,30 @@ export const translations: Record<Locale, Record<string, string>> = {
       "Tu cuenta esta lista. Completa el pago para mantener acceso completo a Business.",
     "business.dashboard.billingManual": "Facturacion manual",
     "business.dashboard.contactSupportCta": "Contactar soporte",
+    "onboarding.usageMode.title": "Como usaras Staveto?",
+    "onboarding.usageMode.subtitle":
+      "Elige si trabajas por tu cuenta o si te unes a una empresa.",
+    "onboarding.usageMode.joinCompany.title": "Formo parte de una empresa",
+    "onboarding.usageMode.joinCompany.body":
+      "Tengo un codigo o QR de mi empleador.",
+    "onboarding.usageMode.solo.title": "Trabajo por mi cuenta",
+    "onboarding.usageMode.solo.body":
+      "Soy autonomo o gestiono mis propios trabajos.",
+    "onboarding.usageMode.createCompany.title": "Quiero crear una empresa",
+    "onboarding.usageMode.createCompany.body":
+      "Quiero gestionar equipo, licencias y proyectos empresariales.",
+    "onboarding.joinCompany.title": "Unirse a una empresa",
+    "onboarding.joinCompany.subtitle": "Introduce el codigo de empresa de tu empleador.",
+    "onboarding.joinCompany.codePlaceholder": "p. ej. AB12CD34",
+    "onboarding.joinCompany.submit": "Unirme",
+    "onboarding.joinCompany.pendingTitle": "Solicitud pendiente de aprobacion",
+    "onboarding.joinCompany.pendingBody":
+      "Cuando un admin la apruebe tendras acceso al espacio empresarial.",
+    "onboarding.joinCompany.activeTitle": "Union completada",
+    "onboarding.joinCompany.activeBody":
+      "Te agregamos al espacio empresarial.",
+    "onboarding.joinCompany.invalidCode": "Codigo de empresa invalido",
+    "onboarding.joinCompany.skipForNow": "Mas tarde",
     "business.join.title": "Trabajas en una empresa?",
     "business.join.subtitle":
       "Si te invitaron, introduce el codigo de empresa. Si no, continua por tu cuenta.",
@@ -9715,6 +9871,31 @@ export const translations: Record<Locale, Record<string, string>> = {
       "Il tuo account e pronto. Completa il pagamento per mantenere accesso completo Business.",
     "business.dashboard.billingManual": "Fatturazione manuale",
     "business.dashboard.contactSupportCta": "Contatta supporto",
+    "onboarding.usageMode.title": "Come userai Staveto?",
+    "onboarding.usageMode.subtitle":
+      "Scegli se lavori in autonomia o ti unisci a un'azienda.",
+    "onboarding.usageMode.joinCompany.title": "Faccio parte di un'azienda",
+    "onboarding.usageMode.joinCompany.body":
+      "Ho un codice o un QR dal mio datore di lavoro.",
+    "onboarding.usageMode.solo.title": "Lavoro in autonomia",
+    "onboarding.usageMode.solo.body":
+      "Sono un artigiano o gestisco i miei lavori.",
+    "onboarding.usageMode.createCompany.title": "Voglio creare un'azienda",
+    "onboarding.usageMode.createCompany.body":
+      "Voglio gestire team, licenze e progetti aziendali.",
+    "onboarding.joinCompany.title": "Unisciti a un'azienda",
+    "onboarding.joinCompany.subtitle":
+      "Inserisci il codice aziendale del tuo datore di lavoro.",
+    "onboarding.joinCompany.codePlaceholder": "es. AB12CD34",
+    "onboarding.joinCompany.submit": "Unisciti",
+    "onboarding.joinCompany.pendingTitle": "Richiesta in attesa di approvazione",
+    "onboarding.joinCompany.pendingBody":
+      "Dopo l'approvazione dell'admin avrai accesso allo spazio aziendale.",
+    "onboarding.joinCompany.activeTitle": "Unione completata",
+    "onboarding.joinCompany.activeBody":
+      "Sei stato aggiunto allo spazio aziendale.",
+    "onboarding.joinCompany.invalidCode": "Codice aziendale non valido",
+    "onboarding.joinCompany.skipForNow": "Salta per ora",
     "business.join.title": "Fai parte di un azienda?",
     "business.join.subtitle":
       "Se sei stato invitato, inserisci il codice aziendale. Altrimenti continua da solo.",
@@ -11416,6 +11597,30 @@ export const translations: Record<Locale, Record<string, string>> = {
       "Twoje konto jest gotowe. Dokoncz platnosc, aby utrzymac pelny dostep do Business.",
     "business.dashboard.billingManual": "Rozliczenie manualne",
     "business.dashboard.contactSupportCta": "Kontakt z supportem",
+    "onboarding.usageMode.title": "Jak bedziesz korzystac ze Staveto?",
+    "onboarding.usageMode.subtitle":
+      "Wybierz, czy pracujesz samodzielnie, czy dolaczasz do firmy.",
+    "onboarding.usageMode.joinCompany.title": "Jestem czesc firmy",
+    "onboarding.usageMode.joinCompany.body":
+      "Mam kod lub QR od pracodawcy.",
+    "onboarding.usageMode.solo.title": "Pracuje samodzielnie",
+    "onboarding.usageMode.solo.body":
+      "Jestem rzemieslnikiem lub prowadze wlasne zlecenia.",
+    "onboarding.usageMode.createCompany.title": "Chce zalozyc firme",
+    "onboarding.usageMode.createCompany.body":
+      "Chce zarzadzac zespolem, licencjami i projektami firmowymi.",
+    "onboarding.joinCompany.title": "Dolacz do firmy",
+    "onboarding.joinCompany.subtitle": "Wpisz kod firmy od pracodawcy.",
+    "onboarding.joinCompany.codePlaceholder": "np. AB12CD34",
+    "onboarding.joinCompany.submit": "Dolacz",
+    "onboarding.joinCompany.pendingTitle": "Prosba oczekuje na akceptacje",
+    "onboarding.joinCompany.pendingBody":
+      "Po akceptacji admina uzyskasz dostep do przestrzeni firmowej.",
+    "onboarding.joinCompany.activeTitle": "Dolaczono do firmy",
+    "onboarding.joinCompany.activeBody":
+      "Dodano Cie do przestrzeni firmowej.",
+    "onboarding.joinCompany.invalidCode": "Nieprawidlowy kod firmy",
+    "onboarding.joinCompany.skipForNow": "Pomin",
     "business.join.title": "Nalezysz do firmy?",
     "business.join.subtitle":
       "Jesli zaprosil Cie pracodawca, wpisz kod firmy. W przeciwnym razie kontynuuj samodzielnie.",

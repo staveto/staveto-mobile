@@ -66,7 +66,6 @@ import {
 import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
 import { readStoredPrimaryUsageMode } from "../lib/primaryUsageMode";
 import { showToast } from "../helpers/toast";
-import { getUnreadChatCount } from "../services/businessChat";
 import { listMyMemberships, type MembershipDoc } from "../services/organizations";
 
 // Conditional imports for image/document picker
@@ -480,12 +479,7 @@ export function HomeScreen() {
       setChatUnreadCount(0);
       return;
     }
-    try {
-      const count = await getUnreadChatCount(activeBusinessOrgId, uid);
-      setChatUnreadCount(count);
-    } catch {
-      setChatUnreadCount(0);
-    }
+    setChatUnreadCount(0);
   }, [activeBusinessOrgId, canOpenBusinessChat, user?.id]);
 
   const openBusinessChat = useCallback(() => {

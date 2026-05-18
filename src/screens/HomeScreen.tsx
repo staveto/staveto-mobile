@@ -39,7 +39,13 @@ import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
 import { db, getCallable } from "../firebase";
 import { doc, getDoc } from "../lib/rnFirestore";
-import { loadHomeLayout, getDefaultLayout, type HomeLayout } from "../services/homeLayout";
+import {
+  loadHomeLayout,
+  getDefaultLayout,
+  type HomeLayout,
+  getHomeDisplayMetrics,
+  type HomeDisplayMetrics,
+} from "../services/homeLayout";
 import { HomeCustomizeSheet } from "../components/HomeCustomizeSheet";
 import { HomeCalendarSheet } from "../components/HomeCalendarSheet";
 import { QuickTimeModal } from "../components/QuickTimeModal";
@@ -145,6 +151,8 @@ type CompactProjectItemProps = {
   minimal?: boolean;
   /** Home preview: row opens project only — no camera/task circles */
   hideSideActions?: boolean;
+  /** Optional typography / row sizing from home display size */
+  displayMetrics?: HomeDisplayMetrics;
 };
 
 function getProjectInitials(name: string): string {
@@ -174,8 +182,10 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
   currentUserId,
   minimal,
   hideSideActions,
+  displayMetrics,
 }: CompactProjectItemProps) {
   const { t } = useI18n();
+  const dm = displayMetrics;
   const isOwner = !!project.ownerId && project.ownerId === currentUserId;
   const hub = isLegacyMaintenanceEquipmentHub(project);
   const active = getActiveProductProjectType(project);
@@ -208,6 +218,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
         styles.compactProjectRow,
         minimal && styles.compactProjectRowMinimal,
         hideSideActions && styles.compactProjectRowHome,
+        hideSideActions && dm ? { minHeight: dm.projectRowMinHeight } : null,
         !isOwner && styles.compactProjectRowMember,
         isSharedToMe && styles.compactProjectRowShared,
       ]}
@@ -221,6 +232,14 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
         style={[
           styles.compactThumb,
           hideSideActions && styles.compactThumbHome,
+          hideSideActions && dm
+            ? {
+                width: dm.projectThumbSize,
+                height: dm.projectThumbSize,
+                borderRadius: Math.max(8, Math.round(dm.projectThumbSize * 0.28)),
+                marginLeft: spacing.xs,
+              }
+            : null,
           { backgroundColor: thumbTint },
         ]}
         onPress={() => {
@@ -230,15 +249,25 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
         {!hub && project.coverImageUrl ? (
           <Image source={{ uri: project.coverImageUrl }} style={styles.compactThumbImage} resizeMode="cover" />
         ) : hub ? (
-          <Ionicons name="construct-outline" size={hideSideActions ? 16 : 20} color={colors.textMuted} />
+          <Ionicons
+            name="construct-outline"
+            size={hideSideActions ? (dm ? Math.round(dm.iconSize * 1.05) : 16) : 20}
+            color={colors.textMuted}
+          />
         ) : (
           <>
-            <Text style={[styles.compactThumbInitials, hideSideActions && styles.compactThumbInitialsHome]}>
+            <Text
+              style={[
+                styles.compactThumbInitials,
+                hideSideActions && styles.compactThumbInitialsHome,
+                hideSideActions && dm ? { fontSize: Math.max(10, Math.round(dm.projectThumbSize * 0.36)) } : null,
+              ]}
+            >
               {getProjectInitials(project.name || t("projects.noName"))}
             </Text>
             <Ionicons
               name={active === "TRADE" ? "briefcase-outline" : "clipboard-outline"}
-              size={hideSideActions ? 9 : 11}
+              size={hideSideActions ? (dm ? Math.max(8, Math.round(dm.iconSize * 0.55)) : 9) : 11}
               color={colors.textMuted}
               style={styles.compactThumbIcon}
             />
@@ -282,7 +311,12 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
           </Text>
         ) : null}
         <Text
-          style={[styles.compactProjectSubline, minimal && styles.compactProjectSublineMinimal, hideSideActions && styles.compactProjectSublineHome]}
+          style={[
+            styles.compactProjectSubline,
+            minimal && styles.compactProjectSublineMinimal,
+            hideSideActions && styles.compactProjectSublineHome,
+            hideSideActions && dm ? { fontSize: dm.projectSublineSize, lineHeight: Math.round(dm.projectSublineSize * 1.35) } : null,
+          ]}
           numberOfLines={minimal ? 2 : 1}
         >
           {openTasks} {openTasks === 1 ? t("home.openTask_one") : t("home.openTask_other")}
@@ -587,6 +621,8 @@ export function HomeScreen() {
     showTodayPriorities,
     showBottomQuickActions,
   } = effectiveLayout.widgets;
+  const homeDisplaySize = effectiveLayout.homeDisplaySize ?? "standard";
+  const hm = useMemo(() => getHomeDisplayMetrics(homeDisplaySize), [homeDisplaySize]);
   const enabledSectionIds = useMemo(
     () => new Set(effectiveLayout.sections.filter((s) => s.enabled).map((s) => s.id)),
     [effectiveLayout]
@@ -1506,8 +1542,8 @@ export function HomeScreen() {
     () =>
       `${selectedTypeFilter}-${projectFilter}-${
         activeTimer ? `tick-${timerTick}-${activeTimer.startedAt}-${activeTimer.projectId}` : "noTimer"
-      }-${data.todaysWorkTasks[0]?.id ?? "noTw"}`,
-    [selectedTypeFilter, projectFilter, activeTimer, timerTick, data.todaysWorkTasks]
+      }-${data.todaysWorkTasks[0]?.id ?? "noTw"}-${homeDisplaySize}`,
+    [selectedTypeFilter, projectFilter, activeTimer, timerTick, data.todaysWorkTasks, homeDisplaySize]
   );
 
   const liveMap = useMemo(() => {
@@ -1567,7 +1603,7 @@ export function HomeScreen() {
         <TouchableOpacity
           style={styles.headerAvatarBtn}
           onPress={openDrawer}
-          accessibilityLabel="Open menu"
+          accessibilityLabel={t("home.headerOpenMenuA11y")}
           hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
           activeOpacity={0.7}
         >
@@ -1596,8 +1632,8 @@ export function HomeScreen() {
           </Text>
           {canAccessBusiness && activeOrganization?.name ? (
             <View style={[styles.businessWorkspaceChip, styles.businessWorkspaceChipCompact]} accessibilityRole="text">
-              <Ionicons name="business-outline" size={12} color="rgba(255,255,255,0.88)" />
-              <Text style={styles.businessWorkspaceChipTextCompact} numberOfLines={1}>
+              <Ionicons name="business-outline" size={Math.max(11, hm.headerIconSize - 6)} color="rgba(255,255,255,0.88)" />
+              <Text style={[styles.businessWorkspaceChipTextCompact, { fontSize: homeDisplaySize === "large" ? 11 : homeDisplaySize === "compact" ? 9 : 10 }]} numberOfLines={1}>
                 {t("home.businessWorkspaceChip", { company: activeOrganization.name })}
               </Text>
             </View>
@@ -1613,7 +1649,7 @@ export function HomeScreen() {
               accessibilityRole="button"
               hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
             >
-              <Ionicons name="chatbubble-ellipses-outline" size={18} color={colors.textOnDark} />
+              <Ionicons name="chatbubble-ellipses-outline" size={hm.headerIconSize} color={colors.textOnDark} />
               {chatUnreadCount > 0 ? (
                 <View style={styles.headerChatBadge}>
                   <Text style={styles.headerChatBadgeText}>{chatUnreadCount > 99 ? "99+" : String(chatUnreadCount)}</Text>
@@ -1628,8 +1664,8 @@ export function HomeScreen() {
             accessibilityRole="button"
             hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
           >
-            <Ionicons name="grid-outline" size={18} color={colors.textOnDark} />
-            <Ionicons name="add" size={14} color={colors.textOnDark} style={{ marginLeft: 2 }} />
+            <Ionicons name="grid-outline" size={hm.headerIconSize} color={colors.textOnDark} />
+            <Ionicons name="add" size={Math.max(12, hm.headerIconSize - 4)} color={colors.textOnDark} style={{ marginLeft: 2 }} />
           </Pressable>
         </View>
       </View>
@@ -1656,7 +1692,7 @@ export function HomeScreen() {
         extraData={homeListExtraData}
         contentContainerStyle={[
           styles.content,
-          { paddingTop: 0, paddingBottom: insets.bottom + (showBottomQuickActions ? 168 : spacing.xl * 2) },
+          { paddingTop: 0, paddingBottom: insets.bottom + (showBottomQuickActions ? hm.bottomDockPadding : spacing.xl * 2 + (homeDisplaySize === "large" ? 12 : 0)) },
         ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
@@ -1740,8 +1776,18 @@ export function HomeScreen() {
               </TouchableOpacity>
             ) : null}
             {!isHomeEmptyByConfig && orgId && data.projects.length > 0 && showTodayPriorities ? (
-              <View style={styles.cmpOverviewCard} accessibilityRole="summary">
-                <Text style={styles.cmpOverviewTitle}>{t("home.compact.todayOverview")}</Text>
+              <View
+                style={[
+                  styles.cmpOverviewCard,
+                  {
+                    paddingHorizontal: hm.cardPaddingH,
+                    paddingVertical: hm.cardPaddingV,
+                    ...(hm.overviewCardMaxHeight != null ? { maxHeight: hm.overviewCardMaxHeight } : {}),
+                  },
+                ]}
+                accessibilityRole="summary"
+              >
+                <Text style={[styles.cmpOverviewTitle, { fontSize: hm.overviewTitleSize }]}>{t("home.compact.todayOverview")}</Text>
                 {data.todaysWorkTasks[0] ? (
                   <View style={styles.cmpOverviewRow}>
                     <TouchableOpacity
@@ -1773,10 +1819,10 @@ export function HomeScreen() {
                               </Text>
                             </View>
                             <View style={styles.cmpUrgentTextCol}>
-                              <Text style={styles.cmpTaskTitle} numberOfLines={1}>
+                              <Text style={[styles.cmpTaskTitle, { fontSize: hm.taskTitleSize }]} numberOfLines={1}>
                                 {tw.title}
                               </Text>
-                              <Text style={styles.cmpTaskProject} numberOfLines={1}>
+                              <Text style={[styles.cmpTaskProject, { fontSize: hm.taskMetaSize }]} numberOfLines={1}>
                                 {tw.projectName}
                               </Text>
                             </View>
@@ -1785,15 +1831,15 @@ export function HomeScreen() {
                       })()}
                     </TouchableOpacity>
                     <TouchableOpacity onPress={() => stackNav.navigate("Tasks")} style={styles.cmpLinkCta} accessibilityRole="button">
-                      <Text style={styles.cmpLinkCtaText}>{t("home.compact.tasks")}</Text>
+                      <Text style={[styles.cmpLinkCtaText, { fontSize: Math.max(11, hm.overviewTitleSize) }]}>{t("home.compact.tasks")}</Text>
                     </TouchableOpacity>
                   </View>
                 ) : (
                   <View style={styles.cmpCleanWrap}>
-                    <Text style={styles.cmpCleanTitle} maxFontSizeMultiplier={1.12}>
+                    <Text style={[styles.cmpCleanTitle, { fontSize: hm.taskTitleSize }]} maxFontSizeMultiplier={1.12}>
                       {t("home.compact.cleanToday")}
                     </Text>
-                    <Text style={styles.cmpCleanBody} numberOfLines={2} maxFontSizeMultiplier={1.1}>
+                    <Text style={[styles.cmpCleanBody, { fontSize: hm.overviewBodySize, lineHeight: Math.round(hm.overviewBodySize * 1.35) }]} numberOfLines={2} maxFontSizeMultiplier={1.1}>
                       {t("home.compact.noUrgentTasks")}
                     </Text>
                   </View>
@@ -1802,11 +1848,11 @@ export function HomeScreen() {
                 {enabledSectionIds.has("current_work") && focusProject ? (
                   <View style={styles.cmpOverviewRow}>
                     <View style={styles.cmpContinueCol}>
-                      <Text style={styles.cmpContinueLabel}>{t("home.compact.continue")}</Text>
-                      <Text style={styles.cmpContinueName} numberOfLines={1}>
+                      <Text style={[styles.cmpContinueLabel, { fontSize: hm.taskMetaSize }]}>{t("home.compact.continue")}</Text>
+                      <Text style={[styles.cmpContinueName, { fontSize: hm.taskTitleSize }]} numberOfLines={1}>
                         {focusProject.name}
                       </Text>
-                      <Text style={styles.cmpContinueMeta} numberOfLines={1}>
+                      <Text style={[styles.cmpContinueMeta, { fontSize: hm.taskMetaSize }]} numberOfLines={1}>
                         {(data.projectStats.get(focusProject.id)?.openCount ?? 0)}{" "}
                         {(data.projectStats.get(focusProject.id)?.openCount ?? 0) === 1
                           ? t("home.openTask_one")
@@ -1814,17 +1860,17 @@ export function HomeScreen() {
                       </Text>
                     </View>
                     <TouchableOpacity onPress={() => handleProjectClick(focusProject.id)} style={styles.cmpLinkCta} accessibilityRole="button">
-                      <Text style={styles.cmpLinkCtaText}>{t("home.compact.open")}</Text>
+                      <Text style={[styles.cmpLinkCtaText, { fontSize: Math.max(11, hm.overviewTitleSize) }]}>{t("home.compact.open")}</Text>
                     </TouchableOpacity>
                   </View>
                 ) : data.projects.length > 0 ? (
-                  <Text style={styles.cmpPickProject} numberOfLines={1}>
+                  <Text style={[styles.cmpPickProject, { fontSize: hm.overviewBodySize }]} numberOfLines={1}>
                     {t("home.compact.pickProject")}
                   </Text>
                 ) : null}
-                <View style={styles.cmpMetricsRow}>
+                <View style={[styles.cmpMetricsRow, { gap: hm.gap }]}>
                   <TouchableOpacity style={styles.cmpMetricPill} onPress={() => stackNav.navigate("Tasks")} activeOpacity={0.85}>
-                    <Text style={styles.cmpMetricText} numberOfLines={1}>
+                    <Text style={[styles.cmpMetricText, { fontSize: hm.metricPillFont }]} numberOfLines={1}>
                       {t("home.compact.openTasks", { count: String(data.kpis.openCount) })}
                     </Text>
                   </TouchableOpacity>
@@ -1833,7 +1879,7 @@ export function HomeScreen() {
                     onPress={() => stackNav.navigate("Tasks", { dueFilter: "overdue" })}
                     activeOpacity={0.85}
                   >
-                    <Text style={styles.cmpMetricText} numberOfLines={1}>
+                    <Text style={[styles.cmpMetricText, { fontSize: hm.metricPillFont }]} numberOfLines={1}>
                       {t("home.compact.overdue", { count: String(data.kpis.overdueCount ?? 0) })}
                     </Text>
                   </TouchableOpacity>
@@ -1845,7 +1891,7 @@ export function HomeScreen() {
                       onPress={() => goToEquipment({ screen: "EquipmentMain" })}
                       activeOpacity={0.85}
                     >
-                      <Text style={styles.cmpMetricText} numberOfLines={1}>
+                      <Text style={[styles.cmpMetricText, { fontSize: hm.metricPillFont }]} numberOfLines={1}>
                         {t("home.compact.service", { count: String(equipmentHomeSummary.openServiceTasks) })}
                       </Text>
                     </TouchableOpacity>
@@ -1856,12 +1902,21 @@ export function HomeScreen() {
             {user?.id &&
             !isHomeEmptyByConfig &&
             (showQuickTime || (orgId && enabledSectionIds.has("quick_capture_card")) || !!orgId) ? (
-              <View style={{ marginBottom: spacing.sm }}>
-                <Text style={styles.cmpSectionHeading}>{t("home.compact.quickActions")}</Text>
-                <View style={styles.cmpQuickRow}>
+              <View style={{ marginBottom: spacing.sm + (homeDisplaySize === "large" ? 4 : 0) }}>
+                <Text style={[styles.cmpSectionHeading, { fontSize: hm.sectionHeadingSize }]}>{t("home.compact.quickActions")}</Text>
+                <View style={[styles.cmpQuickRow, { gap: hm.gap }]}>
                   {showQuickTime ? (
                     <TouchableOpacity
-                      style={[styles.cmpQuickPill, activeTimer ? styles.cmpQuickPillActive : null]}
+                      style={[
+                        styles.cmpQuickPill,
+                        activeTimer ? styles.cmpQuickPillActive : null,
+                        {
+                          minHeight: hm.quickActionMinHeight,
+                          maxHeight: hm.quickActionMaxHeight,
+                          paddingVertical: homeDisplaySize === "compact" ? 4 : homeDisplaySize === "large" ? 10 : 6,
+                          paddingHorizontal: homeDisplaySize === "large" ? 8 : 6,
+                        },
+                      ]}
                       onPress={openQuickTimeSheet}
                       activeOpacity={0.88}
                       accessibilityRole="button"
@@ -1873,7 +1928,7 @@ export function HomeScreen() {
                     >
                       <Ionicons
                         name={activeTimer ? (activeTimer.status === "paused" ? "pause" : "time") : "time-outline"}
-                        size={15}
+                        size={hm.iconSize}
                         color={
                           activeTimer
                             ? activeTimer.status === "paused"
@@ -1882,7 +1937,14 @@ export function HomeScreen() {
                             : colors.textMuted
                         }
                       />
-                      <Text style={styles.cmpQuickPillLabel} numberOfLines={2} maxFontSizeMultiplier={1.08}>
+                      <Text
+                        style={[
+                          styles.cmpQuickPillLabel,
+                          { fontSize: hm.quickLabelSize, lineHeight: hm.quickLabelLineHeight },
+                        ]}
+                        numberOfLines={2}
+                        maxFontSizeMultiplier={1.08}
+                      >
                         {t("home.pro.quickTime")}
                       </Text>
                       {activeTimer ? (
@@ -1894,14 +1956,29 @@ export function HomeScreen() {
                   ) : null}
                   {orgId && enabledSectionIds.has("quick_capture_card") ? (
                     <TouchableOpacity
-                      style={styles.cmpQuickPill}
+                      style={[
+                        styles.cmpQuickPill,
+                        {
+                          minHeight: hm.quickActionMinHeight,
+                          maxHeight: hm.quickActionMaxHeight,
+                          paddingVertical: homeDisplaySize === "compact" ? 4 : homeDisplaySize === "large" ? 10 : 6,
+                          paddingHorizontal: homeDisplaySize === "large" ? 8 : 6,
+                        },
+                      ]}
                       onPress={() => setShowQuickNoteModal(true)}
                       activeOpacity={0.88}
                       accessibilityRole="button"
                       accessibilityLabel={t("home.quickCaptureTitle")}
                     >
-                      <Ionicons name="create-outline" size={15} color={colors.textMuted} />
-                      <Text style={styles.cmpQuickPillLabel} numberOfLines={2} maxFontSizeMultiplier={1.08}>
+                      <Ionicons name="create-outline" size={hm.iconSize} color={colors.textMuted} />
+                      <Text
+                        style={[
+                          styles.cmpQuickPillLabel,
+                          { fontSize: hm.quickLabelSize, lineHeight: hm.quickLabelLineHeight },
+                        ]}
+                        numberOfLines={2}
+                        maxFontSizeMultiplier={1.08}
+                      >
                         {t("home.pro.quickNote")}
                       </Text>
                       {pendingQuickNotesCount > 0 ? (
@@ -1913,14 +1990,29 @@ export function HomeScreen() {
                   ) : null}
                   {orgId ? (
                     <TouchableOpacity
-                      style={styles.cmpQuickPill}
+                      style={[
+                        styles.cmpQuickPill,
+                        {
+                          minHeight: hm.quickActionMinHeight,
+                          maxHeight: hm.quickActionMaxHeight,
+                          paddingVertical: homeDisplaySize === "compact" ? 4 : homeDisplaySize === "large" ? 10 : 6,
+                          paddingHorizontal: homeDisplaySize === "large" ? 8 : 6,
+                        },
+                      ]}
                       onPress={() => runContextAction("photo")}
                       activeOpacity={0.88}
                       accessibilityRole="button"
                       accessibilityLabel={t("home.pro.quickPhoto")}
                     >
-                      <Ionicons name="camera-outline" size={15} color={colors.textMuted} />
-                      <Text style={styles.cmpQuickPillLabel} numberOfLines={2} maxFontSizeMultiplier={1.08}>
+                      <Ionicons name="camera-outline" size={hm.iconSize} color={colors.textMuted} />
+                      <Text
+                        style={[
+                          styles.cmpQuickPillLabel,
+                          { fontSize: hm.quickLabelSize, lineHeight: hm.quickLabelLineHeight },
+                        ]}
+                        numberOfLines={2}
+                        maxFontSizeMultiplier={1.08}
+                      >
                         {t("home.pro.quickPhoto")}
                       </Text>
                     </TouchableOpacity>
@@ -1966,7 +2058,7 @@ export function HomeScreen() {
             ) : null}
             {!isHomeEmptyByConfig && enabledSectionIds.has("other_projects") && data.projects.length > 0 ? (
               <>
-                <Text style={styles.cmpSectionHeading}>{t("home.compact.projects")}</Text>
+                <Text style={[styles.cmpSectionHeading, { fontSize: hm.sectionHeadingSize }]}>{t("home.compact.projects")}</Text>
                 {previewProjects.map((item) => {
                   const live = liveMap.get(item.id);
                   const openTasks = data.projectStats.get(item.id)?.openCount ?? 0;
@@ -1984,6 +2076,7 @@ export function HomeScreen() {
                         currentUserId={user?.id}
                         minimal
                         hideSideActions
+                        displayMetrics={hm}
                       />
                     </View>
                   );
@@ -2008,143 +2101,228 @@ export function HomeScreen() {
               </>
             ) : null}
             {(() => {
+              const hasKpiRow =
+                enabledSectionIds.has("open_tasks_chip") ||
+                enabledSectionIds.has("projects_chip") ||
+                enabledSectionIds.has("time_tracking_chip") ||
+                (enabledSectionIds.has("expenses_chip") && data.kpis.hasExpensesAccess);
+              const hasFilters = enabledSectionIds.has("project_filters");
+
+              const kpiCardStyle = {
+                backgroundColor: colors.card,
+                borderRadius: 12,
+                borderWidth: 1,
+                borderColor: "rgba(45,74,122,0.14)",
+                paddingVertical: hm.gap + 4,
+                paddingHorizontal: hm.gap + 4,
+                minWidth: hm.kpiCardMinWidth,
+              };
+
               return (
                 <>
-                  {(enabledSectionIds.has("open_tasks_chip") ||
-                    enabledSectionIds.has("projects_chip") ||
-                    enabledSectionIds.has("time_tracking_chip") ||
-                    (enabledSectionIds.has("expenses_chip") && data.kpis.hasExpensesAccess)) && (
-            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.chipsRow}>
-              {enabledSectionIds.has("open_tasks_chip") && (
-                <TouchableOpacity style={styles.statChipMuted} onPress={() => stackNav.navigate("Tasks")} activeOpacity={0.8}>
-                  <Text style={styles.statChipTextMuted}>
-                    {t("home.openTasksChip")} <Text style={styles.statChipValueMuted}>{data.kpis.openCount}</Text>
-                  </Text>
-                </TouchableOpacity>
-              )}
-              {enabledSectionIds.has("projects_chip") && (
-                <TouchableOpacity style={styles.statChipMuted} onPress={() => goToProjects()} activeOpacity={0.8}>
-                  <Text style={styles.statChipTextMuted}>
-                    {t("home.projectsCount", { count: String(data.projects.length) })}
-                  </Text>
-                </TouchableOpacity>
-              )}
-              {enabledSectionIds.has("time_tracking_chip") && (
-                <TouchableOpacity
-                  style={styles.statChipMuted}
-                  onPress={() => stackNav.navigate("AttendanceReportScreen")}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.statChipTextMuted}>
-                    {t("home.attendanceChip", { hours: formatMinutesToHours(monthlyMinutes) })}
-                  </Text>
-                </TouchableOpacity>
-              )}
-              {enabledSectionIds.has("expenses_chip") && data.kpis.hasExpensesAccess && (
-                <TouchableOpacity
-                  style={styles.statChipMuted}
-                  onPress={() => stackNav.navigate("ExpensesKpiScreen")}
-                  activeOpacity={0.8}
-                >
-                  <Text style={styles.statChipTextMuted}>
-                    {t("home.expensesCount", { amount: String(Math.round(data.kpis.expensesTotalSum)) })}
-                  </Text>
-                </TouchableOpacity>
-              )}
-            </ScrollView>
-                  )}
-                  {enabledSectionIds.has("project_filters") && (
-            <>
-              <ScrollView
-                horizontal
-                showsHorizontalScrollIndicator={false}
-                contentContainerStyle={styles.filterRowMerged}
-              >
-                <TouchableOpacity
-                  style={styles.filterTypeTrigger}
-                  onPress={() => setShowTypeFilterModal(true)}
-                  accessibilityRole="button"
-                  accessibilityLabel={t("home.filterTypeTitle")}
-                >
-                  <Ionicons name="options-outline" size={17} color={colors.text} />
-                  <Text style={styles.filterTypeTriggerText} numberOfLines={1}>
-                    {t(
-                      selectedTypeFilter === "ALL"
-                        ? "home.filter.type.all"
-                        : selectedTypeFilter === "BUILD"
-                          ? "home.filter.type.management"
-                          : "home.filter.type.trade"
-                    )}
-                  </Text>
-                  <Ionicons name="chevron-down" size={15} color={colors.textMuted} />
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.filterChip, projectFilter === "all" && styles.filterChipActive]}
-                  onPress={() => handleProjectFilterChange("all")}
-                >
-                  <Text style={[styles.filterChipText, projectFilter === "all" && styles.filterChipTextActive]}>
-                    {t("home.filterAll")}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.filterChip, projectFilter === "mine" && styles.filterChipActive]}
-                  onPress={() => handleProjectFilterChange("mine")}
-                >
-                  <Text style={[styles.filterChipText, projectFilter === "mine" && styles.filterChipTextActive]}>
-                    {t("home.filterMine")}
-                  </Text>
-                </TouchableOpacity>
-                <TouchableOpacity
-                  style={[styles.filterChip, projectFilter === "shared" && styles.filterChipActive]}
-                  onPress={() => handleProjectFilterChange("shared")}
-                >
-                  <Text style={[styles.filterChipText, projectFilter === "shared" && styles.filterChipTextActive]}>
-                    {t("home.filterShared")}
-                  </Text>
-                </TouchableOpacity>
-              </ScrollView>
-              <Modal visible={showTypeFilterModal} transparent animationType="fade" onRequestClose={() => setShowTypeFilterModal(false)}>
-                <Pressable style={styles.typeFilterModalOverlay} onPress={() => setShowTypeFilterModal(false)}>
-                  <Pressable style={styles.typeFilterModalCard} onPress={(e) => e.stopPropagation()}>
-                    <Text style={styles.typeFilterModalTitle}>{t("home.filterTypeTitle")}</Text>
-                    {(["ALL", "BUILD", "TRADE"] as TypeFilter[]).map((type) => (
-                      <TouchableOpacity
-                        key={type}
-                        style={[styles.typeFilterModalRow, selectedTypeFilter === type && styles.typeFilterModalRowActive]}
-                        onPress={() => {
-                          void handleTypeFilterChange(type);
-                          setShowTypeFilterModal(false);
+                  {hasKpiRow ? (
+                    <View style={{ marginTop: spacing.md }}>
+                      <Text style={[styles.cmpSectionHeading, { fontSize: hm.sectionHeadingSize }]}>
+                        {t("home.overviewMetricsTitle")}
+                      </Text>
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={{
+                          flexDirection: "row",
+                          gap: hm.gap,
+                          paddingBottom: spacing.sm,
+                          paddingTop: 4,
+                          paddingRight: spacing.lg,
                         }}
                       >
-                        <Text
-                          style={[
-                            styles.typeFilterModalRowText,
-                            selectedTypeFilter === type && styles.typeFilterModalRowTextActive,
-                          ]}
+                        {enabledSectionIds.has("open_tasks_chip") ? (
+                          <TouchableOpacity
+                            style={kpiCardStyle}
+                            onPress={() => stackNav.navigate("Tasks")}
+                            activeOpacity={0.88}
+                            accessibilityRole="button"
+                          >
+                            <Ionicons name="list-outline" size={hm.kpiIconSize} color={colors.primary} />
+                            <Text
+                              style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
+                              numberOfLines={2}
+                            >
+                              {t("home.openTasksChip")}
+                            </Text>
+                            <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
+                              {String(data.kpis.openCount)}
+                            </Text>
+                          </TouchableOpacity>
+                        ) : null}
+                        {enabledSectionIds.has("projects_chip") ? (
+                          <TouchableOpacity style={kpiCardStyle} onPress={() => goToProjects()} activeOpacity={0.88} accessibilityRole="button">
+                            <Ionicons name="folder-outline" size={hm.kpiIconSize} color={colors.primary} />
+                            <Text
+                              style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
+                              numberOfLines={2}
+                            >
+                              {t("home.compact.projects")}
+                            </Text>
+                            <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
+                              {String(data.projects.length)}
+                            </Text>
+                          </TouchableOpacity>
+                        ) : null}
+                        {enabledSectionIds.has("time_tracking_chip") ? (
+                          <TouchableOpacity
+                            style={kpiCardStyle}
+                            onPress={() => stackNav.navigate("AttendanceReportScreen")}
+                            activeOpacity={0.88}
+                            accessibilityRole="button"
+                          >
+                            <Ionicons name="hourglass-outline" size={hm.kpiIconSize} color={colors.primary} />
+                            <Text
+                              style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
+                              numberOfLines={2}
+                            >
+                              {t("home.sectionTimeTrackingChip")}
+                            </Text>
+                            <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
+                              {formatMinutesToHours(monthlyMinutes)}
+                            </Text>
+                          </TouchableOpacity>
+                        ) : null}
+                        {enabledSectionIds.has("expenses_chip") && data.kpis.hasExpensesAccess ? (
+                          <TouchableOpacity
+                            style={kpiCardStyle}
+                            onPress={() => stackNav.navigate("ExpensesKpiScreen")}
+                            activeOpacity={0.88}
+                            accessibilityRole="button"
+                          >
+                            <Ionicons name="wallet-outline" size={hm.kpiIconSize} color={colors.primary} />
+                            <Text
+                              style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
+                              numberOfLines={2}
+                            >
+                              {t("home.expenses")}
+                            </Text>
+                            <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
+                              {String(Math.round(data.kpis.expensesTotalSum))}
+                            </Text>
+                          </TouchableOpacity>
+                        ) : null}
+                      </ScrollView>
+                    </View>
+                  ) : null}
+                  {hasFilters ? (
+                    <View style={{ marginTop: hasKpiRow ? spacing.lg : spacing.md }}>
+                      <Text style={[styles.cmpSectionHeading, { fontSize: hm.sectionHeadingSize }]}>
+                        {t("home.projectFilterSectionTitle")}
+                      </Text>
+                      <ScrollView
+                        horizontal
+                        showsHorizontalScrollIndicator={false}
+                        contentContainerStyle={styles.filterRowMerged}
+                      >
+                        <TouchableOpacity
+                          style={styles.filterTypeTrigger}
+                          onPress={() => setShowTypeFilterModal(true)}
+                          accessibilityRole="button"
+                          accessibilityLabel={t("home.filterTypeTitle")}
                         >
-                          {t(
-                            type === "ALL"
-                              ? "home.filter.type.all"
-                              : type === "BUILD"
-                                ? "home.filter.type.management"
-                                : "home.filter.type.trade"
-                          )}
-                        </Text>
-                        {selectedTypeFilter === type ? (
-                          <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
-                        ) : (
-                          <Ionicons name="ellipse-outline" size={22} color={colors.border} />
-                        )}
-                      </TouchableOpacity>
-                    ))}
-                    <TouchableOpacity style={styles.typeFilterModalClose} onPress={() => setShowTypeFilterModal(false)}>
-                      <Text style={styles.typeFilterModalCloseText}>{t("common.close")}</Text>
-                    </TouchableOpacity>
-                  </Pressable>
-                </Pressable>
-              </Modal>
-            </>
-                  )}
+                          <Ionicons name="options-outline" size={hm.filterTypeIconSize} color={colors.text} />
+                          <Text style={[styles.filterTypeTriggerText, { fontSize: hm.filterChipFont }]} numberOfLines={1}>
+                            {t(
+                              selectedTypeFilter === "ALL"
+                                ? "home.filter.type.all"
+                                : selectedTypeFilter === "BUILD"
+                                  ? "home.filter.type.management"
+                                  : "home.filter.type.trade"
+                            )}
+                          </Text>
+                          <Ionicons name="chevron-down" size={Math.max(14, hm.filterTypeIconSize - 2)} color={colors.textMuted} />
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.filterChip, projectFilter === "all" && styles.filterChipActive]}
+                          onPress={() => handleProjectFilterChange("all")}
+                        >
+                          <Text
+                            style={[
+                              styles.filterChipText,
+                              { fontSize: hm.filterChipFont },
+                              projectFilter === "all" && styles.filterChipTextActive,
+                            ]}
+                          >
+                            {t("home.filterAll")}
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.filterChip, projectFilter === "mine" && styles.filterChipActive]}
+                          onPress={() => handleProjectFilterChange("mine")}
+                        >
+                          <Text
+                            style={[
+                              styles.filterChipText,
+                              { fontSize: hm.filterChipFont },
+                              projectFilter === "mine" && styles.filterChipTextActive,
+                            ]}
+                          >
+                            {t("home.filterMine")}
+                          </Text>
+                        </TouchableOpacity>
+                        <TouchableOpacity
+                          style={[styles.filterChip, projectFilter === "shared" && styles.filterChipActive]}
+                          onPress={() => handleProjectFilterChange("shared")}
+                        >
+                          <Text
+                            style={[
+                              styles.filterChipText,
+                              { fontSize: hm.filterChipFont },
+                              projectFilter === "shared" && styles.filterChipTextActive,
+                            ]}
+                          >
+                            {t("home.filterShared")}
+                          </Text>
+                        </TouchableOpacity>
+                      </ScrollView>
+                      <Modal visible={showTypeFilterModal} transparent animationType="fade" onRequestClose={() => setShowTypeFilterModal(false)}>
+                        <Pressable style={styles.typeFilterModalOverlay} onPress={() => setShowTypeFilterModal(false)}>
+                          <Pressable style={styles.typeFilterModalCard} onPress={(e) => e.stopPropagation()}>
+                            <Text style={styles.typeFilterModalTitle}>{t("home.filterTypeTitle")}</Text>
+                            {(["ALL", "BUILD", "TRADE"] as TypeFilter[]).map((type) => (
+                              <TouchableOpacity
+                                key={type}
+                                style={[styles.typeFilterModalRow, selectedTypeFilter === type && styles.typeFilterModalRowActive]}
+                                onPress={() => {
+                                  void handleTypeFilterChange(type);
+                                  setShowTypeFilterModal(false);
+                                }}
+                              >
+                                <Text
+                                  style={[
+                                    styles.typeFilterModalRowText,
+                                    selectedTypeFilter === type && styles.typeFilterModalRowTextActive,
+                                  ]}
+                                >
+                                  {t(
+                                    type === "ALL"
+                                      ? "home.filter.type.all"
+                                      : type === "BUILD"
+                                        ? "home.filter.type.management"
+                                        : "home.filter.type.trade"
+                                  )}
+                                </Text>
+                                {selectedTypeFilter === type ? (
+                                  <Ionicons name="checkmark-circle" size={22} color={colors.primary} />
+                                ) : (
+                                  <Ionicons name="ellipse-outline" size={22} color={colors.border} />
+                                )}
+                              </TouchableOpacity>
+                            ))}
+                            <TouchableOpacity style={styles.typeFilterModalClose} onPress={() => setShowTypeFilterModal(false)}>
+                              <Text style={styles.typeFilterModalCloseText}>{t("common.close")}</Text>
+                            </TouchableOpacity>
+                          </Pressable>
+                        </Pressable>
+                      </Modal>
+                    </View>
+                  ) : null}
                 </>
               );
             })()}
@@ -2212,7 +2390,7 @@ export function HomeScreen() {
                 }}
               >
                 <Ionicons name="create-outline" size={24} color={colors.primary} style={{ marginRight: spacing.md }} />
-                <Text style={styles.quickNoteRowText}>{t("quickNotes.add") || "Rýchly zápis"}</Text>
+                <Text style={styles.quickNoteRowText}>{t("quickNotes.add")}</Text>
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.quickNoteRow}

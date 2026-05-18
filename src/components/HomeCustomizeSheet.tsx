@@ -22,6 +22,7 @@ import {
   type HomeSectionId,
   type HomeLayout,
   type HomeWidgetToggles,
+  type HomeDisplaySize,
   loadHomeLayout,
   saveHomeLayout,
   getDefaultLayout,
@@ -30,19 +31,39 @@ import {
 } from "../services/homeLayout";
 
 const SECTION_LABELS: Record<HomeSectionId, string> = {
-  open_tasks_chip: "home.sectionOpenTasksChip",
-  projects_chip: "home.sectionProjectsChip",
-  time_tracking_chip: "home.sectionTimeTrackingChip",
-  expenses_chip: "home.sectionExpensesChip",
-  quick_capture_card: "home.sectionQuickCapture",
-  service_tasks_alert: "home.sectionServiceTasks",
-  current_work: "home.sectionCurrentWork",
-  project_filters: "home.sectionProjectFilters",
-  other_projects: "home.sectionOtherProjects",
-  calendar: "home.sectionCalendarButton",
-  quick_add: "home.sectionQuickAdd",
-  kpis: "home.sectionKpis",
+  open_tasks_chip: "home.customize.showKpiChips",
+  projects_chip: "home.customize.showProjects",
+  time_tracking_chip: "home.customize.showTimeTracking",
+  expenses_chip: "home.customize.showExpenses",
+  quick_capture_card: "home.customize.showQuickNote",
+  service_tasks_alert: "home.customize.showServiceTasks",
+  current_work: "home.customize.showCurrentProject",
+  project_filters: "home.customize.showProjectFilters",
+  other_projects: "home.customize.showOtherProjects",
+  calendar: "home.customize.showCalendar",
+  quick_add: "home.customize.showQuickAdd",
+  kpis: "home.customize.showKpiLegacy",
 };
+
+const SECTION_DISPLAY_ORDER: HomeSectionId[] = [
+  "quick_capture_card",
+  "service_tasks_alert",
+  "current_work",
+  "other_projects",
+  "open_tasks_chip",
+  "projects_chip",
+  "time_tracking_chip",
+  "expenses_chip",
+  "project_filters",
+  "calendar",
+  "quick_add",
+  "kpis",
+];
+
+function sortSectionsForCustomize(rows: HomeSectionConfig[]): HomeSectionConfig[] {
+  const rank = new Map(SECTION_DISPLAY_ORDER.map((id, i) => [id, i]));
+  return [...rows].sort((a, b) => (rank.get(a.id) ?? 99) - (rank.get(b.id) ?? 99));
+}
 
 type Props = {
   sheetRef: React.RefObject<BottomSheetModal | null>;
@@ -63,19 +84,20 @@ function SectionToggleRow({
 }) {
   const labelKey = SECTION_LABELS[item.id];
   const isLocked = item.locked === true;
+  const label = t(labelKey);
 
   return (
     <Pressable
       style={({ pressed }) => [styles.row, pressed && !isLocked ? styles.rowPressed : null]}
       accessibilityRole="button"
-      accessibilityLabel={t(labelKey)}
-      accessibilityHint={isLocked ? "Locked section" : "Toggle home section visibility"}
+      accessibilityLabel={label}
+      accessibilityHint={isLocked ? t("home.customize.sectionLockedHint") : t("home.customize.sectionToggleHint")}
       onPress={() => {
         if (!isLocked) onToggle(item.id, !item.enabled);
       }}
     >
-      <Text style={styles.rowLabel} maxFontSizeMultiplier={1.2} numberOfLines={2}>
-        {t(labelKey)}
+      <Text style={styles.rowLabel} maxFontSizeMultiplier={1.25} numberOfLines={2}>
+        {label}
       </Text>
       {isLocked ? (
         <Ionicons name="lock-closed" size={20} color="rgba(255,255,255,0.6)" />
@@ -91,31 +113,73 @@ function SectionToggleRow({
   );
 }
 
+function DisplaySizePicker({
+  value,
+  onChange,
+  t,
+}: {
+  value: HomeDisplaySize;
+  onChange: (v: HomeDisplaySize) => void;
+  t: (key: string) => string;
+}) {
+  const options: HomeDisplaySize[] = ["compact", "standard", "large"];
+  return (
+    <View style={styles.sizePickerRow}>
+      {options.map((opt) => {
+        const active = value === opt;
+        const label =
+          opt === "compact"
+            ? t("home.customize.displaySizeCompact")
+            : opt === "large"
+              ? t("home.customize.displaySizeLarge")
+              : t("home.customize.displaySizeStandard");
+        return (
+          <TouchableOpacity
+            key={opt}
+            style={[styles.sizeChip, active ? styles.sizeChipActive : null]}
+            onPress={() => onChange(opt)}
+            activeOpacity={0.85}
+            accessibilityRole="button"
+            accessibilityState={{ selected: active }}
+            accessibilityLabel={label}
+          >
+            <Text style={[styles.sizeChipText, active ? styles.sizeChipTextActive : null]} numberOfLines={1}>
+              {label}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+}
+
 export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismiss }: Props) {
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
-  const modalSheetHeight = useMemo(
-    () => Math.round(Dimensions.get("window").height * 0.92),
-    []
-  );
+  const modalSheetHeight = useMemo(() => Math.round(Dimensions.get("window").height * 0.92), []);
   const [sections, setSections] = useState<HomeSectionConfig[]>(DEFAULT_HOME_LAYOUT.sections);
   const [widgets, setWidgets] = useState<HomeWidgetToggles>(DEFAULT_HOME_LAYOUT.widgets);
+  const [homeDisplaySize, setHomeDisplaySize] = useState<HomeDisplaySize>("standard");
 
   useEffect(() => {
     loadHomeLayout().then((layout) => {
       setSections(layout.sections);
       setWidgets(layout.widgets);
+      setHomeDisplaySize(layout.homeDisplaySize ?? "standard");
     });
   }, []);
 
   const handleToggle = useCallback((id: HomeSectionId, enabled: boolean) => {
-    setSections((prev) =>
-      prev.map((s) => (s.id === id ? { ...s, enabled } : s))
-    );
+    setSections((prev) => prev.map((s) => (s.id === id ? { ...s, enabled } : s)));
   }, []);
 
   const handleSave = useCallback(async () => {
-    const layout: HomeLayout = { sections, widgets, homeLayoutVersion: HOME_LAYOUT_VERSION };
+    const layout: HomeLayout = {
+      sections,
+      widgets,
+      homeLayoutVersion: HOME_LAYOUT_VERSION,
+      homeDisplaySize,
+    };
     await saveHomeLayout(layout);
     onLayoutChanged?.(layout);
     if (visible !== undefined) {
@@ -123,7 +187,7 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
     } else {
       sheetRef.current?.dismiss();
     }
-  }, [sections, widgets, onLayoutChanged, sheetRef, visible, onDismiss]);
+  }, [sections, widgets, homeDisplaySize, onLayoutChanged, sheetRef, visible, onDismiss]);
 
   const handleCancel = useCallback(() => {
     if (visible !== undefined) {
@@ -134,21 +198,18 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
   }, [sheetRef, visible, onDismiss]);
 
   const handleReset = useCallback(() => {
-    Alert.alert(
-      t("home.resetToDefault"),
-      t("home.resetConfirmMessage"),
-      [
-        { text: t("common.cancel"), style: "cancel" },
-        {
-          text: t("common.continue"),
-          onPress: () => {
-            const def = getDefaultLayout();
-            setSections(def.sections);
-            setWidgets(def.widgets);
-          },
+    Alert.alert(t("home.resetToDefault"), t("home.resetConfirmMessage"), [
+      { text: t("home.customize.cancel"), style: "cancel" },
+      {
+        text: t("common.continue"),
+        onPress: () => {
+          const def = getDefaultLayout();
+          setSections(def.sections);
+          setWidgets(def.widgets);
+          setHomeDisplaySize(def.homeDisplaySize ?? "standard");
         },
-      ]
-    );
+      },
+    ]);
   }, [t]);
 
   const allDisabled =
@@ -160,35 +221,42 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
 
   const renderBackdrop = useCallback(
     (props: any) => (
-      <BottomSheetBackdrop
-        {...props}
-        disappearsOnIndex={-1}
-        appearsOnIndex={0}
-        opacity={0.5}
-      />
+      <BottomSheetBackdrop {...props} disappearsOnIndex={-1} appearsOnIndex={0} opacity={0.5} />
     ),
     []
   );
   const snapPoints = useMemo(() => ["70%", "95%"], []);
 
   const visibleSections = sections.filter((s) => s.id !== "kpis");
-  const sectionRows = visibleSections.length > 0 ? visibleSections : getDefaultLayout().sections;
+  const sectionRows = sortSectionsForCustomize(
+    visibleSections.length > 0 ? visibleSections : getDefaultLayout().sections.filter((s) => s.id !== "kpis")
+  );
 
   const scrollContentPaddingBottom = insets.bottom + spacing.xl + spacing.md;
 
   const renderHeader = () => (
     <View style={[styles.header, { paddingTop: spacing.lg }]}>
-      <TouchableOpacity style={styles.headerBtn} onPress={handleCancel} accessibilityRole="button" accessibilityLabel={t("common.cancel")}>
+      <TouchableOpacity
+        style={styles.headerBtn}
+        onPress={handleCancel}
+        accessibilityRole="button"
+        accessibilityLabel={t("home.customize.cancel")}
+      >
         <Text style={styles.headerCancel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-          {t("common.cancel")}
+          {t("home.customize.cancel")}
         </Text>
       </TouchableOpacity>
       <Text style={styles.headerTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-        {t("home.customizeHomeTitle")}
+        {t("home.customize.title")}
       </Text>
-      <TouchableOpacity style={styles.headerBtn} onPress={handleSave} accessibilityRole="button" accessibilityLabel={t("common.save")}>
+      <TouchableOpacity
+        style={styles.headerBtn}
+        onPress={handleSave}
+        accessibilityRole="button"
+        accessibilityLabel={t("home.customize.save")}
+      >
         <Text style={styles.headerSave} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-          {t("common.save")}
+          {t("home.customize.save")}
         </Text>
       </TouchableOpacity>
     </View>
@@ -197,7 +265,11 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
   const renderScrollInner = () => (
     <>
       <View style={styles.widgetsSection}>
-        <Text style={styles.widgetsSectionTitle}>{t("home.customizeAdditionalWidgets")}</Text>
+        <Text style={styles.widgetsSectionTitle}>{t("home.customize.displaySize")}</Text>
+        <DisplaySizePicker value={homeDisplaySize} onChange={setHomeDisplaySize} t={t} />
+      </View>
+      <View style={styles.widgetsSection}>
+        <Text style={styles.widgetsSectionTitle}>{t("home.customize.additionalWidgets")}</Text>
         <ToggleRow
           label={t("home.customize.showHeaderChatShortcut")}
           value={widgets.showHeaderChatShortcut}
@@ -220,7 +292,7 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
         />
       </View>
       <View style={styles.widgetsSection}>
-        <Text style={styles.widgetsSectionTitle}>{t("home.customizeHomeSections")}</Text>
+        <Text style={styles.widgetsSectionTitle}>{t("home.customize.homeSections")}</Text>
         {sectionRows.map((item) => (
           <SectionToggleRow key={item.id} item={item} onToggle={handleToggle} t={t} />
         ))}
@@ -237,18 +309,28 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
     return (
       <Modal visible={visible} animationType="slide" transparent onRequestClose={handleCancel}>
         <View style={modalStyles.overlay}>
-          <Pressable style={modalStyles.dismissFill} onPress={handleCancel} accessibilityRole="button" accessibilityLabel={t("common.cancel")} />
+          <Pressable
+            style={modalStyles.dismissFill}
+            onPress={handleCancel}
+            accessibilityRole="button"
+            accessibilityLabel={t("home.customize.cancel")}
+          />
           <View style={[styles.sheet, modalStyles.sheet, { height: modalSheetHeight }]}>
             {renderHeader()}
             {allDisabled ? (
               <View style={[styles.content, styles.contentBody]}>
                 <View style={styles.emptyState}>
-                  <Text style={styles.emptyText} maxFontSizeMultiplier={1.2}>
-                    {t("home.resetToDefault")}
+                  <Text style={styles.emptyText} maxFontSizeMultiplier={1.25}>
+                    {t("home.customize.allHiddenHint")}
                   </Text>
-                  <TouchableOpacity style={styles.resetBtn} onPress={handleReset} accessibilityRole="button" accessibilityLabel={t("home.resetToDefault")}>
-                    <Text style={styles.resetBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-                      {t("home.resetToDefault")}
+                  <TouchableOpacity
+                    style={styles.resetBtn}
+                    onPress={handleReset}
+                    accessibilityRole="button"
+                    accessibilityLabel={t("home.customize.resetToDefault")}
+                  >
+                    <Text style={styles.resetBtnText} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+                      {t("home.customize.resetToDefault")}
                     </Text>
                   </TouchableOpacity>
                 </View>
@@ -287,12 +369,17 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
         {allDisabled ? (
           <View style={[styles.content, styles.contentBody]}>
             <View style={styles.emptyState}>
-              <Text style={styles.emptyText} maxFontSizeMultiplier={1.2}>
-                {t("home.resetToDefault")}
+              <Text style={styles.emptyText} maxFontSizeMultiplier={1.25}>
+                {t("home.customize.allHiddenHint")}
               </Text>
-              <TouchableOpacity style={styles.resetBtn} onPress={handleReset} accessibilityRole="button" accessibilityLabel={t("home.resetToDefault")}>
-                <Text style={styles.resetBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-                  {t("home.resetToDefault")}
+              <TouchableOpacity
+                style={styles.resetBtn}
+                onPress={handleReset}
+                accessibilityRole="button"
+                accessibilityLabel={t("home.customize.resetToDefault")}
+              >
+                <Text style={styles.resetBtnText} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+                  {t("home.customize.resetToDefault")}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -325,8 +412,10 @@ function ToggleRow({
     <Pressable
       style={({ pressed }) => [styles.toggleRow, pressed ? styles.rowPressed : null]}
       onPress={() => onChange(!value)}
+      accessibilityRole="switch"
+      accessibilityState={{ checked: value }}
     >
-      <Text style={styles.toggleLabel} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+      <Text style={styles.toggleLabel} maxFontSizeMultiplier={1.25} numberOfLines={2}>
         {label}
       </Text>
       <Switch
@@ -426,6 +515,38 @@ const styles = StyleSheet.create({
     fontSize: 14,
     color: "rgba(255,255,255,0.65)",
     marginBottom: spacing.xs,
+    fontWeight: "600",
+  },
+  sizePickerRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  sizeChip: {
+    flex: 1,
+    minWidth: 0,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.xs,
+    borderRadius: 10,
+    borderWidth: 1,
+    borderColor: SHEET_BORDER,
+    backgroundColor: "rgba(255,255,255,0.06)",
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44,
+  },
+  sizeChipActive: {
+    borderColor: SHEET_ACTION,
+    backgroundColor: "rgba(125,211,252,0.12)",
+  },
+  sizeChipText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.75)",
+    textAlign: "center",
+  },
+  sizeChipTextActive: {
+    color: SHEET_TEXT,
   },
   toggleRow: {
     flexDirection: "row",
@@ -455,13 +576,6 @@ const styles = StyleSheet.create({
   rowPressed: {
     backgroundColor: "rgba(255,255,255,0.06)",
   },
-  rowActive: {
-    backgroundColor: "rgba(255,255,255,0.08)",
-  },
-  dragHandle: {
-    marginRight: spacing.md,
-    padding: spacing.xs,
-  },
   rowLabel: {
     flex: 1,
     fontSize: 16,
@@ -475,6 +589,7 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: "rgba(255,255,255,0.7)",
     marginBottom: spacing.md,
+    textAlign: "center",
   },
   resetBtn: {
     paddingVertical: spacing.sm,
@@ -486,5 +601,6 @@ const styles = StyleSheet.create({
     fontSize: 16,
     fontWeight: "600",
     color: "#fff",
+    textAlign: "center",
   },
 });

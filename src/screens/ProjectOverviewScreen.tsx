@@ -100,6 +100,7 @@ import { formatEventSummary } from "../helpers/formatEvent";
 import type { ProjectEvent } from "../lib/types";
 import type { ProjectWeatherSnapshot } from "../services/weather";
 import { DescriptionInputModal } from "../components/DescriptionInputModal";
+import { AppBottomMenu, getAppBottomMenuExtraPadding } from "../components/AppBottomMenu";
 import { InAppAttachmentViewer, inferInAppViewerMode } from "../components/InAppAttachmentViewer";
 import { CurrencyDropdown } from "../components/CurrencyDropdown";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
@@ -4120,7 +4121,10 @@ export function ProjectOverviewScreen() {
       {/* Scrollable content */}
       <ScrollView 
         style={styles.scrollContent}
-        contentContainerStyle={styles.scrollContentContainer}
+        contentContainerStyle={[
+          styles.scrollContentContainer,
+          { paddingBottom: spacing.xl * 3 + getAppBottomMenuExtraPadding(insets.bottom) },
+        ]}
         nestedScrollEnabled
         refreshControl={
           <RefreshControl
@@ -5435,6 +5439,8 @@ export function ProjectOverviewScreen() {
           )
         ) : null}
       </View>
+
+      <AppBottomMenu />
 
       <Modal
         visible={showAssigneeModal}

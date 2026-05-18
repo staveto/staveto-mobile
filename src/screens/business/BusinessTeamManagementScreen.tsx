@@ -1,6 +1,8 @@
 import React, { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
+import { AppBottomMenu, getAppBottomMenuExtraPadding } from "../../components/AppBottomMenu";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
 import { useI18n } from "../../i18n/I18nContext";
 import { getAuth } from "../../firebase";
@@ -208,8 +210,11 @@ export function BusinessTeamManagementScreen() {
     );
   };
 
+  const scrollPad = getAppBottomMenuExtraPadding(insets.bottom);
+
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <View style={styles.outer}>
+      <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, { paddingBottom: scrollPad }]}>
       <Text style={styles.pageTitle}>{t("business.dashboard.teamCardManage")}</Text>
       {loading ? <ActivityIndicator color={colors.primary} /> : null}
 
@@ -251,13 +256,18 @@ export function BusinessTeamManagementScreen() {
         )}
       </View>
     </ScrollView>
+      <AppBottomMenu />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  outer: {
     flex: 1,
     backgroundColor: "#0E1D3A",
+  },
+  scroll: {
+    flex: 1,
   },
   content: {
     padding: 16,

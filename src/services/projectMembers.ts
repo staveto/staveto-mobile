@@ -1,10 +1,34 @@
 import { collection, addDoc, query, getDocs, deleteDoc, doc, serverTimestamp, where, getDoc, writeBatch, updateDoc } from "../lib/rnFirestore";
 import firestore from "@react-native-firebase/firestore";
-import { getDocsSmart } from "./firestoreSmartRead";
+import { getDocsSmart, getDocSmart } from "./firestoreSmartRead";
 import { db, auth, getCallable } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { addProjectEvent } from "./projectEvents";
 import * as projectsService from "./projects";
+
+/**
+ * Read-only: `orgId` / `workspaceType` on `projects/{projectId}` (may be absent on legacy docs).
+ */
+export async function getProjectOrgMetadata(
+  projectId: string
+): Promise<{ orgId?: string; workspaceType?: string }> {
+  if (!projectId || !auth.currentUser?.uid) return {};
+  try {
+    const snap = await getDocSmart(doc(db, "projects", projectId));
+    if (!snap.exists()) return {};
+    const d = snap.data() as Record<string, unknown>;
+    return {
+      orgId: typeof d.orgId === "string" && d.orgId.trim() ? d.orgId.trim() : undefined,
+      workspaceType:
+        typeof d.workspaceType === "string" && d.workspaceType.trim()
+          ? d.workspaceType.trim()
+          : undefined,
+    };
+  } catch (e) {
+    console.warn("[projectMembers] getProjectOrgMetadata failed", e);
+    return {};
+  }
+}
 
 export type ProjectMemberDoc = {
   id: string;

@@ -1,8 +1,9 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import { View, Text, TouchableOpacity, StyleSheet, ScrollView, Modal, TextInput, Alert, ActivityIndicator, Share, KeyboardAvoidingView, Platform, Dimensions } from "react-native";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
+import { AppBottomMenu, getAppBottomMenuExtraPadding } from "../components/AppBottomMenu";
 import { useAuth } from "../context/AuthContext";
 import { useProjectAccess } from "../hooks/useProjectAccess";
 import { useCapabilities } from "../hooks/useCapabilities";
@@ -11,11 +12,24 @@ import { colors, radius, spacing } from "../theme";
 import * as projectMembersService from "../services/projectMembers";
 import * as projectsService from "../services/projects";
 import * as equipmentService from "../services/equipment";
-import { getCallable } from "../firebase";
+import {
+  getMembershipDisplayMeta,
+  listMembers,
+  type MembershipDoc,
+} from "../services/businessMembers";
+import { getCallable, getAuth } from "../firebase";
 import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
 import type { ProjectMemberDoc } from "../services/projectMembers";
 import type { ProjectPhaseDoc } from "../services/projects";
 import type { EquipmentDoc } from "../services/equipment";
+
+function inviteEmailFromOrgMember(m: MembershipDoc): string | null {
+  const a = (m.email ?? "").trim();
+  if (a.includes("@")) return a.toLowerCase();
+  const b = (m.emailLower ?? "").trim();
+  if (b.includes("@")) return b.toLowerCase();
+  return null;
+}
 
 export function ProjectMembersScreen() {
   const route = useRoute();
@@ -46,6 +60,8 @@ export function ProjectMembersScreen() {
   const [projectType, setProjectType] = useState<string | undefined>(paramProjectType);
   const [projectWorkspaceType, setProjectWorkspaceType] = useState<string | undefined>(undefined);
   const [projectOrgId, setProjectOrgId] = useState<string | undefined>(undefined);
+  const [companyOrgMembers, setCompanyOrgMembers] = useState<MembershipDoc[]>([]);
+  const [companyMemberPickKey, setCompanyMemberPickKey] = useState<string | null>(null);
   const [phases, setPhases] = useState<ProjectPhaseDoc[]>([]);
   const [equipmentList, setEquipmentList] = useState<EquipmentDoc[]>([]);
   const [selectedEquipmentIds, setSelectedEquipmentIds] = useState<string[]>([]);
@@ -71,25 +87,89 @@ export function ProjectMembersScreen() {
     legacyProject: !projectWorkspaceType && !projectOrgId,
   });
 
+  const authUserForPick = getAuth()?.currentUser ?? null;
+  const orgDisplayOpts = useMemo(
+    () => ({
+      currentUserUid: authUserForPick?.uid ?? null,
+      currentUserDisplayName: authUserForPick?.displayName ?? null,
+      currentUserEmail: authUserForPick?.email ?? null,
+    }),
+    [authUserForPick?.uid, authUserForPick?.displayName, authUserForPick?.email]
+  );
+
+  const businessOrgPickerEnabled = Boolean(projectOrgId);
+
+  const companyPickerRows = useMemo(() => {
+    if (!businessOrgPickerEnabled) return [];
+    const uidInProject = new Set(members.map((x) => (x.userId || "").trim()).filter(Boolean));
+    const emailInProject = new Set(
+      members.map((x) => (x.emailLower || x.email || "").trim().toLowerCase()).filter(Boolean)
+    );
+
+    const out: Array<{
+      key: string;
+      member: MembershipDoc;
+      invEmail: string;
+      disabled: boolean;
+    }> = [];
+
+    for (const m of companyOrgMembers) {
+      if (m.status.toLowerCase() !== "active") continue;
+      const invEmail = inviteEmailFromOrgMember(m);
+      if (!invEmail) continue;
+      const uid = (m.userId || "").trim();
+      const inByUid = uid.length > 0 && uidInProject.has(uid);
+      const inByEmail = emailInProject.has(invEmail);
+      const isProjectOwner = Boolean(projectOwnerId && uid && projectOwnerId === uid);
+      const disabled = inByUid || inByEmail || isProjectOwner;
+      out.push({ key: uid || m.id, member: m, invEmail, disabled });
+    }
+    return out;
+  }, [businessOrgPickerEnabled, companyOrgMembers, members, projectOwnerId]);
+
+  const bottomMenuPad = getAppBottomMenuExtraPadding(insets.bottom);
+
   const goBack = () => navigation.goBack();
 
   const loadMembers = async (forceRefresh?: boolean) => {
     if (!projectId) return;
-    
+
     setLoading(true);
     try {
-      // Load project to get owner and projectType
       const project = await projectsService.getProject(projectId);
+      let mergedOrg: string | undefined;
+      let mergedWs: string | undefined;
       if (project) {
         setProjectOwnerId(project.ownerId || null);
         if (!paramProjectType) setProjectType(project.projectType || undefined);
         const rawWorkspaceType = (project as { workspaceType?: unknown }).workspaceType;
         const rawOrgId = (project as { orgId?: unknown }).orgId;
-        setProjectWorkspaceType(typeof rawWorkspaceType === "string" ? rawWorkspaceType : undefined);
-        setProjectOrgId(typeof rawOrgId === "string" ? rawOrgId : undefined);
+        mergedWs = typeof rawWorkspaceType === "string" ? rawWorkspaceType : undefined;
+        mergedOrg = typeof rawOrgId === "string" ? rawOrgId : undefined;
+        setProjectWorkspaceType(mergedWs);
+        setProjectOrgId(mergedOrg);
       } else {
+        setProjectOwnerId(null);
         setProjectWorkspaceType(undefined);
         setProjectOrgId(undefined);
+        mergedOrg = undefined;
+        mergedWs = undefined;
+      }
+
+      const meta = await projectMembersService.getProjectOrgMetadata(projectId);
+      if (meta.orgId) mergedOrg = meta.orgId;
+      if (meta.workspaceType) mergedWs = meta.workspaceType;
+      setProjectOrgId(mergedOrg);
+      setProjectWorkspaceType(mergedWs);
+
+      if (mergedOrg) {
+        try {
+          setCompanyOrgMembers(await listMembers(mergedOrg));
+        } catch {
+          setCompanyOrgMembers([]);
+        }
+      } else {
+        setCompanyOrgMembers([]);
       }
 
       // Load phases (for sharing selection)
@@ -97,18 +177,18 @@ export function ProjectMembersScreen() {
         const phasesList = await projectsService.listProjectPhases(projectId);
         setPhases(phasesList);
       } catch (error: any) {
-        console.warn('[ProjectMembersScreen] Could not load phases:', error);
+        console.warn("[ProjectMembersScreen] Could not load phases:", error);
         setPhases([]);
       }
 
       // Load equipment for MAINTENANCE projects (for sharing selection)
       const pType = project?.projectType ?? paramProjectType ?? projectType;
-      if (pType === 'MAINTENANCE') {
+      if (pType === "MAINTENANCE") {
         try {
-          const eq = await equipmentService.listEquipment(projectId, { status: 'active' });
+          const eq = await equipmentService.listEquipment(projectId, { status: "active" });
           setEquipmentList(eq);
         } catch (error: any) {
-          console.warn('[ProjectMembersScreen] Could not load equipment:', error);
+          console.warn("[ProjectMembersScreen] Could not load equipment:", error);
           setEquipmentList([]);
         }
       } else {
@@ -119,8 +199,11 @@ export function ProjectMembersScreen() {
       const membersList = await projectMembersService.listProjectMembers(projectId, forceRefresh);
       setMembers(membersList);
     } catch (error: any) {
-      console.error('[ProjectMembersScreen] Error loading members:', error);
-      Alert.alert(t("common.error"), error?.message?.startsWith("errors.") ? t(error.message) : (error?.message || t("projectMembers.loadFailed")));
+      console.error("[ProjectMembersScreen] Error loading members:", error);
+      Alert.alert(
+        t("common.error"),
+        error?.message?.startsWith("errors.") ? t(error.message) : error?.message || t("projectMembers.loadFailed")
+      );
     } finally {
       setLoading(false);
     }
@@ -151,6 +234,9 @@ export function ProjectMembersScreen() {
     setSelectedPhaseIds([]);
     setSelectedEquipmentIds([]);
     setAddHourlyRate("");
+    setAddMemberEmail("");
+    setAddMemberName("");
+    setCompanyMemberPickKey(null);
     setShowAddMember(true);
   };
   
@@ -159,6 +245,7 @@ export function ProjectMembersScreen() {
     setAddMemberEmail("");
     setAddMemberName("");
     setAddHourlyRate("");
+    setCompanyMemberPickKey(null);
     setPermissionLevel('editor');
     setShareTasks(true);
     setSharePhases(true);
@@ -409,6 +496,7 @@ export function ProjectMembersScreen() {
   };
 
   return (
+    <View style={styles.screenRoot}>
     <View style={[styles.container, { paddingTop: insets.top }]}>
       <View style={styles.header}>
         <TouchableOpacity onPress={goBack} style={styles.headerBack} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
@@ -423,7 +511,7 @@ export function ProjectMembersScreen() {
           <ActivityIndicator size="large" color={colors.primary} />
         </View>
       ) : (
-        <ScrollView style={styles.content} contentContainerStyle={styles.contentInner}>
+        <ScrollView style={styles.content} contentContainerStyle={[styles.contentInner, { paddingBottom: 100 + bottomMenuPad }]}>
           {/* Project Owner */}
           {user && projectOwnerId === user.id && (
             <View style={styles.memberRow}>
@@ -648,6 +736,57 @@ export function ProjectMembersScreen() {
               keyboardShouldPersistTaps="handled"
               nestedScrollEnabled
             >
+            {businessOrgPickerEnabled ? (
+              <View style={styles.companyPickerBlock}>
+                <Text style={styles.addMemberSectionTitle}>{t("projectMembers.addFromCompany")}</Text>
+                <Text style={styles.addMemberHint}>{t("projectMembers.selectCompanyMember")}</Text>
+                {companyPickerRows.length === 0 ? (
+                  <Text style={styles.addMemberHint}>{t("projectMembers.noCompanyMembers")}</Text>
+                ) : (
+                  companyPickerRows.map(({ key, member, invEmail, disabled }) => {
+                    const meta = getMembershipDisplayMeta(member, t, orgDisplayOpts);
+                    const sel = companyMemberPickKey === key;
+                    return (
+                      <TouchableOpacity
+                        key={key}
+                        style={[
+                          styles.companyMemberRow,
+                          sel && styles.companyMemberRowSelected,
+                          disabled && styles.companyMemberRowDisabled,
+                        ]}
+                        disabled={disabled}
+                        onPress={() => {
+                          if (disabled) return;
+                          setAddMemberEmail(invEmail);
+                          setAddMemberName(meta.primary);
+                          setCompanyMemberPickKey(key);
+                        }}
+                      >
+                        <View style={styles.companyMemberAvatar}>
+                          <Text style={styles.companyMemberAvatarText}>{meta.initials}</Text>
+                        </View>
+                        <View style={styles.companyMemberTextCol}>
+                          <Text style={styles.companyMemberName} numberOfLines={1}>
+                            {meta.primary}
+                          </Text>
+                          <Text style={styles.companyMemberEmailSmall} numberOfLines={1}>
+                            {invEmail}
+                          </Text>
+                          <Text style={styles.companyMemberBadge} numberOfLines={1}>
+                            {t(`business.dashboard.teamLicenses.role.${member.role}`)} · {t("business.team.status.active")}
+                          </Text>
+                          {disabled ? (
+                            <Text style={styles.companyMemberDisabledHint}>{t("projectMembers.alreadyInProject")}</Text>
+                          ) : null}
+                        </View>
+                      </TouchableOpacity>
+                    );
+                  })
+                )}
+                <Text style={styles.addMemberHint}>{t("projectMembers.businessOnlyPicker")}</Text>
+                <Text style={styles.addMemberDivider}>{t("projectMembers.useEmailInvite")}</Text>
+              </View>
+            ) : null}
             <Text style={styles.addMemberLabel}>{t('projectMembers.emailLabel') || 'Email *'}</Text>
             <TextInput
               style={styles.addMemberInput}
@@ -1239,10 +1378,13 @@ export function ProjectMembersScreen() {
         </KeyboardAvoidingView>
       </Modal>
     </View>
+    <AppBottomMenu />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
+  screenRoot: { flex: 1, backgroundColor: colors.background },
   container: { flex: 1, backgroundColor: colors.background },
   header: {
     flexDirection: "row",
@@ -1477,6 +1619,73 @@ const styles = StyleSheet.create({
     marginTop: spacing.sm,
     marginBottom: spacing.lg,
     lineHeight: 18,
+  },
+  addMemberDivider: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.text,
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  companyPickerBlock: {
+    marginBottom: spacing.sm,
+  },
+  companyMemberRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    marginBottom: spacing.sm,
+    backgroundColor: colors.card,
+  },
+  companyMemberRowSelected: {
+    borderColor: colors.primary,
+    backgroundColor: colors.primary + "12",
+  },
+  companyMemberRowDisabled: {
+    opacity: 0.55,
+  },
+  companyMemberAvatar: {
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  companyMemberAvatarText: {
+    color: "#fff",
+    fontSize: 14,
+    fontWeight: "800",
+  },
+  companyMemberTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  companyMemberName: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  companyMemberEmailSmall: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 2,
+  },
+  companyMemberBadge: {
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.textMuted,
+    marginTop: 4,
+  },
+  companyMemberDisabledHint: {
+    fontSize: 11,
+    color: colors.error,
+    marginTop: 4,
   },
   addMemberButtons: {
     flexDirection: "row",

@@ -9,8 +9,10 @@ import {
   View,
 } from "react-native";
 import { useNavigation, useRoute } from "@react-navigation/native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useI18n } from "../../i18n/I18nContext";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
+import { AppBottomMenu, getAppBottomMenuExtraPadding } from "../../components/AppBottomMenu";
 import {
   getOrgMemberByDocId,
   listMembers,
@@ -66,6 +68,7 @@ function mapRoleUpdateError(t: (k: string) => string, error: unknown): string {
 
 export function BusinessMemberRoleScreen() {
   const { t } = useI18n();
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation();
   const route = useRoute();
   const { activeMembership } = useActiveOrg();
@@ -154,26 +157,37 @@ export function BusinessMemberRoleScreen() {
     }
   };
 
+  const scrollPad = getAppBottomMenuExtraPadding(insets.bottom);
+
   if (!orgId || !memberDocId) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.muted}>{t("common.error")}</Text>
+      <View style={styles.outer}>
+        <View style={styles.centered}>
+          <Text style={styles.muted}>{t("common.error")}</Text>
+        </View>
+        <AppBottomMenu />
       </View>
     );
   }
 
   if (loading) {
     return (
-      <View style={styles.centered}>
-        <ActivityIndicator color={colors.primary} />
+      <View style={styles.outer}>
+        <View style={styles.centered}>
+          <ActivityIndicator color={colors.primary} />
+        </View>
+        <AppBottomMenu />
       </View>
     );
   }
 
   if (!member) {
     return (
-      <View style={styles.centered}>
-        <Text style={styles.muted}>{t("common.error")}</Text>
+      <View style={styles.outer}>
+        <View style={styles.centered}>
+          <Text style={styles.muted}>{t("common.error")}</Text>
+        </View>
+        <AppBottomMenu />
       </View>
     );
   }
@@ -182,7 +196,8 @@ export function BusinessMemberRoleScreen() {
   const badgeText = memberStatusBadgeLabel(t, member.status);
 
   return (
-    <ScrollView style={styles.container} contentContainerStyle={styles.content}>
+    <View style={styles.outer}>
+      <ScrollView style={styles.scroll} contentContainerStyle={[styles.content, { paddingBottom: scrollPad }]}>
       <Text style={styles.subtitle}>{t("business.team.roleManagement.subtitle")}</Text>
 
       <View style={styles.card}>
@@ -242,13 +257,18 @@ export function BusinessMemberRoleScreen() {
         <Text style={styles.saveButtonText}>{t("business.team.roleManagement.save")}</Text>
       </TouchableOpacity>
     </ScrollView>
+      <AppBottomMenu />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  container: {
+  outer: {
     flex: 1,
     backgroundColor: "#0E1D3A",
+  },
+  scroll: {
+    flex: 1,
   },
   content: {
     padding: 16,

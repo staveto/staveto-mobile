@@ -6285,34 +6285,31 @@ export function ProjectOverviewScreen() {
                 <Ionicons name="close" size={24} color={colors.text} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.assigneePickerList} contentContainerStyle={styles.assigneePickerListContent}>
-              {EUROPEAN_COUNTRIES.map((c) => (
-                <TouchableOpacity
-                  key={c.code}
-                  onPress={() => {
-                    if (showCountryPicker === 'from') setExpenseTravelFromCountry(c.code);
-                    if (showCountryPicker === 'to') setExpenseTravelToCountry(c.code);
-                    setShowCountryPicker(null);
-                  }}
-                  style={[
-                    styles.assigneePickerRow,
-                    ((showCountryPicker === 'from' && expenseTravelFromCountry === c.code) ||
-                      (showCountryPicker === 'to' && expenseTravelToCountry === c.code)) &&
-                      styles.assigneePickerRowActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.assigneePickerLabel,
-                      ((showCountryPicker === 'from' && expenseTravelFromCountry === c.code) ||
-                        (showCountryPicker === 'to' && expenseTravelToCountry === c.code)) &&
-                        styles.assigneePickerLabelActive,
-                    ]}
+            <ScrollView
+              style={styles.travelCountryPickerList}
+              contentContainerStyle={styles.travelCountryPickerListContent}
+            >
+              {EUROPEAN_COUNTRIES.map((c) => {
+                const selected =
+                  (showCountryPicker === "from" && expenseTravelFromCountry === c.code) ||
+                  (showCountryPicker === "to" && expenseTravelToCountry === c.code);
+                return (
+                  <TouchableOpacity
+                    key={c.code}
+                    onPress={() => {
+                      if (showCountryPicker === "from") setExpenseTravelFromCountry(c.code);
+                      if (showCountryPicker === "to") setExpenseTravelToCountry(c.code);
+                      setShowCountryPicker(null);
+                    }}
+                    style={[styles.travelCountryPickerRow, selected && styles.travelCountryPickerRowActive]}
                   >
-                    {c.code} – {c.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+                    <Text style={[styles.travelCountryPickerLabel, selected && styles.travelCountryPickerLabelActive]}>
+                      {c.code} – {c.name}
+                    </Text>
+                    {selected ? <Ionicons name="checkmark-circle" size={22} color={colors.primary} /> : null}
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
           </View>
         </View>
@@ -8147,6 +8144,36 @@ const styles = StyleSheet.create({
   },
   assigneePickerLabel: { fontSize: 15, color: colors.text, fontWeight: "500" },
   assigneePickerLabelActive: { color: colors.primary, fontWeight: "700" },
+  /** Travel country modal: dark blue rows need white text (not `colors.text`). */
+  travelCountryPickerList: { maxHeight: 360, marginBottom: spacing.md },
+  travelCountryPickerListContent: { gap: spacing.sm },
+  travelCountryPickerRow: {
+    minHeight: 52,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.22)",
+    borderRadius: radius,
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  travelCountryPickerRowActive: {
+    borderColor: colors.primary,
+    backgroundColor: "#162a52",
+  },
+  travelCountryPickerLabel: {
+    flex: 1,
+    fontSize: 17,
+    lineHeight: 22,
+    color: colors.textOnDark,
+    fontWeight: "600",
+  },
+  travelCountryPickerLabelActive: {
+    color: colors.textOnDark,
+    fontWeight: "800",
+  },
   modalLabel: { fontSize: 14, fontWeight: "500", color: colors.text, marginBottom: spacing.xs, marginTop: spacing.sm },
   editCountryChip: {
     paddingVertical: spacing.sm,

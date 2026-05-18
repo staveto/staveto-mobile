@@ -11,3 +11,4 @@ export { createBusinessInviteCode } from "./business/createBusinessInviteCode";
 export { redeemBusinessInviteCode } from "./business/redeemBusinessInviteCode";
 export { approveBusinessMember } from "./business/approveBusinessMember";
 export { revokeBusinessInvite } from "./business/revokeBusinessInvite";
+export { updateBusinessMemberRole } from "./business/updateBusinessMemberRole";

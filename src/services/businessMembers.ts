@@ -1,11 +1,7 @@
 /**
- * Read-only data layer for members of a Staveto Business organization.
- *
- * PHASE 1 SCOPE
- * -------------
- * Read-only. NO invite / role change / removal / hourly-rate write here.
- * Those operations live behind authenticated Cloud Functions (Phase 5+) so
- * that seat limits and licence status can be enforced server-side.
+ * Business organization members: reads from `organizations/{orgId}/members`,
+ * plus `updateBusinessMemberRole` via authenticated Cloud Function (no direct
+ * client writes to member docs for role changes).
  *
  * RELATIONSHIP TO `projectMembers.ts`
  * -----------------------------------
@@ -23,12 +19,12 @@
  *   Phase 2 (BusinessContext) onwards.
  */
 
-import { collection } from "../lib/rnFirestore";
-import { getDocsSmart } from "./firestoreSmartRead";
-import { db, getAuth } from "../firebase";
+import { collection, doc } from "../lib/rnFirestore";
+import { getDocsSmart, getDocSmart } from "./firestoreSmartRead";
+import { db, getAuth, getCallable } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { getMembership, parseMembershipDoc } from "./organizations";
-import type { MembershipDoc } from "./organizations";
+import type { MembershipDoc, OrgRole } from "./organizations";
 
 export type { MembershipDoc } from "./organizations";
 
@@ -96,4 +92,68 @@ export async function getOrgMember(
   userId: string
 ): Promise<MembershipDoc | null> {
   return getMembership(orgId, userId);
+}
+
+/**
+ * Read a membership document by its Firestore document id (may differ from
+ * `userId` for some pending invite rows).
+ */
+export async function getOrgMemberByDocId(
+  orgId: string,
+  memberDocId: string
+): Promise<MembershipDoc | null> {
+  if (!orgId || !memberDocId) return null;
+  requireSignedInUid();
+  try {
+    const ref = doc(db, "organizations", orgId, "members", memberDocId);
+    const snap = await getDocSmart(ref);
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    if (!data || typeof data !== "object") return null;
+    return parseMembershipDoc(snap.id, orgId, data as Record<string, unknown>);
+  } catch (error) {
+    if (isPermissionDenied(error)) {
+      return null;
+    }
+    console.error("[businessMembers] getOrgMemberByDocId error:", error);
+    throw error;
+  }
+}
+
+export type UpdateBusinessMemberRoleInput = {
+  orgId: string;
+  memberUid: string;
+  role: OrgRole;
+};
+
+export type UpdateBusinessMemberRoleResult = {
+  ok: true;
+  orgId: string;
+  memberUid: string;
+  role: OrgRole;
+};
+
+/**
+ * Updates `organizations/{orgId}/members/{memberUid}.role` via Cloud Function
+ * (admin SDK); enforces owner/admin rules and last-owner protection server-side.
+ */
+export async function updateBusinessMemberRole(
+  input: UpdateBusinessMemberRoleInput
+): Promise<UpdateBusinessMemberRoleResult> {
+  requireSignedInUid();
+  const call = getCallable<UpdateBusinessMemberRoleInput, { data?: unknown }>(
+    "updateBusinessMemberRole",
+    { timeoutMs: 25000 }
+  );
+  const res = await call(input);
+  const data = ((res as { data?: unknown })?.data ?? res) as Partial<UpdateBusinessMemberRoleResult>;
+  if (data.ok !== true || typeof data.orgId !== "string" || typeof data.memberUid !== "string") {
+    throw new Error("Invalid updateBusinessMemberRole response.");
+  }
+  return {
+    ok: true,
+    orgId: data.orgId,
+    memberUid: data.memberUid,
+    role: (data.role as OrgRole) ?? input.role,
+  };
 }

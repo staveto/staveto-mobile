@@ -9,6 +9,7 @@ import { BusinessRegistrationScreen } from "../screens/business/BusinessRegistra
 import { BusinessOrderPendingScreen } from "../screens/business/BusinessOrderPendingScreen";
 import { BusinessJoinCompanyScreen } from "../screens/business/BusinessJoinCompanyScreen";
 import { BusinessTeamManagementScreen } from "../screens/business/BusinessTeamManagementScreen";
+import { BusinessMemberRoleScreen } from "../screens/business/BusinessMemberRoleScreen";
 import { BusinessChatListScreen } from "../screens/business/BusinessChatListScreen";
 import { BusinessChatRoomScreen } from "../screens/business/BusinessChatRoomScreen";
 import { useActiveOrg } from "../hooks/useActiveOrg";
@@ -100,6 +101,11 @@ export function BusinessStack() {
         name="BusinessTeamManagement"
         component={BusinessTeamManagementScreen}
         options={{ title: "Správa tímu" }}
+      />
+      <Stack.Screen
+        name="BusinessMemberRole"
+        component={BusinessMemberRoleScreen}
+        options={{ title: "Rola člena" }}
       />
       <Stack.Screen
         name="BusinessChatList"

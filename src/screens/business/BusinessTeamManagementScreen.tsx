@@ -1,5 +1,6 @@
-import React, { useCallback, useEffect, useMemo, useState } from "react";
+import React, { useCallback, useMemo, useState } from "react";
 import { ActivityIndicator, Alert, ScrollView, StyleSheet, Text, TouchableOpacity, View } from "react-native";
+import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
 import { useI18n } from "../../i18n/I18nContext";
 import { listMembers, type MembershipDoc } from "../../services/businessMembers";
@@ -16,11 +17,15 @@ function getMemberName(member: MembershipDoc): string {
 
 export function BusinessTeamManagementScreen() {
   const { t } = useI18n();
+  const navigation = useNavigation() as unknown as {
+    navigate: (name: string, params?: { orgId: string; memberDocId: string }) => void;
+  };
   const { activeOrganization, activeMembership, refresh } = useActiveOrg();
   const [loading, setLoading] = useState(false);
   const [rows, setRows] = useState<MembershipDoc[]>([]);
   const [approveBusyFor, setApproveBusyFor] = useState<string | null>(null);
   const canApprove = activeMembership?.role === "owner" || activeMembership?.role === "admin";
+  const canManageRoles = activeMembership?.role === "owner" || activeMembership?.role === "admin";
 
   const loadMembers = useCallback(async () => {
     const orgId = activeOrganization?.id;
@@ -37,9 +42,11 @@ export function BusinessTeamManagementScreen() {
     }
   }, [activeOrganization?.id]);
 
-  useEffect(() => {
-    void loadMembers();
-  }, [loadMembers]);
+  useFocusEffect(
+    useCallback(() => {
+      void loadMembers();
+    }, [loadMembers])
+  );
 
   const activeRows = useMemo(
     () => rows.filter((row) => row.status.toLowerCase() === "active"),
@@ -69,6 +76,12 @@ export function BusinessTeamManagementScreen() {
     }
   };
 
+  const openMemberRole = (member: MembershipDoc) => {
+    const orgId = activeOrganization?.id;
+    if (!orgId || !canManageRoles) return;
+    navigation.navigate("BusinessMemberRole", { orgId, memberDocId: member.id });
+  };
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>{t("business.dashboard.teamCardManage")}</Text>
@@ -81,12 +94,24 @@ export function BusinessTeamManagementScreen() {
         {activeRows.length === 0 ? (
           <Text style={styles.empty}>{t("business.dashboard.teamLicenses.noMembers")}</Text>
         ) : (
-          activeRows.map((member) => (
-            <View key={member.id} style={styles.row}>
-              <Text style={styles.name}>{getMemberName(member)}</Text>
-              <Text style={styles.meta}>{t(`business.dashboard.teamLicenses.role.${member.role}`)}</Text>
-            </View>
-          ))
+          activeRows.map((member) =>
+            canManageRoles ? (
+              <TouchableOpacity
+                key={member.id}
+                style={styles.row}
+                onPress={() => openMemberRole(member)}
+                accessibilityRole="button"
+              >
+                <Text style={styles.name}>{getMemberName(member)}</Text>
+                <Text style={styles.meta}>{t(`business.dashboard.teamLicenses.role.${member.role}`)}</Text>
+              </TouchableOpacity>
+            ) : (
+              <View key={member.id} style={styles.row}>
+                <Text style={styles.name}>{getMemberName(member)}</Text>
+                <Text style={styles.meta}>{t(`business.dashboard.teamLicenses.role.${member.role}`)}</Text>
+              </View>
+            )
+          )
         )}
       </View>
 
@@ -99,10 +124,17 @@ export function BusinessTeamManagementScreen() {
         ) : (
           pendingRows.map((member) => (
             <View key={member.id} style={styles.pendingRow}>
-              <View style={{ flex: 1 }}>
-                <Text style={styles.name}>{getMemberName(member)}</Text>
-                <Text style={styles.meta}>{t(`business.dashboard.teamLicenses.role.${member.role}`)}</Text>
-              </View>
+              {canManageRoles ? (
+                <TouchableOpacity style={{ flex: 1 }} onPress={() => openMemberRole(member)}>
+                  <Text style={styles.name}>{getMemberName(member)}</Text>
+                  <Text style={styles.meta}>{t(`business.dashboard.teamLicenses.role.${member.role}`)}</Text>
+                </TouchableOpacity>
+              ) : (
+                <View style={{ flex: 1 }}>
+                  <Text style={styles.name}>{getMemberName(member)}</Text>
+                  <Text style={styles.meta}>{t(`business.dashboard.teamLicenses.role.${member.role}`)}</Text>
+                </View>
+              )}
               <TouchableOpacity
                 style={[styles.approveButton, (!canApprove || approveBusyFor === member.id) && styles.approveButtonDisabled]}
                 disabled={!canApprove || approveBusyFor === member.id}

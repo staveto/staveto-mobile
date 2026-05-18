@@ -31,9 +31,13 @@ export type HomeSectionConfig = {
   locked?: boolean;
 };
 
+/** Bumped when stored layout should be normalized (e.g. compact Home defaults). */
+export const HOME_LAYOUT_VERSION = 2;
+
 export type HomeLayout = {
   sections: HomeSectionConfig[];
   widgets: HomeWidgetToggles;
+  homeLayoutVersion?: number;
 };
 
 /** Default Home: construction dashboard — KPI chips and home filters off; dock off (tabs handle navigation). */
@@ -59,12 +63,14 @@ export const DEFAULT_HOME_LAYOUT: HomeLayout = {
     showTodayPriorities: true,
     showBottomQuickActions: false,
   },
+  homeLayoutVersion: HOME_LAYOUT_VERSION,
 };
 
 export function getDefaultLayout(): HomeLayout {
   return {
     sections: [...DEFAULT_SECTIONS],
     widgets: { ...DEFAULT_HOME_LAYOUT.widgets },
+    homeLayoutVersion: HOME_LAYOUT_VERSION,
   };
 }
 
@@ -94,6 +100,10 @@ export async function loadHomeLayout(): Promise<HomeLayout> {
       }
     }
     const loadedWidgets: Partial<HomeWidgetToggles> = parsed.widgets ?? {};
+    const parsedVersion =
+      typeof (parsed as { homeLayoutVersion?: unknown }).homeLayoutVersion === "number"
+        ? (parsed as { homeLayoutVersion: number }).homeLayoutVersion
+        : 0;
     const result: HomeLayout = {
       sections: merged,
       widgets: {
@@ -114,8 +124,22 @@ export async function loadHomeLayout(): Promise<HomeLayout> {
             ? loadedWidgets.showBottomQuickActions
             : DEFAULT_HOME_LAYOUT.widgets.showBottomQuickActions,
       },
+      homeLayoutVersion: parsedVersion >= HOME_LAYOUT_VERSION ? parsedVersion : HOME_LAYOUT_VERSION,
     };
-    if (raw && !raw.includes("open_tasks_chip")) {
+
+    /** One-time migration: old homes often had filters, KPI chips, or floating dock on — compact default clears that. */
+    if (parsedVersion < HOME_LAYOUT_VERSION) {
+      result.sections = result.sections.map((s) => {
+        if (s.id === "project_filters") return { ...s, enabled: false };
+        if (["open_tasks_chip", "projects_chip", "time_tracking_chip", "expenses_chip"].includes(s.id)) {
+          return { ...s, enabled: false };
+        }
+        return s;
+      });
+      result.widgets = { ...result.widgets, showBottomQuickActions: false };
+      result.homeLayoutVersion = HOME_LAYOUT_VERSION;
+      await AsyncStorage.setItem(HOME_LAYOUT_KEY, JSON.stringify(result));
+    } else if (raw && !raw.includes("open_tasks_chip")) {
       await AsyncStorage.setItem(HOME_LAYOUT_KEY, JSON.stringify(result));
     }
     return result;

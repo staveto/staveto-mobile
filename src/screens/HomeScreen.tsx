@@ -179,8 +179,13 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
   const isOwner = !!project.ownerId && project.ownerId === currentUserId;
   const hub = isLegacyMaintenanceEquipmentHub(project);
   const active = getActiveProductProjectType(project);
-  const stripeColor = hub ? "#7dcea0" : active === "TRADE" ? "#5dade2" : "#ff9f43";
-  const thumbTint = hub ? "#7dcea022" : active === "TRADE" ? "#5dade220" : "#ff9f4322";
+  const typeStripeColor = hub ? "#7dcea0" : active === "TRADE" ? "#5dade2" : "#ff9f43";
+  const typeThumbTint = hub ? "#7dcea022" : active === "TRADE" ? "#5dade220" : "#ff9f4322";
+  /** Home preview: stripe reflects activity health, not project type (calmer than decorative orange). */
+  const homeStripeColor =
+    status === "PROBLEM" ? "#dc2626" : status === "RISK" ? "#d97706" : "rgba(148,163,184,0.5)";
+  const stripeColor = hideSideActions ? homeStripeColor : typeStripeColor;
+  const thumbTint = hideSideActions ? "rgba(45,74,122,0.08)" : typeThumbTint;
   const typeLabelKey = hub ? "MAINTENANCE" : active === "TRADE" ? "TRADE" : "MANAGEMENT";
   const typeLabel = t(`createProject.type.${typeLabelKey}.title`);
   const location = getLocationAnchor(project);
@@ -191,7 +196,8 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
     typeof project.equipmentCount === "number"
       ? t("projectCard.equipmentCount", { count: String(project.equipmentCount) })
       : null;
-  const statusLabel = status === "OK" ? "OK" : status === "RISK" ? t("home.statusRisk") : t("home.statusWaiting");
+  const statusLabel =
+    status === "OK" ? t("common.ok") : status === "RISK" ? t("home.statusRisk") : t("home.statusWaiting");
   const showStatusTag = !minimal ? status !== "OK" : status === "PROBLEM" && !hideSideActions;
 
   const isSharedToMe = project.isSharedToMe === true;
@@ -208,7 +214,9 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
       onPress={() => onOpen(project.id)}
       activeOpacity={0.8}
     >
-      <View style={[styles.compactStripe, { backgroundColor: stripeColor }]} />
+      <View
+        style={[styles.compactStripe, hideSideActions && styles.compactStripeHome, { backgroundColor: stripeColor }]}
+      />
       <Pressable
         style={[
           styles.compactThumb,
@@ -1865,7 +1873,7 @@ export function HomeScreen() {
                     >
                       <Ionicons
                         name={activeTimer ? (activeTimer.status === "paused" ? "pause" : "time") : "time-outline"}
-                        size={17}
+                        size={15}
                         color={
                           activeTimer
                             ? activeTimer.status === "paused"
@@ -1874,7 +1882,7 @@ export function HomeScreen() {
                             : colors.textMuted
                         }
                       />
-                      <Text style={styles.cmpQuickPillLabel} numberOfLines={1} maxFontSizeMultiplier={1.12}>
+                      <Text style={styles.cmpQuickPillLabel} numberOfLines={2} maxFontSizeMultiplier={1.08}>
                         {t("home.pro.quickTime")}
                       </Text>
                       {activeTimer ? (
@@ -1892,8 +1900,8 @@ export function HomeScreen() {
                       accessibilityRole="button"
                       accessibilityLabel={t("home.quickCaptureTitle")}
                     >
-                      <Ionicons name="create-outline" size={17} color={colors.textMuted} />
-                      <Text style={styles.cmpQuickPillLabel} numberOfLines={1} maxFontSizeMultiplier={1.12}>
+                      <Ionicons name="create-outline" size={15} color={colors.textMuted} />
+                      <Text style={styles.cmpQuickPillLabel} numberOfLines={2} maxFontSizeMultiplier={1.08}>
                         {t("home.pro.quickNote")}
                       </Text>
                       {pendingQuickNotesCount > 0 ? (
@@ -1911,8 +1919,8 @@ export function HomeScreen() {
                       accessibilityRole="button"
                       accessibilityLabel={t("home.pro.quickPhoto")}
                     >
-                      <Ionicons name="camera-outline" size={17} color={colors.textMuted} />
-                      <Text style={styles.cmpQuickPillLabel} numberOfLines={1} maxFontSizeMultiplier={1.12}>
+                      <Ionicons name="camera-outline" size={15} color={colors.textMuted} />
+                      <Text style={styles.cmpQuickPillLabel} numberOfLines={2} maxFontSizeMultiplier={1.08}>
                         {t("home.pro.quickPhoto")}
                       </Text>
                     </TouchableOpacity>
@@ -3350,6 +3358,9 @@ const styles = StyleSheet.create({
   compactStripe: {
     width: 4,
     alignSelf: "stretch",
+  },
+  compactStripeHome: {
+    width: 3,
   },
   compactProjectBody: {
     flex: 1,
@@ -4807,20 +4818,20 @@ const styles = StyleSheet.create({
   },
   cmpQuickRow: {
     flexDirection: "row",
-    gap: spacing.sm,
+    gap: spacing.xs,
     alignItems: "stretch",
   },
   cmpQuickPill: {
     flex: 1,
     minWidth: 0,
-    minHeight: 60,
-    maxHeight: 64,
+    minHeight: 54,
+    maxHeight: 58,
     backgroundColor: colors.card,
-    borderRadius: 14,
+    borderRadius: 12,
     borderWidth: 1,
-    borderColor: "rgba(45,74,122,0.18)",
-    paddingVertical: spacing.sm,
-    paddingHorizontal: spacing.xs,
+    borderColor: "rgba(45,74,122,0.16)",
+    paddingVertical: 6,
+    paddingHorizontal: 6,
     alignItems: "center",
     justifyContent: "center",
   },
@@ -4829,8 +4840,9 @@ const styles = StyleSheet.create({
     borderWidth: 1,
   },
   cmpQuickPillLabel: {
-    marginTop: 2,
-    fontSize: 11,
+    marginTop: 1,
+    fontSize: 10,
+    lineHeight: 12,
     fontWeight: "600",
     color: colors.text,
     textAlign: "center",

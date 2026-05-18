@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -8,23 +8,25 @@ import {
   Alert,
   Modal,
   Pressable,
+  ScrollView,
+  Platform,
+  Dimensions,
 } from "react-native";
-import { BottomSheetModal, BottomSheetBackdrop } from "@gorhom/bottom-sheet";
-import DraggableFlatList, {
-  RenderItemParams,
-  ScaleDecorator,
-} from "react-native-draggable-flatlist";
-import { GestureHandlerRootView } from "react-native-gesture-handler";
+import { BottomSheetModal, BottomSheetBackdrop, BottomSheetScrollView } from "@gorhom/bottom-sheet";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, spacing } from "../theme";
 import {
   type HomeSectionConfig,
   type HomeSectionId,
+  type HomeLayout,
+  type HomeWidgetToggles,
   loadHomeLayout,
   saveHomeLayout,
   getDefaultLayout,
   DEFAULT_HOME_LAYOUT,
+  HOME_LAYOUT_VERSION,
 } from "../services/homeLayout";
 
 const SECTION_LABELS: Record<HomeSectionId, string> = {
@@ -44,22 +46,18 @@ const SECTION_LABELS: Record<HomeSectionId, string> = {
 
 type Props = {
   sheetRef: React.RefObject<BottomSheetModal | null>;
-  onLayoutChanged?: (layout: { sections: HomeSectionConfig[] }) => void;
+  onLayoutChanged?: (layout: HomeLayout) => void;
   /** When set, use Modal instead of BottomSheetModal (more reliable on some devices) */
   visible?: boolean;
   onDismiss?: () => void;
 };
 
-function SectionRow({
+function SectionToggleRow({
   item,
-  drag,
-  isActive,
   onToggle,
   t,
 }: {
   item: HomeSectionConfig;
-  drag: () => void;
-  isActive: boolean;
   onToggle: (id: HomeSectionId, enabled: boolean) => void;
   t: (key: string) => string;
 }) {
@@ -67,43 +65,47 @@ function SectionRow({
   const isLocked = item.locked === true;
 
   return (
-    <ScaleDecorator>
-      <TouchableOpacity
-        onLongPress={drag}
-        disabled={isActive}
-        activeOpacity={1}
-        style={[styles.row, isActive && styles.rowActive]}
-        accessibilityRole="button"
-        accessibilityLabel={t(labelKey)}
-        accessibilityHint={isLocked ? "Locked section" : "Long press and drag to reorder"}
-      >
-        <View style={styles.dragHandle}>
-          <Ionicons name="reorder-three" size={24} color="rgba(255,255,255,0.6)" />
-        </View>
-        <Text style={styles.rowLabel} maxFontSizeMultiplier={1.2} numberOfLines={2}>
-          {t(labelKey)}
-        </Text>
-        {isLocked ? (
-          <Ionicons name="lock-closed" size={20} color="rgba(255,255,255,0.6)" />
-        ) : (
-          <Switch
-            value={item.enabled}
-            onValueChange={(v) => onToggle(item.id, v)}
-            trackColor={{ false: "rgba(255,255,255,0.3)", true: "#22c55e" }}
-            thumbColor="#fff"
-          />
-        )}
-      </TouchableOpacity>
-    </ScaleDecorator>
+    <Pressable
+      style={({ pressed }) => [styles.row, pressed && !isLocked ? styles.rowPressed : null]}
+      accessibilityRole="button"
+      accessibilityLabel={t(labelKey)}
+      accessibilityHint={isLocked ? "Locked section" : "Toggle home section visibility"}
+      onPress={() => {
+        if (!isLocked) onToggle(item.id, !item.enabled);
+      }}
+    >
+      <Text style={styles.rowLabel} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+        {t(labelKey)}
+      </Text>
+      {isLocked ? (
+        <Ionicons name="lock-closed" size={20} color="rgba(255,255,255,0.6)" />
+      ) : (
+        <Switch
+          value={item.enabled}
+          onValueChange={(v) => onToggle(item.id, v)}
+          trackColor={{ false: "rgba(255,255,255,0.3)", true: "#22c55e" }}
+          thumbColor="#fff"
+        />
+      )}
+    </Pressable>
   );
 }
 
 export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismiss }: Props) {
   const { t } = useI18n();
+  const insets = useSafeAreaInsets();
+  const modalSheetHeight = useMemo(
+    () => Math.round(Dimensions.get("window").height * 0.92),
+    []
+  );
   const [sections, setSections] = useState<HomeSectionConfig[]>(DEFAULT_HOME_LAYOUT.sections);
+  const [widgets, setWidgets] = useState<HomeWidgetToggles>(DEFAULT_HOME_LAYOUT.widgets);
 
   useEffect(() => {
-    loadHomeLayout().then((layout) => setSections(layout.sections));
+    loadHomeLayout().then((layout) => {
+      setSections(layout.sections);
+      setWidgets(layout.widgets);
+    });
   }, []);
 
   const handleToggle = useCallback((id: HomeSectionId, enabled: boolean) => {
@@ -113,7 +115,7 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
   }, []);
 
   const handleSave = useCallback(async () => {
-    const layout = { sections };
+    const layout: HomeLayout = { sections, widgets, homeLayoutVersion: HOME_LAYOUT_VERSION };
     await saveHomeLayout(layout);
     onLayoutChanged?.(layout);
     if (visible !== undefined) {
@@ -121,7 +123,7 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
     } else {
       sheetRef.current?.dismiss();
     }
-  }, [sections, onLayoutChanged, sheetRef, visible, onDismiss]);
+  }, [sections, widgets, onLayoutChanged, sheetRef, visible, onDismiss]);
 
   const handleCancel = useCallback(() => {
     if (visible !== undefined) {
@@ -142,13 +144,19 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
           onPress: () => {
             const def = getDefaultLayout();
             setSections(def.sections);
+            setWidgets(def.widgets);
           },
         },
       ]
     );
   }, [t]);
 
-  const allDisabled = sections.filter((s) => !s.locked).every((s) => !s.enabled);
+  const allDisabled =
+    sections.filter((s) => !s.locked).every((s) => !s.enabled) &&
+    !widgets.showHeaderChatShortcut &&
+    !widgets.showQuickTime &&
+    !widgets.showTodayPriorities &&
+    !widgets.showBottomQuickActions;
 
   const renderBackdrop = useCallback(
     (props: any) => (
@@ -161,74 +169,106 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
     ),
     []
   );
+  const snapPoints = useMemo(() => ["70%", "95%"], []);
 
-  const renderContent = () => (
-    <>
-      <View style={[styles.header, { paddingTop: spacing.lg }]}>
-        <TouchableOpacity style={styles.headerBtn} onPress={handleCancel} accessibilityRole="button" accessibilityLabel={t("common.cancel")}>
-          <Text style={styles.headerCancel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-            {t("common.cancel")}
-          </Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-          {t("home.customizeHomeTitle")}
+  const visibleSections = sections.filter((s) => s.id !== "kpis");
+  const sectionRows = visibleSections.length > 0 ? visibleSections : getDefaultLayout().sections;
+
+  const scrollContentPaddingBottom = insets.bottom + spacing.xl + spacing.md;
+
+  const renderHeader = () => (
+    <View style={[styles.header, { paddingTop: spacing.lg }]}>
+      <TouchableOpacity style={styles.headerBtn} onPress={handleCancel} accessibilityRole="button" accessibilityLabel={t("common.cancel")}>
+        <Text style={styles.headerCancel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+          {t("common.cancel")}
         </Text>
-        <TouchableOpacity style={styles.headerBtn} onPress={handleSave} accessibilityRole="button" accessibilityLabel={t("common.save")}>
-          <Text style={styles.headerSave} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-            {t("common.save")}
-          </Text>
-        </TouchableOpacity>
-      </View>
+      </TouchableOpacity>
+      <Text style={styles.headerTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+        {t("home.customizeHomeTitle")}
+      </Text>
+      <TouchableOpacity style={styles.headerBtn} onPress={handleSave} accessibilityRole="button" accessibilityLabel={t("common.save")}>
+        <Text style={styles.headerSave} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+          {t("common.save")}
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
 
-      <View style={styles.content}>
-        {allDisabled ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyText} maxFontSizeMultiplier={1.2}>
-              {t("home.resetToDefault")}
-            </Text>
-            <TouchableOpacity style={styles.resetBtn} onPress={handleReset} accessibilityRole="button" accessibilityLabel={t("home.resetToDefault")}>
-              <Text style={styles.resetBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-                {t("home.resetToDefault")}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <GestureHandlerRootView style={{ flex: 1 }}>
-            <DraggableFlatList
-              data={sections.filter((s) => s.id !== "kpis")}
-              onDragEnd={({ data }) => setSections(data)}
-              keyExtractor={(item) => item.id}
-              renderItem={({ item, drag, isActive }: RenderItemParams<HomeSectionConfig>) => (
-                <SectionRow
-                  item={item}
-                  drag={drag}
-                  isActive={isActive}
-                  onToggle={handleToggle}
-                  t={t}
-                />
-              )}
-            />
-          </GestureHandlerRootView>
-        )}
+  const renderScrollInner = () => (
+    <>
+      <View style={styles.widgetsSection}>
+        <Text style={styles.widgetsSectionTitle}>{t("home.customizeAdditionalWidgets")}</Text>
+        <ToggleRow
+          label={t("home.customize.showHeaderChatShortcut")}
+          value={widgets.showHeaderChatShortcut}
+          onChange={(value) => setWidgets((prev) => ({ ...prev, showHeaderChatShortcut: value }))}
+        />
+        <ToggleRow
+          label={t("home.customize.showQuickTime")}
+          value={widgets.showQuickTime}
+          onChange={(value) => setWidgets((prev) => ({ ...prev, showQuickTime: value }))}
+        />
+        <ToggleRow
+          label={t("home.customize.showTodayPriorities")}
+          value={widgets.showTodayPriorities}
+          onChange={(value) => setWidgets((prev) => ({ ...prev, showTodayPriorities: value }))}
+        />
+        <ToggleRow
+          label={t("home.customize.showBottomQuickActions")}
+          value={widgets.showBottomQuickActions}
+          onChange={(value) => setWidgets((prev) => ({ ...prev, showBottomQuickActions: value }))}
+        />
+      </View>
+      <View style={styles.widgetsSection}>
+        <Text style={styles.widgetsSectionTitle}>{t("home.customizeHomeSections")}</Text>
+        {sectionRows.map((item) => (
+          <SectionToggleRow key={item.id} item={item} onToggle={handleToggle} t={t} />
+        ))}
       </View>
     </>
   );
 
+  const scrollContentStyle = useMemo(
+    () => [styles.sectionsListContent, { paddingHorizontal: spacing.lg, paddingBottom: scrollContentPaddingBottom }],
+    [scrollContentPaddingBottom]
+  );
+
   if (visible !== undefined) {
     return (
-      <Modal
-        visible={visible}
-        animationType="slide"
-        transparent
-        onRequestClose={handleCancel}
-      >
-        <Pressable style={modalStyles.overlay} onPress={handleCancel}>
-          <Pressable style={modalStyles.content} onPress={(e) => e.stopPropagation()}>
-            <View style={[styles.sheet, modalStyles.sheet]}>
-              {renderContent()}
-            </View>
-          </Pressable>
-        </Pressable>
+      <Modal visible={visible} animationType="slide" transparent onRequestClose={handleCancel}>
+        <View style={modalStyles.overlay}>
+          <Pressable style={modalStyles.dismissFill} onPress={handleCancel} accessibilityRole="button" accessibilityLabel={t("common.cancel")} />
+          <View style={[styles.sheet, modalStyles.sheet, { height: modalSheetHeight }]}>
+            {renderHeader()}
+            {allDisabled ? (
+              <View style={[styles.content, styles.contentBody]}>
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyText} maxFontSizeMultiplier={1.2}>
+                    {t("home.resetToDefault")}
+                  </Text>
+                  <TouchableOpacity style={styles.resetBtn} onPress={handleReset} accessibilityRole="button" accessibilityLabel={t("home.resetToDefault")}>
+                    <Text style={styles.resetBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                      {t("home.resetToDefault")}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <ScrollView
+                style={styles.scrollBody}
+                contentContainerStyle={scrollContentStyle}
+                showsVerticalScrollIndicator
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+                decelerationRate={Platform.OS === "ios" ? "fast" : 0.985}
+                overScrollMode="always"
+                bounces
+              >
+                {renderScrollInner()}
+              </ScrollView>
+            )}
+          </View>
+        </View>
       </Modal>
     );
   }
@@ -237,13 +277,65 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
     <BottomSheetModal
       ref={sheetRef}
       enablePanDownToClose
-      snapPoints={["70%"]}
+      snapPoints={snapPoints}
       backdropComponent={renderBackdrop}
       handleIndicatorStyle={{ backgroundColor: "rgba(255,255,255,0.5)" }}
       backgroundStyle={styles.sheet}
     >
-      {renderContent()}
+      <View style={styles.bottomSheetInner}>
+        {renderHeader()}
+        {allDisabled ? (
+          <View style={[styles.content, styles.contentBody]}>
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyText} maxFontSizeMultiplier={1.2}>
+                {t("home.resetToDefault")}
+              </Text>
+              <TouchableOpacity style={styles.resetBtn} onPress={handleReset} accessibilityRole="button" accessibilityLabel={t("home.resetToDefault")}>
+                <Text style={styles.resetBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                  {t("home.resetToDefault")}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <BottomSheetScrollView
+            style={styles.bottomSheetScroll}
+            contentContainerStyle={scrollContentStyle}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator
+          >
+            {renderScrollInner()}
+          </BottomSheetScrollView>
+        )}
+      </View>
     </BottomSheetModal>
+  );
+}
+
+function ToggleRow({
+  label,
+  value,
+  onChange,
+}: {
+  label: string;
+  value: boolean;
+  onChange: (value: boolean) => void;
+}) {
+  return (
+    <Pressable
+      style={({ pressed }) => [styles.toggleRow, pressed ? styles.rowPressed : null]}
+      onPress={() => onChange(!value)}
+    >
+      <Text style={styles.toggleLabel} maxFontSizeMultiplier={1.2} numberOfLines={2}>
+        {label}
+      </Text>
+      <Switch
+        value={value}
+        onValueChange={onChange}
+        trackColor={{ false: "rgba(255,255,255,0.3)", true: "#22c55e" }}
+        thumbColor="#fff"
+      />
+    </Pressable>
   );
 }
 
@@ -258,14 +350,11 @@ const modalStyles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "flex-end",
   },
-  content: {
-    maxHeight: "80%",
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    overflow: "hidden",
+  dismissFill: {
+    ...StyleSheet.absoluteFillObject,
   },
   sheet: {
-    minHeight: 400,
+    width: "100%",
   },
 });
 
@@ -274,6 +363,7 @@ const styles = StyleSheet.create({
     backgroundColor: SHEET_BG,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
+    overflow: "hidden",
   },
   header: {
     flexDirection: "row",
@@ -308,13 +398,62 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xl,
   },
+  sectionsListContent: {
+    flexGrow: 1,
+  },
+  scrollBody: {
+    flex: 1,
+    minHeight: 0,
+  },
+  bottomSheetInner: {
+    flex: 1,
+    minHeight: 0,
+  },
+  bottomSheetScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  contentBody: {
+    flex: 1,
+    minHeight: 0,
+    justifyContent: "center",
+  },
+  widgetsSection: {
+    marginTop: spacing.md,
+    marginBottom: spacing.sm,
+  },
+  widgetsSectionTitle: {
+    fontSize: 14,
+    color: "rgba(255,255,255,0.65)",
+    marginBottom: spacing.xs,
+  },
+  toggleRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingVertical: spacing.sm,
+    borderBottomWidth: 1,
+    borderBottomColor: SHEET_BORDER,
+    minHeight: 52,
+  },
+  toggleLabel: {
+    flex: 1,
+    color: SHEET_TEXT,
+    fontSize: 15,
+    marginRight: spacing.md,
+  },
   row: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "space-between",
     paddingVertical: spacing.md,
+    gap: spacing.sm,
     borderBottomWidth: 1,
     borderBottomColor: SHEET_BORDER,
     minHeight: 56,
+  },
+  rowPressed: {
+    backgroundColor: "rgba(255,255,255,0.06)",
   },
   rowActive: {
     backgroundColor: "rgba(255,255,255,0.08)",

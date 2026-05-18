@@ -290,6 +290,11 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
           value={widgets.showBottomQuickActions}
           onChange={(value) => setWidgets((prev) => ({ ...prev, showBottomQuickActions: value }))}
         />
+        {homeDisplaySize === "large" ? (
+          <Text style={styles.largeDockHint} maxFontSizeMultiplier={1.3}>
+            {t("home.customize.largeHidesBottomDockHint")}
+          </Text>
+        ) : null}
       </View>
       <View style={styles.widgetsSection}>
         <Text style={styles.widgetsSectionTitle}>{t("home.customize.homeSections")}</Text>
@@ -547,6 +552,14 @@ const styles = StyleSheet.create({
   },
   sizeChipTextActive: {
     color: SHEET_TEXT,
+  },
+  largeDockHint: {
+    fontSize: 12,
+    lineHeight: 16,
+    color: "rgba(255,255,255,0.55)",
+    marginTop: -spacing.xs,
+    marginBottom: spacing.xs,
+    paddingHorizontal: spacing.xs,
   },
   toggleRow: {
     flexDirection: "row",

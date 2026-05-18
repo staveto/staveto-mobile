@@ -16,6 +16,7 @@ import {
   Platform,
   Image,
   AppState,
+  useWindowDimensions,
 } from "react-native";
 import { DrawerActions, TabActions, useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -153,6 +154,8 @@ type CompactProjectItemProps = {
   hideSideActions?: boolean;
   /** Optional typography / row sizing from home display size */
   displayMetrics?: HomeDisplayMetrics;
+  /** Large Home “comfort” mode: taller tap row, 2-line title, more air */
+  comfortableHome?: boolean;
 };
 
 function getProjectInitials(name: string): string {
@@ -183,6 +186,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
   minimal,
   hideSideActions,
   displayMetrics,
+  comfortableHome,
 }: CompactProjectItemProps) {
   const { t } = useI18n();
   const dm = displayMetrics;
@@ -219,6 +223,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
         minimal && styles.compactProjectRowMinimal,
         hideSideActions && styles.compactProjectRowHome,
         hideSideActions && dm ? { minHeight: dm.projectRowMinHeight } : null,
+        comfortableHome && hideSideActions ? { paddingVertical: 10 } : null,
         !isOwner && styles.compactProjectRowMember,
         isSharedToMe && styles.compactProjectRowShared,
       ]}
@@ -276,7 +281,20 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
       </Pressable>
       <View style={styles.compactProjectBody}>
         <View style={styles.compactProjectTitleRow}>
-          <Text style={[styles.compactProjectTitle, minimal && styles.compactProjectTitleMinimal, hideSideActions && styles.compactProjectTitleHome]} numberOfLines={1}>
+          <Text
+            style={[
+              styles.compactProjectTitle,
+              minimal && styles.compactProjectTitleMinimal,
+              hideSideActions && styles.compactProjectTitleHome,
+              hideSideActions && dm
+                ? {
+                    fontSize: dm.projectTitleSize,
+                    lineHeight: Math.round(dm.projectTitleSize * (comfortableHome ? 1.38 : 1.28)),
+                  }
+                : null,
+            ]}
+            numberOfLines={comfortableHome ? 2 : 1}
+          >
             {project.name}
           </Text>
         </View>
@@ -623,6 +641,13 @@ export function HomeScreen() {
   } = effectiveLayout.widgets;
   const homeDisplaySize = effectiveLayout.homeDisplaySize ?? "standard";
   const hm = useMemo(() => getHomeDisplayMetrics(homeDisplaySize), [homeDisplaySize]);
+  const isLargeHome = homeDisplaySize === "large";
+  const shouldShowBottomQuickActions = showBottomQuickActions && !isLargeHome;
+  const { width: windowWidth } = useWindowDimensions();
+  const kpiLargeCellWidth = useMemo(
+    () => Math.max(148, (windowWidth - spacing.lg * 2 - hm.gap) / 2),
+    [windowWidth, hm.gap]
+  );
   const enabledSectionIds = useMemo(
     () => new Set(effectiveLayout.sections.filter((s) => s.enabled).map((s) => s.id)),
     [effectiveLayout]
@@ -1618,10 +1643,17 @@ export function HomeScreen() {
           )}
         </TouchableOpacity>
         <View style={styles.headerCenter}>
-          <Text style={[styles.welcomeTitle, styles.welcomeTitleCompact]} numberOfLines={1}>
+          <Text style={[styles.welcomeTitle, styles.welcomeTitleCompact, isLargeHome ? { fontSize: 20 } : null]} numberOfLines={1}>
             {t("home.greeting", { name: greetingName })}
           </Text>
-          <Text style={[styles.welcomeSubtitle, styles.welcomeSubtitleCompact]} numberOfLines={1}>
+          <Text
+            style={[
+              styles.welcomeSubtitle,
+              styles.welcomeSubtitleCompact,
+              isLargeHome ? { fontSize: 12, lineHeight: 17 } : null,
+            ]}
+            numberOfLines={1}
+          >
             {t(
               headerUsageMode === "trade"
                 ? "home.headerHintTrade"
@@ -1692,7 +1724,7 @@ export function HomeScreen() {
         extraData={homeListExtraData}
         contentContainerStyle={[
           styles.content,
-          { paddingTop: 0, paddingBottom: insets.bottom + (showBottomQuickActions ? hm.bottomDockPadding : spacing.xl * 2 + (homeDisplaySize === "large" ? 12 : 0)) },
+          { paddingTop: 0, paddingBottom: insets.bottom + (shouldShowBottomQuickActions ? hm.bottomDockPadding : spacing.xl * 2 + (isLargeHome ? 20 : 0)) },
         ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
@@ -1776,6 +1808,183 @@ export function HomeScreen() {
               </TouchableOpacity>
             ) : null}
             {!isHomeEmptyByConfig && orgId && data.projects.length > 0 && showTodayPriorities ? (
+              isLargeHome ? (
+                <View
+                  style={[
+                    styles.cmpOverviewCard,
+                    {
+                      paddingHorizontal: hm.cardPaddingH,
+                      paddingVertical: hm.cardPaddingV + 6,
+                      borderRadius: 14,
+                      marginBottom: spacing.md,
+                    },
+                  ]}
+                  accessibilityRole="summary"
+                >
+                  <Text style={[styles.cmpOverviewTitle, { fontSize: hm.overviewTitleSize + 1, marginBottom: spacing.sm }]}>
+                    {t("home.compact.todayOverview")}
+                  </Text>
+                  {data.todaysWorkTasks[0] ? (
+                    <View style={{ marginBottom: spacing.md }}>
+                      {(() => {
+                        const tw = data.todaysWorkTasks[0];
+                        const badgeKey =
+                          tw.workKind === "overdue"
+                            ? "home.todaysWorkBadgeOverdue"
+                            : tw.workKind === "blocked"
+                              ? "home.todaysWorkBadgeBlocked"
+                              : "home.todaysWorkBadgeDueToday";
+                        const badgeStyle =
+                          tw.workKind === "overdue"
+                            ? styles.todaysWorkBadgeOverdue
+                            : tw.workKind === "blocked"
+                              ? styles.todaysWorkBadgeBlocked
+                              : styles.todaysWorkBadgeDueToday;
+                        return (
+                          <View>
+                            <View style={{ flexDirection: "row", alignItems: "center", marginBottom: spacing.sm }}>
+                              <View style={[styles.cmpChip, badgeStyle, { paddingVertical: 6, paddingHorizontal: 10 }]}>
+                                <Text style={[styles.cmpChipText, { fontSize: 12 }]} maxFontSizeMultiplier={1.1}>
+                                  {t(badgeKey)}
+                                </Text>
+                              </View>
+                            </View>
+                            <TouchableOpacity
+                              onPress={() => openTodaysWorkTask(tw)}
+                              activeOpacity={0.82}
+                              accessibilityRole="button"
+                              accessibilityLabel={t("home.compact.urgentTask")}
+                            >
+                              <Text
+                                style={{ fontSize: hm.taskTitleSize + 1, fontWeight: "700", color: colors.text, lineHeight: Math.round((hm.taskTitleSize + 1) * 1.35) }}
+                                numberOfLines={2}
+                              >
+                                {tw.title}
+                              </Text>
+                              <Text style={{ fontSize: hm.taskMetaSize, color: colors.textMuted, marginTop: 8 }} numberOfLines={1}>
+                                {tw.projectName}
+                              </Text>
+                            </TouchableOpacity>
+                            <TouchableOpacity
+                              onPress={() => stackNav.navigate("Tasks")}
+                              style={{ alignSelf: "flex-start", marginTop: spacing.md, paddingVertical: 6 }}
+                              accessibilityRole="button"
+                            >
+                              <Text style={{ fontSize: 15, fontWeight: "700", color: colors.primary }}>{t("home.compact.tasks")}</Text>
+                            </TouchableOpacity>
+                          </View>
+                        );
+                      })()}
+                    </View>
+                  ) : (
+                    <View style={{ marginBottom: spacing.md }}>
+                      <Text style={{ fontSize: hm.taskTitleSize, fontWeight: "700", color: colors.text }}>{t("home.compact.cleanToday")}</Text>
+                      <Text style={{ fontSize: hm.overviewBodySize, color: colors.textMuted, marginTop: 8, lineHeight: Math.round(hm.overviewBodySize * 1.45) }}>
+                        {t("home.compact.noUrgentTasks")}
+                      </Text>
+                    </View>
+                  )}
+                  <View style={[styles.cmpDivider, { marginVertical: spacing.md }]} />
+                  {enabledSectionIds.has("current_work") && focusProject ? (
+                    <View style={{ marginBottom: spacing.md }}>
+                      <Text
+                        style={{
+                          fontSize: 12,
+                          fontWeight: "700",
+                          color: colors.textMuted,
+                          textTransform: "uppercase",
+                          letterSpacing: 0.5,
+                        }}
+                      >
+                        {t("home.compact.continue")}
+                      </Text>
+                      <Text
+                        style={{ fontSize: hm.taskTitleSize + 1, fontWeight: "700", color: colors.text, marginTop: 10, lineHeight: Math.round((hm.taskTitleSize + 1) * 1.3) }}
+                        numberOfLines={2}
+                      >
+                        {focusProject.name}
+                      </Text>
+                      <Text style={{ fontSize: hm.taskMetaSize, color: colors.textMuted, marginTop: 6 }} numberOfLines={2}>
+                        {(data.projectStats.get(focusProject.id)?.openCount ?? 0)}{" "}
+                        {(data.projectStats.get(focusProject.id)?.openCount ?? 0) === 1
+                          ? t("home.openTask_one")
+                          : t("home.openTask_other")}
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => handleProjectClick(focusProject.id)}
+                        style={{ alignSelf: "flex-start", marginTop: spacing.md, paddingVertical: 6 }}
+                        accessibilityRole="button"
+                      >
+                        <Text style={{ fontSize: 15, fontWeight: "700", color: colors.primary }}>{t("home.compact.open")}</Text>
+                      </TouchableOpacity>
+                    </View>
+                  ) : data.projects.length > 0 ? (
+                    <Text style={{ fontSize: hm.overviewBodySize, color: colors.textMuted, marginBottom: spacing.md }} numberOfLines={2}>
+                      {t("home.compact.pickProject")}
+                    </Text>
+                  ) : null}
+                  <View style={{ flexDirection: "row", flexWrap: "wrap", gap: 12 }}>
+                    <TouchableOpacity
+                      style={{
+                        paddingVertical: 12,
+                        paddingHorizontal: 16,
+                        borderRadius: 12,
+                        backgroundColor: "rgba(45,74,122,0.08)",
+                        borderWidth: 1,
+                        borderColor: "rgba(45,74,122,0.14)",
+                        minHeight: 48,
+                        justifyContent: "center",
+                      }}
+                      onPress={() => stackNav.navigate("Tasks")}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={{ fontSize: hm.metricPillFont + 1, fontWeight: "600", color: colors.text }} numberOfLines={2}>
+                        {t("home.compact.openTasks", { count: String(data.kpis.openCount) })}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={{
+                        paddingVertical: 12,
+                        paddingHorizontal: 16,
+                        borderRadius: 12,
+                        backgroundColor: "rgba(45,74,122,0.08)",
+                        borderWidth: 1,
+                        borderColor: "rgba(45,74,122,0.14)",
+                        minHeight: 48,
+                        justifyContent: "center",
+                      }}
+                      onPress={() => stackNav.navigate("Tasks", { dueFilter: "overdue" })}
+                      activeOpacity={0.85}
+                    >
+                      <Text style={{ fontSize: hm.metricPillFont + 1, fontWeight: "600", color: colors.text }} numberOfLines={2}>
+                        {t("home.compact.overdue", { count: String(data.kpis.overdueCount ?? 0) })}
+                      </Text>
+                    </TouchableOpacity>
+                    {enabledSectionIds.has("service_tasks_alert") &&
+                    equipmentHomeSummary &&
+                    (equipmentHomeSummary.openServiceTasks > 0 || equipmentHomeSummary.dueTodayOrOverdue > 0) ? (
+                      <TouchableOpacity
+                        style={{
+                          paddingVertical: 12,
+                          paddingHorizontal: 16,
+                          borderRadius: 12,
+                          backgroundColor: "rgba(45,74,122,0.08)",
+                          borderWidth: 1,
+                          borderColor: "rgba(45,74,122,0.14)",
+                          minHeight: 48,
+                          justifyContent: "center",
+                        }}
+                        onPress={() => goToEquipment({ screen: "EquipmentMain" })}
+                        activeOpacity={0.85}
+                      >
+                        <Text style={{ fontSize: hm.metricPillFont + 1, fontWeight: "600", color: colors.text }} numberOfLines={2}>
+                          {t("home.compact.service", { count: String(equipmentHomeSummary.openServiceTasks) })}
+                        </Text>
+                      </TouchableOpacity>
+                    ) : null}
+                  </View>
+                </View>
+              ) : (
               <View
                 style={[
                   styles.cmpOverviewCard,
@@ -1898,6 +2107,7 @@ export function HomeScreen() {
                   ) : null}
                 </View>
               </View>
+              )
             ) : null}
             {user?.id &&
             !isHomeEmptyByConfig &&
@@ -2063,7 +2273,7 @@ export function HomeScreen() {
                   const live = liveMap.get(item.id);
                   const openTasks = data.projectStats.get(item.id)?.openCount ?? 0;
                   return (
-                    <View key={item.id} style={{ marginBottom: spacing.xs }}>
+                    <View key={item.id} style={{ marginBottom: isLargeHome ? spacing.sm : spacing.xs }}>
                       <CompactProjectItem
                         project={item}
                         openTasks={openTasks}
@@ -2077,6 +2287,7 @@ export function HomeScreen() {
                         minimal
                         hideSideActions
                         displayMetrics={hm}
+                        comfortableHome={isLargeHome}
                       />
                     </View>
                   );
@@ -2095,7 +2306,10 @@ export function HomeScreen() {
                     </Text>
                   </View>
                 ) : null}
-                <TouchableOpacity style={styles.showAllButton} onPress={() => goToProjects()}>
+                <TouchableOpacity
+                  style={[styles.showAllButton, isLargeHome ? { minHeight: 52, paddingVertical: 14 } : null]}
+                  onPress={() => goToProjects()}
+                >
                   <Text style={styles.showAllButtonText}>{t("home.compact.allProjects")}</Text>
                 </TouchableOpacity>
               </>
@@ -2118,100 +2332,232 @@ export function HomeScreen() {
                 minWidth: hm.kpiCardMinWidth,
               };
 
+              const kpiLargeCellBase = {
+                backgroundColor: colors.card,
+                borderRadius: 14,
+                borderWidth: 1,
+                borderColor: "rgba(45,74,122,0.14)",
+                paddingVertical: spacing.md,
+                paddingHorizontal: spacing.md,
+                width: kpiLargeCellWidth,
+                minHeight: 120,
+              };
+
               return (
                 <>
                   {hasKpiRow ? (
-                    <View style={{ marginTop: spacing.md }}>
+                    <View style={{ marginTop: spacing.md, marginBottom: isLargeHome ? spacing.xs : 0 }}>
                       <Text style={[styles.cmpSectionHeading, { fontSize: hm.sectionHeadingSize }]}>
                         {t("home.overviewMetricsTitle")}
                       </Text>
-                      <ScrollView
-                        horizontal
-                        showsHorizontalScrollIndicator={false}
-                        contentContainerStyle={{
-                          flexDirection: "row",
-                          gap: hm.gap,
-                          paddingBottom: spacing.sm,
-                          paddingTop: 4,
-                          paddingRight: spacing.lg,
-                        }}
-                      >
-                        {enabledSectionIds.has("open_tasks_chip") ? (
-                          <TouchableOpacity
-                            style={kpiCardStyle}
-                            onPress={() => stackNav.navigate("Tasks")}
-                            activeOpacity={0.88}
-                            accessibilityRole="button"
-                          >
-                            <Ionicons name="list-outline" size={hm.kpiIconSize} color={colors.primary} />
-                            <Text
-                              style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
-                              numberOfLines={2}
+                      {isLargeHome ? (
+                        <View
+                          style={{
+                            flexDirection: "row",
+                            flexWrap: "wrap",
+                            justifyContent: "space-between",
+                            rowGap: hm.gap + 8,
+                            paddingTop: 8,
+                            paddingBottom: spacing.sm,
+                          }}
+                        >
+                          {enabledSectionIds.has("open_tasks_chip") ? (
+                            <TouchableOpacity
+                              style={kpiLargeCellBase}
+                              onPress={() => stackNav.navigate("Tasks")}
+                              activeOpacity={0.88}
+                              accessibilityRole="button"
                             >
-                              {t("home.openTasksChip")}
-                            </Text>
-                            <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
-                              {String(data.kpis.openCount)}
-                            </Text>
-                          </TouchableOpacity>
-                        ) : null}
-                        {enabledSectionIds.has("projects_chip") ? (
-                          <TouchableOpacity style={kpiCardStyle} onPress={() => goToProjects()} activeOpacity={0.88} accessibilityRole="button">
-                            <Ionicons name="folder-outline" size={hm.kpiIconSize} color={colors.primary} />
-                            <Text
-                              style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
-                              numberOfLines={2}
+                              <Ionicons name="list-outline" size={hm.kpiIconSize + 2} color={colors.primary} />
+                              <Text style={{ fontSize: hm.kpiValueSize + 2, fontWeight: "800", color: colors.text, marginTop: 10 }}>
+                                {String(data.kpis.openCount)}
+                              </Text>
+                              <Text
+                                style={{
+                                  fontSize: hm.kpiLabelSize + 1,
+                                  color: colors.textMuted,
+                                  marginTop: 8,
+                                  lineHeight: Math.round((hm.kpiLabelSize + 1) * 1.38),
+                                }}
+                                numberOfLines={3}
+                              >
+                                {t("home.openTasksChip")}
+                              </Text>
+                            </TouchableOpacity>
+                          ) : null}
+                          {enabledSectionIds.has("projects_chip") ? (
+                            <TouchableOpacity
+                              style={kpiLargeCellBase}
+                              onPress={() => goToProjects()}
+                              activeOpacity={0.88}
+                              accessibilityRole="button"
                             >
-                              {t("home.compact.projects")}
-                            </Text>
-                            <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
-                              {String(data.projects.length)}
-                            </Text>
-                          </TouchableOpacity>
-                        ) : null}
-                        {enabledSectionIds.has("time_tracking_chip") ? (
-                          <TouchableOpacity
-                            style={kpiCardStyle}
-                            onPress={() => stackNav.navigate("AttendanceReportScreen")}
-                            activeOpacity={0.88}
-                            accessibilityRole="button"
-                          >
-                            <Ionicons name="hourglass-outline" size={hm.kpiIconSize} color={colors.primary} />
-                            <Text
-                              style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
-                              numberOfLines={2}
+                              <Ionicons name="folder-outline" size={hm.kpiIconSize + 2} color={colors.primary} />
+                              <Text style={{ fontSize: hm.kpiValueSize + 2, fontWeight: "800", color: colors.text, marginTop: 10 }}>
+                                {String(data.projects.length)}
+                              </Text>
+                              <Text
+                                style={{
+                                  fontSize: hm.kpiLabelSize + 1,
+                                  color: colors.textMuted,
+                                  marginTop: 8,
+                                  lineHeight: Math.round((hm.kpiLabelSize + 1) * 1.38),
+                                }}
+                                numberOfLines={3}
+                              >
+                                {t("home.compact.projects")}
+                              </Text>
+                            </TouchableOpacity>
+                          ) : null}
+                          {enabledSectionIds.has("time_tracking_chip") ? (
+                            <TouchableOpacity
+                              style={kpiLargeCellBase}
+                              onPress={() => stackNav.navigate("AttendanceReportScreen")}
+                              activeOpacity={0.88}
+                              accessibilityRole="button"
                             >
-                              {t("home.sectionTimeTrackingChip")}
-                            </Text>
-                            <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
-                              {formatMinutesToHours(monthlyMinutes)}
-                            </Text>
-                          </TouchableOpacity>
-                        ) : null}
-                        {enabledSectionIds.has("expenses_chip") && data.kpis.hasExpensesAccess ? (
-                          <TouchableOpacity
-                            style={kpiCardStyle}
-                            onPress={() => stackNav.navigate("ExpensesKpiScreen")}
-                            activeOpacity={0.88}
-                            accessibilityRole="button"
-                          >
-                            <Ionicons name="wallet-outline" size={hm.kpiIconSize} color={colors.primary} />
-                            <Text
-                              style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
-                              numberOfLines={2}
+                              <Ionicons name="hourglass-outline" size={hm.kpiIconSize + 2} color={colors.primary} />
+                              <Text style={{ fontSize: hm.kpiValueSize + 2, fontWeight: "800", color: colors.text, marginTop: 10 }}>
+                                {formatMinutesToHours(monthlyMinutes)}
+                              </Text>
+                              <Text
+                                style={{
+                                  fontSize: hm.kpiLabelSize + 1,
+                                  color: colors.textMuted,
+                                  marginTop: 8,
+                                  lineHeight: Math.round((hm.kpiLabelSize + 1) * 1.38),
+                                }}
+                                numberOfLines={3}
+                              >
+                                {t("home.sectionTimeTrackingChip")}
+                              </Text>
+                            </TouchableOpacity>
+                          ) : null}
+                          {enabledSectionIds.has("expenses_chip") && data.kpis.hasExpensesAccess ? (
+                            <TouchableOpacity
+                              style={kpiLargeCellBase}
+                              onPress={() => stackNav.navigate("ExpensesKpiScreen")}
+                              activeOpacity={0.88}
+                              accessibilityRole="button"
                             >
-                              {t("home.expenses")}
-                            </Text>
-                            <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
-                              {String(Math.round(data.kpis.expensesTotalSum))}
-                            </Text>
-                          </TouchableOpacity>
-                        ) : null}
-                      </ScrollView>
+                              <Ionicons name="wallet-outline" size={hm.kpiIconSize + 2} color={colors.primary} />
+                              <Text style={{ fontSize: hm.kpiValueSize + 2, fontWeight: "800", color: colors.text, marginTop: 10 }}>
+                                {String(Math.round(data.kpis.expensesTotalSum))}
+                              </Text>
+                              <Text
+                                style={{
+                                  fontSize: hm.kpiLabelSize + 1,
+                                  color: colors.textMuted,
+                                  marginTop: 8,
+                                  lineHeight: Math.round((hm.kpiLabelSize + 1) * 1.38),
+                                }}
+                                numberOfLines={3}
+                              >
+                                {t("home.expenses")}
+                              </Text>
+                            </TouchableOpacity>
+                          ) : null}
+                        </View>
+                      ) : (
+                        <ScrollView
+                          horizontal
+                          showsHorizontalScrollIndicator={false}
+                          contentContainerStyle={{
+                            flexDirection: "row",
+                            gap: hm.gap,
+                            paddingBottom: spacing.sm,
+                            paddingTop: 4,
+                            paddingRight: spacing.lg,
+                          }}
+                        >
+                          {enabledSectionIds.has("open_tasks_chip") ? (
+                            <TouchableOpacity
+                              style={kpiCardStyle}
+                              onPress={() => stackNav.navigate("Tasks")}
+                              activeOpacity={0.88}
+                              accessibilityRole="button"
+                            >
+                              <Ionicons name="list-outline" size={hm.kpiIconSize} color={colors.primary} />
+                              <Text
+                                style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
+                                numberOfLines={2}
+                              >
+                                {t("home.openTasksChip")}
+                              </Text>
+                              <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
+                                {String(data.kpis.openCount)}
+                              </Text>
+                            </TouchableOpacity>
+                          ) : null}
+                          {enabledSectionIds.has("projects_chip") ? (
+                            <TouchableOpacity style={kpiCardStyle} onPress={() => goToProjects()} activeOpacity={0.88} accessibilityRole="button">
+                              <Ionicons name="folder-outline" size={hm.kpiIconSize} color={colors.primary} />
+                              <Text
+                                style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
+                                numberOfLines={2}
+                              >
+                                {t("home.compact.projects")}
+                              </Text>
+                              <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
+                                {String(data.projects.length)}
+                              </Text>
+                            </TouchableOpacity>
+                          ) : null}
+                          {enabledSectionIds.has("time_tracking_chip") ? (
+                            <TouchableOpacity
+                              style={kpiCardStyle}
+                              onPress={() => stackNav.navigate("AttendanceReportScreen")}
+                              activeOpacity={0.88}
+                              accessibilityRole="button"
+                            >
+                              <Ionicons name="hourglass-outline" size={hm.kpiIconSize} color={colors.primary} />
+                              <Text
+                                style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
+                                numberOfLines={2}
+                              >
+                                {t("home.sectionTimeTrackingChip")}
+                              </Text>
+                              <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
+                                {formatMinutesToHours(monthlyMinutes)}
+                              </Text>
+                            </TouchableOpacity>
+                          ) : null}
+                          {enabledSectionIds.has("expenses_chip") && data.kpis.hasExpensesAccess ? (
+                            <TouchableOpacity
+                              style={kpiCardStyle}
+                              onPress={() => stackNav.navigate("ExpensesKpiScreen")}
+                              activeOpacity={0.88}
+                              accessibilityRole="button"
+                            >
+                              <Ionicons name="wallet-outline" size={hm.kpiIconSize} color={colors.primary} />
+                              <Text
+                                style={{ fontSize: hm.kpiLabelSize, color: colors.textMuted, marginTop: 6 }}
+                                numberOfLines={2}
+                              >
+                                {t("home.expenses")}
+                              </Text>
+                              <Text style={{ fontSize: hm.kpiValueSize, fontWeight: "800", color: colors.text, marginTop: 4 }}>
+                                {String(Math.round(data.kpis.expensesTotalSum))}
+                              </Text>
+                            </TouchableOpacity>
+                          ) : null}
+                        </ScrollView>
+                      )}
                     </View>
                   ) : null}
                   {hasFilters ? (
-                    <View style={{ marginTop: hasKpiRow ? spacing.lg : spacing.md }}>
+                    <View
+                      style={{
+                        marginTop: hasKpiRow ? (isLargeHome ? spacing.xl + 12 : spacing.lg) : spacing.md,
+                        ...(isLargeHome && hasKpiRow
+                          ? {
+                              borderTopWidth: 1,
+                              borderTopColor: "rgba(45,74,122,0.12)",
+                              paddingTop: spacing.md + 6,
+                            }
+                          : {}),
+                      }}
+                    >
                       <Text style={[styles.cmpSectionHeading, { fontSize: hm.sectionHeadingSize }]}>
                         {t("home.projectFilterSectionTitle")}
                       </Text>
@@ -2456,7 +2802,7 @@ export function HomeScreen() {
       </Modal>
 
       {/* Unified bottom dock: calendar (optional) · project actions · time */}
-      {showBottomQuickActions ? (
+      {shouldShowBottomQuickActions ? (
         <View style={[styles.fabDockWrap, { bottom: insets.bottom + spacing.sm }]} pointerEvents="box-none">
           <View style={styles.fabDockInner}>
             <View style={styles.fabDockThird}>

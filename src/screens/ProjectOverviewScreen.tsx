@@ -93,6 +93,7 @@ import type { DiaryEntryDoc } from "../services/constructionDiary";
 import type { ProjectDocumentDoc } from "../services/projectDocuments";
 import type { ProjectMemberDoc } from "../services/projectMembers";
 import type { EquipmentDoc } from "../services/equipment";
+import Svg, { Circle, Path } from "react-native-svg";
 import { colors, radius, spacing } from "../theme";
 import { showToast } from "../helpers/toast";
 import { openInMaps } from "../lib/maps";
@@ -158,6 +159,36 @@ function resolveTravelDefaultCountry(projectCountry: string | undefined, deviceR
   };
   const lc = (localeToCountry[appLocale] ?? "SK").trim().toUpperCase();
   return isEuropeanCountryCode(lc) ? lc : "SK";
+}
+
+/** Mini A→B route graphic for travel expense (pins + dashed path). */
+function TravelRouteMiniDiagram() {
+  const pin = colors.primary;
+  const line = "rgba(45, 74, 122, 0.42)";
+  return (
+    <View style={styles.travelRouteDiagramRow} accessibilityRole="image" accessibilityLabel="A → B">
+      <Svg width={168} height={42} viewBox="0 0 168 42">
+        <Path
+          fill={pin}
+          d="M18 36 L18 36 C10 23 6 17 6 12.5 C6 7 10.5 3 16 3 C21.5 3 26 7 26 12.5 C26 17 22 23 18 36 Z"
+        />
+        <Circle cx={16} cy={12.5} r={2.8} fill="#ffffff" />
+        <Path
+          d="M36 30 Q 84 6 132 30"
+          fill="none"
+          stroke={line}
+          strokeWidth={2.2}
+          strokeDasharray="5 7"
+          strokeLinecap="round"
+        />
+        <Path
+          fill={pin}
+          d="M150 36 L150 36 C142 23 138 17 138 12.5 C138 7 142.5 3 148 3 C153.5 3 158 7 158 12.5 C158 17 154 23 150 36 Z"
+        />
+        <Circle cx={148} cy={12.5} r={2.8} fill="#ffffff" />
+      </Svg>
+    </View>
+  );
 }
 
 export function ProjectOverviewScreen() {
@@ -5883,6 +5914,7 @@ export function ProjectOverviewScreen() {
                       <Ionicons name="chevron-down" size={12} color={colors.textMuted} />
                     </TouchableOpacity>
                   </View>
+                  <TravelRouteMiniDiagram />
                   <Text style={styles.travelFieldLabel}>{t("expenses.travel.to")}</Text>
                   <View style={styles.travelAddressRow}>
                     <TextInput
@@ -8868,10 +8900,10 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
   },
   travelSectionCard: {
-    backgroundColor: colors.card,
+    backgroundColor: `${colors.primary}0e`,
     borderRadius: radius,
     borderWidth: 1,
-    borderColor: "rgba(45,74,122,0.12)",
+    borderColor: "rgba(224, 103, 55, 0.22)",
     padding: spacing.md,
   },
   travelSectionHeaderRow: {
@@ -8920,8 +8952,9 @@ const styles = StyleSheet.create({
     paddingHorizontal: 8,
     borderRadius: 8,
     borderWidth: 1,
-    borderColor: "rgba(45,74,122,0.2)",
-    backgroundColor: colors.background,
+    borderColor: "rgba(45,74,122,0.28)",
+    /** Svetlý chip na `travelSectionCard` — nie `colors.background` (modrá + čierny text). */
+    backgroundColor: "#ffffff",
     minWidth: 44,
   },
   travelCountryChipText: {
@@ -9003,10 +9036,10 @@ const styles = StyleSheet.create({
     lineHeight: 16,
   },
   travelSummaryCard: {
-    backgroundColor: `${colors.primary}10`,
+    backgroundColor: `${colors.primary}12`,
     borderRadius: radius,
     borderWidth: 1,
-    borderColor: "rgba(45,74,122,0.2)",
+    borderColor: "rgba(224, 103, 55, 0.26)",
     padding: spacing.md,
     marginBottom: spacing.xs,
   },
@@ -9023,7 +9056,18 @@ const styles = StyleSheet.create({
   },
   travelReceiptSection: {
     marginTop: 0,
-    paddingTop: spacing.sm,
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+    paddingTop: spacing.md,
+    backgroundColor: `${colors.primary}0a`,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(224, 103, 55, 0.18)",
+  },
+  travelRouteDiagramRow: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginVertical: spacing.xs,
   },
   travelRateInputWide: {
     alignSelf: "stretch",

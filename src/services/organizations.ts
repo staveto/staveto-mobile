@@ -122,8 +122,16 @@ export type MembershipDoc = {
   orgId: string;
   /** Auth uid of the member. Empty string for pending invites pre-claim. */
   userId: string;
+  /** Denormalized email on the membership doc (read-only client). */
+  email?: string;
   /** Lower-case email used during invite (defense-in-depth lookup). */
   emailLower?: string;
+  /** Display name from invite / sync (read-only). */
+  displayName?: string;
+  /** Full name when stored separately (read-only). */
+  name?: string;
+  /** Phone when present on membership or merged from `users/{uid}` (read-only). */
+  phoneNumber?: string;
   /** Role inside the org. Legacy `'member'` is normalised to `'viewer'`. */
   role: OrgRole;
   /** Lifecycle. Only `active` counts toward seats. */
@@ -317,12 +325,26 @@ export function parseMembershipDoc(
 ): MembershipDoc {
   const userIdRaw = data.userId;
   const hourlyRaw = data.hourlyRateEur;
+  const emailRaw = typeof data.email === "string" ? data.email.trim() : "";
+  const emailLowerRaw =
+    typeof data.emailLower === "string" ? data.emailLower.trim().toLowerCase() : "";
+  const displayNameRaw = typeof data.displayName === "string" ? data.displayName.trim() : "";
+  const nameRaw = typeof data.name === "string" ? data.name.trim() : "";
+  const phoneRaw =
+    typeof data.phoneNumber === "string"
+      ? data.phoneNumber.trim()
+      : typeof data.phoneE164 === "string"
+        ? data.phoneE164.trim()
+        : "";
   return {
     id,
     orgId,
     userId: typeof userIdRaw === "string" && userIdRaw.length > 0 ? userIdRaw : "",
-    emailLower:
-      typeof data.emailLower === "string" ? data.emailLower.toLowerCase() : undefined,
+    email: emailRaw.length > 0 ? emailRaw : undefined,
+    emailLower: emailLowerRaw.length > 0 ? emailLowerRaw : undefined,
+    displayName: displayNameRaw.length > 0 ? displayNameRaw : undefined,
+    name: nameRaw.length > 0 ? nameRaw : undefined,
+    phoneNumber: phoneRaw.length > 0 ? phoneRaw : undefined,
     role: parseOrgRole(data.role),
     status: parseMembershipStatus(data.status),
     joinedAt: (data.joinedAt as MembershipDoc["joinedAt"]) ?? undefined,

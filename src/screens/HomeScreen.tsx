@@ -39,7 +39,7 @@ import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
 import { db, getCallable } from "../firebase";
 import { doc, getDoc } from "../lib/rnFirestore";
-import { loadHomeLayout, getDefaultLayout, type HomeSectionConfig } from "../services/homeLayout";
+import { loadHomeLayout, getDefaultLayout, type HomeLayout } from "../services/homeLayout";
 import { HomeCustomizeSheet } from "../components/HomeCustomizeSheet";
 import { HomeCalendarSheet } from "../components/HomeCalendarSheet";
 import { QuickTimeModal } from "../components/QuickTimeModal";
@@ -67,6 +67,7 @@ import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
 import { readStoredPrimaryUsageMode } from "../lib/primaryUsageMode";
 import { showToast } from "../helpers/toast";
 import { getUnreadChatCount } from "../services/businessChat";
+import { listMyMemberships, type MembershipDoc } from "../services/organizations";
 
 // Conditional imports for image/document picker
 let ImagePicker: typeof import('expo-image-picker') | null = null;
@@ -303,9 +304,10 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
 export function HomeScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const homeHeaderTopPadding = insets.top + (Platform.OS === "android" ? spacing.md : spacing.lg);
   const { t } = useI18n();
   const { user, orgId } = useAuth();
-  const { activeBusinessOrgId } = useActiveOrg();
+  const { activeBusinessOrgId, activeOrganization, activeMembership } = useActiveOrg();
   const { canAccessBusiness } = useOrgAccess();
   const { isOnline } = useOnlineStatus();
   const [dashboardData, setDashboardData] = useState<DashboardViewModel | null>(null);
@@ -399,7 +401,7 @@ export function HomeScreen() {
   const [uploadingExpenseAttachment, setUploadingExpenseAttachment] = useState(false);
   const [submittingExpense, setSubmittingExpense] = useState(false);
   const [showActionSheet, setShowActionSheet] = useState(false);
-  const [homeLayout, setHomeLayout] = useState<{ sections: HomeSectionConfig[] } | null>(null);
+  const [homeLayout, setHomeLayout] = useState<HomeLayout | null>(null);
   const [photoURL, setPhotoURL] = useState<string | null>(null);
   const [showCustomizeModal, setShowCustomizeModal] = useState(false);
   const [showTypeFilterModal, setShowTypeFilterModal] = useState(false);
@@ -415,6 +417,12 @@ export function HomeScreen() {
   const [pendingQuickNotesCount, setPendingQuickNotesCount] = useState(0);
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const quickNoteCtx = useQuickNoteContext();
+  const canOpenBusinessChat = Boolean(
+    activeBusinessOrgId &&
+      activeOrganization &&
+      activeMembership?.status === "active" &&
+      canAccessBusiness
+  );
 
   useEffect(() => {
     const unregister = quickNoteCtx?.registerOpenQuickNote(() => setShowQuickNoteModal(true));
@@ -445,7 +453,7 @@ export function HomeScreen() {
 
   const refreshChatUnread = useCallback(async () => {
     const uid = user?.id ?? null;
-    if (!uid || !activeBusinessOrgId || !canAccessBusiness) {
+    if (!uid || !activeBusinessOrgId || !canOpenBusinessChat) {
       setChatUnreadCount(0);
       return;
     }
@@ -455,10 +463,10 @@ export function HomeScreen() {
     } catch {
       setChatUnreadCount(0);
     }
-  }, [activeBusinessOrgId, canAccessBusiness, user?.id]);
+  }, [activeBusinessOrgId, canOpenBusinessChat, user?.id]);
 
   const openBusinessChat = useCallback(() => {
-    if (!activeBusinessOrgId || !canAccessBusiness) {
+    if (!activeBusinessOrgId || !canOpenBusinessChat) {
       Alert.alert(
         t("business.chat.businessRequiredTitle"),
         t("business.chat.businessRequiredBody")
@@ -468,7 +476,7 @@ export function HomeScreen() {
     (navigation as { navigate: (name: string, params?: object) => void }).navigate("BusinessStack", {
       screen: "BusinessChatList",
     });
-  }, [activeBusinessOrgId, canAccessBusiness, navigation, t]);
+  }, [activeBusinessOrgId, canOpenBusinessChat, navigation, t]);
 
   const openCalendarSheet = useCallback(() => {
     calendarSheetRef.current?.present();
@@ -550,9 +558,19 @@ export function HomeScreen() {
   }, [activeTimer, t]);
 
   const effectiveLayout = homeLayout ?? getDefaultLayout();
+  const {
+    showHeaderChatShortcut,
+    showQuickTime,
+    showTodayPriorities,
+    showBottomQuickActions,
+  } = effectiveLayout.widgets;
   const enabledSectionIds = useMemo(
     () => new Set(effectiveLayout.sections.filter((s) => s.enabled).map((s) => s.id)),
     [effectiveLayout]
+  );
+  const allCustomSectionsDisabled = useMemo(
+    () => effectiveLayout.sections.filter((s) => !s.locked).every((s) => !s.enabled),
+    [effectiveLayout.sections]
   );
 
   const stackNav = navigation as { navigate: (name: string, params?: object) => void };
@@ -647,6 +665,33 @@ export function HomeScreen() {
       }
     });
   }, []);
+
+  const [pendingBusinessMemberships, setPendingBusinessMemberships] = useState<MembershipDoc[]>([]);
+
+  useFocusEffect(
+    useCallback(() => {
+      let cancelled = false;
+      const uid = user?.id;
+      if (!uid) {
+        setPendingBusinessMemberships([]);
+        return () => {
+          cancelled = true;
+        };
+      }
+      listMyMemberships(uid)
+        .then((rows) => {
+          if (!cancelled) {
+            setPendingBusinessMemberships(rows.filter((m) => m.userId === uid && m.status === "pending"));
+          }
+        })
+        .catch(() => {
+          if (!cancelled) setPendingBusinessMemberships([]);
+        });
+      return () => {
+        cancelled = true;
+      };
+    }, [user?.id])
+  );
 
   const greetingName = user?.firstName ?? user?.name ?? onboardingFirstName ?? onboardingDisplayName ?? user?.email ?? t("home.userFallback");
 
@@ -910,14 +955,6 @@ export function HomeScreen() {
       setHomeStopLoading(false);
     }
   }, [activeTimer, loadDashboard, t]);
-
-  const homeListExtraData = useMemo(
-    () =>
-      `${selectedTypeFilter}-${projectFilter}-${
-        activeTimer ? `tick-${timerTick}-${activeTimer.startedAt}-${activeTimer.projectId}` : "noTimer"
-      }`,
-    [selectedTypeFilter, projectFilter, activeTimer, timerTick]
-  );
 
   const showCoverSheet = useCallback(
     (project: ProjectDoc) => {
@@ -1442,6 +1479,14 @@ export function HomeScreen() {
     projectStats: new Map(),
   };
 
+  const homeListExtraData = useMemo(
+    () =>
+      `${selectedTypeFilter}-${projectFilter}-${
+        activeTimer ? `tick-${timerTick}-${activeTimer.startedAt}-${activeTimer.projectId}` : "noTimer"
+      }-${data.todaysWorkTasks[0]?.id ?? "noTw"}`,
+    [selectedTypeFilter, projectFilter, activeTimer, timerTick, data.todaysWorkTasks]
+  );
+
   const liveMap = useMemo(() => {
     const m = new Map<string, LiveProjectRow>();
     liveRows.forEach((row) => m.set(row.projectId, row));
@@ -1475,46 +1520,14 @@ export function HomeScreen() {
   const otherProjects = useMemo(() => {
     return filteredProjects.filter((p) => p.id !== focusProject?.id);
   }, [filteredProjects, focusProject?.id]);
+  const isHomeEmptyByConfig =
+    allCustomSectionsDisabled &&
+    !showHeaderChatShortcut &&
+    !showQuickTime &&
+    !showTodayPriorities &&
+    !showBottomQuickActions;
 
-  const overdueCount = data.kpis.overdueCount ?? 0;
-
-  const dueTodayCount = useMemo(() => {
-    const t0 = new Date();
-    t0.setHours(0, 0, 0, 0);
-    const ymd = `${t0.getFullYear()}-${String(t0.getMonth() + 1).padStart(2, "0")}-${String(t0.getDate()).padStart(2, "0")}`;
-    return data.todayTasks.filter(
-      (task) => task.status !== "DONE" && task.dueDate?.trim() === ymd
-    ).length;
-  }, [data.todayTasks]);
-
-  const alerts = useMemo(() => {
-    const rows: Array<{ id: string; icon: string; text: string; onPress: () => void }> = [];
-    if (data.kpis.blockedCount > 0) {
-      rows.push({
-        id: "blocked",
-        icon: "⚠️",
-        text: t("home.alertBlocked", { count: String(data.kpis.blockedCount) }),
-        onPress: () => stackNav.navigate("Tasks", { status: "BLOCKED" }),
-      });
-    }
-    if (overdueCount > 0) {
-      rows.push({
-        id: "overdue",
-        icon: "⏱️",
-        text: t("home.alertOverdue", { count: String(overdueCount) }),
-        onPress: () => stackNav.navigate("Tasks", { dueFilter: "overdue" }),
-      });
-    }
-    if (dueTodayCount > 0) {
-      rows.push({
-        id: "today",
-        icon: "📌",
-        text: t("home.alertToday", { count: String(dueTodayCount) }),
-        onPress: () => stackNav.navigate("Tasks", { dueFilter: "today" }),
-      });
-    }
-    return rows.slice(0, 3);
-  }, [data.kpis.blockedCount, overdueCount, dueTodayCount, stackNav, t]);
+  const previewProjects = useMemo(() => otherProjects.slice(0, 2), [otherProjects]);
 
   const focusActivityDisplay = useMemo(() => {
     if (!focusProject) return "";
@@ -1525,10 +1538,23 @@ export function HomeScreen() {
     return raw;
   }, [focusProject, liveMap, t]);
 
+  const focusContinueSubtitle = useMemo(() => {
+    if (!focusProject) return "";
+    const loc = getLocationAnchor(focusProject);
+    if (loc) return loc;
+    if (focusActivityDisplay && focusActivityDisplay !== t("home.activityNone")) return focusActivityDisplay;
+    return "";
+  }, [focusProject, focusActivityDisplay, t]);
+
+  const focusLiveStatus = useMemo(() => {
+    if (!focusProject) return null;
+    return liveMap.get(focusProject.id)?.status ?? "OK";
+  }, [focusProject, liveMap]);
+
   if (loading && !dashboardData) {
     return (
       <View style={styles.container}>
-        <View style={[styles.loadingContainer, { paddingTop: insets.top + spacing.lg }]}>
+        <View style={[styles.loadingContainer, { paddingTop: homeHeaderTopPadding }]}>
           <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.loadingHint} maxFontSizeMultiplier={1.3}>
             {t("home.loadingProjects")}
@@ -1541,7 +1567,7 @@ export function HomeScreen() {
   return (
     <View style={styles.container} pointerEvents="box-none">
       {/* Fixed header outside FlatList for reliable touch handling */}
-      <View style={[styles.headerRow, { paddingTop: insets.top + spacing.lg, paddingHorizontal: spacing.lg }]}>
+      <View style={[styles.headerRow, { paddingTop: homeHeaderTopPadding, paddingHorizontal: spacing.lg }]}>
         <TouchableOpacity
           style={styles.headerAvatarBtn}
           onPress={openDrawer}
@@ -1572,22 +1598,33 @@ export function HomeScreen() {
                   : "home.headerHint"
             )}
           </Text>
+          {canAccessBusiness && activeOrganization?.name ? (
+            <View style={[styles.businessWorkspaceChip, styles.businessWorkspaceChipCompact]} accessibilityRole="text">
+              <Ionicons name="business-outline" size={12} color="rgba(255,255,255,0.88)" />
+              <Text style={styles.businessWorkspaceChipTextCompact} numberOfLines={1}>
+                {t("home.businessWorkspaceChip", { company: activeOrganization.name })}
+              </Text>
+            </View>
+          ) : null}
         </View>
         <View style={styles.headerActionsRow}>
-          <Pressable
-            style={styles.headerChatBtn}
-            onPress={openBusinessChat}
-            accessibilityLabel={t("business.chat.title")}
-            accessibilityRole="button"
-            hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
-          >
-            <Ionicons name="chatbubble-ellipses-outline" size={20} color={colors.textOnDark} />
-            {chatUnreadCount > 0 ? (
-              <View style={styles.headerChatBadge}>
-                <Text style={styles.headerChatBadgeText}>{chatUnreadCount > 99 ? "99+" : String(chatUnreadCount)}</Text>
-              </View>
-            ) : null}
-          </Pressable>
+          {showHeaderChatShortcut ? (
+            <Pressable
+              style={styles.headerChatBtn}
+              onPress={openBusinessChat}
+              accessibilityLabel={t("business.chat.inboxTitle")}
+              accessibilityHint={t("business.chat.inboxSubtitle")}
+              accessibilityRole="button"
+              hitSlop={{ top: 16, bottom: 16, left: 16, right: 16 }}
+            >
+              <Ionicons name="chatbubble-ellipses-outline" size={20} color={colors.textOnDark} />
+              {chatUnreadCount > 0 ? (
+                <View style={styles.headerChatBadge}>
+                  <Text style={styles.headerChatBadgeText}>{chatUnreadCount > 99 ? "99+" : String(chatUnreadCount)}</Text>
+                </View>
+              ) : null}
+            </Pressable>
+          ) : null}
           <Pressable
             style={styles.headerCustomizeBtn}
             onPress={openCustomizeSheet}
@@ -1601,121 +1638,30 @@ export function HomeScreen() {
         </View>
       </View>
 
-      {user?.id ? (
-        <View style={[styles.homeQuickTilesWrap, { paddingHorizontal: spacing.lg }]}>
-          <View style={styles.homeQuickTilesRow}>
-            <TouchableOpacity
-              style={[
-                styles.homeQuickTile,
-                styles.homeQuickTileTimer,
-                activeTimer ? styles.homeQuickTileTimerOn : null,
-              ]}
-              onPress={openQuickTimeSheet}
-              activeOpacity={0.88}
-              accessibilityRole="button"
-              accessibilityLabel={
-                activeTimer
-                  ? `${activeTimer.status === "paused" ? t("time.timerPaused") : t("time.timerRunning")}: ${activeTimer.projectNameSnapshot}, ${formatHomeTimerHms(timeTracking.calculateActiveTimerWorkMs(activeTimer))}`
-                  : t("time.title")
-              }
-            >
-              <View style={[styles.homeQuickTileIconWrap, activeTimer ? styles.homeQuickTileIconWrapTimerOn : null]}>
-                <Ionicons
-                  name={activeTimer ? (activeTimer.status === "paused" ? "pause" : "time") : "time-outline"}
-                  size={28}
-                  color={
-                    activeTimer
-                      ? activeTimer.status === "paused"
-                        ? ACTIVE_TIMER_PAUSED_AMBER
-                        : ACTIVE_TIMER_GREEN
-                      : "#fff"
-                  }
-                />
-                {activeTimer && activeTimer.status !== "paused" ? <View style={styles.homeQuickTileLiveDot} /> : null}
+      {pendingBusinessMemberships.length > 0 ? (
+        <View style={[styles.businessPendingBannerWrap, { paddingHorizontal: spacing.lg }]}>
+          {pendingBusinessMemberships.map((m) => {
+            const companyLabel = (m.organizationName?.trim() || t("home.businessCompanyFallback")).trim();
+            return (
+              <View key={m.orgId} style={styles.businessPendingBannerCard} accessibilityRole="alert">
+                <Ionicons name="time-outline" size={20} color="#B45309" style={{ marginRight: spacing.sm }} />
+                <Text style={styles.businessPendingBannerText}>
+                  {t("home.businessPendingBanner", { company: companyLabel })}
+                </Text>
               </View>
-              <Text style={styles.homeQuickTileLabel} numberOfLines={1} maxFontSizeMultiplier={1.2}>
-                {t("time.title")}
-              </Text>
-              {activeTimer ? (
-                <Text
-                  key={timerTick}
-                  style={[
-                    styles.homeQuickTileHms,
-                    activeTimer.status === "paused" ? { color: ACTIVE_TIMER_PAUSED_AMBER } : null,
-                  ]}
-                  numberOfLines={1}
-                  maxFontSizeMultiplier={1.25}
-                >
-                  {formatHomeTimerHms(timeTracking.calculateActiveTimerWorkMs(activeTimer))}
-                </Text>
-              ) : null}
-            </TouchableOpacity>
-            {orgId && enabledSectionIds.has("quick_capture_card") ? (
-              <TouchableOpacity
-                style={[styles.homeQuickTile, styles.homeQuickTileNote]}
-                onPress={() => setShowQuickNoteModal(true)}
-                activeOpacity={0.88}
-                accessibilityRole="button"
-                accessibilityLabel={t("home.quickCaptureTitle")}
-              >
-                <View style={[styles.homeQuickTileIconWrap, styles.homeQuickTileIconWrapNote]}>
-                  <Ionicons name="create-outline" size={28} color="#fff" />
-                </View>
-                <Text style={styles.homeQuickTileLabel} numberOfLines={1} maxFontSizeMultiplier={1.2}>
-                  {t("quickNotes.add")}
-                </Text>
-                {pendingQuickNotesCount > 0 ? (
-                  <Text style={styles.homeQuickTileBadge} numberOfLines={1} maxFontSizeMultiplier={1.2}>
-                    {pendingQuickNotesCount}
-                  </Text>
-                ) : null}
-              </TouchableOpacity>
-            ) : null}
-          </View>
-          {activeTimer ? (
-            <View style={styles.homeTimerStatusBarActions}>
-              <TouchableOpacity
-                style={styles.homeTimerStatusBarLinkBtn}
-                onPress={() =>
-                  stackNav.navigate("ProjectTimeDetail", {
-                    projectId: activeTimer.projectId,
-                    projectName: activeTimer.projectNameSnapshot || undefined,
-                  })
-                }
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel={t("time.openTime")}
-              >
-                <Text style={styles.homeTimerStatusBarLinkText} maxFontSizeMultiplier={1.15}>
-                  {t("time.openTime")}
-                </Text>
-              </TouchableOpacity>
-              <TouchableOpacity
-                style={[styles.homeTimerStatusBarStopCompact, homeStopLoading ? styles.homeTimerStatusBarBtnDisabled : null]}
-                onPress={handleHomeStopTimer}
-                disabled={homeStopLoading}
-                activeOpacity={0.85}
-                accessibilityRole="button"
-                accessibilityLabel={t("time.stop")}
-              >
-                {homeStopLoading ? (
-                  <ActivityIndicator color="#fff" size="small" />
-                ) : (
-                  <Text style={styles.homeTimerStatusBarStopCompactText} maxFontSizeMultiplier={1.15}>
-                    {t("time.stop")}
-                  </Text>
-                )}
-              </TouchableOpacity>
-            </View>
-          ) : null}
+            );
+          })}
         </View>
       ) : null}
 
       <FlatList
-        data={enabledSectionIds.has("other_projects") ? otherProjects : []}
-        keyExtractor={(item) => item.id}
+        data={[] as ProjectDoc[]}
+        keyExtractor={(_item, index) => `home-${index}`}
         extraData={homeListExtraData}
-        contentContainerStyle={[styles.content, { paddingTop: spacing.sm, paddingBottom: insets.bottom + 100 }]}
+        contentContainerStyle={[
+          styles.content,
+          { paddingTop: spacing.sm, paddingBottom: insets.bottom + (showBottomQuickActions ? 168 : spacing.xl * 2) },
+        ]}
         refreshControl={
           <RefreshControl refreshing={refreshing} onRefresh={onRefresh} tintColor={colors.primary} colors={[colors.primary]} />
         }
@@ -1747,64 +1693,35 @@ export function HomeScreen() {
                 <Ionicons name="chevron-forward" size={18} color="rgba(255,255,255,0.78)" />
               </TouchableOpacity>
             ) : null}
-            {orgId && data.todaysWorkTasks.length > 0 ? (
-              <View style={styles.todaysWorkSection} accessibilityRole="summary">
-                <View style={styles.todaysWorkHeaderRow}>
-                  <Ionicons name="today-outline" size={22} color={colors.textOnDark} />
-                  <Text style={styles.todaysWorkTitle} maxFontSizeMultiplier={1.2}>
-                    {t("home.todaysWorkTitle")}
-                  </Text>
-                </View>
-                {data.todaysWorkTasks.map((tw) => {
-                  const badgeKey =
-                    tw.workKind === "overdue"
-                      ? "home.todaysWorkBadgeOverdue"
-                      : tw.workKind === "blocked"
-                        ? "home.todaysWorkBadgeBlocked"
-                        : "home.todaysWorkBadgeDueToday";
-                  const badgeStyle =
-                    tw.workKind === "overdue"
-                      ? styles.todaysWorkBadgeOverdue
-                      : tw.workKind === "blocked"
-                        ? styles.todaysWorkBadgeBlocked
-                        : styles.todaysWorkBadgeDueToday;
-                  return (
-                    <TouchableOpacity
-                      key={`${tw.projectId}-${tw.id}`}
-                      style={styles.todaysWorkRow}
-                      onPress={() => openTodaysWorkTask(tw)}
-                      activeOpacity={0.82}
-                      accessibilityRole="button"
-                      accessibilityLabel={`${tw.title}, ${tw.projectName}`}
-                    >
-                      <View style={[styles.todaysWorkBadge, badgeStyle]}>
-                        <Text style={styles.todaysWorkBadgeText} maxFontSizeMultiplier={1.15}>
-                          {t(badgeKey)}
-                        </Text>
-                      </View>
-                      <View style={styles.todaysWorkTextCol}>
-                        <Text style={styles.todaysWorkTaskTitle} numberOfLines={2} maxFontSizeMultiplier={1.2}>
-                          {tw.title}
-                        </Text>
-                        <Text style={styles.todaysWorkProject} numberOfLines={1} maxFontSizeMultiplier={1.15}>
-                          {tw.projectName}
-                        </Text>
-                      </View>
-                      <Ionicons name="chevron-forward" size={20} color={colors.textMuted} />
-                    </TouchableOpacity>
-                  );
-                })}
+            {!isHomeEmptyByConfig && orgId && data.projects.length === 0 && showTodayPriorities ? (
+              <View style={[styles.proPaperCard, { marginBottom: spacing.md }]}>
+                <Text style={styles.proCardSectionTitle}>{t("home.pro.startTitle")}</Text>
+                <Text style={styles.proCardBody}>{t("home.pro.startBody")}</Text>
                 <TouchableOpacity
-                  style={styles.todaysWorkSeeTasks}
-                  onPress={() => stackNav.navigate("Tasks")}
-                  activeOpacity={0.8}
+                  style={styles.proCardPrimaryCta}
+                  onPress={() => {
+                    try {
+                      goToProjects({ openNew: true });
+                    } catch (e) {
+                      if (__DEV__) console.warn("[HomeScreen] goToProjects failed:", e);
+                      goToProjects();
+                    }
+                  }}
+                  activeOpacity={0.88}
                   accessibilityRole="button"
                 >
-                  <Text style={styles.todaysWorkSeeTasksText}>{t("home.todaysWorkSeeAllTasks")}</Text>
+                  <Text style={styles.proCardPrimaryCtaText}>{t("firstProjectPrompt.createButton")}</Text>
+                  <Ionicons name="arrow-forward" size={18} color="#fff" style={{ marginLeft: spacing.sm }} />
                 </TouchableOpacity>
               </View>
             ) : null}
-            {data.projects.length === 0 && (
+            {isHomeEmptyByConfig ? (
+              <View style={styles.homeEmptyCard}>
+                <Text style={styles.homeEmptyTitle}>{t("home.customize.emptyTitle")}</Text>
+                <Text style={styles.homeEmptyBody}>{t("home.customize.emptyBody")}</Text>
+              </View>
+            ) : null}
+            {!isHomeEmptyByConfig && data.projects.length === 0 && (!orgId || !showTodayPriorities) ? (
               <TouchableOpacity
                 style={styles.firstProjectCtaCard}
                 onPress={() => {
@@ -1825,9 +1742,238 @@ export function HomeScreen() {
                   <Ionicons name="arrow-forward" size={18} color="#fff" />
                 </View>
               </TouchableOpacity>
-            )}
+            ) : null}
+            {!isHomeEmptyByConfig && orgId && data.projects.length > 0 && showTodayPriorities ? (
+              <View style={[styles.proPaperCard, { marginBottom: spacing.md }]} accessibilityRole="summary">
+                <Text style={styles.proCardSectionTitle}>{t("home.pro.sectionToday")}</Text>
+                {data.todaysWorkTasks[0] ? (
+                  <>
+                    {(() => {
+                      const tw = data.todaysWorkTasks[0];
+                      const badgeKey =
+                        tw.workKind === "overdue"
+                          ? "home.todaysWorkBadgeOverdue"
+                          : tw.workKind === "blocked"
+                            ? "home.todaysWorkBadgeBlocked"
+                            : "home.todaysWorkBadgeDueToday";
+                      const badgeStyle =
+                        tw.workKind === "overdue"
+                          ? styles.todaysWorkBadgeOverdue
+                          : tw.workKind === "blocked"
+                            ? styles.todaysWorkBadgeBlocked
+                            : styles.todaysWorkBadgeDueToday;
+                      return (
+                        <TouchableOpacity
+                          onPress={() => openTodaysWorkTask(tw)}
+                          activeOpacity={0.82}
+                          style={styles.proTodayTaskPress}
+                          accessibilityRole="button"
+                          accessibilityLabel={`${tw.title}, ${tw.projectName}`}
+                        >
+                          <View style={[styles.todaysWorkBadge, { alignSelf: "flex-start", marginBottom: spacing.sm }, badgeStyle]}>
+                            <Text style={styles.todaysWorkBadgeText} maxFontSizeMultiplier={1.12}>
+                              {t(badgeKey)}
+                            </Text>
+                          </View>
+                          <Text style={styles.proTodayTaskTitle} numberOfLines={2} maxFontSizeMultiplier={1.2}>
+                            {tw.title}
+                          </Text>
+                          <Text style={styles.proTodayProject} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                            {tw.projectName}
+                          </Text>
+                        </TouchableOpacity>
+                      );
+                    })()}
+                    <Text style={styles.proTodayMeta} maxFontSizeMultiplier={1.15}>
+                      {t("home.pro.openTasksMeta", { count: String(data.kpis.openCount) })}
+                    </Text>
+                    <TouchableOpacity
+                      style={styles.proCardSecondaryCta}
+                      onPress={() => stackNav.navigate("Tasks")}
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.proCardSecondaryCtaText}>{t("home.pro.viewTasks")}</Text>
+                    </TouchableOpacity>
+                  </>
+                ) : (
+                  <>
+                    <Text style={styles.proTodayClearTitle}>{t("home.pro.todayClearTitle")}</Text>
+                    <Text style={styles.proCardBody}>{t("home.pro.todayClearBody")}</Text>
+                    <TouchableOpacity
+                      style={styles.proCardSecondaryCta}
+                      onPress={() => goToProjects()}
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.proCardSecondaryCtaText}>{t("home.pro.openProjectsCta")}</Text>
+                    </TouchableOpacity>
+                  </>
+                )}
+              </View>
+            ) : null}
+            {!isHomeEmptyByConfig && enabledSectionIds.has("current_work") && focusProject && data.projects.length > 0 ? (
+              <View style={[styles.proPaperCard, { marginBottom: spacing.md }]}>
+                <View style={styles.proContinueHeader}>
+                  <Text style={styles.proCardSectionTitle}>{t("home.pro.sectionContinue")}</Text>
+                  {focusLiveStatus ? (
+                    <View
+                      style={[
+                        styles.proStatusDot,
+                        focusLiveStatus === "OK" && styles.proStatusDotOk,
+                        focusLiveStatus === "RISK" && styles.proStatusDotRisk,
+                        focusLiveStatus === "PROBLEM" && styles.proStatusDotProblem,
+                      ]}
+                    />
+                  ) : null}
+                </View>
+                <Text style={styles.proContinueCaption} maxFontSizeMultiplier={1.15} numberOfLines={1}>
+                  {focusIsFromLastUsed ? t("home.continueCaptionLastOpened") : t("home.continueCaptionSuggested")}
+                </Text>
+                <Text style={styles.proContinueName} numberOfLines={2}>
+                  {focusProject.name}
+                </Text>
+                {focusContinueSubtitle ? (
+                  <Text style={styles.proContinueSubtitle} numberOfLines={2} maxFontSizeMultiplier={1.12}>
+                    {focusContinueSubtitle}
+                  </Text>
+                ) : null}
+                <Text style={styles.proTodayMeta} maxFontSizeMultiplier={1.12}>
+                  {(data.projectStats.get(focusProject.id)?.openCount ?? 0)}{" "}
+                  {(data.projectStats.get(focusProject.id)?.openCount ?? 0) === 1
+                    ? t("home.openTask_one")
+                    : t("home.openTask_other")}
+                </Text>
+                <TouchableOpacity
+                  style={[styles.focusCta, !focusIsFromLastUsed && styles.focusCtaSecondary, { marginTop: spacing.md }]}
+                  onPress={() => handleProjectClick(focusProject.id)}
+                  activeOpacity={0.85}
+                  accessibilityRole="button"
+                >
+                  <Text style={[styles.focusCtaText, !focusIsFromLastUsed && styles.focusCtaTextSecondary]}>
+                    {t("home.pro.openProject")}
+                  </Text>
+                  <Ionicons
+                    name="arrow-forward"
+                    size={18}
+                    color={focusIsFromLastUsed ? "#fff" : colors.primary}
+                    style={{ marginLeft: spacing.sm }}
+                  />
+                </TouchableOpacity>
+              </View>
+            ) : null}
+            {user?.id &&
+            !isHomeEmptyByConfig &&
+            (showQuickTime || (orgId && enabledSectionIds.has("quick_capture_card")) || !!orgId) ? (
+              <View style={{ marginBottom: spacing.md }}>
+                <Text style={styles.proSectionLabel}>{t("home.pro.sectionQuickActions")}</Text>
+                <View style={styles.proQuickRow}>
+                  {showQuickTime ? (
+                    <TouchableOpacity
+                      style={[styles.proQuickTile, activeTimer ? styles.proQuickTilePrimary : null]}
+                      onPress={openQuickTimeSheet}
+                      activeOpacity={0.88}
+                      accessibilityRole="button"
+                      accessibilityLabel={
+                        activeTimer
+                          ? `${activeTimer.status === "paused" ? t("time.timerPaused") : t("time.timerRunning")}: ${activeTimer.projectNameSnapshot}`
+                          : t("time.title")
+                      }
+                    >
+                      <Ionicons
+                        name={activeTimer ? (activeTimer.status === "paused" ? "pause" : "time") : "time-outline"}
+                        size={20}
+                        color={
+                          activeTimer
+                            ? activeTimer.status === "paused"
+                              ? ACTIVE_TIMER_PAUSED_AMBER
+                              : ACTIVE_TIMER_GREEN
+                            : colors.primary
+                        }
+                      />
+                      <Text style={styles.proQuickTileLabel} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                        {t("home.pro.quickTime")}
+                      </Text>
+                      {activeTimer ? (
+                        <Text key={timerTick} style={styles.proQuickTileHms} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                          {formatHomeTimerHms(timeTracking.calculateActiveTimerWorkMs(activeTimer))}
+                        </Text>
+                      ) : null}
+                    </TouchableOpacity>
+                  ) : null}
+                  {orgId && enabledSectionIds.has("quick_capture_card") ? (
+                    <TouchableOpacity
+                      style={styles.proQuickTile}
+                      onPress={() => setShowQuickNoteModal(true)}
+                      activeOpacity={0.88}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("home.quickCaptureTitle")}
+                    >
+                      <Ionicons name="create-outline" size={20} color={colors.primary} />
+                      <Text style={styles.proQuickTileLabel} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                        {t("home.pro.quickNote")}
+                      </Text>
+                      {pendingQuickNotesCount > 0 ? (
+                        <Text style={styles.proQuickTileBadge} numberOfLines={1}>
+                          {String(pendingQuickNotesCount)}
+                        </Text>
+                      ) : null}
+                    </TouchableOpacity>
+                  ) : null}
+                  {orgId ? (
+                    <TouchableOpacity
+                      style={styles.proQuickTile}
+                      onPress={() => runContextAction("photo")}
+                      activeOpacity={0.88}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("home.pro.quickPhoto")}
+                    >
+                      <Ionicons name="camera-outline" size={20} color={colors.primary} />
+                      <Text style={styles.proQuickTileLabel} numberOfLines={1} maxFontSizeMultiplier={1.15}>
+                        {t("home.pro.quickPhoto")}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+                {showQuickTime && activeTimer ? (
+                  <View style={styles.homeTimerStatusBarActions}>
+                    <TouchableOpacity
+                      style={styles.homeTimerStatusBarLinkBtn}
+                      onPress={() =>
+                        stackNav.navigate("ProjectTimeDetail", {
+                          projectId: activeTimer.projectId,
+                          projectName: activeTimer.projectNameSnapshot || undefined,
+                        })
+                      }
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("time.openTime")}
+                    >
+                      <Text style={styles.homeTimerStatusBarLinkText} maxFontSizeMultiplier={1.15}>
+                        {t("time.openTime")}
+                      </Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[styles.homeTimerStatusBarStopCompact, homeStopLoading ? styles.homeTimerStatusBarBtnDisabled : null]}
+                      onPress={handleHomeStopTimer}
+                      disabled={homeStopLoading}
+                      activeOpacity={0.85}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("time.stop")}
+                    >
+                      {homeStopLoading ? (
+                        <ActivityIndicator color="#fff" size="small" />
+                      ) : (
+                        <Text style={styles.homeTimerStatusBarStopCompactText} maxFontSizeMultiplier={1.15}>
+                          {t("time.stop")}
+                        </Text>
+                      )}
+                    </TouchableOpacity>
+                  </View>
+                ) : null}
+              </View>
+            ) : null}
             {(() => {
-              const enabledSections = effectiveLayout.sections.filter((s) => s.enabled);
               return (
                 <>
                   {(enabledSectionIds.has("open_tasks_chip") ||
@@ -1873,64 +2019,6 @@ export function HomeScreen() {
               )}
             </ScrollView>
                   )}
-                  {enabledSectionIds.has("current_work") && focusProject ? (
-              <View style={[styles.focusCard, !focusIsFromLastUsed && styles.focusCardSuggested]}>
-                <View style={styles.focusCaptionRow}>
-                  <Text
-                    style={[styles.focusTrustLine, !focusIsFromLastUsed && styles.focusTrustLineMuted]}
-                    maxFontSizeMultiplier={1.2}
-                  >
-                    {focusIsFromLastUsed ? t("home.continueCaptionLastOpened") : t("home.continueCaptionSuggested")}
-                  </Text>
-                  {(focusProject.isSharedToMe === true || (focusProject.sharedWithCount ?? 0) > 0) && (
-                    <View style={styles.focusSharedBadge}>
-                      <Text style={styles.focusSharedBadgeText}>{t("home.filterShared")}</Text>
-                    </View>
-                  )}
-                </View>
-                <Text style={[styles.focusTitle, !focusIsFromLastUsed && styles.focusTitleSuggested]} numberOfLines={2}>
-                  {focusProject.name}
-                </Text>
-                <Text style={styles.focusTasksLine} maxFontSizeMultiplier={1.2}>
-                  {(data.projectStats.get(focusProject.id)?.openCount ?? 0)}{" "}
-                  {(data.projectStats.get(focusProject.id)?.openCount ?? 0) === 1
-                    ? t("home.openTask_one")
-                    : t("home.openTask_other")}
-                </Text>
-                {(focusIsFromLastUsed || (focusActivityDisplay !== t("home.activityNone") && focusActivityDisplay !== "—")) ? (
-                  <Text style={styles.focusActivityLine} maxFontSizeMultiplier={1.15}>
-                    <Text style={styles.focusActivityIntro}>{t("home.focusActivityIntro")}</Text>
-                    <Text style={styles.focusActivityDot}> · </Text>
-                    <Text style={styles.focusActivityValue}>{focusActivityDisplay}</Text>
-                  </Text>
-                ) : null}
-                <TouchableOpacity
-                  style={[styles.focusCta, !focusIsFromLastUsed && styles.focusCtaSecondary]}
-                  onPress={() => handleProjectClick(focusProject.id)}
-                  activeOpacity={0.85}
-                >
-                  <Text style={[styles.focusCtaText, !focusIsFromLastUsed && styles.focusCtaTextSecondary]}>
-                    {t("home.continueWorking")}
-                  </Text>
-                  <Ionicons
-                    name="arrow-forward"
-                    size={18}
-                    color={focusIsFromLastUsed ? "#fff" : colors.primary}
-                    style={{ marginLeft: spacing.sm }}
-                  />
-                </TouchableOpacity>
-              </View>
-            ) : null}
-                  {enabledSectionIds.has("current_work") && alerts.length > 0 ? (
-              <View style={styles.alertsSection}>
-                {alerts.map((row) => (
-                  <TouchableOpacity key={row.id} style={styles.alertRow} onPress={row.onPress} activeOpacity={0.8}>
-                    <Text style={styles.alertIcon}>{row.icon}</Text>
-                    <Text style={styles.alertText}>{row.text}</Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-            ) : null}
                   {enabledSectionIds.has("service_tasks_alert") &&
               equipmentHomeSummary &&
               (equipmentHomeSummary.openServiceTasks > 0 || equipmentHomeSummary.dueTodayOrOverdue > 0) ? (
@@ -2050,54 +2138,58 @@ export function HomeScreen() {
               </Modal>
             </>
                   )}
-                  {enabledSectionIds.has("other_projects") && (
-            <View style={styles.sectionHeaderCompact}>
-              <Text style={styles.sectionTitle}>{t("home.otherProjects")}</Text>
-            </View>
-                  )}
+                  {enabledSectionIds.has("other_projects") && !isHomeEmptyByConfig && data.projects.length > 0 ? (
+                    <>
+                      <View style={{ marginBottom: spacing.xs }}>
+                        <Text style={styles.proSectionLabel}>{t("home.pro.sectionMyProjects")}</Text>
+                      </View>
+                      {previewProjects.map((item) => {
+                        const live = liveMap.get(item.id);
+                        const openTasks = data.projectStats.get(item.id)?.openCount ?? 0;
+                        return (
+                          <View key={item.id} style={{ marginBottom: spacing.sm }}>
+                            <CompactProjectItem
+                              project={item}
+                              openTasks={openTasks}
+                              lastActivity={live?.lastActivityLabel ?? "—"}
+                              status={live?.status ?? "RISK"}
+                              onOpen={handleProjectClick}
+                              onPhoto={(projectId) => runContextAction("photo", projectId)}
+                              onTask={(projectId) => runContextAction("task", projectId)}
+                              onCoverPress={showCoverSheet}
+                              currentUserId={user?.id}
+                              minimal
+                            />
+                          </View>
+                        );
+                      })}
+                      {!isHomeEmptyByConfig &&
+                      enabledSectionIds.has("other_projects") &&
+                      otherProjects.length === 0 &&
+                      data.projects.length > 1 ? (
+                        <View style={styles.emptyListContainer}>
+                          <Text style={styles.emptyListText}>
+                            {projectFilter === "shared"
+                              ? focusProject && (focusProject.isSharedToMe === true || (focusProject.sharedWithCount ?? 0) > 0)
+                                ? t("home.onlySharedProjectAbove")
+                                : t("home.noSharedProjects")
+                              : t("home.noProjectsMatchFilter")}
+                          </Text>
+                        </View>
+                      ) : null}
+                      <TouchableOpacity style={styles.showAllButton} onPress={() => goToProjects()}>
+                        <Text style={styles.showAllButtonText}>{t("home.pro.viewAllProjects")}</Text>
+                      </TouchableOpacity>
+                    </>
+                  ) : null}
                 </>
               );
             })()}
           </>
         }
-        renderItem={({ item }) => {
-          const live = liveMap.get(item.id);
-          const openTasks = data.projectStats.get(item.id)?.openCount ?? 0;
-          return (
-            <CompactProjectItem
-              project={item}
-              openTasks={openTasks}
-              lastActivity={live?.lastActivityLabel ?? "—"}
-              status={live?.status ?? "RISK"}
-              onOpen={handleProjectClick}
-              onPhoto={(projectId) => runContextAction("photo", projectId)}
-              onTask={(projectId) => runContextAction("task", projectId)}
-              onCoverPress={showCoverSheet}
-              currentUserId={user?.id}
-              minimal
-            />
-          );
-        }}
-        ListEmptyComponent={
-          enabledSectionIds.has("other_projects") && otherProjects.length === 0 ? (
-            <View style={styles.emptyListContainer}>
-              <Text style={styles.emptyListText}>
-                {projectFilter === "shared"
-                  ? focusProject && (focusProject.isSharedToMe === true || (focusProject.sharedWithCount ?? 0) > 0)
-                    ? t("home.onlySharedProjectAbove")
-                    : t("home.noSharedProjects")
-                  : t("home.noProjectsMatchFilter")}
-              </Text>
-            </View>
-          ) : null
-        }
-        ListFooterComponent={
-          enabledSectionIds.has("other_projects") ? (
-            <TouchableOpacity style={styles.showAllButton} onPress={() => goToProjects()}>
-              <Text style={styles.showAllButtonText}>{t("home.showAllProjects")}</Text>
-            </TouchableOpacity>
-          ) : null
-        }
+        renderItem={() => <View style={{ height: 0 }} />}
+        ListEmptyComponent={null}
+        ListFooterComponent={null}
       />
 
       {/* Create your first project modal - shown once when 0 projects */}
@@ -2223,62 +2315,64 @@ export function HomeScreen() {
       </Modal>
 
       {/* Unified bottom dock: calendar (optional) · project actions · time */}
-      <View style={[styles.fabDockWrap, { bottom: insets.bottom + spacing.sm }]} pointerEvents="box-none">
-        <View style={styles.fabDockInner}>
-          <View style={styles.fabDockThird}>
-            {enabledSectionIds.has("calendar") ? (
+      {showBottomQuickActions ? (
+        <View style={[styles.fabDockWrap, { bottom: insets.bottom + spacing.sm }]} pointerEvents="box-none">
+          <View style={styles.fabDockInner}>
+            <View style={styles.fabDockThird}>
+              {enabledSectionIds.has("calendar") ? (
+                <TouchableOpacity
+                  style={styles.fabDockIconBtn}
+                  onPress={openCalendarSheet}
+                  activeOpacity={0.75}
+                  accessibilityRole="button"
+                  accessibilityLabel={t("home.sectionCalendar")}
+                >
+                  <Ionicons name="calendar-outline" size={24} color={colors.primary} />
+                </TouchableOpacity>
+              ) : (
+                <View style={styles.fabDockIconBtn} />
+              )}
+            </View>
+            <View style={styles.fabDockThird}>
+              <TouchableOpacity
+                style={styles.fabDockCenterBtn}
+                onPress={startFabFlow}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={t("home.fabQuickActionsA11y")}
+              >
+                <Ionicons name="add" size={28} color={colors.primary} />
+              </TouchableOpacity>
+            </View>
+            <View style={styles.fabDockThird}>
               <TouchableOpacity
                 style={styles.fabDockIconBtn}
-                onPress={openCalendarSheet}
+                onPress={openQuickTimeSheet}
                 activeOpacity={0.75}
                 accessibilityRole="button"
-                accessibilityLabel={t("home.sectionCalendar")}
+                accessibilityLabel={
+                  activeTimer
+                    ? `${activeTimer.status === "paused" ? t("time.timerPaused") : t("time.timerRunning")}, ${formatHomeTimerHms(timeTracking.calculateActiveTimerWorkMs(activeTimer))}`
+                    : t("time.title")
+                }
               >
-                <Ionicons name="calendar-outline" size={24} color={colors.primary} />
+                {activeTimer ? (
+                  <View style={styles.fabDockTimerActiveWrap}>
+                    <Ionicons
+                      name={activeTimer.status === "paused" ? "pause" : "time"}
+                      size={24}
+                      color={activeTimer.status === "paused" ? ACTIVE_TIMER_PAUSED_AMBER : ACTIVE_TIMER_GREEN}
+                    />
+                    {activeTimer.status === "paused" ? null : <View style={styles.fabDockTimerBadgeDot} />}
+                  </View>
+                ) : (
+                  <Ionicons name="time-outline" size={26} color={colors.primary} />
+                )}
               </TouchableOpacity>
-            ) : (
-              <View style={styles.fabDockIconBtn} />
-            )}
-          </View>
-          <View style={styles.fabDockThird}>
-            <TouchableOpacity
-              style={styles.fabDockCenterBtn}
-              onPress={startFabFlow}
-              activeOpacity={0.85}
-              accessibilityRole="button"
-              accessibilityLabel={t("home.fabQuickActionsA11y")}
-            >
-              <Ionicons name="add" size={28} color={colors.primary} />
-            </TouchableOpacity>
-          </View>
-          <View style={styles.fabDockThird}>
-            <TouchableOpacity
-              style={styles.fabDockIconBtn}
-              onPress={openQuickTimeSheet}
-              activeOpacity={0.75}
-              accessibilityRole="button"
-              accessibilityLabel={
-                activeTimer
-                  ? `${activeTimer.status === "paused" ? t("time.timerPaused") : t("time.timerRunning")}, ${formatHomeTimerHms(timeTracking.calculateActiveTimerWorkMs(activeTimer))}`
-                  : t("time.title")
-              }
-            >
-              {activeTimer ? (
-                <View style={styles.fabDockTimerActiveWrap}>
-                  <Ionicons
-                    name={activeTimer.status === "paused" ? "pause" : "time"}
-                    size={24}
-                    color={activeTimer.status === "paused" ? ACTIVE_TIMER_PAUSED_AMBER : ACTIVE_TIMER_GREEN}
-                  />
-                  {activeTimer.status === "paused" ? null : <View style={styles.fabDockTimerBadgeDot} />}
-                </View>
-              ) : (
-                <Ionicons name="time-outline" size={26} color={colors.primary} />
-              )}
-            </TouchableOpacity>
+            </View>
           </View>
         </View>
-      </View>
+      ) : null}
 
       {/* Expense Type Selection Modal - Klasický vs Cestovné */}
       <Modal visible={showExpenseTypeModal} transparent animationType="slide">
@@ -2796,6 +2890,46 @@ const styles = StyleSheet.create({
     lineHeight: 16,
     color: "rgba(255,255,255,0.72)",
     fontWeight: "500",
+  },
+  businessWorkspaceChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: 6,
+    marginTop: 8,
+    paddingHorizontal: 10,
+    paddingVertical: 5,
+    borderRadius: 999,
+    backgroundColor: "rgba(255,255,255,0.16)",
+    maxWidth: "100%",
+  },
+  businessWorkspaceChipText: {
+    flexShrink: 1,
+    fontSize: 11,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.95)",
+  },
+  businessPendingBannerWrap: {
+    marginTop: -spacing.sm,
+    marginBottom: spacing.md,
+    gap: spacing.sm,
+  },
+  businessPendingBannerCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    backgroundColor: "#FFFBEB",
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(180,83,9,0.35)",
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  businessPendingBannerText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    fontWeight: "600",
+    color: "#92400E",
   },
   headerRow: {
     flexDirection: "row",
@@ -3853,6 +3987,26 @@ const styles = StyleSheet.create({
     lineHeight: 22,
     fontWeight: "500",
   },
+  homeEmptyCard: {
+    marginTop: spacing.sm,
+    marginBottom: spacing.md,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.14)",
+    backgroundColor: "rgba(255,255,255,0.06)",
+    padding: spacing.lg,
+  },
+  homeEmptyTitle: {
+    color: "#fff",
+    fontSize: 18,
+    fontWeight: "700",
+    marginBottom: spacing.xs,
+  },
+  homeEmptyBody: {
+    color: "rgba(255,255,255,0.82)",
+    fontSize: 14,
+    lineHeight: 21,
+  },
   fabDockWrap: {
     position: "absolute",
     left: 0,
@@ -3863,8 +4017,8 @@ const styles = StyleSheet.create({
   fabDockInner: {
     flexDirection: "row",
     alignItems: "center",
-    width: "100%",
-    maxWidth: 400,
+    width: "92%",
+    maxWidth: 360,
     minHeight: 58,
     backgroundColor: colors.card,
     borderRadius: 29,
@@ -4358,6 +4512,185 @@ const styles = StyleSheet.create({
     fontSize: 14,
     fontWeight: "600",
     color: colors.primary,
+  },
+  proPaperCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(45,74,122,0.2)",
+    padding: spacing.lg,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 1 },
+    shadowOpacity: 0.06,
+    shadowRadius: 3,
+    elevation: 2,
+  },
+  proCardSectionTitle: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: colors.text,
+    letterSpacing: 0.3,
+    textTransform: "uppercase",
+    marginBottom: spacing.sm,
+  },
+  proSectionLabel: {
+    fontSize: 13,
+    fontWeight: "800",
+    color: "rgba(255,255,255,0.92)",
+    letterSpacing: 0.35,
+    textTransform: "uppercase",
+    marginBottom: spacing.sm,
+  },
+  proCardBody: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.textMuted,
+    fontWeight: "500",
+    marginBottom: spacing.md,
+  },
+  proTodayClearTitle: {
+    fontSize: 17,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.xs,
+  },
+  proTodayTaskPress: {
+    paddingVertical: spacing.xs,
+  },
+  proTodayTaskTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.text,
+    marginTop: spacing.xs,
+  },
+  proTodayProject: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginTop: 4,
+  },
+  proTodayMeta: {
+    fontSize: 12,
+    color: colors.textMuted,
+    fontWeight: "600",
+    marginTop: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  proCardPrimaryCta: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    backgroundColor: colors.primary,
+    borderRadius: radius,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.lg,
+  },
+  proCardPrimaryCtaText: {
+    color: "#fff",
+    fontSize: 15,
+    fontWeight: "700",
+  },
+  proCardSecondaryCta: {
+    alignSelf: "flex-start",
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(45,74,122,0.35)",
+    backgroundColor: "transparent",
+  },
+  proCardSecondaryCtaText: {
+    color: colors.primary,
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  proContinueHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.xs,
+  },
+  proContinueCaption: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.primary,
+    marginBottom: spacing.xs,
+  },
+  proContinueName: {
+    fontSize: 20,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: 4,
+  },
+  proContinueSubtitle: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginBottom: spacing.xs,
+  },
+  proStatusDot: {
+    width: 8,
+    height: 8,
+    borderRadius: 4,
+  },
+  proStatusDotOk: {
+    backgroundColor: "#22c55e",
+  },
+  proStatusDotRisk: {
+    backgroundColor: "#f59e0b",
+  },
+  proStatusDotProblem: {
+    backgroundColor: "#ef4444",
+  },
+  proQuickRow: {
+    flexDirection: "row",
+    gap: spacing.sm,
+  },
+  proQuickTile: {
+    flex: 1,
+    minWidth: 0,
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(45,74,122,0.22)",
+    paddingVertical: spacing.md,
+    paddingHorizontal: spacing.xs,
+    alignItems: "center",
+    justifyContent: "center",
+    minHeight: 88,
+  },
+  proQuickTilePrimary: {
+    borderColor: "rgba(224,103,55,0.45)",
+    borderWidth: 1.5,
+  },
+  proQuickTileLabel: {
+    marginTop: spacing.xs,
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.text,
+    textAlign: "center",
+  },
+  proQuickTileHms: {
+    marginTop: 2,
+    fontSize: 11,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  proQuickTileBadge: {
+    marginTop: 2,
+    fontSize: 12,
+    fontWeight: "800",
+    color: colors.primary,
+  },
+  businessWorkspaceChipCompact: {
+    marginTop: 6,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+    gap: 4,
+  },
+  businessWorkspaceChipTextCompact: {
+    flexShrink: 1,
+    fontSize: 10,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.9)",
   },
   projectList: {
     maxHeight: 400,

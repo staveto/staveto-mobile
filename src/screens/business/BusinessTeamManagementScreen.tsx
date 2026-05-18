@@ -35,6 +35,7 @@ function memberStatusI18nKey(status: string): string {
 
 export function BusinessTeamManagementScreen() {
   const { t } = useI18n();
+  const insets = useSafeAreaInsets();
   const navigation = useNavigation() as unknown as {
     navigate: (name: string, params?: { orgId: string; memberDocId: string }) => void;
   };

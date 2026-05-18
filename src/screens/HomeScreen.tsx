@@ -304,6 +304,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
 export function HomeScreen() {
   const navigation = useNavigation();
   const insets = useSafeAreaInsets();
+  const homeHeaderTopPadding = insets.top + (Platform.OS === "android" ? spacing.md : spacing.lg);
   const { t } = useI18n();
   const { user, orgId } = useAuth();
   const { activeBusinessOrgId, activeOrganization, activeMembership } = useActiveOrg();
@@ -1578,7 +1579,7 @@ export function HomeScreen() {
   if (loading && !dashboardData) {
     return (
       <View style={styles.container}>
-        <View style={[styles.loadingContainer, { paddingTop: insets.top + spacing.lg }]}>
+        <View style={[styles.loadingContainer, { paddingTop: homeHeaderTopPadding }]}>
           <ActivityIndicator size="large" color={colors.primary} />
           <Text style={styles.loadingHint} maxFontSizeMultiplier={1.3}>
             {t("home.loadingProjects")}
@@ -1591,7 +1592,7 @@ export function HomeScreen() {
   return (
     <View style={styles.container} pointerEvents="box-none">
       {/* Fixed header outside FlatList for reliable touch handling */}
-      <View style={[styles.headerRow, { paddingTop: insets.top + spacing.lg, paddingHorizontal: spacing.lg }]}>
+      <View style={[styles.headerRow, { paddingTop: homeHeaderTopPadding, paddingHorizontal: spacing.lg }]}>
         <TouchableOpacity
           style={styles.headerAvatarBtn}
           onPress={openDrawer}

@@ -8,7 +8,6 @@ import {
   Image,
   Modal,
   ActivityIndicator,
-  Linking,
   Alert,
   TextInput,
   Platform,
@@ -22,6 +21,7 @@ import type { AttachmentDoc } from "../services/attachments";
 import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
+import { InAppAttachmentViewer, inferInAppViewerMode } from "../components/InAppAttachmentViewer";
 import {
   getStatusMappingsForUI,
   normalizeStatusValue,
@@ -126,27 +126,17 @@ export function TaskDetailScreen() {
   };
 
   const openAttachment = async (attachment: AttachmentDoc) => {
-    if (attachment.fileType === 'image') {
-      try {
-        const attachmentData = attachment as any;
-        const url = attachmentData.downloadURL || await attachmentsService.getAttachmentURL(attachment);
-        setViewingAttachmentURL(url);
-        setViewingAttachment(attachment);
-      } catch (error: any) {
-        Alert.alert(t("common.error"), t("taskDetail.failedToLoadImage"));
-      }
-    } else {
-      try {
-        const url = await attachmentsService.getAttachmentURL(attachment);
-        const supported = await Linking.canOpenURL(url);
-        if (supported) {
-          await Linking.openURL(url);
-        } else {
-          Alert.alert(t("common.error"), t("taskDetail.cannotOpenFile"));
-        }
-      } catch (error: any) {
-        Alert.alert(t("common.error"), t("taskDetail.failedToOpenFile"));
-      }
+    try {
+      const attachmentData = attachment as any;
+      const url =
+        attachmentData.downloadURL || (await attachmentsService.getAttachmentURL(attachment));
+      setViewingAttachmentURL(url);
+      setViewingAttachment(attachment);
+    } catch (error: any) {
+      Alert.alert(
+        t("common.error"),
+        attachment.fileType === "image" ? t("taskDetail.failedToLoadImage") : t("taskDetail.failedToOpenFile")
+      );
     }
   };
 
@@ -520,47 +510,16 @@ export function TaskDetailScreen() {
         <Text style={styles.confirmButtonText}>{t("taskDetail.confirmAndBack")}</Text>
       </TouchableOpacity>
 
-      {/* Image Viewer Modal */}
-      <Modal
+      <InAppAttachmentViewer
         visible={viewingAttachment !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
+        onClose={() => {
           setViewingAttachment(null);
           setViewingAttachmentURL(null);
         }}
-      >
-        <View style={styles.imageViewerOverlay}>
-          <View style={styles.imageViewerHeader}>
-            <Text style={styles.imageViewerTitle} numberOfLines={1}>
-              {viewingAttachment?.fileName || 'Obrázok'}
-            </Text>
-            <TouchableOpacity
-              style={styles.imageViewerCloseButton}
-              onPress={() => {
-                setViewingAttachment(null);
-                setViewingAttachmentURL(null);
-              }}
-            >
-              <Ionicons name="close" size={28} color="#fff" />
-            </TouchableOpacity>
-          </View>
-          <ScrollView
-            style={styles.imageViewerScroll}
-            contentContainerStyle={styles.imageViewerContent}
-            maximumZoomScale={3}
-            minimumZoomScale={1}
-          >
-            {viewingAttachmentURL && (
-              <Image
-                source={{ uri: viewingAttachmentURL }}
-                style={styles.imageViewerImage}
-                resizeMode="contain"
-              />
-            )}
-          </ScrollView>
-        </View>
-      </Modal>
+        url={viewingAttachmentURL}
+        fileName={viewingAttachment?.fileName ?? ""}
+        mode={viewingAttachment ? inferInAppViewerMode(viewingAttachment) : "image"}
+      />
     </ScrollView>
   );
 }
@@ -732,41 +691,5 @@ const styles = StyleSheet.create({
   },
   loader: {
     marginVertical: spacing.md,
-  },
-  imageViewerOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0, 0, 0, 0.95)',
-  },
-  imageViewerHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
-    paddingTop: spacing.lg,
-    paddingHorizontal: spacing.md,
-    paddingBottom: spacing.sm,
-  },
-  imageViewerTitle: {
-    flex: 1,
-    fontSize: 16,
-    fontWeight: "600",
-    color: "#fff",
-    marginRight: spacing.md,
-  },
-  imageViewerCloseButton: {
-    padding: spacing.xs,
-  },
-  imageViewerScroll: {
-    flex: 1,
-  },
-  imageViewerContent: {
-    flexGrow: 1,
-    justifyContent: "center",
-    alignItems: "center",
-  },
-  imageViewerImage: {
-    width: '100%',
-    aspectRatio: 1,
-    maxWidth: '100%',
-    maxHeight: '100%',
   },
 });

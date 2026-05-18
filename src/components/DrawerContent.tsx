@@ -348,6 +348,13 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     };
   }
 
+  /** Store builds often omit EXPO_PUBLIC_BUSINESS_ENABLED; org-linked users still need the entry (see featureFlags comment + business-architecture rule 6). */
+  const showBusinessInDrawer =
+    businessEnabled ||
+    pendingBusinessMemberships.length > 0 ||
+    canAccessBusiness ||
+    (activeMembership?.status === "active" && !!activeOrganization);
+
   const mainNavItems: NavItem[] = [
     { id: "projects", icon: "folder-open-outline", labelKey: "tabs.projects", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Projects" }); } },
     { id: "quickNotes", icon: "create-outline", labelKey: "quickNotes.title", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Home", params: { screen: "QuickNotesInbox" } }); } },
@@ -369,12 +376,15 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       },
     },
   ];
-  if (businessEnabled) {
+  if (showBusinessInDrawer) {
     mainNavItems.push({
       id: "business",
       icon: "business-outline",
       labelKey: "nav.business",
-      label: "Staveto Business",
+      label:
+        canAccessBusiness && orgNameActive
+          ? t("nav.businessWithCompany", { company: orgNameActive })
+          : undefined,
       action: () => {
         closeDrawer();
         navigation.navigate("BusinessStack");

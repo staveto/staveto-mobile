@@ -1,4 +1,5 @@
 import React from "react";
+import { Platform } from "react-native";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
@@ -29,6 +30,7 @@ export function AppTabs() {
       screenOptions={({ route }) => ({
         headerStyle: { backgroundColor: colors.background },
         headerTintColor: colors.textOnDark,
+        headerTitleStyle: Platform.OS === "android" ? { fontSize: 18, fontWeight: "700" } : undefined,
         tabBarStyle: { backgroundColor: colors.background, borderTopColor: colors.border },
         tabBarActiveTintColor: colors.primary,
         tabBarInactiveTintColor: "rgba(255,255,255,0.75)",

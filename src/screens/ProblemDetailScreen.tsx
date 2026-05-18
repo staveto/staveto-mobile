@@ -8,10 +8,10 @@ import {
   TouchableOpacity,
   Alert,
   Image,
-  Linking,
   RefreshControl,
   TextInput,
   Platform,
+  Modal,
 } from "react-native";
 import MapView, { Marker } from "react-native-maps";
 
@@ -39,6 +39,7 @@ import { showToast } from "../helpers/toast";
 import { openLatLngInMaps } from "../lib/maps";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
 import Constants from "expo-constants";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 
 const PRIORITY_COLORS: Record<string, string> = {
   low: "#2e7d32",
@@ -59,6 +60,7 @@ type RouteParams = { projectId: string; problemId: string; projectName?: string;
 export function ProblemDetailScreen() {
   const route = useRoute();
   const navigation = useNavigation<any>();
+  const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const { user } = useAuth();
   const { projectId, problemId } = (route.params ?? {}) as RouteParams;
@@ -72,6 +74,7 @@ export function ProblemDetailScreen() {
   const [showArchiveInput, setShowArchiveInput] = useState(false);
   const [resolutionNote, setResolutionNote] = useState("");
   const [noteExpanded, setNoteExpanded] = useState(false);
+  const [photoViewerUrl, setPhotoViewerUrl] = useState<string | null>(null);
   const soundRef = React.useRef<{ unloadAsync: () => Promise<void>; playAsync: () => Promise<void>; pauseAsync: () => Promise<void> } | null>(null);
 
   const canEdit =
@@ -235,7 +238,7 @@ export function ProblemDetailScreen() {
   };
 
   const openPhoto = (url: string) => {
-    Linking.openURL(url).catch(() => {});
+    setPhotoViewerUrl(url);
   };
 
   if (loading || !problem) {
@@ -249,6 +252,7 @@ export function ProblemDetailScreen() {
   const statusFlow: ProblemStatus[] = ["open", "in_progress", "fixed", "verified", "rejected"];
 
   return (
+    <>
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
@@ -579,6 +583,40 @@ export function ProblemDetailScreen() {
         )}
       </View>
     </ScrollView>
+
+    <Modal
+      visible={photoViewerUrl !== null}
+      transparent
+      animationType="fade"
+      onRequestClose={() => setPhotoViewerUrl(null)}
+    >
+      <View style={styles.imageViewerOverlay}>
+        <View style={[styles.imageViewerHeader, { paddingTop: insets.top + spacing.sm }]}>
+          <Text style={styles.imageViewerTitle} numberOfLines={1}>
+            {t("problems.photos")}
+          </Text>
+          <TouchableOpacity
+            style={styles.imageViewerCloseButton}
+            onPress={() => setPhotoViewerUrl(null)}
+            accessibilityRole="button"
+            accessibilityLabel={t("common.close")}
+          >
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+        </View>
+        <ScrollView
+          style={styles.imageViewerScroll}
+          contentContainerStyle={styles.imageViewerContent}
+          maximumZoomScale={3}
+          minimumZoomScale={1}
+        >
+          {photoViewerUrl ? (
+            <Image source={{ uri: photoViewerUrl }} style={styles.imageViewerImage} resizeMode="contain" />
+          ) : null}
+        </ScrollView>
+      </View>
+    </Modal>
+    </>
   );
 }
 
@@ -683,4 +721,40 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   deleteBtnText: { color: colors.error, fontSize: 16 },
+  imageViewerOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(0, 0, 0, 0.95)",
+  },
+  imageViewerHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+  },
+  imageViewerTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#fff",
+    marginRight: spacing.md,
+  },
+  imageViewerCloseButton: {
+    padding: spacing.xs,
+  },
+  imageViewerScroll: {
+    flex: 1,
+  },
+  imageViewerContent: {
+    flexGrow: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingBottom: spacing.xl,
+  },
+  imageViewerImage: {
+    width: "100%",
+    aspectRatio: 1,
+    maxWidth: "100%",
+    maxHeight: "100%",
+  },
 });

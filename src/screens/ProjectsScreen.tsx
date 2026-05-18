@@ -59,6 +59,7 @@ import { COUNTRY_CODES, getLocalizedCountryName } from "../utils/countries";
 import { getCallable, auth } from "../firebase";
 import { showToast } from "../helpers/toast";
 import { runLegacyProjectTypeBackfillOncePerSession } from "../services/projectTypeBackfill";
+import { paddingBelowTabHeader } from "../lib/tabScreenLayout";
 
 type Project = ProjectDoc;
 
@@ -647,7 +648,7 @@ export function ProjectsScreen() {
   return (
     <View style={styles.container}>
       {!visibleProjects.length && !loading ? (
-        <View style={[styles.emptyHero, { paddingTop: insets.top + spacing.xl }]}>
+        <View style={[styles.emptyHero, { paddingTop: paddingBelowTabHeader() + spacing.lg }]}>
           <Ionicons name="folder-open-outline" size={48} color={colors.textMuted} style={styles.emptyHeroIcon} />
           <Text style={styles.emptyHeroTitle}>{t("projectsTab.empty.title")}</Text>
           <Text style={styles.emptyHeroBody}>{t("projectsTab.empty.body")}</Text>
@@ -663,7 +664,7 @@ export function ProjectsScreen() {
         </View>
       ) : (
         <>
-        <View style={[styles.screenTop, { paddingTop: insets.top + spacing.sm }]}>
+        <View style={[styles.screenTop, { paddingTop: paddingBelowTabHeader() }]}>
           <View style={styles.pageHeaderRow}>
             <Text style={styles.pageTitle} accessibilityRole="header">
               {t("projectsTab.title")}

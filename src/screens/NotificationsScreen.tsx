@@ -8,7 +8,6 @@ import {
   TouchableOpacity as GHTouchableOpacity,
 } from "react-native-gesture-handler";
 import { showToast } from "../helpers/toast";
-import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation, useFocusEffect } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
@@ -22,6 +21,7 @@ import * as invitesService from "../services/invites";
 import type { PendingInvite } from "../services/invites";
 import * as tasksService from "../services/tasks";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
+import { paddingBelowTabHeader } from "../lib/tabScreenLayout";
 
 const NOTIF_ROW_DEBUG = typeof __DEV__ !== "undefined" && __DEV__;
 /** UX / persistence audit logs — dev only, minimal production noise. */
@@ -47,7 +47,6 @@ const SWIPEABLE_ROW_GESTURE_PROPS = {
 };
 
 export function NotificationsScreen() {
-  const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const { user, orgId } = useAuth();
   /**
@@ -549,7 +548,7 @@ export function NotificationsScreen() {
   }
 
   return (
-    <View style={[styles.container, { paddingTop: insets.top }]}>
+    <View style={[styles.container, { paddingTop: paddingBelowTabHeader() }]}>
       {/* Header */}
       <View style={styles.header}>
         <Text style={styles.headerTitle} accessibilityRole="header" maxFontSizeMultiplier={1.2} numberOfLines={1}>

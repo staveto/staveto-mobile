@@ -10,8 +10,10 @@ import {
   Pressable,
   ScrollView,
   Platform,
+  Dimensions,
 } from "react-native";
-import { BottomSheetModal, BottomSheetBackdrop } from "@gorhom/bottom-sheet";
+import { BottomSheetModal, BottomSheetBackdrop, BottomSheetScrollView } from "@gorhom/bottom-sheet";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, spacing } from "../theme";
@@ -90,6 +92,11 @@ function SectionToggleRow({
 
 export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismiss }: Props) {
   const { t } = useI18n();
+  const insets = useSafeAreaInsets();
+  const modalSheetHeight = useMemo(
+    () => Math.round(Dimensions.get("window").height * 0.92),
+    []
+  );
   const [sections, setSections] = useState<HomeSectionConfig[]>(DEFAULT_HOME_LAYOUT.sections);
   const [widgets, setWidgets] = useState<HomeWidgetToggles>(DEFAULT_HOME_LAYOUT.widgets);
 
@@ -166,102 +173,101 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
   const visibleSections = sections.filter((s) => s.id !== "kpis");
   const sectionRows = visibleSections.length > 0 ? visibleSections : getDefaultLayout().sections;
 
-  const renderContent = () => (
-    <>
-      <View style={[styles.header, { paddingTop: spacing.lg }]}>
-        <TouchableOpacity style={styles.headerBtn} onPress={handleCancel} accessibilityRole="button" accessibilityLabel={t("common.cancel")}>
-          <Text style={styles.headerCancel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-            {t("common.cancel")}
-          </Text>
-        </TouchableOpacity>
-        <Text style={styles.headerTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-          {t("home.customizeHomeTitle")}
-        </Text>
-        <TouchableOpacity style={styles.headerBtn} onPress={handleSave} accessibilityRole="button" accessibilityLabel={t("common.save")}>
-          <Text style={styles.headerSave} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-            {t("common.save")}
-          </Text>
-        </TouchableOpacity>
-      </View>
+  const scrollContentPaddingBottom = insets.bottom + spacing.xl + spacing.md;
 
-      <View style={styles.content}>
-        {allDisabled ? (
-          <View style={styles.emptyState}>
-            <Text style={styles.emptyText} maxFontSizeMultiplier={1.2}>
-              {t("home.resetToDefault")}
-            </Text>
-            <TouchableOpacity style={styles.resetBtn} onPress={handleReset} accessibilityRole="button" accessibilityLabel={t("home.resetToDefault")}>
-              <Text style={styles.resetBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
-                {t("home.resetToDefault")}
-              </Text>
-            </TouchableOpacity>
-          </View>
-        ) : (
-          <ScrollView
-            style={styles.sectionsList}
-            contentContainerStyle={styles.sectionsListContent}
-            showsVerticalScrollIndicator={false}
-            nestedScrollEnabled
-            keyboardShouldPersistTaps="handled"
-            decelerationRate={Platform.OS === "ios" ? "fast" : 0.985}
-            overScrollMode="always"
-          >
-            <View style={styles.widgetsSection}>
-              <Text style={styles.widgetsSectionTitle}>{t("home.customizeAdditionalWidgets")}</Text>
-              <ToggleRow
-                label={t("home.customize.showHeaderChatShortcut")}
-                value={widgets.showHeaderChatShortcut}
-                onChange={(value) =>
-                  setWidgets((prev) => ({ ...prev, showHeaderChatShortcut: value }))
-                }
-              />
-              <ToggleRow
-                label={t("home.customize.showQuickTime")}
-                value={widgets.showQuickTime}
-                onChange={(value) => setWidgets((prev) => ({ ...prev, showQuickTime: value }))}
-              />
-              <ToggleRow
-                label={t("home.customize.showTodayPriorities")}
-                value={widgets.showTodayPriorities}
-                onChange={(value) =>
-                  setWidgets((prev) => ({ ...prev, showTodayPriorities: value }))
-                }
-              />
-              <ToggleRow
-                label={t("home.customize.showBottomQuickActions")}
-                value={widgets.showBottomQuickActions}
-                onChange={(value) =>
-                  setWidgets((prev) => ({ ...prev, showBottomQuickActions: value }))
-                }
-              />
-            </View>
-            <View style={styles.widgetsSection}>
-              <Text style={styles.widgetsSectionTitle}>Home sections</Text>
-              {sectionRows.map((item) => (
-                <SectionToggleRow key={item.id} item={item} onToggle={handleToggle} t={t} />
-              ))}
-            </View>
-          </ScrollView>
-        )}
+  const renderHeader = () => (
+    <View style={[styles.header, { paddingTop: spacing.lg }]}>
+      <TouchableOpacity style={styles.headerBtn} onPress={handleCancel} accessibilityRole="button" accessibilityLabel={t("common.cancel")}>
+        <Text style={styles.headerCancel} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+          {t("common.cancel")}
+        </Text>
+      </TouchableOpacity>
+      <Text style={styles.headerTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+        {t("home.customizeHomeTitle")}
+      </Text>
+      <TouchableOpacity style={styles.headerBtn} onPress={handleSave} accessibilityRole="button" accessibilityLabel={t("common.save")}>
+        <Text style={styles.headerSave} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+          {t("common.save")}
+        </Text>
+      </TouchableOpacity>
+    </View>
+  );
+
+  const renderScrollInner = () => (
+    <>
+      <View style={styles.widgetsSection}>
+        <Text style={styles.widgetsSectionTitle}>{t("home.customizeAdditionalWidgets")}</Text>
+        <ToggleRow
+          label={t("home.customize.showHeaderChatShortcut")}
+          value={widgets.showHeaderChatShortcut}
+          onChange={(value) => setWidgets((prev) => ({ ...prev, showHeaderChatShortcut: value }))}
+        />
+        <ToggleRow
+          label={t("home.customize.showQuickTime")}
+          value={widgets.showQuickTime}
+          onChange={(value) => setWidgets((prev) => ({ ...prev, showQuickTime: value }))}
+        />
+        <ToggleRow
+          label={t("home.customize.showTodayPriorities")}
+          value={widgets.showTodayPriorities}
+          onChange={(value) => setWidgets((prev) => ({ ...prev, showTodayPriorities: value }))}
+        />
+        <ToggleRow
+          label={t("home.customize.showBottomQuickActions")}
+          value={widgets.showBottomQuickActions}
+          onChange={(value) => setWidgets((prev) => ({ ...prev, showBottomQuickActions: value }))}
+        />
+      </View>
+      <View style={styles.widgetsSection}>
+        <Text style={styles.widgetsSectionTitle}>{t("home.customizeHomeSections")}</Text>
+        {sectionRows.map((item) => (
+          <SectionToggleRow key={item.id} item={item} onToggle={handleToggle} t={t} />
+        ))}
       </View>
     </>
   );
 
+  const scrollContentStyle = useMemo(
+    () => [styles.sectionsListContent, { paddingHorizontal: spacing.lg, paddingBottom: scrollContentPaddingBottom }],
+    [scrollContentPaddingBottom]
+  );
+
   if (visible !== undefined) {
     return (
-      <Modal
-        visible={visible}
-        animationType="slide"
-        transparent
-        onRequestClose={handleCancel}
-      >
-        <Pressable style={modalStyles.overlay} onPress={handleCancel}>
-          <Pressable style={modalStyles.content} onPress={(e) => e.stopPropagation()}>
-            <View style={[styles.sheet, modalStyles.sheet]}>
-              {renderContent()}
-            </View>
-          </Pressable>
-        </Pressable>
+      <Modal visible={visible} animationType="slide" transparent onRequestClose={handleCancel}>
+        <View style={modalStyles.overlay}>
+          <Pressable style={modalStyles.dismissFill} onPress={handleCancel} accessibilityRole="button" accessibilityLabel={t("common.cancel")} />
+          <View style={[styles.sheet, modalStyles.sheet, { height: modalSheetHeight }]}>
+            {renderHeader()}
+            {allDisabled ? (
+              <View style={[styles.content, styles.contentBody]}>
+                <View style={styles.emptyState}>
+                  <Text style={styles.emptyText} maxFontSizeMultiplier={1.2}>
+                    {t("home.resetToDefault")}
+                  </Text>
+                  <TouchableOpacity style={styles.resetBtn} onPress={handleReset} accessibilityRole="button" accessibilityLabel={t("home.resetToDefault")}>
+                    <Text style={styles.resetBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                      {t("home.resetToDefault")}
+                    </Text>
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ) : (
+              <ScrollView
+                style={styles.scrollBody}
+                contentContainerStyle={scrollContentStyle}
+                showsVerticalScrollIndicator
+                nestedScrollEnabled
+                keyboardShouldPersistTaps="handled"
+                decelerationRate={Platform.OS === "ios" ? "fast" : 0.985}
+                overScrollMode="always"
+                bounces
+              >
+                {renderScrollInner()}
+              </ScrollView>
+            )}
+          </View>
+        </View>
       </Modal>
     );
   }
@@ -275,7 +281,32 @@ export function HomeCustomizeSheet({ sheetRef, onLayoutChanged, visible, onDismi
       handleIndicatorStyle={{ backgroundColor: "rgba(255,255,255,0.5)" }}
       backgroundStyle={styles.sheet}
     >
-      {renderContent()}
+      <View style={styles.bottomSheetInner}>
+        {renderHeader()}
+        {allDisabled ? (
+          <View style={[styles.content, styles.contentBody]}>
+            <View style={styles.emptyState}>
+              <Text style={styles.emptyText} maxFontSizeMultiplier={1.2}>
+                {t("home.resetToDefault")}
+              </Text>
+              <TouchableOpacity style={styles.resetBtn} onPress={handleReset} accessibilityRole="button" accessibilityLabel={t("home.resetToDefault")}>
+                <Text style={styles.resetBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                  {t("home.resetToDefault")}
+                </Text>
+              </TouchableOpacity>
+            </View>
+          </View>
+        ) : (
+          <BottomSheetScrollView
+            style={styles.bottomSheetScroll}
+            contentContainerStyle={scrollContentStyle}
+            keyboardShouldPersistTaps="handled"
+            showsVerticalScrollIndicator
+          >
+            {renderScrollInner()}
+          </BottomSheetScrollView>
+        )}
+      </View>
     </BottomSheetModal>
   );
 }
@@ -318,14 +349,11 @@ const modalStyles = StyleSheet.create({
     backgroundColor: "rgba(0,0,0,0.5)",
     justifyContent: "flex-end",
   },
-  content: {
-    maxHeight: "80%",
-    borderTopLeftRadius: 16,
-    borderTopRightRadius: 16,
-    overflow: "hidden",
+  dismissFill: {
+    ...StyleSheet.absoluteFillObject,
   },
   sheet: {
-    minHeight: 400,
+    width: "100%",
   },
 });
 
@@ -334,6 +362,7 @@ const styles = StyleSheet.create({
     backgroundColor: SHEET_BG,
     borderTopLeftRadius: 16,
     borderTopRightRadius: 16,
+    overflow: "hidden",
   },
   header: {
     flexDirection: "row",
@@ -368,13 +397,25 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.lg,
     paddingBottom: spacing.xl,
   },
-  sectionsList: {
+  sectionsListContent: {
+    flexGrow: 1,
+  },
+  scrollBody: {
     flex: 1,
     minHeight: 0,
   },
-  sectionsListContent: {
-    paddingBottom: spacing.xl + spacing.lg,
-    flexGrow: 1,
+  bottomSheetInner: {
+    flex: 1,
+    minHeight: 0,
+  },
+  bottomSheetScroll: {
+    flex: 1,
+    minHeight: 0,
+  },
+  contentBody: {
+    flex: 1,
+    minHeight: 0,
+    justifyContent: "center",
   },
   widgetsSection: {
     marginTop: spacing.md,

@@ -3,7 +3,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { doc, getDoc } from "../lib/rnFirestore";
 import { getAuth, db, getCallable } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
-import { configureGoogleSignInAtStartup } from "../services/auth";
+import { configureGoogleSignInAtStartup, disconnectGoogleSignInSession } from "../services/auth";
 import { configurePurchases } from "../services/billing";
 import { getExtraEnv } from "../lib/env";
 import { IOS_SKIP_GOOGLE_SIGNIN } from "../lib/iosDiagnostic";
@@ -234,6 +234,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const logout = async () => {
     const fbAuth = getAuth();
     if (fbAuth) await fbAuth.signOut();
+    await disconnectGoogleSignInSession({ revokeAccess: true });
   };
 
   const finishOnboarding = async () => {

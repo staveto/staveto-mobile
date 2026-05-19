@@ -7,6 +7,8 @@ import { BusinessLandingScreen } from "../screens/business/BusinessLandingScreen
 import { BusinessPlanSelectionScreen } from "../screens/business/BusinessPlanSelectionScreen";
 import { BusinessRegistrationScreen } from "../screens/business/BusinessRegistrationScreen";
 import { BusinessOrderPendingScreen } from "../screens/business/BusinessOrderPendingScreen";
+import { BusinessTeamManagementScreen } from "../screens/business/BusinessTeamManagementScreen";
+import { BusinessMemberRoleScreen } from "../screens/business/BusinessMemberRoleScreen";
 import { BusinessChatListScreen } from "../screens/business/BusinessChatListScreen";
 import { BusinessChatRoomScreen } from "../screens/business/BusinessChatRoomScreen";
 import { useActiveOrg } from "../hooks/useActiveOrg";
@@ -88,6 +90,16 @@ export function BusinessStack() {
         name="BusinessDashboard"
         component={BusinessDashboardWithGate}
         options={{ title: "Staveto Business" }}
+      />
+      <Stack.Screen
+        name="BusinessTeamManagement"
+        component={BusinessTeamManagementScreen}
+        options={{ title: "Správa tímu" }}
+      />
+      <Stack.Screen
+        name="BusinessMemberRole"
+        component={BusinessMemberRoleScreen}
+        options={{ title: "Rola člena" }}
       />
       <Stack.Screen
         name="BusinessChatList"

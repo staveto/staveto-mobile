@@ -115,16 +115,31 @@ export function listenBusinessChats(
   callback: (chats: BusinessChatDoc[]) => void,
   onError?: (error: Error) => void
 ): () => void {
+  return listenGeneralBusinessChat(
+    orgId,
+    (chat) => {
+      callback(chat ? [chat] : []);
+    },
+    onError
+  );
+}
+
+/** Subscribe to the team `general` chat document (avoids collection-query rule edge cases). */
+export function listenGeneralBusinessChat(
+  orgId: string,
+  callback: (chat: BusinessChatDoc | null) => void,
+  onError?: (error: Error) => void
+): () => void {
   const normalizedOrgId = orgId.trim();
-  const chatsRef = collection(db, `organizations/${normalizedOrgId}/chats`);
-  const q = query(chatsRef, orderBy("lastMessageAt", "desc"), limit(30));
+  const chatRef = doc(db, `organizations/${normalizedOrgId}/chats/general`);
   return onSnapshot(
-    q,
-    (snap) => {
-      const rows = snap.docs.map((d: { id: string; data: () => unknown }) =>
-        toChatDoc(d.id, (d.data() ?? {}) as Record<string, unknown>)
-      );
-      callback(rows);
+    chatRef,
+    (snap: { exists: () => boolean; id: string; data: () => unknown }) => {
+      if (!snap.exists()) {
+        callback(null);
+        return;
+      }
+      callback(toChatDoc(snap.id, (snap.data() ?? {}) as Record<string, unknown>));
     },
     onError
   );

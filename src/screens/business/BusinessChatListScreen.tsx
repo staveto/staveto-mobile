@@ -92,7 +92,12 @@ export function BusinessChatListScreen() {
           },
           (snapshotError) => {
             if (cancelled) return;
-            setError(snapshotError.message || t("business.chat.error"));
+            const raw = snapshotError.message || "";
+            const friendly =
+              raw.includes("permission-denied") || raw.includes("PERMISSION_DENIED")
+                ? t("business.chat.permissionDeniedFriendly")
+                : raw || t("business.chat.error");
+            setError(friendly);
             setLoading(false);
           }
         );
@@ -101,7 +106,12 @@ export function BusinessChatListScreen() {
       })
       .catch((e) => {
         if (cancelled) return;
-        setError(e instanceof Error ? e.message : String(e));
+        const raw = e instanceof Error ? e.message : String(e);
+        const friendly =
+          raw.includes("permission-denied") || raw.includes("PERMISSION_DENIED")
+            ? t("business.chat.permissionDeniedFriendly")
+            : raw || t("business.chat.error");
+        setError(friendly);
         setLoading(false);
       });
 

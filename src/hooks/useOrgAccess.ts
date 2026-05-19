@@ -1,6 +1,23 @@
 import { useMemo } from "react";
 import { useActiveOrg } from "./useActiveOrg";
 
+function toMillis(raw: unknown): number | null {
+  if (!raw) return null;
+  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
+  if (typeof raw === "string") {
+    const parsed = new Date(raw).getTime();
+    return Number.isFinite(parsed) ? parsed : null;
+  }
+  if (typeof raw === "object" && raw !== null) {
+    const maybeTimestamp = raw as { toDate?: () => Date };
+    if (typeof maybeTimestamp.toDate === "function") {
+      const parsed = maybeTimestamp.toDate().getTime();
+      return Number.isFinite(parsed) ? parsed : null;
+    }
+  }
+  return null;
+}
+
 export function useOrgAccess() {
   const { activeBusinessOrgId, activeMembership, activeOrganization } = useActiveOrg();
 
@@ -19,11 +36,52 @@ export function useOrgAccess() {
     const isViewer = role === "viewer";
     const isActiveMember = status === "active";
 
+    const trialEndsAtMs = toMillis(activeOrganization?.trialEndsAt);
+    const trialActive =
+      orgStatus === "trialing" ||
+      (trialEndsAtMs !== null && trialEndsAtMs > Date.now());
+
+    const hasActiveBusinessOrder =
+      typeof activeOrganization?.activeBusinessOrderId === "string" &&
+      activeOrganization.activeBusinessOrderId.trim().length > 0;
+
+    const pendingCanAccess =
+      orgStatus === "pending_payment" &&
+      isActiveMember &&
+      (trialActive || businessEnabled || hasActiveBusinessOrder);
+
+    const canViewBusinessDashboard =
+      !!activeBusinessOrgId &&
+      isActiveMember &&
+      businessEnabled &&
+      (orgStatus === "active" ||
+        orgStatus === "trialing" ||
+        (orgStatus === "pending_payment" && pendingCanAccess));
+
     const canAccessBusiness =
       !!activeBusinessOrgId &&
       isActiveMember &&
       orgStatus === "active" &&
       businessEnabled;
+
+    let dashboardBlockReason = "dashboard_allowed";
+    if (!activeBusinessOrgId) {
+      dashboardBlockReason = "missing_active_business_org_id";
+    } else if (!isActiveMember) {
+      dashboardBlockReason = `membership_not_active:${status ?? "none"}`;
+    } else if (!businessEnabled) {
+      dashboardBlockReason = "business_not_enabled";
+    } else if (orgStatus === "suspended") {
+      dashboardBlockReason = "org_suspended";
+    } else if (orgStatus === "cancelled") {
+      dashboardBlockReason = "org_cancelled";
+    } else if (orgStatus === "pending_payment" && !pendingCanAccess) {
+      dashboardBlockReason = "pending_payment_without_trial_access";
+    } else if (orgStatus === "past_due") {
+      dashboardBlockReason = "org_past_due";
+    } else if (!canViewBusinessDashboard) {
+      dashboardBlockReason = `org_status_blocked:${orgStatus ?? "unknown"}`;
+    }
 
     return {
       role,
@@ -38,8 +96,11 @@ export function useOrgAccess() {
       orgStatus,
       seatsLimit,
       seatsUsed,
+      trialActive,
+      pendingCanAccess,
+      canViewBusinessDashboard,
       canAccessBusiness,
+      dashboardBlockReason,
     };
   }, [activeBusinessOrgId, activeMembership, activeOrganization]);
 }
-

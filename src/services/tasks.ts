@@ -343,16 +343,16 @@ export async function listTasksByProject(projectId: string): Promise<TaskDoc[]> 
     console.warn("[tasks] listTasksByProject: invalid projectId, returning empty array");
     return [];
   }
-  console.log(`[tasks] listTasksByProject called for projectId: ${projectId}`);
-  
-  // DEBUG: Check auth state
-  const currentUser = auth.currentUser;
-  const currentUserUid = currentUser?.uid;
-  console.log(`[tasks] listTasksByProject: auth.currentUser?.uid = "${currentUserUid}"`);
-  
+  if (__DEV__) {
+    console.log(`[tasks] listTasksByProject called for projectId: ${projectId}`);
+  }
+
+  const currentUserUid = auth.currentUser?.uid;
   if (!currentUserUid) {
-    console.error(`[tasks] listTasksByProject: auth.currentUser is null`);
-    throw new Error('Musíte byť prihlásený na načítanie úloh.');
+    if (__DEV__) {
+      console.warn("[tasks] listTasksByProject: no signed-in user, returning empty array");
+    }
+    return [];
   }
   
   try {

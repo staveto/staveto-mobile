@@ -279,8 +279,29 @@ function getFirebaseAuthOrThrow() {
   return fbAuth;
 }
 
+/**
+ * Clears the native Google Sign-In session (best effort).
+ * Call before manual sign-in so the account picker is shown instead of silent reuse.
+ */
+export async function disconnectGoogleSignInSession(options?: {
+  revokeAccess?: boolean;
+}): Promise<void> {
+  try {
+    configureGoogleSignInSdk();
+    await GoogleSignin.signOut();
+    if (options?.revokeAccess) {
+      await GoogleSignin.revokeAccess();
+    }
+  } catch {
+    /* ignore — session may already be cleared */
+  }
+}
+
 export async function loginWithGoogle(): Promise<{ user: AuthUser; token: string }> {
   configureGoogleSignInSdk();
+
+  // Drop cached Google account so signIn() prompts for account selection.
+  await disconnectGoogleSignInSession();
 
   // #region agent log
   agentDebugLog({

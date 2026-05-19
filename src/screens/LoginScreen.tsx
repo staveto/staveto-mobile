@@ -106,6 +106,7 @@ export function LoginScreen() {
       await loginWithGoogle();
     } catch (e: unknown) {
       const code = getAuthErrorCodeFromUnknown(e);
+      if (code === "auth/cancelled") return;
       setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("login.failed")));
     } finally {
       setSubmitting(false);

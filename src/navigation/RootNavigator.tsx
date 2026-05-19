@@ -46,6 +46,7 @@ import { AbsenceHomeScreen } from "../screens/absence/AbsenceHomeScreen";
 import { AbsenceRequestScreen } from "../screens/absence/AbsenceRequestScreen";
 import { AbsenceDetailScreen } from "../screens/absence/AbsenceDetailScreen";
 import { QuickActionsSetup } from "../components/QuickActionsSetup";
+import { navigationRef } from "../components/PushNotificationHandler";
 
 // Lazy-load ProblemDetailScreen (react-native-maps) – speeds up initial app load
 const ProblemDetailScreenLazy = React.lazy(() =>
@@ -103,6 +104,12 @@ export function RootNavigator() {
   const [languageSelectionDone, setLanguageSelectionDone] = useState<boolean | null>(null);
   const [showConsentAgain, setShowConsentAgain] = useState(false);
   const hasShownTrialPopup = useRef(false);
+  /** Set from onboarding when an employee redeems an invite with immediate `active` membership. */
+  const pendingOpenBusinessStack = useRef(false);
+
+  const onBusinessFlowRequested = useCallback(() => {
+    pendingOpenBusinessStack.current = true;
+  }, []);
 
   useEffect(() => {
     AsyncStorage.getItem(LANGUAGE_SELECTION_DONE_KEY).then((v) => {
@@ -173,6 +180,23 @@ export function RootNavigator() {
     }
     checkGate();
   }, [token, user?.id, checkGate]);
+
+  useEffect(() => {
+    if (!onboardingOk || gateLoading) return;
+    if (!pendingOpenBusinessStack.current) return;
+    const t = setTimeout(() => {
+      if (!pendingOpenBusinessStack.current) return;
+      pendingOpenBusinessStack.current = false;
+      try {
+        if (navigationRef.isReady()) {
+          (navigationRef as { navigate: (name: string) => void }).navigate("BusinessStack");
+        }
+      } catch (e) {
+        console.warn("[RootNavigator] post-onboarding BusinessStack navigate failed:", e);
+      }
+    }, 200);
+    return () => clearTimeout(t);
+  }, [onboardingOk, gateLoading]);
 
   // Show first-login trial popup once per device (must be before any conditional return)
   useEffect(() => {
@@ -304,6 +328,7 @@ export function RootNavigator() {
       <OnboardingMvpScreen
         onFinished={checkGate}
         onBack={() => setShowConsentAgain(true)}
+        onBusinessFlowRequested={onBusinessFlowRequested}
       />
     );
   }

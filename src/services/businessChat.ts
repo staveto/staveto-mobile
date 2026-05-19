@@ -1,4 +1,4 @@
-import { getAuth, db } from "../firebase";
+import { getAuth, db, getStorage } from "../firebase";
 import {
   addDoc,
   collection,
@@ -148,6 +148,61 @@ export function listenChatMessages(
     },
     onError
   );
+}
+
+const MAX_CHAT_IMAGE_BYTES = 15 * 1024 * 1024;
+
+export async function sendImageMessage(input: {
+  orgId: string;
+  chatId: string;
+  localUri: string;
+  mimeType?: string;
+}): Promise<void> {
+  const uid = requireUid();
+  const authUser = getAuth()?.currentUser ?? null;
+  const mimeType = input.mimeType?.trim() || "image/jpeg";
+  const ext = mimeType.includes("png") ? "png" : "jpg";
+
+  const response = await fetch(input.localUri);
+  const blob = await response.blob();
+  if (blob.size > MAX_CHAT_IMAGE_BYTES) {
+    throw new Error("Image is too large (max 15 MB).");
+  }
+
+  await ensureGeneralChat(input.orgId);
+
+  const fileName = `${uid}_${Date.now()}.${ext}`;
+  const storagePath = `organizations/${input.orgId}/chats/${input.chatId}/messages/${fileName}`;
+  const storageInstance = getStorage();
+  if (!storageInstance) {
+    throw new Error("Firebase Storage is not available.");
+  }
+  const storageRef = storageInstance.ref(storagePath);
+  await storageRef.putFile(input.localUri, { contentType: mimeType });
+  const imageUrl = await storageRef.getDownloadURL();
+
+  const messagesRef = collection(db, `organizations/${input.orgId}/chats/${input.chatId}/messages`);
+  await addDoc(messagesRef, {
+    orgId: input.orgId,
+    chatId: input.chatId,
+    senderUid: uid,
+    senderName: authUser?.displayName ?? authUser?.email ?? uid,
+    senderEmail: authUser?.email ?? "",
+    text: "",
+    type: "image",
+    imageUrl,
+    storagePath,
+    createdAt: serverTimestamp(),
+    status: "sent",
+  });
+
+  const chatRef = doc(db, `organizations/${input.orgId}/chats/${input.chatId}`);
+  await updateDoc(chatRef, {
+    updatedAt: serverTimestamp(),
+    lastMessageText: "📷",
+    lastMessageAt: serverTimestamp(),
+    lastMessageByUid: uid,
+  });
 }
 
 export async function sendTextMessage(input: { orgId: string; chatId: string; text: string }): Promise<void> {

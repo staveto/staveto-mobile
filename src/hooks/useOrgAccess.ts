@@ -68,6 +68,10 @@ export function useOrgAccess() {
       orgStatus === "active" &&
       businessEnabled;
 
+    /** Team inbox/chat — same org access as Business dashboard (incl. trial / pending payment). */
+    const canAccessBusinessChat =
+      !!activeBusinessOrgId && isActiveMember && statusAllowsDashboard;
+
     let dashboardBlockReason = "dashboard_allowed";
     if (!activeBusinessOrgId) {
       dashboardBlockReason = "missing_active_business_org_id";
@@ -108,6 +112,7 @@ export function useOrgAccess() {
       statusAllowsDashboard,
       canViewBusinessDashboard,
       canAccessBusiness,
+      canAccessBusinessChat,
       dashboardBlockReason,
     };
   }, [activeBusinessOrgId, activeMembership, activeOrganization]);

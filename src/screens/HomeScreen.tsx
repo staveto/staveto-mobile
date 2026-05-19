@@ -370,7 +370,7 @@ export function HomeScreen() {
   const { t } = useI18n();
   const { user, orgId } = useAuth();
   const { activeBusinessOrgId, activeOrganization, activeMembership } = useActiveOrg();
-  const { canAccessBusiness } = useOrgAccess();
+  const { canAccessBusiness, canAccessBusinessChat } = useOrgAccess();
   const { isOnline } = useOnlineStatus();
   const [dashboardData, setDashboardData] = useState<DashboardViewModel | null>(null);
   const [liveRows, setLiveRows] = useState<LiveProjectRow[]>([]);
@@ -482,10 +482,7 @@ export function HomeScreen() {
   const [chatUnreadCount, setChatUnreadCount] = useState(0);
   const quickNoteCtx = useQuickNoteContext();
   const canOpenBusinessChat = Boolean(
-    activeBusinessOrgId &&
-      activeOrganization &&
-      activeMembership?.status === "active" &&
-      canAccessBusiness
+    activeBusinessOrgId && activeOrganization && canAccessBusinessChat
   );
 
   useEffect(() => {

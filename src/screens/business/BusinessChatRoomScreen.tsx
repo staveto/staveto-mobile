@@ -3,6 +3,7 @@ import {
   ActivityIndicator,
   Alert,
   FlatList,
+  Image,
   KeyboardAvoidingView,
   Platform,
   Pressable,
@@ -11,6 +12,7 @@ import {
   TextInput,
   View,
 } from "react-native";
+import * as ImagePicker from "expo-image-picker";
 import { useRoute } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -21,9 +23,11 @@ import {
   ensureGeneralChat,
   listenChatMessages,
   markChatRead,
+  sendImageMessage,
   sendTextMessage,
   type BusinessChatMessageDoc,
 } from "../../services/businessChat";
+import { useOrgAccess } from "../../hooks/useOrgAccess";
 
 type ChatRouteParams = {
   orgId?: string;
@@ -60,10 +64,12 @@ export function BusinessChatRoomScreen() {
   const { t } = useI18n();
   const insets = useSafeAreaInsets();
   const { activeBusinessOrgId } = useActiveOrg();
+  const { isViewer, canAccessBusinessChat } = useOrgAccess();
   const [messages, setMessages] = useState<BusinessChatMessageDoc[]>([]);
   const [input, setInput] = useState("");
   const [loading, setLoading] = useState(true);
   const [sending, setSending] = useState(false);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const flatListRef = useRef<FlatList<BusinessChatMessageDoc> | null>(null);
   const cleanupRef = React.useRef<(() => void) | null>(null);
@@ -128,9 +134,11 @@ export function BusinessChatRoomScreen() {
     };
   }, [chatId, orgId, refreshRead, t]);
 
-  const canSend = input.trim().length > 0 && !sending;
+  const canWriteChat = canAccessBusinessChat && !isViewer;
+  const canSend = canWriteChat && input.trim().length > 0 && !sending && !uploadingPhoto;
 
   const onSend = async () => {
+    if (!canWriteChat) return;
     if (!canSend || !orgId || !chatId) return;
     setSending(true);
     setError(null);
@@ -148,6 +156,43 @@ export function BusinessChatRoomScreen() {
       setSending(false);
     }
   };
+
+  const onPickPhoto = useCallback(async () => {
+    if (!canWriteChat || !orgId || !chatId) {
+      Alert.alert(t("business.chat.noAccessTitle"), t("business.chat.noAccessBody"));
+      return;
+    }
+    const permission = await ImagePicker.requestMediaLibraryPermissionsAsync();
+    if (!permission.granted) {
+      Alert.alert(t("business.chat.noAccessTitle"), t("business.chat.error"));
+      return;
+    }
+    const result = await ImagePicker.launchImageLibraryAsync({
+      mediaTypes: ImagePicker.MediaTypeOptions.Images,
+      quality: 0.85,
+      allowsEditing: false,
+    });
+    if (result.canceled || !result.assets?.[0]?.uri) return;
+
+    const asset = result.assets[0];
+    setUploadingPhoto(true);
+    setError(null);
+    try {
+      await sendImageMessage({
+        orgId,
+        chatId,
+        localUri: asset.uri,
+        mimeType: asset.mimeType ?? "image/jpeg",
+      });
+      await refreshRead();
+      requestAnimationFrame(() => flatListRef.current?.scrollToEnd({ animated: true }));
+    } catch (e) {
+      const message = e instanceof Error ? e.message : String(e);
+      setError(message || t("business.chat.error"));
+    } finally {
+      setUploadingPhoto(false);
+    }
+  }, [canWriteChat, chatId, orgId, refreshRead, t]);
 
   const data = useMemo(() => messages, [messages]);
 
@@ -180,9 +225,18 @@ export function BusinessChatRoomScreen() {
                   </Text>
                 ) : null}
                 <View style={[styles.bubble, mine ? styles.bubbleMine : styles.bubbleOther]}>
-                  <Text style={[styles.messageText, mine ? styles.messageTextMine : styles.messageTextOther]}>
-                    {item.text}
-                  </Text>
+                  {item.type === "image" && item.imageUrl ? (
+                    <Image
+                      source={{ uri: item.imageUrl }}
+                      style={styles.chatImage}
+                      resizeMode="cover"
+                      accessibilityLabel="Photo"
+                    />
+                  ) : (
+                    <Text style={[styles.messageText, mine ? styles.messageTextMine : styles.messageTextOther]}>
+                      {item.text}
+                    </Text>
+                  )}
                 </View>
                 <Text style={styles.time}>{formatMessageTime(item.createdAt)}</Text>
               </View>
@@ -194,12 +248,15 @@ export function BusinessChatRoomScreen() {
       <KeyboardAvoidingView behavior={Platform.OS === "ios" ? "padding" : undefined} keyboardVerticalOffset={64}>
         <View style={[styles.inputWrap, { paddingBottom: Math.max(insets.bottom, 8) }]}>
           <Pressable
-            style={styles.photoBtn}
-            onPress={() =>
-              Alert.alert(t("business.chat.photoComingSoonTitle"), t("business.chat.photoComingSoonBody"))
-            }
+            style={[styles.photoBtn, (!canWriteChat || uploadingPhoto) && styles.photoBtnDisabled]}
+            onPress={onPickPhoto}
+            disabled={!canWriteChat || uploadingPhoto || sending}
           >
-            <Ionicons name="image-outline" size={22} color="#1E3A8A" />
+            {uploadingPhoto ? (
+              <ActivityIndicator size="small" color="#1E3A8A" />
+            ) : (
+              <Ionicons name="image-outline" size={22} color="#1E3A8A" />
+            )}
           </Pressable>
           <TextInput
             value={input}
@@ -209,6 +266,7 @@ export function BusinessChatRoomScreen() {
             multiline
             style={styles.input}
             maxLength={1200}
+            editable={canWriteChat && !uploadingPhoto}
           />
           <Pressable style={[styles.sendBtn, !canSend && styles.sendBtnDisabled]} disabled={!canSend} onPress={onSend}>
             <Text style={styles.sendText}>{t("business.chat.send")}</Text>
@@ -294,6 +352,12 @@ const styles = StyleSheet.create({
   messageTextOther: {
     color: "#0F172A",
   },
+  chatImage: {
+    width: 220,
+    height: 165,
+    borderRadius: 10,
+    backgroundColor: "#E2E8F0",
+  },
   time: {
     marginTop: 3,
     color: "#94A3B8",
@@ -317,6 +381,9 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     marginBottom: 6,
+  },
+  photoBtnDisabled: {
+    opacity: 0.45,
   },
   input: {
     flex: 1,

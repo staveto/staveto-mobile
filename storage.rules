@@ -104,6 +104,24 @@ service firebase.storage {
         && request.resource.size < 10 * 1024 * 1024;
     }
 
+    function isOrgMemberActive(orgId) {
+      return signedIn()
+        && firestore.exists(/databases/(default)/documents/organizations/$(orgId)/members/$(uid()))
+        && firestore.get(/databases/(default)/documents/organizations/$(orgId)/members/$(uid())).data.status == 'active';
+    }
+
+    function isOrgChatWriter(orgId) {
+      return isOrgMemberActive(orgId)
+        && firestore.get(/databases/(default)/documents/organizations/$(orgId)/members/$(uid())).data.role in ['owner', 'admin', 'manager', 'worker'];
+    }
+
+    // Business team chat images
+    match /organizations/{orgId}/chats/{chatId}/messages/{fileName} {
+      allow read: if isOrgMemberActive(orgId);
+      allow write: if isOrgChatWriter(orgId)
+        && request.resource.size < 15 * 1024 * 1024;
+    }
+
     // User profile photos
     match /users/{userId}/profile/{fileName} {
       allow read: if signedIn() && uid() == userId;

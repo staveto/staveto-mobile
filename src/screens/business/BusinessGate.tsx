@@ -1,4 +1,4 @@
-import React, { useEffect } from "react";
+import React, { useEffect, useMemo } from "react";
 import { ActivityIndicator, StyleSheet, Text, View } from "react-native";
 import { useAuth } from "../../context/AuthContext";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
@@ -21,11 +21,28 @@ export function BusinessGate({ children }: BusinessGateProps) {
     canViewBusinessDashboard,
     pendingCanAccess,
     trialActive,
+    hasActiveBusinessOrder,
+    businessEnabled,
     dashboardBlockReason,
   } = useOrgAccess();
 
+  const finalDecision = useMemo(() => {
+    if (loading) return "loading";
+    if (!activeBusinessOrgId) return "unavailable";
+    if (orgStatus === "suspended") return "suspended";
+    if (orgStatus === "cancelled") return "unavailable";
+    if (orgStatus === "pending_payment" && !canViewBusinessDashboard) return "pending_payment";
+    if (canViewBusinessDashboard || canAccessBusiness) return "dashboard";
+    return "unavailable";
+  }, [
+    loading,
+    activeBusinessOrgId,
+    orgStatus,
+    canViewBusinessDashboard,
+    canAccessBusiness,
+  ]);
+
   useEffect(() => {
-    if (loading) return;
     console.log("[BusinessGateDebug]", {
       authUid: user?.id ?? null,
       activeBusinessOrgId,
@@ -34,27 +51,31 @@ export function BusinessGate({ children }: BusinessGateProps) {
       businessEnabled: activeOrganization?.businessEnabled ?? null,
       trialEndsAt: activeOrganization?.trialEndsAt ?? null,
       activeBusinessOrderId: activeOrganization?.activeBusinessOrderId ?? null,
+      orderNumber: (activeOrganization as { orderNumber?: string } | null)?.orderNumber ?? null,
       membershipId: activeMembership?.id ?? null,
       membershipUserId: activeMembership?.userId ?? null,
       membershipRole: activeMembership?.role ?? null,
       membershipStatus: activeMembership?.status ?? null,
+      trialActive,
+      hasActiveBusinessOrder,
+      pendingCanAccess,
       canAccessBusiness,
       canViewBusinessDashboard,
-      pendingCanAccess,
-      trialActive,
       dashboardBlockReason,
+      finalDecision,
     });
   }, [
-    loading,
     user?.id,
     activeBusinessOrgId,
     activeOrganization,
     activeMembership,
+    trialActive,
+    hasActiveBusinessOrder,
+    pendingCanAccess,
     canAccessBusiness,
     canViewBusinessDashboard,
-    pendingCanAccess,
-    trialActive,
     dashboardBlockReason,
+    finalDecision,
   ]);
 
   if (loading) {
@@ -79,7 +100,14 @@ export function BusinessGate({ children }: BusinessGateProps) {
   }
 
   if (orgStatus === "pending_payment" && !canViewBusinessDashboard) {
-    return <PendingPaymentScreen />;
+    return (
+      <PendingPaymentScreen
+        debugReason={dashboardBlockReason}
+        orgStatus={orgStatus ?? undefined}
+        businessEnabled={businessEnabled}
+        membershipStatus={activeMembership?.status}
+      />
+    );
   }
 
   if (canViewBusinessDashboard || canAccessBusiness) {

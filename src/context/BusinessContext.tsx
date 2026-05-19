@@ -136,6 +136,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     const runId = ++refreshRunRef.current;
     const expectedOrgId = activeBusinessOrgId;
     const expectedUserId = user?.id ?? null;
+    const storedOrgId = expectedOrgId;
     try {
       const [organization, membership] = await Promise.all([
         getOrganization(expectedOrgId),
@@ -147,9 +148,39 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       }
 
       if (!organization || !membership) {
-        await resolveAndSetPreferredOrg(expectedUserId ?? "");
+        if (__DEV__) {
+          console.log("[BusinessContextDebug]", {
+            storedOrgId,
+            resolvedOrgId: organization?.id ?? null,
+            membershipStatus: membership?.status ?? null,
+            membershipUserId: membership?.userId ?? null,
+            fallback: "resolveAndSetPreferredOrg",
+          });
+        }
+        const fellBack = await resolveAndSetPreferredOrg(expectedUserId ?? "");
+        if (__DEV__) {
+          console.log("[BusinessContextDebug]", {
+            storedOrgId,
+            selectedOrgId: fellBack ? "preferred" : null,
+            fallbackApplied: fellBack,
+          });
+        }
         setLoading(false);
         return;
+      }
+
+      if (__DEV__) {
+        console.log("[BusinessContextDebug]", {
+          storedOrgId,
+          resolvedOrgId: organization.id,
+          membershipId: membership.id,
+          membershipUserId: membership.userId,
+          membershipStatus: membership.status,
+          orgStatus: organization.status,
+          businessEnabled: organization.businessEnabled,
+          activeBusinessOrderId: organization.activeBusinessOrderId ?? null,
+          selectedOrgId: organization.id,
+        });
       }
 
       setActiveOrganization(organization);

@@ -34,7 +34,7 @@ import * as dashboardService from "../services/dashboard";
 import type { TodaysWorkTask } from "../services/dashboard";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectCoverService from "../services/projectCover";
-import type { ProjectDoc } from "../services/projects";
+import { listMyProjects, type ProjectDoc } from "../services/projects";
 import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
 import { db, getCallable } from "../firebase";
@@ -62,6 +62,7 @@ import {
   isLegacyMaintenanceEquipmentHub,
   isSoloOwnerProjectRow,
   isSharedOrCollaborativeProjectRow,
+  isProjectShownOnProjectsJobsTab,
 } from "../lib/projectTypeModel";
 import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
 import { readStoredPrimaryUsageMode } from "../lib/primaryUsageMode";
@@ -78,6 +79,61 @@ try {
   DocumentPicker = require('expo-document-picker');
 } catch (e) {
   console.warn('expo-image-picker or expo-document-picker not installed. Attachment features will be disabled.');
+}
+
+const HOME_LOAD_TIMEOUT_MS = 18_000;
+const HOME_SECONDARY_TIMEOUT_MS = 12_000;
+
+type DashboardViewModel = {
+  projects: ProjectDoc[];
+  todayTasks: Array<TaskDoc & { projectName: string; phaseName?: string }>;
+  todaysWorkTasks: TodaysWorkTask[];
+  kpis: {
+    openCount: number;
+    doneTodayCount: number;
+    blockedCount: number;
+    overdueCount: number;
+    expensesMonthSum: number;
+    expensesTotalSum: number;
+    hasExpensesAccess: boolean;
+  };
+  projectStats: Map<string, { openCount: number; totalCount: number; progress: number }>;
+  timeTrackingProjectIds?: string[];
+};
+
+const EMPTY_HOME_DASHBOARD: DashboardViewModel = {
+  projects: [],
+  todayTasks: [],
+  todaysWorkTasks: [],
+  kpis: {
+    openCount: 0,
+    doneTodayCount: 0,
+    blockedCount: 0,
+    overdueCount: 0,
+    expensesMonthSum: 0,
+    expensesTotalSum: 0,
+    hasExpensesAccess: false,
+  },
+  projectStats: new Map(),
+  timeTrackingProjectIds: [],
+};
+
+function homeLoadTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`[HomeLoadDebug] ${label}_TIMEOUT`)), ms);
+    }),
+  ]);
+}
+
+function homeLoadDebug(
+  loadId: number,
+  authUid: string | null,
+  msg: string,
+  extra?: Record<string, unknown>
+): void {
+  console.log("[HomeLoadDebug]", { loadId, authUid, ...extra, msg });
 }
 
 function formatMinutesToHours(minutes: number): string {
@@ -105,23 +161,6 @@ const PROJECTS_FILTER_KEY = "projects_filter_v1";
 const TYPE_FILTER_KEY = "home_type_filter_v1";
 type ProjectFilter = "all" | "mine" | "shared";
 type TypeFilter = "ALL" | "BUILD" | "TRADE";
-
-type DashboardViewModel = {
-  projects: ProjectDoc[];
-  todayTasks: Array<TaskDoc & { projectName: string; phaseName?: string }>;
-  todaysWorkTasks: TodaysWorkTask[];
-  kpis: {
-    openCount: number;
-    doneTodayCount: number;
-    blockedCount: number;
-    overdueCount: number;
-    expensesMonthSum: number;
-    expensesTotalSum: number;
-    hasExpensesAccess: boolean;
-  };
-  projectStats: Map<string, { openCount: number; totalCount: number; progress: number }>;
-  timeTrackingProjectIds?: string[];
-};
 
 type LiveProjectRow = {
   projectId: string;
@@ -339,6 +378,8 @@ export function HomeScreen() {
   const [loading, setLoading] = useState(true);
   const [loadError, setLoadError] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
+  const homeLoadSeqRef = useRef(0);
+  const homeLoadInFlightRef = useRef(false);
   const [lastUsedProjectId, setLastUsedProjectId] = useState<string | null>(null);
   /** User equipment service work — Home shows a small alert only, not as a project. */
   const [equipmentHomeSummary, setEquipmentHomeSummary] = useState<{
@@ -787,11 +828,30 @@ export function HomeScreen() {
   }, [loading, dashboardData]);
 
   const loadDashboard = useCallback(async (isRefresh = false) => {
+    const loadId = ++homeLoadSeqRef.current;
+    const authUid = user?.id ?? orgId ?? null;
+    const startedAt = Date.now();
+    const isStale = () => homeLoadSeqRef.current !== loadId;
+
+    homeLoadDebug(loadId, authUid, "load start", { isRefresh, startedAt });
+
     if (!orgId) {
-      setEquipmentHomeSummary(null);
-      setLoading(false);
+      if (!isStale()) {
+        setEquipmentHomeSummary(null);
+        setDashboardData(EMPTY_HOME_DASHBOARD);
+        setLoadError(false);
+        setLoading(false);
+        setRefreshing(false);
+        homeLoadDebug(loadId, authUid, "setLoading(false) — no orgId");
+      }
       return;
     }
+
+    if (homeLoadInFlightRef.current && !isRefresh) {
+      homeLoadDebug(loadId, authUid, "skip duplicate in-flight load");
+      return;
+    }
+    homeLoadInFlightRef.current = true;
 
     if (isRefresh) {
       setRefreshing(true);
@@ -799,97 +859,170 @@ export function HomeScreen() {
       setLoading(true);
     }
 
+    let projectsPhase: ProjectDoc[] = [];
+
     try {
       if (isRefresh) {
-        try {
-          await getCallable("syncMyProjectsSharedCount")({});
-        } catch (e) {
-          console.warn("[HomeScreen] syncMyProjectsSharedCount failed:", e);
-          try {
-            await getCallable("backfillProjectSharedCounts")({});
-          } catch (e2) {
-            console.warn("[HomeScreen] backfillProjectSharedCounts failed:", e2);
+        homeLoadDebug(loadId, authUid, "start sync callable");
+        const syncResults = await Promise.allSettled([
+          homeLoadTimeout(getCallable("syncMyProjectsSharedCount")({}), HOME_SECONDARY_TIMEOUT_MS, "syncMyProjectsSharedCount"),
+        ]);
+        syncResults.forEach((r, i) => {
+          if (r.status === "rejected") {
+            homeLoadDebug(loadId, authUid, "sync callable failed", { index: i, error: String(r.reason) });
           }
-        }
+        });
+        homeLoadDebug(loadId, authUid, "end sync callable");
       }
-      const data = await dashboardService.loadDashboardData(orgId, { forceServerRead: isRefresh });
-      let monthlyMins = 0;
+
+      homeLoadDebug(loadId, authUid, "start projects");
+      const projectsStart = Date.now();
       try {
-        monthlyMins = user?.id
-          ? await timeTracking.getMonthlyMinutes(user.id, new Date().getFullYear(), new Date().getMonth() + 1)
-          : 0;
-      } catch (e) {
-        console.warn("[HomeScreen] getMonthlyMinutes failed:", e);
-      }
-      setMonthlyMinutes(monthlyMins);
-
-      // Ensure overdue notifications exist (for tasks past due date)
-      if (typeof tasksService.ensureOverdueNotificationsIfNeeded === "function") {
-        tasksService.ensureOverdueNotificationsIfNeeded(orgId).catch((e) =>
-          console.warn("[HomeScreen] ensureOverdueNotificationsIfNeeded failed:", e)
+        const rawProjects = await homeLoadTimeout(
+          listMyProjects(orgId, { forceServerRead: isRefresh }),
+          HOME_LOAD_TIMEOUT_MS,
+          "listMyProjects"
         );
-      }
-      if (user?.id) {
-        const { ensureUserEquipmentServiceOverdueNotificationsIfNeeded } = await import(
-          "../services/userEquipmentServiceTasks"
-        );
-        ensureUserEquipmentServiceOverdueNotificationsIfNeeded(user.id).catch((e) =>
-          console.warn("[HomeScreen] ensureUserEquipmentServiceOverdueNotificationsIfNeeded failed:", e)
-        );
+        projectsPhase = rawProjects.filter(isProjectShownOnProjectsJobsTab);
+        homeLoadDebug(loadId, authUid, "end projects", {
+          projectCount: projectsPhase.length,
+          ms: Date.now() - projectsStart,
+        });
+      } catch (projectsError) {
+        homeLoadDebug(loadId, authUid, "projects error", {
+          error: projectsError instanceof Error ? projectsError.message : String(projectsError),
+          ms: Date.now() - projectsStart,
+        });
       }
 
-      // Upcoming tasks already carry projectName from dashboard — no per-task phase fetch (expensive, unused on Home).
-      const enrichedTasks = data.todayTasks.map((t) => ({
-        ...t,
-        projectName: t.projectName || data.projects.find((p) => p.id === t.projectId)?.name || "—",
-        phaseName: undefined as string | undefined,
-      }));
+      if (!isStale()) {
+        setDashboardData({
+          ...EMPTY_HOME_DASHBOARD,
+          projects: projectsPhase,
+        });
+        setLoadError(false);
+        setLoading(false);
+        homeLoadDebug(loadId, authUid, "setLoading(false) after projects", {
+          projectCount: projectsPhase.length,
+        });
+      }
 
-      setDashboardData({
-        projects: data.projects,
-        todayTasks: enrichedTasks,
-        todaysWorkTasks: data.todaysWorkTasks ?? [],
-        kpis: data.kpis,
-        projectStats: data.projectStats,
-        timeTrackingProjectIds: data.timeTrackingProjectIds,
-      });
-      setLoadError(false);
+      homeLoadDebug(loadId, authUid, "start dashboard aggregate");
+      const aggregateStart = Date.now();
+      const [dashboardSettled, monthlySettled, equipmentSettled] = await Promise.allSettled([
+        homeLoadTimeout(
+          dashboardService.loadDashboardData(orgId, { forceServerRead: isRefresh }),
+          HOME_LOAD_TIMEOUT_MS,
+          "loadDashboardData"
+        ),
+        user?.id
+          ? homeLoadTimeout(
+              timeTracking.getMonthlyMinutes(user.id, new Date().getFullYear(), new Date().getMonth() + 1),
+              HOME_SECONDARY_TIMEOUT_MS,
+              "getMonthlyMinutes"
+            )
+          : Promise.resolve(0),
+        user?.id
+          ? homeLoadTimeout(
+              import("../services/userEquipmentServiceTasks").then((m) =>
+                m.getUserEquipmentHomeSummary(user.id!)
+              ),
+              HOME_SECONDARY_TIMEOUT_MS,
+              "getUserEquipmentHomeSummary"
+            )
+          : Promise.resolve(null),
+      ]);
+      homeLoadDebug(loadId, authUid, "end dashboard aggregate", { ms: Date.now() - aggregateStart });
 
-      if (user?.id) {
-        try {
-          const { getUserEquipmentHomeSummary } = await import("../services/userEquipmentServiceTasks");
-          const s = await getUserEquipmentHomeSummary(user.id);
-          setEquipmentHomeSummary(s);
-        } catch (e) {
-          if (__DEV__) console.warn("[HomeScreen] getUserEquipmentHomeSummary failed:", e);
-          setEquipmentHomeSummary({ openServiceTasks: 0, dueTodayOrOverdue: 0 });
+      if (isStale()) {
+        homeLoadDebug(loadId, authUid, "stale after aggregate — skip state");
+        return;
+      }
+
+      if (dashboardSettled.status === "fulfilled") {
+        const data = dashboardSettled.value;
+        homeLoadDebug(loadId, authUid, "dashboard ok", {
+          projectCount: data.projects.length,
+          taskCount: data.todayTasks.length,
+        });
+
+        const enrichedTasks = data.todayTasks.map((task) => ({
+          ...task,
+          projectName: task.projectName || data.projects.find((p) => p.id === task.projectId)?.name || "—",
+          phaseName: undefined as string | undefined,
+        }));
+
+        setDashboardData({
+          projects: data.projects.length > 0 ? data.projects : projectsPhase,
+          todayTasks: enrichedTasks,
+          todaysWorkTasks: data.todaysWorkTasks ?? [],
+          kpis: data.kpis,
+          projectStats: data.projectStats,
+          timeTrackingProjectIds: data.timeTrackingProjectIds,
+        });
+        setLoadError(false);
+
+        if (typeof tasksService.ensureOverdueNotificationsIfNeeded === "function") {
+          tasksService.ensureOverdueNotificationsIfNeeded(orgId).catch((e) =>
+            console.warn("[HomeScreen] ensureOverdueNotificationsIfNeeded failed:", e)
+          );
+        }
+        if (user?.id) {
+          import("../services/userEquipmentServiceTasks")
+            .then((m) => m.ensureUserEquipmentServiceOverdueNotificationsIfNeeded(user.id!))
+            .catch((e) =>
+              console.warn("[HomeScreen] ensureUserEquipmentServiceOverdueNotificationsIfNeeded failed:", e)
+            );
         }
       } else {
+        homeLoadDebug(loadId, authUid, "dashboard failed — keep projects", {
+          error: String(dashboardSettled.reason),
+        });
+        setLoadError(true);
+        setDashboardData({
+          ...EMPTY_HOME_DASHBOARD,
+          projects: projectsPhase,
+        });
+      }
+
+      if (monthlySettled.status === "fulfilled") {
+        homeLoadDebug(loadId, authUid, "end time tracking", { monthlyMinutes: monthlySettled.value });
+        setMonthlyMinutes(monthlySettled.value);
+      } else {
+        homeLoadDebug(loadId, authUid, "time tracking error", { error: String(monthlySettled.reason) });
+      }
+
+      if (equipmentSettled.status === "fulfilled") {
+        homeLoadDebug(loadId, authUid, "end equipment summary");
+        setEquipmentHomeSummary(equipmentSettled.value);
+      } else if (equipmentSettled.status === "rejected") {
+        homeLoadDebug(loadId, authUid, "equipment summary error", { error: String(equipmentSettled.reason) });
+        setEquipmentHomeSummary({ openServiceTasks: 0, dueTodayOrOverdue: 0 });
+      }
+    } catch (error: unknown) {
+      homeLoadDebug(loadId, authUid, "load error", {
+        error: error instanceof Error ? error.message : String(error),
+      });
+      console.error("[HomeScreen] Error loading dashboard:", error);
+      if (!isStale()) {
+        setLoadError(true);
+        setDashboardData({
+          ...EMPTY_HOME_DASHBOARD,
+          projects: projectsPhase,
+        });
         setEquipmentHomeSummary(null);
       }
-    } catch (error: any) {
-      console.error("[HomeScreen] Error loading dashboard:", error);
-      setLoadError(true);
-      setDashboardData({
-        projects: [],
-        todayTasks: [],
-        todaysWorkTasks: [],
-        kpis: {
-          openCount: 0,
-          doneTodayCount: 0,
-          blockedCount: 0,
-          overdueCount: 0,
-          expensesMonthSum: 0,
-          expensesTotalSum: 0,
-          hasExpensesAccess: false,
-        },
-        projectStats: new Map(),
-        timeTrackingProjectIds: [],
-      });
-      setEquipmentHomeSummary(null);
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      homeLoadInFlightRef.current = false;
+      if (!isStale()) {
+        setLoading(false);
+        setRefreshing(false);
+        homeLoadDebug(loadId, authUid, "finally setLoading(false)", {
+          elapsedMs: Date.now() - startedAt,
+        });
+      } else {
+        homeLoadDebug(loadId, authUid, "finally stale — skip setLoading");
+      }
     }
   }, [orgId, user?.id]);
 
@@ -1048,8 +1181,7 @@ export function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadDashboard(false);
-      if (isOnline) loadDashboard(true);
+      loadDashboard(isOnline);
       setCalendarRefreshTrigger((prev) => prev + 1);
       (async () => {
         await trackPaywallEvent("app_opened");

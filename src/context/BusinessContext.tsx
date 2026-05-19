@@ -11,8 +11,8 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "./AuthContext";
 import {
   findPreferredBusinessOrgForUser,
-  getMembership,
   getOrganization,
+  resolveMembershipForUser,
   type MembershipDoc,
   type OrganizationDoc,
 } from "../services/organizations";
@@ -139,7 +139,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     try {
       const [organization, membership] = await Promise.all([
         getOrganization(expectedOrgId),
-        getMembership(expectedOrgId, expectedUserId ?? ""),
+        resolveMembershipForUser(expectedOrgId, expectedUserId ?? ""),
       ]);
 
       if (runId !== refreshRunRef.current) {

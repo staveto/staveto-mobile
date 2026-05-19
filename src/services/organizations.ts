@@ -533,6 +533,20 @@ export async function getMembership(
   }
 }
 
+/**
+ * Resolves membership by `organizations/{orgId}/members/{uid}` first, then
+ * falls back to collection-group lookup when the doc id is not the auth uid.
+ */
+export async function resolveMembershipForUser(
+  orgId: string,
+  userId: string
+): Promise<MembershipDoc | null> {
+  const direct = await getMembership(orgId, userId);
+  if (direct) return direct;
+  const memberships = await listMyMemberships(userId);
+  return memberships.find((row) => row.orgId === orgId) ?? null;
+}
+
 export async function getBusinessOrder(orderId: string): Promise<BusinessOrderDoc | null> {
   if (typeof orderId !== "string" || orderId.trim().length === 0) return null;
   requireSignedInUid();

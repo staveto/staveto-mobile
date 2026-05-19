@@ -7,3 +7,4 @@ export { adminActivateBusinessOrg } from "./business/adminActivateBusinessOrg";
 export { createBusinessOrg } from "./business/createBusinessOrg";
 export { createBusinessCheckoutSession } from "./business/createBusinessCheckoutSession";
 export { updateBusinessOrderPlan } from "./business/updateBusinessOrderPlan";
+export { updateBusinessMemberRole } from "./business/updateBusinessMemberRole";

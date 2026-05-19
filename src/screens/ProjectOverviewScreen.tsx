@@ -101,6 +101,7 @@ import type { ProjectEvent } from "../lib/types";
 import type { ProjectWeatherSnapshot } from "../services/weather";
 import { DescriptionInputModal } from "../components/DescriptionInputModal";
 import { InAppAttachmentViewer, inferInAppViewerMode } from "../components/InAppAttachmentViewer";
+import { AppBottomMenu, getAppBottomMenuExtraPadding } from "../components/AppBottomMenu";
 import { CurrencyDropdown } from "../components/CurrencyDropdown";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
 import {
@@ -4120,7 +4121,10 @@ export function ProjectOverviewScreen() {
       {/* Scrollable content */}
       <ScrollView 
         style={styles.scrollContent}
-        contentContainerStyle={styles.scrollContentContainer}
+        contentContainerStyle={[
+          styles.scrollContentContainer,
+          { paddingBottom: spacing.xl * 3 + getAppBottomMenuExtraPadding(insets.bottom) },
+        ]}
         nestedScrollEnabled
         refreshControl={
           <RefreshControl
@@ -5366,7 +5370,7 @@ export function ProjectOverviewScreen() {
       </ScrollView>
 
       {/* Bottom: List toggle + FAB/Button for new task */}
-      <View style={[styles.bottomBar, { paddingBottom: insets.bottom + spacing.md }]}>
+      <View style={[styles.bottomBar, { paddingBottom: spacing.md }]}>
         {projectType !== 'MAINTENANCE' && (
           <TouchableOpacity style={styles.listBtn}>
             <Ionicons name="swap-vertical" size={20} color={colors.textOnDark} style={{ marginRight: 6 }} />
@@ -5435,6 +5439,8 @@ export function ProjectOverviewScreen() {
           )
         ) : null}
       </View>
+
+      <AppBottomMenu activeTab="Projects" />
 
       <Modal
         visible={showAssigneeModal}

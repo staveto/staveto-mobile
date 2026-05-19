@@ -338,6 +338,31 @@ export async function getProject(projectId: string): Promise<ProjectDoc | null> 
 }
 
 /**
+ * collectionGroup("members") matches projects/{projectId}/members/* and organizations/{orgId}/members/*.
+ * Only the former is a project membership.
+ */
+function projectIdFromProjectMembersDoc(
+  path: string,
+  parent: FirebaseFirestoreTypes.CollectionReference | null | undefined
+): string | null {
+  if (!parent || parent.id !== "members") {
+    console.log(`[projects] skipped non-project member doc: ${path}`);
+    return null;
+  }
+  const projectDocRef = parent.parent;
+  if (!projectDocRef?.id) {
+    console.log(`[projects] skipped non-project member doc: ${path}`);
+    return null;
+  }
+  const rootCollection = projectDocRef.parent;
+  if (!rootCollection || rootCollection.id !== "projects") {
+    console.log(`[projects] skipped non-project member doc: ${path}`);
+    return null;
+  }
+  return projectDocRef.id;
+}
+
+/**
  * Internal helper to load all projects (including archived)
  */
 async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: boolean): Promise<ProjectDoc[]> {
@@ -417,16 +442,16 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
     const memberProjectIds = new Set<string>();
     const ownerIds = new Set(ownerProjects.map((p) => p.id));
 
-    // Source 1: collectionGroup('members') where userId == uid
+    // Source 1: collectionGroup('members') where userId == uid (projects/*/members only — not organizations/*/members)
     if (!memberQueryPermissionDenied) {
       try {
         const membersGroup = collectionGroup(db, "members");
         const memberQuery = query(membersGroup, where("userId", "==", actualOwnerId));
         const memberSnap = await getDocsSmart(memberQuery, smartOpts);
         memberSnap.docs.forEach((d) => {
-          const pathParts = d.ref.path.split("/");
-          const projectId = pathParts[1];
-          if (projectId && !ownerIds.has(projectId)) memberProjectIds.add(projectId);
+          const projectId = projectIdFromProjectMembersDoc(d.ref.path, d.ref.parent);
+          if (!projectId) return;
+          if (!ownerIds.has(projectId)) memberProjectIds.add(projectId);
         });
         if (memberSnap.docs.length > 0) {
           console.log(`[projects] listAllMyProjectsInternal: found ${memberSnap.docs.length} member docs via collectionGroup`);

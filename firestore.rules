@@ -7,27 +7,38 @@ service cloud.firestore {
     function hasPhone() { return request.auth.token.phone_number != null; }
 
     // B2B Org helpers: orgId must be non-null; members must have status 'active'
-    function isOrgMember(orgId, u) {
-      return orgId != null && orgId != ''
-        && exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(u))
-        && get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.status == 'active';
-    }
-    function isOrgMemberActive(orgId) {
-      return isOrgMember(orgId, uid());
-    }
-    function isOrgAdmin(orgId, u) {
-      return isOrgMember(orgId, u)
-        && get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role == 'admin';
-    }
     function isOrgOwner(orgId, u) {
       return orgId != null
         && orgId != ''
         && exists(/databases/$(database)/documents/organizations/$(orgId))
         && get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == u;
     }
+    function isOrgMember(orgId, u) {
+      return orgId != null && orgId != ''
+        && (
+          (
+            exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(u))
+            && get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.status == 'active'
+          )
+          || isOrgOwner(orgId, u)
+        );
+    }
+    function isOrgMemberActive(orgId) {
+      return isOrgMember(orgId, uid());
+    }
+    function isOrgAdmin(orgId, u) {
+      return isOrgMember(orgId, u)
+        && (
+          isOrgOwner(orgId, u)
+          || get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role == 'admin'
+        );
+    }
     function isOrgChatWriter(orgId, u) {
       return isOrgMember(orgId, u)
-        && get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['owner', 'admin', 'manager', 'worker'];
+        && (
+          isOrgOwner(orgId, u)
+          || get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['owner', 'admin', 'manager', 'worker']
+        );
     }
 
     function projectOwner(projectId) {
@@ -215,7 +226,11 @@ service cloud.firestore {
                   && get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == uid()
                   && request.resource.data.role == 'admin'
                   && request.resource.data.status == 'active'));
-        allow read: if signedIn() && (uid() == memberId || isOrgMemberActive(orgId));
+        allow read: if signedIn() && (
+          uid() == memberId
+          || isOrgMemberActive(orgId)
+          || (resource.data.userId == uid() && resource.data.status == 'active')
+        );
         allow update, delete: if signedIn() && isOrgAdmin(orgId, uid());
       }
 

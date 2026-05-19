@@ -104,15 +104,29 @@ service firebase.storage {
         && request.resource.size < 10 * 1024 * 1024;
     }
 
+    function isOrgOwner(orgId) {
+      return signedIn()
+        && firestore.exists(/databases/(default)/documents/organizations/$(orgId))
+        && firestore.get(/databases/(default)/documents/organizations/$(orgId)).data.ownerUid == uid();
+    }
+
     function isOrgMemberActive(orgId) {
       return signedIn()
-        && firestore.exists(/databases/(default)/documents/organizations/$(orgId)/members/$(uid()))
-        && firestore.get(/databases/(default)/documents/organizations/$(orgId)/members/$(uid())).data.status == 'active';
+        && (
+          (
+            firestore.exists(/databases/(default)/documents/organizations/$(orgId)/members/$(uid()))
+            && firestore.get(/databases/(default)/documents/organizations/$(orgId)/members/$(uid())).data.status == 'active'
+          )
+          || isOrgOwner(orgId)
+        );
     }
 
     function isOrgChatWriter(orgId) {
       return isOrgMemberActive(orgId)
-        && firestore.get(/databases/(default)/documents/organizations/$(orgId)/members/$(uid())).data.role in ['owner', 'admin', 'manager', 'worker'];
+        && (
+          isOrgOwner(orgId)
+          || firestore.get(/databases/(default)/documents/organizations/$(orgId)/members/$(uid())).data.role in ['owner', 'admin', 'manager', 'worker']
+        );
     }
 
     // Business team chat images

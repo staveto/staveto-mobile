@@ -100,6 +100,7 @@ import { formatEventSummary } from "../helpers/formatEvent";
 import type { ProjectEvent } from "../lib/types";
 import type { ProjectWeatherSnapshot } from "../services/weather";
 import { DescriptionInputModal } from "../components/DescriptionInputModal";
+import { InAppAttachmentViewer, inferInAppViewerMode } from "../components/InAppAttachmentViewer";
 import { CurrencyDropdown } from "../components/CurrencyDropdown";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
 import {
@@ -3773,28 +3774,8 @@ export function ProjectOverviewScreen() {
         return;
       }
       
-      // For images, show in modal viewer
-      if (attachment.fileType === 'image') {
-        setViewingAttachment(attachment);
-        setViewingAttachmentURL(url);
-        return;
-      }
-      
-      // For documents/PDFs, try to open with Linking
-      try {
-        const supported = await Linking.canOpenURL(url);
-        if (supported) {
-          await Linking.openURL(url);
-        } else {
-          Alert.alert(
-            'Otvoriť prílohu',
-            t("projectOverview.failedToAutoOpenAttachment")
-          );
-        }
-      } catch (error: any) {
-        console.error(`[ProjectOverview] Error opening document:`, error);
-        Alert.alert(t("common.error"), t("projectOverview.failedToOpenAttachment", { error: error.message || t("common.unknown") }));
-      }
+      setViewingAttachment(attachment);
+      setViewingAttachmentURL(url);
     } catch (error: any) {
       console.error(`[ProjectOverview] Error opening attachment:`, error);
       Alert.alert(t("common.error"), t("projectOverview.failedToOpenAttachment", { error: error.message || t("common.unknown") }));
@@ -5272,7 +5253,8 @@ export function ProjectOverviewScreen() {
                               return;
                             }
                             const url = await attachmentsService.getAttachmentURL(attachmentMeta);
-                            await Linking.openURL(url);
+                            setViewingAttachment(attachmentMeta);
+                            setViewingAttachmentURL(url);
                           } catch (error: any) {
                             console.warn("[ProjectOverview] Error opening document:", error);
                             Alert.alert(t("common.error"), t("projectOverview.failedToOpenDocument"));
@@ -6262,53 +6244,16 @@ export function ProjectOverviewScreen() {
         </View>
       </Modal>
 
-      {/* Image viewer modal */}
-      <Modal visible={viewingAttachment !== null} transparent animationType="fade">
-        <View style={styles.imageViewerOverlay}>
-          <View style={styles.imageViewerHeader}>
-            <Text style={styles.imageViewerTitle} numberOfLines={1}>
-              {viewingAttachment?.fileName}
-            </Text>
-            <TouchableOpacity
-              onPress={() => {
-                setViewingAttachment(null);
-                setViewingAttachmentURL(null);
-              }}
-              style={styles.imageViewerCloseButton}
-            >
-              <Ionicons name="close" size={28} color={colors.textOnDark} />
-            </TouchableOpacity>
-          </View>
-          {viewingAttachmentURL && (
-            <ScrollView
-              style={styles.imageViewerScroll}
-              contentContainerStyle={styles.imageViewerContent}
-              maximumZoomScale={3}
-              minimumZoomScale={1}
-              showsVerticalScrollIndicator={false}
-              showsHorizontalScrollIndicator={false}
-            >
-              <Image
-                source={{ uri: viewingAttachmentURL }}
-                style={styles.imageViewerImage}
-                resizeMode="contain"
-                onError={(error) => {
-                  console.error(`[ProjectOverview] Image load error:`, error);
-                  Alert.alert(
-                    t("common.error"), 
-                    t("projectOverview.failedToLoadImage")
-                  );
-                  setViewingAttachment(null);
-                  setViewingAttachmentURL(null);
-                }}
-                onLoad={() => {
-                  console.log(`[ProjectOverview] Image loaded successfully: ${viewingAttachment?.fileName}`);
-                }}
-              />
-            </ScrollView>
-          )}
-        </View>
-      </Modal>
+      <InAppAttachmentViewer
+        visible={viewingAttachment !== null}
+        onClose={() => {
+          setViewingAttachment(null);
+          setViewingAttachmentURL(null);
+        }}
+        url={viewingAttachmentURL}
+        fileName={viewingAttachment?.fileName ?? ""}
+        mode={viewingAttachment ? inferInAppViewerMode(viewingAttachment) : "image"}
+      />
 
       {/* Diary entry detail modal - full overview */}
       <Modal visible={viewingDiaryEntry !== null} transparent animationType="slide">
@@ -6398,7 +6343,8 @@ export function ProjectOverviewScreen() {
                               onPress={async () => {
                                 try {
                                   const u = await attachmentsService.getAttachmentURL(att);
-                                  await Linking.openURL(u);
+                                  setViewingAttachment(att);
+                                  setViewingAttachmentURL(u);
                                 } catch (e) {
                                   Alert.alert(t("common.error"), t("projectOverview.failedToLoadAttachments"));
                                 }

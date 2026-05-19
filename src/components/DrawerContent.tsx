@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -28,6 +28,8 @@ import { useUnreadCount } from "../hooks/useUnreadCount";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
 import { isAdminEmail, isBusinessFeatureEnabled } from "../lib/featureFlags";
 import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
+import { useActiveOrg } from "../hooks/useActiveOrg";
+import { useOrgAccess } from "../hooks/useOrgAccess";
 
 type NavItem = {
   id: string;
@@ -292,9 +294,47 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   }, [uploadingPhoto, photoURL, t, takeProfilePhoto, pickProfilePhoto, removeProfilePhoto]);
 
   const { count: unreadCount } = useUnreadCount();
+  const { activeBusinessOrgId, activeOrganization, activeMembership } = useActiveOrg();
+  const { canViewBusinessDashboard, canAccessBusiness } = useOrgAccess();
   const displayName = user?.name ?? user?.firstName ?? user?.email ?? "—";
   const initials = displayName !== "—" ? displayName.slice(0, 2).toUpperCase() : "?";
   const isProTier = planTier === "PRO";
+
+  const displayCompanyName = useMemo(() => {
+    if (!activeOrganization) return "";
+    const orgWithLegacy = activeOrganization as { companyName?: string };
+    const fromOrg =
+      (typeof orgWithLegacy.companyName === "string" ? orgWithLegacy.companyName.trim() : "") ||
+      (typeof activeOrganization.name === "string" ? activeOrganization.name.trim() : "");
+    const fromMembership =
+      typeof activeMembership?.organizationName === "string"
+        ? activeMembership.organizationName.trim()
+        : "";
+    return fromOrg || fromMembership;
+  }, [activeOrganization, activeMembership]);
+
+  const showBusinessCompanyLine =
+    !!activeBusinessOrgId &&
+    !!activeOrganization &&
+    displayCompanyName.length > 0 &&
+    (activeMembership?.status === "active" ||
+      canViewBusinessDashboard ||
+      canAccessBusiness);
+
+  useEffect(() => {
+    if (!__DEV__ || !activeBusinessOrgId) return;
+    console.log("[DrawerBusinessDebug]", {
+      companyName: displayCompanyName || null,
+      activeBusinessOrgId,
+      membershipStatus: activeMembership?.status ?? null,
+      showBusinessCompanyLine,
+    });
+  }, [
+    activeBusinessOrgId,
+    activeMembership?.status,
+    displayCompanyName,
+    showBusinessCompanyLine,
+  ]);
 
   const mainNavItems: NavItem[] = [
     { id: "projects", icon: "folder-open-outline", labelKey: "tabs.projects", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Projects" }); } },
@@ -392,6 +432,16 @@ export function DrawerContent(props: DrawerContentComponentProps) {
         <Text style={styles.userName} numberOfLines={1} maxFontSizeMultiplier={1.2}>
           {displayName}
         </Text>
+        {showBusinessCompanyLine ? (
+          <Text
+            style={styles.businessCompanyName}
+            numberOfLines={1}
+            ellipsizeMode="tail"
+            maxFontSizeMultiplier={1.1}
+          >
+            {displayCompanyName}
+          </Text>
+        ) : null}
         <View style={[styles.planBadge, isProTier && styles.planBadgePro]}>
           <Text style={[styles.planText, isProTier && styles.planTextPro]} maxFontSizeMultiplier={1.1} numberOfLines={1}>
             {getPlanLabel(planTier)}
@@ -545,6 +595,15 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.textOnDark,
     marginBottom: spacing.xs,
+  },
+  businessCompanyName: {
+    fontSize: 13,
+    fontWeight: "500",
+    color: "rgba(255,255,255,0.72)",
+    marginTop: 2,
+    marginBottom: spacing.xs,
+    alignSelf: "stretch",
+    textAlign: "center",
   },
   planBadge: {
     backgroundColor: "rgba(255,255,255,0.2)",

@@ -48,15 +48,19 @@ export function useOrgAccess() {
     const pendingCanAccess =
       orgStatus === "pending_payment" &&
       isActiveMember &&
-      (trialActive || businessEnabled || hasActiveBusinessOrder);
+      (trialActive || hasActiveBusinessOrder || businessEnabled);
+
+    const statusAllowsDashboard =
+      orgStatus === "active"
+        ? businessEnabled
+        : orgStatus === "trialing"
+        ? trialActive
+        : orgStatus === "pending_payment"
+        ? pendingCanAccess
+        : false;
 
     const canViewBusinessDashboard =
-      !!activeBusinessOrgId &&
-      isActiveMember &&
-      businessEnabled &&
-      (orgStatus === "active" ||
-        orgStatus === "trialing" ||
-        (orgStatus === "pending_payment" && pendingCanAccess));
+      !!activeBusinessOrgId && isActiveMember && statusAllowsDashboard;
 
     const canAccessBusiness =
       !!activeBusinessOrgId &&
@@ -69,17 +73,19 @@ export function useOrgAccess() {
       dashboardBlockReason = "missing_active_business_org_id";
     } else if (!isActiveMember) {
       dashboardBlockReason = `membership_not_active:${status ?? "none"}`;
-    } else if (!businessEnabled) {
-      dashboardBlockReason = "business_not_enabled";
     } else if (orgStatus === "suspended") {
       dashboardBlockReason = "org_suspended";
     } else if (orgStatus === "cancelled") {
       dashboardBlockReason = "org_cancelled";
+    } else if (orgStatus === "active" && !businessEnabled) {
+      dashboardBlockReason = "business_not_enabled";
+    } else if (orgStatus === "trialing" && !trialActive) {
+      dashboardBlockReason = "trial_expired";
     } else if (orgStatus === "pending_payment" && !pendingCanAccess) {
       dashboardBlockReason = "pending_payment_without_trial_access";
     } else if (orgStatus === "past_due") {
       dashboardBlockReason = "org_past_due";
-    } else if (!canViewBusinessDashboard) {
+    } else if (!statusAllowsDashboard) {
       dashboardBlockReason = `org_status_blocked:${orgStatus ?? "unknown"}`;
     }
 
@@ -97,7 +103,9 @@ export function useOrgAccess() {
       seatsLimit,
       seatsUsed,
       trialActive,
+      hasActiveBusinessOrder,
       pendingCanAccess,
+      statusAllowsDashboard,
       canViewBusinessDashboard,
       canAccessBusiness,
       dashboardBlockReason,

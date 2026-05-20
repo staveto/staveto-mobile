@@ -104,6 +104,7 @@ import {
   InAppAttachmentViewer,
   inferInAppViewerMode,
   isAttachmentImage,
+  resolveInAppViewerMode,
 } from "../components/InAppAttachmentViewer";
 import { AppBottomMenu, getAppBottomMenuExtraPadding } from "../components/AppBottomMenu";
 import { CurrencyDropdown } from "../components/CurrencyDropdown";
@@ -3755,7 +3756,8 @@ export function ProjectOverviewScreen() {
     openSource: string
   ) => {
     if (__DEV__) {
-      const mode = inferInAppViewerMode(attachment);
+      const requestedMode = inferInAppViewerMode(attachment);
+      const mode = resolveInAppViewerMode(requestedMode, url, attachment.fileName);
       console.log("[AttachmentPreviewDebug]", {
         event: "openPreview",
         openSource,
@@ -3766,6 +3768,7 @@ export function ProjectOverviewScreen() {
         hasUrl: !!url,
         urlHost: attachmentPreviewHost(url),
         viewerMode: mode,
+        requestedMode,
       });
     }
     setViewingAttachment(attachment);

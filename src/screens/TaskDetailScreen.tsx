@@ -8,7 +8,6 @@ import {
   Image,
   Modal,
   ActivityIndicator,
-  Linking,
   Alert,
   TextInput,
   Platform,
@@ -28,6 +27,11 @@ import {
   type StoredStatusValue,
 } from "../helpers/taskStatusMapping";
 import { toYmd } from "../utils/date";
+import {
+  InAppAttachmentViewer,
+  inferInAppViewerMode,
+  isAttachmentImage,
+} from "../components/InAppAttachmentViewer";
 
 let DateTimePicker: any = null;
 try {
@@ -126,27 +130,31 @@ export function TaskDetailScreen() {
   };
 
   const openAttachment = async (attachment: AttachmentDoc) => {
-    if (attachment.fileType === 'image') {
-      try {
-        const attachmentData = attachment as any;
-        const url = attachmentData.downloadURL || await attachmentsService.getAttachmentURL(attachment);
-        setViewingAttachmentURL(url);
-        setViewingAttachment(attachment);
-      } catch (error: any) {
-        Alert.alert(t("common.error"), t("taskDetail.failedToLoadImage"));
+    try {
+      const attachmentData = attachment as AttachmentDoc & { downloadURL?: string };
+      const url = attachmentData.downloadURL || (await attachmentsService.getAttachmentURL(attachment));
+      if (__DEV__) {
+        const mode = inferInAppViewerMode(attachment);
+        console.log("[AttachmentPreviewDebug]", {
+          event: "openPreview",
+          openSource: "taskDetailAttachment",
+          fileName: attachment.fileName,
+          mimeType: attachment.contentType || attachment.fileType,
+          isImage: isAttachmentImage(attachment),
+          isPdf: mode === "pdf",
+          hasUrl: !!url,
+          viewerMode: mode,
+        });
       }
-    } else {
-      try {
-        const url = await attachmentsService.getAttachmentURL(attachment);
-        const supported = await Linking.canOpenURL(url);
-        if (supported) {
-          await Linking.openURL(url);
-        } else {
-          Alert.alert(t("common.error"), t("taskDetail.cannotOpenFile"));
-        }
-      } catch (error: any) {
-        Alert.alert(t("common.error"), t("taskDetail.failedToOpenFile"));
-      }
+      setViewingAttachmentURL(url);
+      setViewingAttachment(attachment);
+    } catch (error: any) {
+      Alert.alert(
+        t("common.error"),
+        isAttachmentImage(attachment)
+          ? t("taskDetail.failedToLoadImage")
+          : t("taskDetail.failedToOpenFile")
+      );
     }
   };
 
@@ -520,47 +528,17 @@ export function TaskDetailScreen() {
         <Text style={styles.confirmButtonText}>{t("taskDetail.confirmAndBack")}</Text>
       </TouchableOpacity>
 
-      {/* Image Viewer Modal */}
-      <Modal
+      <InAppAttachmentViewer
         visible={viewingAttachment !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
+        onClose={() => {
           setViewingAttachment(null);
           setViewingAttachmentURL(null);
         }}
-      >
-        <View style={styles.imageViewerOverlay}>
-          <View style={styles.imageViewerHeader}>
-            <Text style={styles.imageViewerTitle} numberOfLines={1}>
-              {viewingAttachment?.fileName || 'Obrázok'}
-            </Text>
-            <TouchableOpacity
-              style={styles.imageViewerCloseButton}
-              onPress={() => {
-                setViewingAttachment(null);
-                setViewingAttachmentURL(null);
-              }}
-            >
-              <Ionicons name="close" size={28} color="#fff" />
-            </TouchableOpacity>
-          </View>
-          <ScrollView
-            style={styles.imageViewerScroll}
-            contentContainerStyle={styles.imageViewerContent}
-            maximumZoomScale={3}
-            minimumZoomScale={1}
-          >
-            {viewingAttachmentURL && (
-              <Image
-                source={{ uri: viewingAttachmentURL }}
-                style={styles.imageViewerImage}
-                resizeMode="contain"
-              />
-            )}
-          </ScrollView>
-        </View>
-      </Modal>
+        url={viewingAttachmentURL}
+        fileName={viewingAttachment?.fileName ?? ""}
+        mode={viewingAttachment ? inferInAppViewerMode(viewingAttachment) : "image"}
+        debugOpenSource="taskDetail"
+      />
     </ScrollView>
   );
 }

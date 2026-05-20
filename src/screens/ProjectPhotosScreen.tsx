@@ -9,11 +9,11 @@ import {
   StyleSheet,
   ScrollView,
   Image,
-  Modal,
   ActivityIndicator,
   RefreshControl,
   useWindowDimensions,
 } from "react-native";
+import { InAppAttachmentViewer, inferInAppViewerMode } from "../components/InAppAttachmentViewer";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -98,7 +98,7 @@ export function ProjectPhotosScreen() {
         isOffline,
         isPoorNetwork,
       });
-      setViewingUrl(url ?? undefined);
+      setViewingUrl(url ?? null);
       setViewingPhoto(att);
     } catch {
       // ignore
@@ -159,51 +159,17 @@ export function ProjectPhotosScreen() {
         </ScrollView>
       )}
 
-      <Modal
+      <InAppAttachmentViewer
         visible={viewingPhoto !== null}
-        transparent
-        animationType="fade"
-        onRequestClose={() => {
+        onClose={() => {
           setViewingPhoto(null);
           setViewingUrl(null);
         }}
-      >
-        <View style={styles.modalOverlay}>
-          <View style={styles.modalHeader}>
-            <Text style={styles.modalTitle} numberOfLines={1}>
-              {viewingPhoto?.fileName || ""}
-            </Text>
-            <TouchableOpacity
-              style={styles.modalClose}
-              onPress={() => {
-                setViewingPhoto(null);
-                setViewingUrl(null);
-              }}
-            >
-              <Ionicons name="close" size={28} color="#fff" />
-            </TouchableOpacity>
-          </View>
-          <ScrollView
-            style={styles.modalScroll}
-            contentContainerStyle={styles.modalContent}
-          >
-            {viewingUrl ? (
-              <Image
-                source={{ uri: viewingUrl }}
-                style={styles.modalImage}
-                resizeMode="contain"
-              />
-            ) : (
-              <View style={[styles.modalImage, styles.centered]}>
-                <Ionicons name="cloud-offline-outline" size={48} color={colors.textMuted} />
-                <Text style={styles.emptyText}>
-                  {t("common.noConnection") || "Slabé pripojenie – obrázok sa nenačítal"}
-                </Text>
-              </View>
-            )}
-          </ScrollView>
-        </View>
-      </Modal>
+        url={viewingUrl}
+        fileName={viewingPhoto?.fileName ?? ""}
+        mode={viewingPhoto ? inferInAppViewerMode(viewingPhoto) : "image"}
+        debugOpenSource="projectPhotosGrid"
+      />
     </View>
   );
 }

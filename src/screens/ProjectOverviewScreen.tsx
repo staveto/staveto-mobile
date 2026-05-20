@@ -100,7 +100,12 @@ import { formatEventSummary } from "../helpers/formatEvent";
 import type { ProjectEvent } from "../lib/types";
 import type { ProjectWeatherSnapshot } from "../services/weather";
 import { DescriptionInputModal } from "../components/DescriptionInputModal";
-import { InAppAttachmentViewer, inferInAppViewerMode } from "../components/InAppAttachmentViewer";
+import {
+  InAppAttachmentViewer,
+  inferInAppViewerMode,
+  isAttachmentImage,
+  resolveInAppViewerMode,
+} from "../components/InAppAttachmentViewer";
 import { AppBottomMenu, getAppBottomMenuExtraPadding } from "../components/AppBottomMenu";
 import { CurrencyDropdown } from "../components/CurrencyDropdown";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
@@ -3151,8 +3156,9 @@ export function ProjectOverviewScreen() {
           const att = await attachmentsService.getAttachment(projectId, attId);
           if (att) {
             docMap.set(attId, att);
-            if (att.fileType === "image") {
-              const url = (att as any).downloadURL ?? (await attachmentsService.getAttachmentURL(att));
+            if (isAttachmentImage(att)) {
+              const url = (att as AttachmentDoc & { downloadURL?: string }).downloadURL
+                ?? (await attachmentsService.getAttachmentURL(att));
               urlMap.set(attId, url);
             }
           }
@@ -3169,8 +3175,7 @@ export function ProjectOverviewScreen() {
     const att = diaryDetailAttachmentDocs.get(attachmentId);
     const url = diaryDetailAttachmentUrls.get(attachmentId);
     if (att && url) {
-      setViewingAttachment(att);
-      setViewingAttachmentURL(url);
+      openAttachmentPreview(att, url, "diaryGallery");
     }
   };
 
@@ -3737,30 +3742,54 @@ export function ProjectOverviewScreen() {
     }
   };
 
+  const attachmentPreviewHost = (uri: string): string | null => {
+    try {
+      return new URL(uri).host;
+    } catch {
+      return null;
+    }
+  };
+
+  const openAttachmentPreview = (
+    attachment: AttachmentDoc,
+    url: string,
+    openSource: string
+  ) => {
+    if (__DEV__) {
+      const requestedMode = inferInAppViewerMode(attachment);
+      const mode = resolveInAppViewerMode(requestedMode, url, attachment.fileName);
+      console.log("[AttachmentPreviewDebug]", {
+        event: "openPreview",
+        openSource,
+        fileName: attachment.fileName,
+        mimeType: attachment.contentType || attachment.fileType,
+        isImage: isAttachmentImage(attachment),
+        isPdf: mode === "pdf",
+        hasUrl: !!url,
+        urlHost: attachmentPreviewHost(url),
+        viewerMode: mode,
+        requestedMode,
+      });
+    }
+    setViewingAttachment(attachment);
+    setViewingAttachmentURL(url);
+  };
+
   const openAttachment = async (attachment: AttachmentDoc) => {
     try {
-      console.log(`[ProjectOverview] Opening attachment: ${attachment.fileName}, type: ${attachment.fileType}`);
-      
-      // Try to get URL - first check if downloadURL is stored in metadata (from upload)
-      // Otherwise fetch it from Storage
       let url: string;
       try {
-        // Check if attachment has downloadURL stored (it should be stored during upload)
-        const attachmentData = attachment as any;
+        const attachmentData = attachment as AttachmentDoc & { downloadURL?: string };
         if (attachmentData.downloadURL) {
           url = attachmentData.downloadURL;
-          console.log(`[ProjectOverview] Using stored downloadURL`);
         } else {
-          // Fetch URL from Storage
           url = await attachmentsService.getAttachmentURL(attachment);
-          console.log(`[ProjectOverview] Fetched URL from Storage`);
         }
-        console.log(`[ProjectOverview] Attachment URL: ${url.substring(0, 50)}...`);
       } catch (error: any) {
         console.error(`[ProjectOverview] Error getting attachment URL:`, error);
         const errorCode = error.code || '';
         const errorMessage = error.message || 'Neznáma chyba';
-        
+
         if (errorCode === 'storage/unauthorized' || errorCode === 'permission-denied') {
           Alert.alert(
             t("projectOverview.permissionError"),
@@ -3774,9 +3803,8 @@ export function ProjectOverviewScreen() {
         }
         return;
       }
-      
-      setViewingAttachment(attachment);
-      setViewingAttachmentURL(url);
+
+      openAttachmentPreview(attachment, url, "projectAttachmentRow");
     } catch (error: any) {
       console.error(`[ProjectOverview] Error opening attachment:`, error);
       Alert.alert(t("common.error"), t("projectOverview.failedToOpenAttachment", { error: error.message || t("common.unknown") }));
@@ -5257,8 +5285,7 @@ export function ProjectOverviewScreen() {
                               return;
                             }
                             const url = await attachmentsService.getAttachmentURL(attachmentMeta);
-                            setViewingAttachment(attachmentMeta);
-                            setViewingAttachmentURL(url);
+                            openAttachmentPreview(attachmentMeta, url, "projectDocumentRow");
                           } catch (error: any) {
                             console.warn("[ProjectOverview] Error opening document:", error);
                             Alert.alert(t("common.error"), t("projectOverview.failedToOpenDocument"));
@@ -6198,7 +6225,7 @@ export function ProjectOverviewScreen() {
               ) : (
                 attachments.map((attachment) => {
                   const thumbnailURL = attachmentThumbnails.get(attachment.id);
-                  const isImage = attachment.fileType === 'image';
+                  const isImage = isAttachmentImage(attachment);
                   
                   return (
                     <View key={attachment.id} style={styles.attachmentItem}>
@@ -6259,6 +6286,7 @@ export function ProjectOverviewScreen() {
         url={viewingAttachmentURL}
         fileName={viewingAttachment?.fileName ?? ""}
         mode={viewingAttachment ? inferInAppViewerMode(viewingAttachment) : "image"}
+        debugOpenSource="projectOverview"
       />
 
       {/* Diary entry detail modal - full overview */}
@@ -6325,7 +6353,7 @@ export function ProjectOverviewScreen() {
                       {viewingDiaryEntry.attachments.map((attId) => {
                         const url = diaryDetailAttachmentUrls.get(attId);
                         const att = diaryDetailAttachmentDocs.get(attId);
-                        if (url && att?.fileType === "image") {
+                        if (url && att && isAttachmentImage(att)) {
                           return (
                             <TouchableOpacity
                               key={attId}
@@ -6349,8 +6377,7 @@ export function ProjectOverviewScreen() {
                               onPress={async () => {
                                 try {
                                   const u = await attachmentsService.getAttachmentURL(att);
-                                  setViewingAttachment(att);
-                                  setViewingAttachmentURL(u);
+                                  openAttachmentPreview(att, u, "diaryDocument");
                                 } catch (e) {
                                   Alert.alert(t("common.error"), t("projectOverview.failedToLoadAttachments"));
                                 }

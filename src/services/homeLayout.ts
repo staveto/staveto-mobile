@@ -24,6 +24,134 @@ export type HomeWidgetToggles = {
   showBottomQuickActions: boolean;
 };
 
+/** Text and touch targets on Home (local to HomeScreen, not system font scale). */
+export type HomeDisplaySize = "compact" | "standard" | "large";
+
+export type HomeDisplayMetrics = {
+  cardPaddingH: number;
+  cardPaddingV: number;
+  overviewTitleSize: number;
+  overviewBodySize: number;
+  taskTitleSize: number;
+  taskMetaSize: number;
+  sectionHeadingSize: number;
+  iconSize: number;
+  headerIconSize: number;
+  quickActionMinHeight: number;
+  quickActionMaxHeight: number;
+  quickLabelSize: number;
+  quickLabelLineHeight: number;
+  projectThumbSize: number;
+  projectRowMinHeight: number;
+  projectTitleSize: number;
+  projectSublineSize: number;
+  metricPillFont: number;
+  gap: number;
+  kpiCardMinWidth: number;
+  kpiLabelSize: number;
+  kpiValueSize: number;
+  kpiIconSize: number;
+  filterChipFont: number;
+  filterTypeIconSize: number;
+  overviewCardMaxHeight?: number;
+  bottomDockPadding: number;
+};
+
+export function getHomeDisplayMetrics(size: HomeDisplaySize | undefined): HomeDisplayMetrics {
+  const s = size ?? "standard";
+  if (s === "compact") {
+    return {
+      cardPaddingH: 10,
+      cardPaddingV: 6,
+      overviewTitleSize: 11,
+      overviewBodySize: 11,
+      taskTitleSize: 13,
+      taskMetaSize: 10,
+      sectionHeadingSize: 11,
+      iconSize: 15,
+      headerIconSize: 16,
+      quickActionMinHeight: 52,
+      quickActionMaxHeight: 54,
+      quickLabelSize: 9,
+      quickLabelLineHeight: 11,
+      projectThumbSize: 34,
+      projectRowMinHeight: 58,
+      projectTitleSize: 13,
+      projectSublineSize: 10,
+      metricPillFont: 10,
+      gap: 6,
+      kpiCardMinWidth: 86,
+      kpiLabelSize: 9,
+      kpiValueSize: 13,
+      kpiIconSize: 16,
+      filterChipFont: 11,
+      filterTypeIconSize: 15,
+      overviewCardMaxHeight: 210,
+      bottomDockPadding: 178,
+    };
+  }
+  if (s === "large") {
+    return {
+      cardPaddingH: 18,
+      cardPaddingV: 14,
+      overviewTitleSize: 18,
+      overviewBodySize: 15,
+      taskTitleSize: 18,
+      taskMetaSize: 14,
+      sectionHeadingSize: 15,
+      iconSize: 26,
+      headerIconSize: 24,
+      quickActionMinHeight: 84,
+      quickActionMaxHeight: 92,
+      quickLabelSize: 14,
+      quickLabelLineHeight: 18,
+      projectThumbSize: 52,
+      projectRowMinHeight: 100,
+      projectTitleSize: 18,
+      projectSublineSize: 15,
+      metricPillFont: 13,
+      gap: 12,
+      kpiCardMinWidth: 140,
+      kpiLabelSize: 13,
+      kpiValueSize: 20,
+      kpiIconSize: 24,
+      filterChipFont: 13,
+      filterTypeIconSize: 20,
+      overviewCardMaxHeight: undefined,
+      bottomDockPadding: 196,
+    };
+  }
+  return {
+    cardPaddingH: 12,
+    cardPaddingV: 8,
+    overviewTitleSize: 12,
+    overviewBodySize: 12,
+    taskTitleSize: 14,
+    taskMetaSize: 11,
+    sectionHeadingSize: 12,
+    iconSize: 17,
+    headerIconSize: 18,
+    quickActionMinHeight: 58,
+    quickActionMaxHeight: 62,
+    quickLabelSize: 10,
+    quickLabelLineHeight: 12,
+    projectThumbSize: 36,
+    projectRowMinHeight: 64,
+    projectTitleSize: 14,
+    projectSublineSize: 11,
+    metricPillFont: 11,
+    gap: 8,
+    kpiCardMinWidth: 92,
+    kpiLabelSize: 10,
+    kpiValueSize: 14,
+    kpiIconSize: 18,
+    filterChipFont: 12,
+    filterTypeIconSize: 17,
+    overviewCardMaxHeight: 240,
+    bottomDockPadding: 176,
+  };
+}
+
 export type HomeSectionConfig = {
   id: HomeSectionId;
   enabled: boolean;
@@ -38,6 +166,8 @@ export type HomeLayout = {
   sections: HomeSectionConfig[];
   widgets: HomeWidgetToggles;
   homeLayoutVersion?: number;
+  /** Local Home typography / touch targets (not global font scale). */
+  homeDisplaySize?: HomeDisplaySize;
 };
 
 /** Default Home: construction dashboard — KPI chips and home filters off; dock off (tabs handle navigation). */
@@ -64,6 +194,7 @@ export const DEFAULT_HOME_LAYOUT: HomeLayout = {
     showBottomQuickActions: false,
   },
   homeLayoutVersion: HOME_LAYOUT_VERSION,
+  homeDisplaySize: "standard",
 };
 
 export function getDefaultLayout(): HomeLayout {
@@ -71,6 +202,7 @@ export function getDefaultLayout(): HomeLayout {
     sections: [...DEFAULT_SECTIONS],
     widgets: { ...DEFAULT_HOME_LAYOUT.widgets },
     homeLayoutVersion: HOME_LAYOUT_VERSION,
+    homeDisplaySize: "standard",
   };
 }
 
@@ -104,6 +236,10 @@ export async function loadHomeLayout(): Promise<HomeLayout> {
       typeof (parsed as { homeLayoutVersion?: unknown }).homeLayoutVersion === "number"
         ? (parsed as { homeLayoutVersion: number }).homeLayoutVersion
         : 0;
+    const rawDisplay = (parsed as { homeDisplaySize?: unknown }).homeDisplaySize;
+    const homeDisplaySize: HomeDisplaySize =
+      rawDisplay === "compact" || rawDisplay === "standard" || rawDisplay === "large" ? rawDisplay : "standard";
+
     const result: HomeLayout = {
       sections: merged,
       widgets: {
@@ -125,6 +261,7 @@ export async function loadHomeLayout(): Promise<HomeLayout> {
             : DEFAULT_HOME_LAYOUT.widgets.showBottomQuickActions,
       },
       homeLayoutVersion: parsedVersion >= HOME_LAYOUT_VERSION ? parsedVersion : HOME_LAYOUT_VERSION,
+      homeDisplaySize,
     };
 
     /** One-time migration: old homes often had filters, KPI chips, or floating dock on — compact default clears that. */

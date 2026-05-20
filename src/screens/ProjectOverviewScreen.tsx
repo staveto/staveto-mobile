@@ -17,6 +17,7 @@ import {
   Share,
   KeyboardAvoidingView,
   Dimensions,
+  Switch,
 } from "react-native";
 
 // Conditional imports - only load if packages are installed
@@ -72,6 +73,7 @@ import {
 } from "../services/documentPrefill";
 import type { InvoiceExtractionSource } from "../lib/invoiceTypes";
 import { calculateRouteDistanceKm } from "../services/mapsDistance";
+import type { Locale } from "../i18n/translations";
 import { EUROPEAN_COUNTRIES, buildAddressWithCountry, parseCountryFromAddress } from "../utils/europeanCountries";
 import { COUNTRY_CODES, getDeviceRegionCode, getLocalizedCountryName } from "../utils/countries";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
@@ -92,6 +94,7 @@ import type { DiaryEntryDoc } from "../services/constructionDiary";
 import type { ProjectDocumentDoc } from "../services/projectDocuments";
 import type { ProjectMemberDoc } from "../services/projectMembers";
 import type { EquipmentDoc } from "../services/equipment";
+import Svg, { Circle, Path } from "react-native-svg";
 import { colors, radius, spacing } from "../theme";
 import { showToast } from "../helpers/toast";
 import { openInMaps } from "../lib/maps";
@@ -149,6 +152,60 @@ function isExpenseOcrAttachmentKind(
   kind: "image" | "pdf" | "document" | undefined | null
 ): boolean {
   return kind === "image" || kind === "pdf";
+}
+
+function isEuropeanCountryCode(code: string | undefined): boolean {
+  const c = (code ?? "").trim().toUpperCase();
+  return c.length === 2 && EUROPEAN_COUNTRIES.some((x) => x.code === c);
+}
+
+/** Default country for travel A/B: project → device region → app locale → SK. */
+function resolveTravelDefaultCountry(projectCountry: string | undefined, deviceRegion: string, appLocale: Locale): string {
+  const pc = (projectCountry ?? "").trim().toUpperCase();
+  if (isEuropeanCountryCode(pc)) return pc;
+  const dr = (deviceRegion ?? "").trim().toUpperCase();
+  if (isEuropeanCountryCode(dr)) return dr;
+  const localeToCountry: Record<Locale, string> = {
+    sk: "SK",
+    cs: "CZ",
+    de: "DE",
+    pl: "PL",
+    it: "IT",
+    es: "ES",
+    en: "SK",
+  };
+  const lc = (localeToCountry[appLocale] ?? "SK").trim().toUpperCase();
+  return isEuropeanCountryCode(lc) ? lc : "SK";
+}
+
+/** Mini A→B route graphic for travel expense (pins + dashed path). */
+function TravelRouteMiniDiagram() {
+  const pin = colors.primary;
+  const line = "rgba(45, 74, 122, 0.42)";
+  return (
+    <View style={styles.travelRouteDiagramRow} accessibilityRole="image" accessibilityLabel="A → B">
+      <Svg width={168} height={42} viewBox="0 0 168 42">
+        <Path
+          fill={pin}
+          d="M18 36 L18 36 C10 23 6 17 6 12.5 C6 7 10.5 3 16 3 C21.5 3 26 7 26 12.5 C26 17 22 23 18 36 Z"
+        />
+        <Circle cx={16} cy={12.5} r={2.8} fill="#ffffff" />
+        <Path
+          d="M36 30 Q 84 6 132 30"
+          fill="none"
+          stroke={line}
+          strokeWidth={2.2}
+          strokeDasharray="5 7"
+          strokeLinecap="round"
+        />
+        <Path
+          fill={pin}
+          d="M150 36 L150 36 C142 23 138 17 138 12.5 C138 7 142.5 3 148 3 C153.5 3 158 7 158 12.5 C158 17 154 23 150 36 Z"
+        />
+        <Circle cx={148} cy={12.5} r={2.8} fill="#ffffff" />
+      </Svg>
+    </View>
+  );
 }
 
 export function ProjectOverviewScreen() {
@@ -331,16 +388,13 @@ export function ProjectOverviewScreen() {
   const [expenseTravelDistanceKm, setExpenseTravelDistanceKm] = useState("");
   const [expenseTravelRatePerKm, setExpenseTravelRatePerKm] = useState("0.30");
   const [expenseTravelRoundTrip, setExpenseTravelRoundTrip] = useState(false);
+  const travelDefaultCountry = useMemo(
+    () => resolveTravelDefaultCountry(projectCountryCode, defaultCountry, locale),
+    [projectCountryCode, defaultCountry, locale]
+  );
   const { isOnline } = useOnlineStatus();
   const [isLoadingDistance, setIsLoadingDistance] = useState(false);
   const [kmError, setKmError] = useState<string | undefined>(undefined);
-  /** Wider km field when the value has more digits (longer routes / precise decimals). */
-  const travelDistanceInputMinWidth = useMemo(() => {
-    const { width } = Dimensions.get("window");
-    const len = Math.max(expenseTravelDistanceKm.replace(/\s/g, "").length || 1, 3);
-    return Math.max(96, Math.min(width * 0.72, 13 * len + 52));
-  }, [expenseTravelDistanceKm]);
-
   /** Travel form is long; avoid staying scrolled to bottom (e.g. after autoFocus on title) when switching to TRAVEL. */
   useEffect(() => {
     if (!showExpenseModal || expenseCategory !== "TRAVEL") return;
@@ -1350,8 +1404,8 @@ export function ProjectOverviewScreen() {
       const fromFull = buildAddressWithCountry(from, expenseTravelFromCountry);
       const toFull = buildAddressWithCountry(to, expenseTravelToCountry);
       const oneWayKm = await calculateRouteDistanceKm(fromFull, toFull);
-      const km = expenseTravelRoundTrip ? oneWayKm * 2 : oneWayKm;
-      setExpenseTravelDistanceKm(String(Math.round(km * 10) / 10));
+      /** Pole „km“ = jedna cesta; tam a späť sa násobí až pri súhrne / uložení. */
+      setExpenseTravelDistanceKm(String(Math.round(oneWayKm * 10) / 10));
     } catch (err) {
       const raw = err instanceof Error ? err.message : "";
       const msg =
@@ -1363,7 +1417,7 @@ export function ProjectOverviewScreen() {
     } finally {
       setIsLoadingDistance(false);
     }
-  }, [expenseTravelFromAddress, expenseTravelToAddress, expenseTravelFromCountry, expenseTravelToCountry, expenseTravelRoundTrip, isLoadingDistance, isOnline, t]);
+  }, [expenseTravelFromAddress, expenseTravelToAddress, expenseTravelFromCountry, expenseTravelToCountry, isLoadingDistance, isOnline, t]);
 
   const handleAddressBBlur = useCallback(() => {
     const from = expenseTravelFromAddress.trim();
@@ -1374,11 +1428,36 @@ export function ProjectOverviewScreen() {
     }
   }, [expenseTravelFromAddress, expenseTravelToAddress, expenseTravelDistanceKm, isLoadingDistance, isOnline, handleCalculateDistanceKm]);
 
+  const swapTravelRoute = useCallback(() => {
+    const a = expenseTravelFromAddress;
+    const ac = expenseTravelFromCountry;
+    setExpenseTravelFromAddress(expenseTravelToAddress);
+    setExpenseTravelFromCountry(expenseTravelToCountry);
+    setExpenseTravelToAddress(a);
+    setExpenseTravelToCountry(ac);
+    setKmError(undefined);
+  }, [expenseTravelFromAddress, expenseTravelToAddress, expenseTravelFromCountry, expenseTravelToCountry]);
+
+  const travelCalcDisabledHint = useMemo(() => {
+    if (isLoadingDistance) return t("expenses.travel.calculatingDistance");
+    if (!isOnline) return t("expenses.travel.offlineDistanceHint");
+    if (expenseTravelFromAddress.trim().length < 3 || expenseTravelToAddress.trim().length < 3) {
+      return t("expenses.travel.calculateDistanceDisabledHint");
+    }
+    return "";
+  }, [
+    isLoadingDistance,
+    isOnline,
+    expenseTravelFromAddress,
+    expenseTravelToAddress,
+    t,
+  ]);
+
   useEffect(() => {
     if (expenseCategory !== "TRAVEL") return;
-    const km = parseFloat(expenseTravelDistanceKm);
-    const rate = parseFloat(expenseTravelRatePerKm) || 0.2;
-    if (!Number.isFinite(km) || km <= 0) return;
+    const km = parseFloat(expenseTravelDistanceKm.replace(",", "."));
+    const rate = parseFloat(expenseTravelRatePerKm.replace(",", "."));
+    if (!Number.isFinite(km) || km <= 0 || !Number.isFinite(rate) || rate <= 0) return;
     const mult = expenseTravelRoundTrip ? 2 : 1;
     setExpenseAmount(String(Math.round(km * rate * mult * 100) / 100));
   }, [expenseCategory, expenseTravelDistanceKm, expenseTravelRatePerKm, expenseTravelRoundTrip]);
@@ -2244,8 +2323,8 @@ export function ProjectOverviewScreen() {
       setExpenseTravelDistanceKm("");
       setExpenseTravelRatePerKm("0.30");
       setExpenseTravelRoundTrip(false);
-      setExpenseTravelFromCountry(defaultCountry);
-      setExpenseTravelToCountry(defaultCountry);
+      setExpenseTravelFromCountry(travelDefaultCountry);
+      setExpenseTravelToCountry(travelDefaultCountry);
     }
     setShowExpenseModal(true);
   };
@@ -2831,7 +2910,6 @@ export function ProjectOverviewScreen() {
       const from = expenseTravelFromAddress.trim();
       const to = expenseTravelToAddress.trim();
       const km = parseFloat(expenseTravelDistanceKm.replace(",", "."));
-      const rate = parseFloat(expenseTravelRatePerKm.replace(",", ".")) || 0.3;
       if (!from || !to) {
         Alert.alert(t("common.error"), t("expense.enterAddressAandB"));
         return;
@@ -2840,6 +2918,12 @@ export function ProjectOverviewScreen() {
         Alert.alert(t("common.error"), t("expense.enterValidDistanceKm"));
         return;
       }
+      const rateRaw = parseFloat(expenseTravelRatePerKm.replace(",", "."));
+      if (!Number.isFinite(rateRaw) || rateRaw <= 0) {
+        Alert.alert(t("common.error"), t("expenses.travel.enterValidRate"));
+        return;
+      }
+      const rate = rateRaw;
       const effectiveKm = expenseTravelRoundTrip ? km * 2 : km;
       amount = Math.round(effectiveKm * rate * 100) / 100;
       titleValue = t("expense.travelDisplay", { from, to });
@@ -5717,12 +5801,14 @@ export function ProjectOverviewScreen() {
                       setExpenseTravelRatePerKm("0.30");
                       setExpenseTravelRoundTrip(false);
                       setKmError(undefined);
+                      setExpenseTravelFromCountry(travelDefaultCountry);
+                      setExpenseTravelToCountry(travelDefaultCountry);
                     }
                     setExpenseCategory('WORK');
                   }}
                 >
                   {(expenseCategory === 'WORK' || expenseCategory === 'MATERIAL' || expenseCategory === 'OTHER') ? (
-                    <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+                    <Ionicons name="checkmark-circle" size={14} color={colors.primary} />
                   ) : null}
                   <Text
                     style={[
@@ -5743,10 +5829,12 @@ export function ProjectOverviewScreen() {
                       setExpenseAmount("");
                     }
                     setExpenseCategory('TRAVEL');
+                    setExpenseTravelFromCountry(travelDefaultCountry);
+                    setExpenseTravelToCountry(travelDefaultCountry);
                   }}
                 >
                   {expenseCategory === "TRAVEL" ? (
-                    <Ionicons name="checkmark-circle" size={18} color={colors.primary} />
+                    <Ionicons name="checkmark-circle" size={14} color={colors.primary} />
                   ) : null}
                   <Text
                     style={[
@@ -5878,113 +5966,133 @@ export function ProjectOverviewScreen() {
               </>
             )}
 
-            {/* Travel: Address A, B, Distance, Calculate button, Rate, Round trip */}
-            {expenseCategory === 'TRAVEL' && (
-              <View style={styles.travelFormSection}>
-                <Text style={styles.travelFormLabel}>{t("expense.addressA")}</Text>
-                <View style={styles.travelAddressRow}>
-                  <TextInput
-                    style={[styles.input, styles.travelAddressInput]}
-                    value={expenseTravelFromAddress}
-                    onChangeText={(t) => {
-                      setExpenseTravelFromAddress(t);
-                      setKmError(undefined);
-                    }}
-                    placeholder={t("expense.placeholderAddressFrom")}
-                    placeholderTextColor={colors.textMuted}
-                  />
-                  <TouchableOpacity
-                    style={styles.travelCountryButton}
-                    onPress={() => setShowCountryPicker('from')}
-                  >
-                    <Text style={styles.travelCountryButtonText}>
-                      {EUROPEAN_COUNTRIES.find((c) => c.code === expenseTravelFromCountry)?.code ?? expenseTravelFromCountry}
-                    </Text>
-                    <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
-                  </TouchableOpacity>
+            {/* Travel expense: route → distance → trip details → summary → optional receipt */}
+            {expenseCategory === "TRAVEL" && (
+              <View style={styles.travelFormOuter}>
+                <View style={styles.travelSectionCard}>
+                  <View style={styles.travelSectionHeaderRow}>
+                    <Text style={styles.travelSectionTitle}>{t("expenses.travel.routeTitle")}</Text>
+                    <TouchableOpacity
+                      onPress={swapTravelRoute}
+                      style={styles.travelSwapBtn}
+                      accessibilityRole="button"
+                      accessibilityLabel={t("expenses.travel.swapRoute")}
+                    >
+                      <Ionicons name="swap-horizontal" size={18} color={colors.textMuted} />
+                      <Text style={styles.travelSwapBtnText}>{t("expenses.travel.swapRoute")}</Text>
+                    </TouchableOpacity>
+                  </View>
+                  <Text style={styles.travelFieldLabel}>{t("expenses.travel.from")}</Text>
+                  <View style={styles.travelAddressRow}>
+                    <TextInput
+                      style={[styles.input, styles.travelAddressInput]}
+                      value={expenseTravelFromAddress}
+                      onChangeText={(text) => {
+                        setExpenseTravelFromAddress(text);
+                        setKmError(undefined);
+                      }}
+                      placeholder={t("expense.placeholderAddressFrom")}
+                      placeholderTextColor={colors.textMuted}
+                    />
+                    <TouchableOpacity
+                      style={styles.travelCountryChip}
+                      onPress={() => setShowCountryPicker("from")}
+                      accessibilityLabel={t("expense.travelCountry")}
+                    >
+                      <Text style={styles.travelCountryChipText}>
+                        {EUROPEAN_COUNTRIES.find((c) => c.code === expenseTravelFromCountry)?.code ?? expenseTravelFromCountry}
+                      </Text>
+                      <Ionicons name="chevron-down" size={12} color={colors.textMuted} />
+                    </TouchableOpacity>
+                  </View>
+                  <TravelRouteMiniDiagram />
+                  <Text style={styles.travelFieldLabel}>{t("expenses.travel.to")}</Text>
+                  <View style={styles.travelAddressRow}>
+                    <TextInput
+                      style={[styles.input, styles.travelAddressInput]}
+                      value={expenseTravelToAddress}
+                      onChangeText={(text) => {
+                        setExpenseTravelToAddress(text);
+                        setKmError(undefined);
+                      }}
+                      onBlur={handleAddressBBlur}
+                      placeholder={t("expense.placeholderAddressTo")}
+                      placeholderTextColor={colors.textMuted}
+                    />
+                    <TouchableOpacity
+                      style={styles.travelCountryChip}
+                      onPress={() => setShowCountryPicker("to")}
+                      accessibilityLabel={t("expense.travelCountry")}
+                    >
+                      <Text style={styles.travelCountryChipText}>
+                        {EUROPEAN_COUNTRIES.find((c) => c.code === expenseTravelToCountry)?.code ?? expenseTravelToCountry}
+                      </Text>
+                      <Ionicons name="chevron-down" size={12} color={colors.textMuted} />
+                    </TouchableOpacity>
+                  </View>
                 </View>
-                <Text style={styles.travelFormLabel}>{t("expense.addressB")}</Text>
-                <View style={styles.travelAddressRow}>
-                  <TextInput
-                    style={[styles.input, styles.travelAddressInput]}
-                    value={expenseTravelToAddress}
-                    onChangeText={(t) => {
-                      setExpenseTravelToAddress(t);
-                      setKmError(undefined);
-                    }}
-                    onBlur={handleAddressBBlur}
-                    placeholder={t("expense.placeholderAddressTo")}
-                    placeholderTextColor={colors.textMuted}
-                  />
-                  <TouchableOpacity
-                    style={styles.travelCountryButton}
-                    onPress={() => setShowCountryPicker('to')}
-                  >
-                    <Text style={styles.travelCountryButtonText}>
-                      {EUROPEAN_COUNTRIES.find((c) => c.code === expenseTravelToCountry)?.code ?? expenseTravelToCountry}
-                    </Text>
-                    <Ionicons name="chevron-down" size={14} color={colors.textMuted} />
-                  </TouchableOpacity>
-                </View>
-                <Text style={styles.travelFormLabel}>{t("expense.distanceKm")}</Text>
-                <View style={styles.travelDistanceRow}>
-                  <TextInput
-                    style={[
-                      styles.input,
-                      styles.travelDistanceInput,
-                      { minWidth: travelDistanceInputMinWidth },
-                    ]}
-                    value={expenseTravelDistanceKm}
-                    onChangeText={(t) => {
-                      setExpenseTravelDistanceKm(t.replace(/[^\d.,]/g, '').replace(',', '.'));
-                    }}
-                    placeholder="0"
-                    placeholderTextColor={colors.textMuted}
-                    keyboardType="decimal-pad"
-                  />
+
+                <View style={styles.travelSectionCard}>
+                  <Text style={styles.travelSectionTitle}>{t("expenses.travel.distanceKm")}</Text>
+                  <Text style={styles.travelSectionHint}>{t("expenses.travel.manualDistanceHint")}</Text>
+                  <View style={styles.travelKmRow}>
+                    <TextInput
+                      style={[styles.input, styles.travelKmInput]}
+                      value={expenseTravelDistanceKm}
+                      onChangeText={(text) => {
+                        setExpenseTravelDistanceKm(text.replace(/[^\d.,]/g, "").replace(",", "."));
+                      }}
+                      placeholder="0"
+                      placeholderTextColor={colors.textMuted}
+                      keyboardType="decimal-pad"
+                    />
+                    <Text style={styles.travelKmSuffix}>km</Text>
+                  </View>
                   <TouchableOpacity
                     style={[
-                      styles.calculateKmButton,
-                      (!isOnline || expenseTravelFromAddress.trim().length < 3 || expenseTravelToAddress.trim().length < 3 || isLoadingDistance) && styles.calculateKmButtonDisabled,
+                      styles.travelCalcButton,
+                      (!isOnline ||
+                        expenseTravelFromAddress.trim().length < 3 ||
+                        expenseTravelToAddress.trim().length < 3 ||
+                        isLoadingDistance) &&
+                        styles.travelCalcButtonDisabled,
                     ]}
                     onPress={handleCalculateDistanceKm}
-                    disabled={!isOnline || expenseTravelFromAddress.trim().length < 3 || expenseTravelToAddress.trim().length < 3 || isLoadingDistance}
+                    disabled={
+                      !isOnline ||
+                      expenseTravelFromAddress.trim().length < 3 ||
+                      expenseTravelToAddress.trim().length < 3 ||
+                      isLoadingDistance
+                    }
                   >
                     {isLoadingDistance ? (
-                      <ActivityIndicator size="small" color="#fff" />
+                      <ActivityIndicator size="small" color={colors.primary} />
                     ) : (
                       <>
-                        <Ionicons name="navigate" size={18} color="#fff" style={{ marginRight: spacing.sm }} />
-                        <Text style={styles.calculateKmButtonText}>
-                          {!isOnline ? t("expense.noInternet") : t("expense.calculateDistance")}
-                        </Text>
+                        <Ionicons name="navigate-outline" size={18} color={colors.primary} style={{ marginRight: spacing.xs }} />
+                        <Text style={styles.travelCalcButtonText}>{t("expenses.travel.calculateDistance")}</Text>
                       </>
                     )}
                   </TouchableOpacity>
+                  {(!isOnline ||
+                    expenseTravelFromAddress.trim().length < 3 ||
+                    expenseTravelToAddress.trim().length < 3 ||
+                    isLoadingDistance) &&
+                  travelCalcDisabledHint ? (
+                    <Text style={styles.travelCalcHint}>{travelCalcDisabledHint}</Text>
+                  ) : null}
+                  <Text style={styles.travelOrManual}>{t("expenses.travel.orEnterManually")}</Text>
+                  {kmError ? (
+                    <>
+                      <Text style={styles.kmErrorText}>{kmError}</Text>
+                      <Text style={styles.travelCalcHint}>{t("expenses.travel.distanceFailedManual")}</Text>
+                    </>
+                  ) : null}
                 </View>
-                {kmError ? (
-                  <Text style={styles.kmErrorText}>{kmError}</Text>
-                ) : null}
-                <View style={styles.travelRateRow}>
-                  <Text style={styles.travelFormLabel}>{t("expense.ratePerKm")}</Text>
-                  <TextInput
-                    style={[styles.input, styles.travelRateInput]}
-                    value={expenseTravelRatePerKm}
-                    onChangeText={(t) => setExpenseTravelRatePerKm(t.replace(/[^\d.,]/g, '').replace(',', '.'))}
-                    placeholder="0.20"
-                    placeholderTextColor={colors.textMuted}
-                    keyboardType="decimal-pad"
-                  />
-                </View>
-                <TouchableOpacity
-                  style={styles.travelRoundTripRow}
-                  onPress={() => setExpenseTravelRoundTrip((v) => !v)}
-                >
-                  <Ionicons name={expenseTravelRoundTrip ? "checkbox" : "square-outline"} size={22} color={colors.primary} />
-                  <Text style={styles.travelRoundTripText}>{t("expense.roundTrip")}</Text>
-                </TouchableOpacity>
-                <View style={styles.travelDateRow}>
-                  <Text style={styles.travelFormLabel}>{t("expense.travelDate")}</Text>
+
+                <View style={styles.travelSectionCard}>
+                  <Text style={styles.travelSectionTitle}>{t("expenses.travel.tripDetails")}</Text>
+                  <Text style={styles.travelFieldLabel}>{t("expenses.travel.tripDate")}</Text>
                   <TouchableOpacity
                     style={styles.dateInputButton}
                     onPress={() => {
@@ -5994,80 +6102,116 @@ export function ProjectOverviewScreen() {
                       setShowDatePicker(true);
                     }}
                   >
-                    <Text style={styles.dateInputText}>
-                      {expenseDate || t("projectOverview.selectDate")}
-                    </Text>
+                    <Text style={styles.dateInputText}>{expenseDate || t("projectOverview.selectDate")}</Text>
                     <Ionicons name="calendar-outline" size={20} color={colors.primary} />
                   </TouchableOpacity>
-                </View>
-                {(() => {
-                  const km = parseFloat(expenseTravelDistanceKm.replace(",", "."));
-                  const rate = parseFloat(expenseTravelRatePerKm.replace(",", ".")) || 0.3;
-                  const effectiveKm = expenseTravelRoundTrip ? km * 2 : km;
-                  const calculatedAmount = Number.isFinite(km) && km > 0 ? Math.round(effectiveKm * rate * 100) / 100 : null;
-                  return calculatedAmount != null ? (
-                    <View style={styles.travelCalculatedAmountRow}>
-                      <Text style={styles.travelCalculatedAmountLabel}>{t("expense.amount")}</Text>
-                      <Text style={styles.travelCalculatedAmountValue}>{calculatedAmount.toFixed(2)} EUR</Text>
+                  <View style={styles.travelRoundTripSwitchRow}>
+                    <View style={{ flex: 1, paddingRight: spacing.sm }}>
+                      <Text style={styles.travelRoundTripLabel}>{t("expenses.travel.roundTrip")}</Text>
+                      <Text style={styles.travelRoundTripHint}>{t("expenses.travel.roundTripHint")}</Text>
                     </View>
-                  ) : null;
-                })()}
-              </View>
-            )}
-
-            {/* Optional Faktúra for travel */}
-            {expenseCategory === 'TRAVEL' && (
-              <View style={[styles.expenseAttachmentSection, { marginTop: 0 }]}>
-                <Text style={[styles.expenseAttachmentLabel, { opacity: 0.8 }]}>{t("expense.invoice")}</Text>
-                <View style={styles.expenseAttachmentButtons}>
-                  <TouchableOpacity
-                    style={[styles.expenseAttachmentButton, (uploadingExpenseAttachment || submitting) && styles.expenseAttachmentButtonDisabled]}
-                    onPress={pickExpenseImage}
-                    disabled={uploadingExpenseAttachment || submitting}
-                  >
-                    <Ionicons name="image-outline" size={20} color={colors.primary} />
-                    <Text style={styles.expenseAttachmentButtonText}>{t("expense.photo")}</Text>
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={[styles.expenseAttachmentButton, (uploadingExpenseAttachment || submitting) && styles.expenseAttachmentButtonDisabled]}
-                    onPress={pickExpenseDocument}
-                    disabled={uploadingExpenseAttachment || submitting}
-                  >
-                    <Ionicons name="document-outline" size={20} color={colors.primary} />
-                    <Text style={styles.expenseAttachmentButtonText}>{t("expense.pdf")}</Text>
-                  </TouchableOpacity>
+                    <Switch
+                      value={expenseTravelRoundTrip}
+                      onValueChange={setExpenseTravelRoundTrip}
+                      trackColor={{ false: colors.border, true: `${colors.primary}55` }}
+                      thumbColor={expenseTravelRoundTrip ? colors.primary : colors.textMuted}
+                    />
+                  </View>
+                  <Text style={styles.travelFieldLabel}>{t("expenses.travel.ratePerKm")}</Text>
+                  <TextInput
+                    style={[styles.input, styles.travelRateInputWide]}
+                    value={expenseTravelRatePerKm}
+                    onChangeText={(text) => setExpenseTravelRatePerKm(text.replace(/[^\d.,]/g, "").replace(",", "."))}
+                    placeholder="0.30"
+                    placeholderTextColor={colors.textMuted}
+                    keyboardType="decimal-pad"
+                  />
                 </View>
-                {expenseAttachment && (
-                  <View style={styles.expenseAttachmentPreview}>
-                    <Ionicons name={expenseAttachment.kind === 'image' ? 'image-outline' : 'document-outline'} size={20} color={colors.primary} style={{ marginRight: spacing.sm }} />
-                    <Text style={styles.expenseAttachmentPreviewText} numberOfLines={1}>{expenseAttachment.fileName}</Text>
+
+                <View style={styles.travelSummaryCard}>
+                  <Text style={styles.travelSectionTitle}>{t("expenses.travel.summaryTitle")}</Text>
+                  {(() => {
+                    const km = parseFloat(expenseTravelDistanceKm.replace(",", "."));
+                    const rate = parseFloat(expenseTravelRatePerKm.replace(",", "."));
+                    if (!Number.isFinite(km) || km <= 0 || !Number.isFinite(rate) || rate <= 0) {
+                      return <Text style={styles.travelSummaryEmpty}>{t("expenses.travel.summaryEmpty")}</Text>;
+                    }
+                    const mid = expenseTravelRoundTrip ? "2 × " : "";
+                    const total = Math.round(km * (expenseTravelRoundTrip ? 2 : 1) * rate * 100) / 100;
+                    const kmStr = String(Math.round(km * 10) / 10);
+                    const rateStr = rate.toFixed(2);
+                    const totalStr = total.toFixed(2);
+                    return (
+                      <Text style={styles.travelSummaryFormula}>
+                        {t("expenses.travel.summaryFormula", { km: kmStr, mid, rate: rateStr, total: totalStr })}
+                      </Text>
+                    );
+                  })()}
+                </View>
+
+                <View style={[styles.expenseAttachmentSection, styles.travelReceiptSection]}>
+                  <Text style={styles.expenseAttachmentLabel}>{t("expenses.travel.receiptOptional")}</Text>
+                  <View style={styles.expenseAttachmentButtons}>
                     <TouchableOpacity
-                      onPress={() => {
-                        setExpenseAttachment(null);
-                        setExpensePreuploadedAttachment(null);
-                        setExpenseOcrStatus(null);
-                        setExpenseOcrExtractionSource(null);
-                      }}
-                      style={styles.expenseAttachmentRemove}
+                      style={[
+                        styles.expenseAttachmentButtonSecondary,
+                        (uploadingExpenseAttachment || submitting) && styles.expenseAttachmentButtonDisabled,
+                      ]}
+                      onPress={pickExpenseImage}
+                      disabled={uploadingExpenseAttachment || submitting}
                     >
-                      <Ionicons name="close-circle" size={20} color={colors.textMuted} />
+                      <Ionicons name="image-outline" size={18} color={colors.text} />
+                      <Text style={styles.expenseAttachmentButtonTextMuted}>{t("expense.photo")}</Text>
+                    </TouchableOpacity>
+                    <TouchableOpacity
+                      style={[
+                        styles.expenseAttachmentButtonSecondary,
+                        (uploadingExpenseAttachment || submitting) && styles.expenseAttachmentButtonDisabled,
+                      ]}
+                      onPress={pickExpenseDocument}
+                      disabled={uploadingExpenseAttachment || submitting}
+                    >
+                      <Ionicons name="document-outline" size={18} color={colors.text} />
+                      <Text style={styles.expenseAttachmentButtonTextMuted}>{t("expense.pdf")}</Text>
                     </TouchableOpacity>
                   </View>
-                )}
-                {expenseOcrStatus === "success" &&
+                  {expenseAttachment && (
+                    <View style={styles.expenseAttachmentPreview}>
+                      <Ionicons
+                        name={expenseAttachment.kind === "image" ? "image-outline" : "document-outline"}
+                        size={20}
+                        color={colors.primary}
+                        style={{ marginRight: spacing.sm }}
+                      />
+                      <Text style={styles.expenseAttachmentPreviewText} numberOfLines={1}>
+                        {expenseAttachment.fileName}
+                      </Text>
+                      <TouchableOpacity
+                        onPress={() => {
+                          setExpenseAttachment(null);
+                          setExpensePreuploadedAttachment(null);
+                          setExpenseOcrStatus(null);
+                          setExpenseOcrExtractionSource(null);
+                        }}
+                        style={styles.expenseAttachmentRemove}
+                      >
+                        <Ionicons name="close-circle" size={20} color={colors.textMuted} />
+                      </TouchableOpacity>
+                    </View>
+                  )}
+                  {expenseOcrStatus === "success" &&
                   expenseOcrExtractionSource &&
                   expenseOcrExtractionSource !== "none" &&
                   getExtractionSourceLabel(expenseOcrExtractionSource) ? (
-                  <Text style={styles.expenseOcrSourceHint}>
-                    {getExtractionSourceLabel(expenseOcrExtractionSource)}
-                  </Text>
-                ) : null}
-                {uploadingExpenseAttachment && (
-                  <View style={styles.expenseAttachmentUploading}>
-                    <ActivityIndicator size="small" color={colors.primary} />
-                    <Text style={styles.expenseAttachmentUploadingText}>{t("common.uploading") || 'Nahrava sa...'}</Text>
-                  </View>
-                )}
+                    <Text style={styles.expenseOcrSourceHint}>{getExtractionSourceLabel(expenseOcrExtractionSource)}</Text>
+                  ) : null}
+                  {uploadingExpenseAttachment && (
+                    <View style={styles.expenseAttachmentUploading}>
+                      <ActivityIndicator size="small" color={colors.primary} />
+                      <Text style={styles.expenseAttachmentUploadingText}>{t("common.uploading") || "…"}</Text>
+                    </View>
+                  )}
+                </View>
               </View>
             )}
 
@@ -6155,8 +6299,8 @@ export function ProjectOverviewScreen() {
                   setExpenseTravelDistanceKm("");
                   setExpenseTravelRatePerKm("0.30");
                   setExpenseTravelRoundTrip(false);
-                  setExpenseTravelFromCountry(defaultCountry);
-                  setExpenseTravelToCountry(defaultCountry);
+                  setExpenseTravelFromCountry(travelDefaultCountry);
+                  setExpenseTravelToCountry(travelDefaultCountry);
                   setKmError(undefined);
                 }}
               >
@@ -6167,7 +6311,18 @@ export function ProjectOverviewScreen() {
                   styles.modalOk,
                   (!expenseCategory
                     || (expenseCategory === "TRAVEL"
-                      ? (!expenseTravelFromAddress.trim() || !expenseTravelToAddress.trim() || !expenseTravelDistanceKm.trim() || !Number.isFinite(parseFloat(expenseTravelDistanceKm.replace(",", "."))) || parseFloat(expenseTravelDistanceKm.replace(",", ".")) <= 0)
+                      ? (() => {
+                          const kmN = parseFloat(expenseTravelDistanceKm.replace(",", "."));
+                          const rateN = parseFloat(expenseTravelRatePerKm.replace(",", "."));
+                          return (
+                            !expenseTravelFromAddress.trim() ||
+                            !expenseTravelToAddress.trim() ||
+                            !Number.isFinite(kmN) ||
+                            kmN <= 0 ||
+                            !Number.isFinite(rateN) ||
+                            rateN <= 0
+                          );
+                        })()
                       : !expenseTitle.trim())
                     || submitting
                     || uploadingExpenseAttachment
@@ -6178,7 +6333,18 @@ export function ProjectOverviewScreen() {
                 disabled={
                   !expenseCategory
                   || (expenseCategory === "TRAVEL"
-                    ? !expenseTravelFromAddress.trim() || !expenseTravelToAddress.trim() || !expenseTravelDistanceKm.trim() || !Number.isFinite(parseFloat(expenseTravelDistanceKm.replace(",", "."))) || parseFloat(expenseTravelDistanceKm.replace(",", ".")) <= 0
+                    ? (() => {
+                        const kmN = parseFloat(expenseTravelDistanceKm.replace(",", "."));
+                        const rateN = parseFloat(expenseTravelRatePerKm.replace(",", "."));
+                        return (
+                          !expenseTravelFromAddress.trim() ||
+                          !expenseTravelToAddress.trim() ||
+                          !Number.isFinite(kmN) ||
+                          kmN <= 0 ||
+                          !Number.isFinite(rateN) ||
+                          rateN <= 0
+                        );
+                      })()
                     : !expenseTitle.trim())
                   || submitting
                   || uploadingExpenseAttachment
@@ -6186,7 +6352,13 @@ export function ProjectOverviewScreen() {
                 }
               >
                 <Text style={styles.modalOkText}>
-                  {submitting ? t("common.saving") : (editingExpense ? t("common.save") : t("common.add"))}
+                  {submitting
+                    ? t("common.saving")
+                    : editingExpense
+                      ? t("common.save")
+                      : expenseCategory === "TRAVEL"
+                        ? t("expenses.travel.addTravelExpense")
+                        : t("common.add")}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -6204,34 +6376,31 @@ export function ProjectOverviewScreen() {
                 <Ionicons name="close" size={24} color={colors.text} />
               </TouchableOpacity>
             </View>
-            <ScrollView style={styles.assigneePickerList} contentContainerStyle={styles.assigneePickerListContent}>
-              {EUROPEAN_COUNTRIES.map((c) => (
-                <TouchableOpacity
-                  key={c.code}
-                  onPress={() => {
-                    if (showCountryPicker === 'from') setExpenseTravelFromCountry(c.code);
-                    if (showCountryPicker === 'to') setExpenseTravelToCountry(c.code);
-                    setShowCountryPicker(null);
-                  }}
-                  style={[
-                    styles.assigneePickerRow,
-                    ((showCountryPicker === 'from' && expenseTravelFromCountry === c.code) ||
-                      (showCountryPicker === 'to' && expenseTravelToCountry === c.code)) &&
-                      styles.assigneePickerRowActive,
-                  ]}
-                >
-                  <Text
-                    style={[
-                      styles.assigneePickerLabel,
-                      ((showCountryPicker === 'from' && expenseTravelFromCountry === c.code) ||
-                        (showCountryPicker === 'to' && expenseTravelToCountry === c.code)) &&
-                        styles.assigneePickerLabelActive,
-                    ]}
+            <ScrollView
+              style={styles.travelCountryPickerList}
+              contentContainerStyle={styles.travelCountryPickerListContent}
+            >
+              {EUROPEAN_COUNTRIES.map((c) => {
+                const selected =
+                  (showCountryPicker === "from" && expenseTravelFromCountry === c.code) ||
+                  (showCountryPicker === "to" && expenseTravelToCountry === c.code);
+                return (
+                  <TouchableOpacity
+                    key={c.code}
+                    onPress={() => {
+                      if (showCountryPicker === "from") setExpenseTravelFromCountry(c.code);
+                      if (showCountryPicker === "to") setExpenseTravelToCountry(c.code);
+                      setShowCountryPicker(null);
+                    }}
+                    style={[styles.travelCountryPickerRow, selected && styles.travelCountryPickerRowActive]}
                   >
-                    {c.code} – {c.name}
-                  </Text>
-                </TouchableOpacity>
-              ))}
+                    <Text style={[styles.travelCountryPickerLabel, selected && styles.travelCountryPickerLabelActive]}>
+                      {c.code} – {c.name}
+                    </Text>
+                    {selected ? <Ionicons name="checkmark-circle" size={22} color={colors.primary} /> : null}
+                  </TouchableOpacity>
+                );
+              })}
             </ScrollView>
           </View>
         </View>
@@ -7990,7 +8159,7 @@ const styles = StyleSheet.create({
     padding: spacing.lg,
   },
   expenseModalScroll: { flex: 1, minHeight: 0 },
-  expenseModalScrollContent: { paddingTop: spacing.sm, paddingBottom: 220 },
+  expenseModalScrollContent: { paddingTop: spacing.sm, paddingBottom: 280 },
   diaryModal: {
     height: Dimensions.get("window").height * 0.9,
     alignSelf: "stretch",
@@ -8030,6 +8199,36 @@ const styles = StyleSheet.create({
   },
   assigneePickerLabel: { fontSize: 15, color: colors.text, fontWeight: "500" },
   assigneePickerLabelActive: { color: colors.primary, fontWeight: "700" },
+  /** Travel country modal: dark blue rows need white text (not `colors.text`). */
+  travelCountryPickerList: { maxHeight: 360, marginBottom: spacing.md },
+  travelCountryPickerListContent: { gap: spacing.sm },
+  travelCountryPickerRow: {
+    minHeight: 52,
+    borderWidth: 1,
+    borderColor: "rgba(255,255,255,0.22)",
+    borderRadius: radius,
+    backgroundColor: colors.background,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  travelCountryPickerRowActive: {
+    borderColor: colors.primary,
+    backgroundColor: "#162a52",
+  },
+  travelCountryPickerLabel: {
+    flex: 1,
+    fontSize: 17,
+    lineHeight: 22,
+    color: colors.textOnDark,
+    fontWeight: "600",
+  },
+  travelCountryPickerLabelActive: {
+    color: colors.textOnDark,
+    fontWeight: "800",
+  },
   modalLabel: { fontSize: 14, fontWeight: "500", color: colors.text, marginBottom: spacing.xs, marginTop: spacing.sm },
   editCountryChip: {
     paddingVertical: spacing.sm,
@@ -8390,7 +8589,25 @@ const styles = StyleSheet.create({
   expenseAttachmentButtonText: {
     fontSize: 14,
     color: colors.textOnDark,
-    fontWeight: '500',
+    fontWeight: "500",
+  },
+  expenseAttachmentButtonSecondary: {
+    flex: 1,
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.sm,
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(45,74,122,0.18)",
+    gap: spacing.xs,
+  },
+  expenseAttachmentButtonTextMuted: {
+    fontSize: 13,
+    color: colors.text,
+    fontWeight: "500",
   },
   expenseAttachmentPreview: {
     flexDirection: 'row',
@@ -8737,8 +8954,8 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.xs,
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
     borderRadius: radius,
     borderWidth: 1,
     borderColor: colors.border,
@@ -8749,7 +8966,7 @@ const styles = StyleSheet.create({
     backgroundColor: `${colors.primary}14`,
   },
   expenseTypeChoiceButtonText: {
-    fontSize: 15,
+    fontSize: 13,
     color: colors.textOnDark,
     fontWeight: "600",
   },
@@ -8759,6 +8976,183 @@ const styles = StyleSheet.create({
   },
   travelFormSection: {
     marginBottom: spacing.md,
+  },
+  travelFormOuter: {
+    gap: spacing.md,
+    marginBottom: spacing.md,
+  },
+  travelSectionCard: {
+    backgroundColor: `${colors.primary}0e`,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(224, 103, 55, 0.22)",
+    padding: spacing.md,
+  },
+  travelSectionHeaderRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginBottom: spacing.sm,
+    gap: spacing.sm,
+  },
+  travelSectionTitle: {
+    fontSize: 15,
+    fontWeight: "700",
+    color: colors.text,
+    flex: 1,
+  },
+  travelSectionHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
+    lineHeight: 17,
+  },
+  travelFieldLabel: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.textMuted,
+    marginBottom: spacing.xs,
+    marginTop: spacing.xs,
+  },
+  travelSwapBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    paddingVertical: 4,
+    paddingHorizontal: spacing.xs,
+  },
+  travelSwapBtnText: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textMuted,
+  },
+  travelCountryChip: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
+    paddingVertical: 6,
+    paddingHorizontal: 8,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: "rgba(45,74,122,0.28)",
+    /** Svetlý chip na `travelSectionCard` — nie `colors.background` (modrá + čierny text). */
+    backgroundColor: "#ffffff",
+    minWidth: 44,
+  },
+  travelCountryChipText: {
+    fontSize: 12,
+    fontWeight: "700",
+    color: colors.text,
+  },
+  travelKmRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.sm,
+  },
+  travelKmInput: {
+    flex: 1,
+    marginBottom: 0,
+    fontSize: 20,
+    fontWeight: "700",
+    paddingVertical: spacing.sm,
+  },
+  travelKmSuffix: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.textMuted,
+    paddingRight: spacing.xs,
+  },
+  travelCalcButton: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "center",
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: "transparent",
+    marginBottom: spacing.xs,
+  },
+  travelCalcButtonDisabled: {
+    borderColor: colors.border,
+    opacity: 0.55,
+  },
+  travelCalcButtonText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.primary,
+  },
+  travelCalcHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginBottom: spacing.xs,
+    lineHeight: 17,
+  },
+  travelOrManual: {
+    fontSize: 12,
+    color: colors.textMuted,
+    fontStyle: "italic",
+    marginTop: spacing.xs,
+  },
+  travelRoundTripSwitchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginVertical: spacing.md,
+    paddingVertical: spacing.sm,
+    borderTopWidth: 1,
+    borderBottomWidth: 1,
+    borderColor: "rgba(45,74,122,0.1)",
+  },
+  travelRoundTripLabel: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  travelRoundTripHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginTop: 4,
+    lineHeight: 16,
+  },
+  travelSummaryCard: {
+    backgroundColor: `${colors.primary}12`,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(224, 103, 55, 0.26)",
+    padding: spacing.md,
+    marginBottom: spacing.xs,
+  },
+  travelSummaryFormula: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.text,
+    lineHeight: 24,
+  },
+  travelSummaryEmpty: {
+    fontSize: 14,
+    color: colors.textMuted,
+    lineHeight: 20,
+  },
+  travelReceiptSection: {
+    marginTop: 0,
+    marginBottom: spacing.sm,
+    padding: spacing.md,
+    paddingTop: spacing.md,
+    backgroundColor: `${colors.primary}0a`,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: "rgba(224, 103, 55, 0.18)",
+  },
+  travelRouteDiagramRow: {
+    alignItems: "center",
+    justifyContent: "center",
+    marginVertical: spacing.xs,
+  },
+  travelRateInputWide: {
+    alignSelf: "stretch",
   },
   travelAddressRow: {
     flexDirection: "row",

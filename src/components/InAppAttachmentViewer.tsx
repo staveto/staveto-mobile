@@ -510,7 +510,14 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
   if (!visible) return null;
 
   return (
-    <Modal visible={visible} transparent animationType="fade" onRequestClose={handleClose}>
+    <Modal
+      visible={visible}
+      transparent
+      animationType="fade"
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+      onRequestClose={handleClose}
+    >
       <View style={styles.overlay}>
         <View style={[styles.header, { paddingTop: insets.top + spacing.xs }]}>
           <Text style={styles.title} numberOfLines={1}>

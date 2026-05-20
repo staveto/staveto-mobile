@@ -8,10 +8,19 @@ import {
   TouchableOpacity,
   Alert,
   Image,
+  Modal,
   RefreshControl,
   TextInput,
   Platform,
+  Dimensions,
 } from "react-native";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
+import {
+  cacheDirectory,
+  deleteAsync,
+  downloadAsync,
+  FileSystemSessionType,
+} from "expo-file-system/legacy";
 import MapView, { Marker } from "react-native-maps";
 
 // Lazy-load expo-av only when playing audio (avoids iOS mic indicator at startup)
@@ -29,7 +38,6 @@ import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { useAuth } from "../context/AuthContext";
 import { useProjectAccess } from "../hooks/useProjectAccess";
-import { InAppAttachmentViewer } from "../components/InAppAttachmentViewer";
 import * as problemsService from "../services/problems";
 import * as problemPhotosService from "../services/problemPhotos";
 import * as attachmentsService from "../services/attachments";
@@ -62,6 +70,7 @@ export function ProblemDetailScreen() {
   const { t } = useI18n();
   const { user } = useAuth();
   const { projectId, problemId } = (route.params ?? {}) as RouteParams;
+  const insets = useSafeAreaInsets();
   const access = useProjectAccess(projectId);
   const [problem, setProblem] = useState<ProblemDoc | null>(null);
   const [loading, setLoading] = useState(true);
@@ -72,8 +81,10 @@ export function ProblemDetailScreen() {
   const [showArchiveInput, setShowArchiveInput] = useState(false);
   const [resolutionNote, setResolutionNote] = useState("");
   const [noteExpanded, setNoteExpanded] = useState(false);
-  const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
-  const [viewingPhotoName, setViewingPhotoName] = useState("photo.jpg");
+  const [photoPreviewOpen, setPhotoPreviewOpen] = useState(false);
+  const [photoPreviewUri, setPhotoPreviewUri] = useState<string | null>(null);
+  const [photoPreviewLoading, setPhotoPreviewLoading] = useState(false);
+  const photoCachePathRef = React.useRef<string | null>(null);
   const soundRef = React.useRef<{ unloadAsync: () => Promise<void>; playAsync: () => Promise<void>; pauseAsync: () => Promise<void> } | null>(null);
 
   const canEdit =
@@ -236,11 +247,57 @@ export function ProblemDetailScreen() {
     );
   };
 
-  const openPhoto = (url: string, path?: string) => {
-    const name = path?.split("/").pop() || "photo.jpg";
-    setViewingPhotoName(name.includes(".") ? name : `${name}.jpg`);
-    setViewingPhotoUrl(url);
-  };
+  const closePhotoPreview = useCallback(async () => {
+    setPhotoPreviewOpen(false);
+    setPhotoPreviewUri(null);
+    setPhotoPreviewLoading(false);
+    const cached = photoCachePathRef.current;
+    photoCachePathRef.current = null;
+    if (cached) {
+      try {
+        await deleteAsync(cached, { idempotent: true });
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
+  const openPhoto = useCallback(async (url: string) => {
+    if (__DEV__) {
+      console.log("[AttachmentPreviewDebug]", {
+        event: "openPreview",
+        openSource: "problemDetail",
+        viewerMode: "image",
+        hasUrl: !!url,
+      });
+    }
+    setPhotoPreviewOpen(true);
+    setPhotoPreviewLoading(true);
+    setPhotoPreviewUri(null);
+
+    if (Platform.OS === "android" && !url.startsWith("file://") && !url.startsWith("content://")) {
+      try {
+        const dir = cacheDirectory;
+        if (dir) {
+          const dest = `${dir}staveto_problem_photo_${Date.now()}.jpg`;
+          const res = await downloadAsync(url, dest, {
+            sessionType: FileSystemSessionType.FOREGROUND,
+          });
+          if (res.status < 400) {
+            photoCachePathRef.current = res.uri;
+            setPhotoPreviewUri(res.uri);
+            setPhotoPreviewLoading(false);
+            return;
+          }
+        }
+      } catch (e) {
+        if (__DEV__) console.warn("[ProblemDetail] photo cache download failed:", e);
+      }
+    }
+
+    setPhotoPreviewUri(url);
+    setPhotoPreviewLoading(false);
+  }, []);
 
   if (loading || !problem) {
     return (
@@ -286,7 +343,7 @@ export function ProblemDetailScreen() {
                 return (
                   <TouchableOpacity
                     key={ph.path}
-                    onPress={() => openPhoto(url, ph.path)}
+                    onPress={() => void openPhoto(url)}
                     accessibilityRole="button"
                     accessibilityLabel={t("problems.photos")}
                     hitSlop={ICON_HIT_SLOP}
@@ -584,14 +641,41 @@ export function ProblemDetailScreen() {
         )}
       </View>
     </ScrollView>
-    <InAppAttachmentViewer
-      visible={viewingPhotoUrl !== null}
-      onClose={() => setViewingPhotoUrl(null)}
-      url={viewingPhotoUrl}
-      fileName={viewingPhotoName}
-      mode="image"
-      debugOpenSource="problemDetail"
-    />
+    <Modal
+      visible={photoPreviewOpen}
+      transparent
+      animationType="fade"
+      presentationStyle="overFullScreen"
+      statusBarTranslucent
+      onRequestClose={() => void closePhotoPreview()}
+    >
+      <View style={styles.photoPreviewOverlay}>
+        <View style={[styles.photoPreviewHeader, { paddingTop: insets.top + spacing.xs }]}>
+          <Text style={styles.photoPreviewTitle}>{t("problems.photos")}</Text>
+          <TouchableOpacity
+            onPress={() => void closePhotoPreview()}
+            accessibilityRole="button"
+            accessibilityLabel={t("attachments.closeA11y")}
+            hitSlop={ICON_HIT_SLOP}
+          >
+            <Ionicons name="close" size={28} color="#fff" />
+          </TouchableOpacity>
+        </View>
+        <View style={styles.photoPreviewBody}>
+          {photoPreviewLoading ? (
+            <ActivityIndicator size="large" color={colors.primary} />
+          ) : photoPreviewUri ? (
+            <Image
+              source={{ uri: photoPreviewUri }}
+              style={styles.photoPreviewImage}
+              resizeMode="contain"
+            />
+          ) : (
+            <Text style={styles.photoPreviewError}>{t("attachments.inAppPreviewFailed")}</Text>
+          )}
+        </View>
+      </View>
+    </Modal>
     </>
   );
 }
@@ -679,6 +763,38 @@ const styles = StyleSheet.create({
   photosSection: { marginTop: spacing.sm },
   photoGrid: { flexDirection: "row", flexWrap: "wrap", marginTop: spacing.xs, gap: spacing.xs },
   photoThumb: { width: 64, height: 64, borderRadius: 6 },
+  photoPreviewOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15, 23, 42, 0.97)",
+  },
+  photoPreviewHeader: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    paddingHorizontal: spacing.md,
+    paddingBottom: spacing.sm,
+  },
+  photoPreviewTitle: {
+    flex: 1,
+    fontSize: 16,
+    fontWeight: "600",
+    color: "#fff",
+  },
+  photoPreviewBody: {
+    flex: 1,
+    justifyContent: "center",
+    alignItems: "center",
+    paddingHorizontal: spacing.md,
+  },
+  photoPreviewImage: {
+    width: Dimensions.get("window").width,
+    height: Dimensions.get("window").height * 0.75,
+  },
+  photoPreviewError: {
+    color: "rgba(255,255,255,0.85)",
+    fontSize: 15,
+    textAlign: "center",
+  },
   audioSection: { marginTop: spacing.md },
   audioBtn: {
     flexDirection: "row",

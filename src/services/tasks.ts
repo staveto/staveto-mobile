@@ -18,6 +18,7 @@ import { getDocSmart, getDocsSmart, type SmartReadOptions } from "./firestoreSma
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { firestoreValueToIsoString, normalizeDueDateToYmd } from "../utils/date";
+import { normalizeStatusValue } from "../helpers/taskStatusMapping";
 import { upsertTaskDueNotification, markTaskNotificationsRead, recordSyncIssue } from "./notifications";
 import { runServiceAutoNextOnDone } from "./serviceAutoNext";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
@@ -42,6 +43,7 @@ export type TaskDoc = {
   assignedToEmail?: string | null;
   createdAt?: string;
   updatedAt?: string;
+  doneAt?: string | null;
   // MVP additions
   origin?: 'TEMPLATE' | 'CUSTOM';
   templateTaskId?: string | null;
@@ -87,6 +89,7 @@ function toDoc(
     assignedToEmail: (d.assignedToEmail as string | null) ?? undefined,
     createdAt: firestoreValueToIsoString(d.createdAt),
     updatedAt: firestoreValueToIsoString(d.updatedAt),
+    doneAt: firestoreValueToIsoString(d.doneAt) ?? null,
     // MVP additions
     origin: (d.origin as 'TEMPLATE' | 'CUSTOM') ?? undefined,
     templateTaskId: (d.templateTaskId as string | null) ?? undefined,
@@ -479,14 +482,16 @@ export type TaskWithProject = TaskDoc & {
 export async function listTasksWithDueDateInRange(
   ownerId: string,
   startYmd: string,
-  endYmd: string
+  endYmd: string,
+  readOpts?: SmartReadOptions
 ): Promise<TaskWithProject[]> {
   const { listMyProjects } = await import("./projects");
-  const projects = await listMyProjects(ownerId);
+  const { isProjectShownOnProjectsJobsTab } = await import("../lib/projectTypeModel");
+  const projects = (await listMyProjects(ownerId)).filter(isProjectShownOnProjectsJobsTab);
 
   const allTasksPromises = projects.map(async (project) => {
     try {
-      const tasks = await listTasksByProject(project.id);
+      const tasks = await listTasksByProject(project.id, readOpts);
       return tasks.map((task) => ({
         ...task,
         projectId: project.id,
@@ -503,11 +508,13 @@ export async function listTasksWithDueDateInRange(
   const activeTasks = allTasks.filter((t) => t.isActive !== false);
 
   return activeTasks.filter((task) => {
-    const ymd = task.dueDate;
-    if (!ymd || typeof ymd !== "string") return false;
-    const trimmed = ymd.trim();
-    if (!/^\d{4}-\d{2}-\d{2}$/.test(trimmed)) return false;
-    return trimmed >= startYmd && trimmed <= endYmd;
+    const dueYmd = normalizeDueDateToYmd(task.dueDate);
+    if (dueYmd && dueYmd >= startYmd && dueYmd <= endYmd) return true;
+    if (normalizeStatusValue(task.status) === "DONE") {
+      const doneYmd = normalizeDueDateToYmd(task.doneAt);
+      if (doneYmd && doneYmd >= startYmd && doneYmd <= endYmd) return true;
+    }
+    return false;
   });
 }
 

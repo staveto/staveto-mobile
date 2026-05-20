@@ -100,20 +100,29 @@ export function EquipmentScreen() {
     }
   }, [uid, filter]);
 
-  const maybeMigrateLegacy = useCallback(
+  const runMigrationInBackground = useCallback(
     async (opts: { force: boolean }) => {
       if (!uid) return;
       try {
-        if (!opts.force && (await shouldThrottleLegacyUserEquipmentMigration(LEGACY_USER_EQUIPMENT_MIGRATION_THROTTLE_MS))) {
+        if (
+          !opts.force &&
+          (await shouldThrottleLegacyUserEquipmentMigration(LEGACY_USER_EQUIPMENT_MIGRATION_THROTTLE_MS))
+        ) {
           return;
         }
-        await runLegacyUserEquipmentMigration(uid);
+        await Promise.race([
+          runLegacyUserEquipmentMigration(uid),
+          new Promise<never>((_, reject) => {
+            setTimeout(() => reject(new Error("LEGACY_EQUIPMENT_MIGRATION_TIMEOUT")), 90_000);
+          }),
+        ]);
         await markLegacyUserEquipmentMigrationRan();
+        await load();
       } catch (e) {
         if (__DEV__) console.warn("[EquipmentScreen] legacy user equipment migration:", e);
       }
     },
-    [uid]
+    [uid, load]
   );
 
   useFocusEffect(
@@ -121,22 +130,22 @@ export function EquipmentScreen() {
       let cancelled = false;
       (async () => {
         setLoading(true);
-        await maybeMigrateLegacy({ force: false });
         if (!cancelled) await load();
+        if (!cancelled) void runMigrationInBackground({ force: false });
       })();
       return () => {
         cancelled = true;
       };
-    }, [load, maybeMigrateLegacy])
+    }, [load, runMigrationInBackground])
   );
 
   const onRefresh = useCallback(() => {
     setRefreshing(true);
     (async () => {
-      await maybeMigrateLegacy({ force: true });
       await load();
+      void runMigrationInBackground({ force: true });
     })();
-  }, [load, maybeMigrateLegacy]);
+  }, [load, runMigrationInBackground]);
 
   const qLow = q.trim().toLowerCase();
   const filtered = useMemo(() => {

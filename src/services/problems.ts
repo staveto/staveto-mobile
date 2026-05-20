@@ -9,7 +9,7 @@ import {
   serverTimestamp,
   Timestamp,
 } from "../lib/rnFirestore";
-import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
+import { getDocSmart, getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { ProjectStorageType } from "../lib/projectTypeModel";
@@ -181,12 +181,13 @@ export async function listProblems(
     priority?: ProblemPriority;
     category?: ProblemCategory;
     assigneeUid?: string;
-  }
+  },
+  readOpts?: SmartReadOptions
 ): Promise<ProblemDoc[]> {
   const c = collection(db, paths.projectProblems(projectId));
   /** No `orderBy("createdAt")` here: Firestore omits docs missing that field, so counts vs list diverged. */
   const q = query(c);
-  const snap = await getDocsSmart(q);
+  const snap = await getDocsSmart(q, readOpts);
   let list = snap.docs
     .map((d) => {
       try {
@@ -453,14 +454,15 @@ function normalizeDueDateToYmd(value: string | null | undefined): string | null 
 export async function listProblemsWithDueDateInRange(
   ownerId: string,
   startYmd: string,
-  endYmd: string
+  endYmd: string,
+  readOpts?: SmartReadOptions
 ): Promise<ProblemWithProject[]> {
   const { listMyProjects } = await import("./projects");
   const projects = await listMyProjects(ownerId);
   const allProblems: ProblemWithProject[] = [];
   for (const project of projects) {
     try {
-      const list = await listProblems(project.id);
+      const list = await listProblems(project.id, undefined, readOpts);
       for (const p of list) {
         if (p.archivedAt) continue;
         const ymd = normalizeDueDateToYmd(p.dueDate);

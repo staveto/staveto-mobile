@@ -539,7 +539,29 @@ export function HomeScreen() {
     });
   }, [activeBusinessOrgId, canOpenBusinessChat, navigation, t]);
 
+  const calendarSeedTasks = useMemo((): tasksService.TaskWithProject[] | undefined => {
+    if (!dashboardData) return undefined;
+    const seen = new Set<string>();
+    const out: tasksService.TaskWithProject[] = [];
+    const add = (task: TaskDoc & { projectId: string; projectName?: string }) => {
+      const key = `${task.projectId}:${task.id}`;
+      if (seen.has(key)) return;
+      seen.add(key);
+      const proj = dashboardData.projects.find((p) => p.id === task.projectId);
+      out.push({
+        ...task,
+        projectId: task.projectId,
+        projectName: task.projectName || proj?.name,
+        projectType: proj?.projectType,
+      });
+    };
+    dashboardData.todaysWorkTasks.forEach(add);
+    dashboardData.todayTasks.forEach(add);
+    return out.length > 0 ? out : undefined;
+  }, [dashboardData]);
+
   const openCalendarSheet = useCallback(() => {
+    setCalendarRefreshTrigger((prev) => prev + 1);
     calendarSheetRef.current?.present();
   }, []);
 
@@ -2846,6 +2868,7 @@ export function HomeScreen() {
       <HomeCalendarSheet
         sheetRef={calendarSheetRef}
         refreshTrigger={calendarRefreshTrigger}
+        seedTasks={calendarSeedTasks}
         onTaskPress={(task) => {
           calendarSheetRef.current?.dismiss();
           (navigation.getParent() as { getParent: () => { navigate: (n: string, p: object) => void } } | undefined)

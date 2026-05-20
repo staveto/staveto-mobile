@@ -9,7 +9,6 @@ import {
   deleteDoc,
   doc,
   getDoc,
-  getDocs,
   orderBy,
   query,
   serverTimestamp,
@@ -17,6 +16,7 @@ import {
 } from "../lib/rnFirestore";
 import { db, getStorage } from "../firebase";
 import { paths } from "../lib/firestorePaths";
+import { getDocsSmart } from "./firestoreSmartRead";
 import type { EquipmentCategory } from "./equipment";
 
 export type UserEquipmentStatus = "available" | "assigned" | "in_service" | "inactive";
@@ -109,9 +109,26 @@ export async function listUserEquipment(
   opts?: { status?: UserEquipmentStatus | "all" }
 ): Promise<UserEquipmentDoc[]> {
   const col = collection(db, paths.userEquipment(uid));
-  const q = query(col, orderBy("updatedAt", "desc"));
-  const snap = await getDocs(q);
-  let rows = snap.docs.map((d) => toDoc(uid, { id: d.id, data: () => d.data() }));
+  const mapRows = (snap: { docs: { id: string; data: () => Record<string, unknown> }[] }) =>
+    snap.docs.map((d) => toDoc(uid, { id: d.id, data: () => d.data() }));
+
+  let rows: UserEquipmentDoc[];
+  try {
+    const q = query(col, orderBy("updatedAt", "desc"));
+    const snap = await getDocsSmart(q);
+    rows = mapRows(snap);
+  } catch (error: unknown) {
+    const code = String((error as { code?: string })?.code ?? "");
+    const msg = String((error as Error)?.message ?? "");
+    if (code === "failed-precondition" || msg.includes("index")) {
+      const snap = await getDocsSmart(col);
+      rows = mapRows(snap);
+      rows.sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+    } else {
+      throw error;
+    }
+  }
+
   if (opts?.status && opts.status !== "all") {
     rows = rows.filter((r) => r.status === opts.status);
   }

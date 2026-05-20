@@ -1,6 +1,6 @@
 {
   "name": "mobile",
-  "version": "1.23.3",
+  "version": "1.23.4",
   "main": "index.ts",
   "expo": {
     "install": {

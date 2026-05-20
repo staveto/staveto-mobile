@@ -17,6 +17,8 @@ export type SmartReadOptions = {
   forceServer?: boolean;
   /** When poor network, prefer cache first (default true) */
   preferCacheWhenPoor?: boolean;
+  /** Skip 28s empty-cache server retry (calendar loads many projects in parallel). */
+  skipEmptyCacheRetry?: boolean;
 };
 
 /** Only "unknown" is treated as poor — cellular uses server-first like WiFi so first load is not stuck on empty Firestore cache. */
@@ -149,9 +151,9 @@ export async function getDocSmart(
 async function retryGetDocsIfEmptyCache(
   queryRef: QueryOrColRef,
   snap: FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>,
-  opts: { status: NetworkStatus }
+  opts: { status: NetworkStatus; skipEmptyCacheRetry?: boolean }
 ): Promise<FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>> {
-  if (opts.status === "offline" || snap.docs.length > 0) {
+  if (opts.skipEmptyCacheRetry || opts.status === "offline" || snap.docs.length > 0) {
     return snap;
   }
   // Empty online result is often a stale/timeout cache snapshot — always try server once.
@@ -184,7 +186,7 @@ export async function getDocsSmart(
   const preferCacheWhenPoor = opts?.preferCacheWhenPoor !== false;
   const preferCache = status === "offline" || (status === "poor" && preferCacheWhenPoor);
   const forceServer = opts?.forceServer === true;
-  const retryOpts = { status };
+  const retryOpts = { status, skipEmptyCacheRetry: opts?.skipEmptyCacheRetry };
 
   if (forceServer) {
     try {

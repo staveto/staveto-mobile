@@ -1,6 +1,5 @@
 import React, { useMemo, useState, useEffect, useCallback } from "react";
-import { View, Text, StyleSheet, Dimensions } from "react-native";
-import { TouchableOpacity } from "react-native-gesture-handler";
+import { View, Text, StyleSheet, Dimensions, TouchableOpacity, Pressable } from "react-native";
 import { BottomSheetModal, BottomSheetBackdrop, BottomSheetScrollView } from "@gorhom/bottom-sheet";
 import { Ionicons } from "@expo/vector-icons";
 import {
@@ -40,7 +39,8 @@ import * as absencesService from "../services/absences";
 import type { TaskWithProject } from "../services/tasks";
 import type { ProblemWithProject } from "../services/problems";
 import type { AbsenceDoc } from "../services/absences";
-import { ABSENCE_COLOR, ABSENCE_TYPE_KEYS } from "../screens/absence/absenceUi";
+import { ABSENCE_COLOR, ABSENCE_TYPE_KEYS, ABSENCE_TYPES_ORDER } from "../screens/absence/absenceUi";
+import type { AbsenceType } from "../services/absences";
 import { useNavigation } from "@react-navigation/native";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
 import { getProjectEngine } from "../lib/projectTypeModel";
@@ -75,6 +75,8 @@ type Props = {
   onSeeAllForDate?: (dueDateYmd: string) => void;
   /** When changed, triggers a refresh of tasks/problems (e.g. after returning from TaskDetail) */
   refreshTrigger?: number;
+  /** Tasks already loaded on Home (dashboard) — shown immediately while calendar refetches. */
+  seedTasks?: TaskWithProject[];
 };
 
 const LOCALE_MAP: Record<Locale, DateFnsLocale> = {
@@ -100,7 +102,49 @@ const WEEKDAYS_BY_LOCALE: Record<Locale, string[]> = {
 
 const CALENDAR_TASK_BUCKETS = ["BUILD", "TRADE", "service"] as const;
 
-export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSeeAllForDate, refreshTrigger }: Props) {
+/** Calendar day keys: due date + completion day for DONE tasks. */
+function calendarTaskYmds(task: TaskWithProject): string[] {
+  const keys: string[] = [];
+  const due = normalizeDueDateToYmd(task.dueDate);
+  if (due) keys.push(due);
+  if (normalizeStatusValue(task.status) === "DONE") {
+    const done = normalizeDueDateToYmd(task.doneAt);
+    if (done && !keys.includes(done)) keys.push(done);
+  }
+  return keys;
+}
+
+function mergeTasksForSelectedDay(
+  selectedYmd: string,
+  todayYmd: string,
+  tasksByYmd: Map<string, TaskWithProject[]>
+): TaskWithProject[] {
+  const byKey = new Map<string, TaskWithProject>();
+  const add = (t: TaskWithProject) => byKey.set(`${t.projectId}:${t.id}`, t);
+
+  for (const t of tasksByYmd.get(selectedYmd) ?? []) add(t);
+
+  // Same as Home "OVERDUE": on today, also list open tasks due before today.
+  if (selectedYmd === todayYmd) {
+    for (const [ymd, list] of tasksByYmd) {
+      if (ymd >= todayYmd) continue;
+      for (const t of list) {
+        if (normalizeStatusValue(t.status) !== "DONE") add(t);
+      }
+    }
+  }
+
+  return Array.from(byKey.values());
+}
+
+export function HomeCalendarSheet({
+  sheetRef,
+  onTaskPress,
+  onProblemPress,
+  onSeeAllForDate,
+  refreshTrigger,
+  seedTasks,
+}: Props) {
   const { t, locale } = useI18n();
   const dateFnsLocale = LOCALE_MAP[locale] ?? enUS;
   const weekdays = WEEKDAYS_BY_LOCALE[locale] ?? WEEKDAYS_BY_LOCALE.en;
@@ -112,6 +156,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
   const [problemsByYmd, setProblemsByYmd] = useState<Map<string, ProblemWithProject[]>>(new Map());
   const [absencesByYmd, setAbsencesByYmd] = useState<Map<string, AbsenceDoc[]>>(new Map());
   const [loading, setLoading] = useState(false);
+  const [loadError, setLoadError] = useState(false);
 
   const days = useMemo(() => {
     const start = startOfWeek(startOfMonth(currentMonth), { weekStartsOn: 1 });
@@ -120,26 +165,57 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
   }, [currentMonth]);
 
   const loadTasks = useCallback(async () => {
-    if (!user?.id) return;
+    if (!user?.id) {
+      setLoading(false);
+      return;
+    }
     setLoading(true);
-    try {
-      const start = subMonths(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1), 2);
-      const end = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 2, 0);
-      const startYmd = toYmd(start);
-      const endYmd = toYmd(end);
-      const [tasks, problems, absencesList] = await Promise.all([
-        tasksService.listTasksWithDueDateInRange(user.id, startYmd, endYmd),
-        problemsService.listProblemsWithDueDateInRange(user.id, startYmd, endYmd),
-        absencesService.listAbsencesForUser(user.id, startYmd, endYmd).catch(() => [] as AbsenceDoc[]),
-      ]);
+    setLoadError(false);
+    const start = subMonths(new Date(currentMonth.getFullYear(), currentMonth.getMonth(), 1), 2);
+    const end = new Date(currentMonth.getFullYear(), currentMonth.getMonth() + 2, 0);
+    const startYmd = toYmd(start);
+    const endYmd = toYmd(end);
+
+    const buildTaskMap = (tasks: TaskWithProject[]) => {
       const taskMap = new Map<string, TaskWithProject[]>();
       for (const task of tasks) {
-        const ymd = task.dueDate?.trim();
-        if (!ymd || !/^\d{4}-\d{2}-\d{2}$/.test(ymd)) continue;
-        const arr = taskMap.get(ymd) ?? [];
-        arr.push(task);
-        taskMap.set(ymd, arr);
+        for (const ymd of calendarTaskYmds(task)) {
+          if (ymd < startYmd || ymd > endYmd) continue;
+          const arr = taskMap.get(ymd) ?? [];
+          if (!arr.some((x) => x.projectId === task.projectId && x.id === task.id)) {
+            arr.push(task);
+            taskMap.set(ymd, arr);
+          }
+        }
       }
+      return taskMap;
+    };
+
+    if (seedTasks?.length) {
+      setTasksByYmd(buildTaskMap(seedTasks));
+    }
+
+    // Absences first (purple vacation band) — must not wait on slow task loads.
+    try {
+      const absencesList = await absencesService
+        .listAbsencesForUser(user.id, startYmd, endYmd)
+        .catch(() => [] as AbsenceDoc[]);
+      setAbsencesByYmd(absencesService.getAbsencesMapByYmd(absencesList));
+      if (__DEV__) {
+        console.log(`[HomeCalendarSheet] Loaded ${absencesList.length} absences`);
+      }
+    } catch (e) {
+      console.warn("[HomeCalendarSheet] Failed to load absences:", e);
+    }
+
+    try {
+      const [tasks, problems] = await Promise.all([
+        tasksService.listTasksWithDueDateInRange(user.id, startYmd, endYmd),
+        problemsService.listProblemsWithDueDateInRange(user.id, startYmd, endYmd),
+      ]);
+
+      setTasksByYmd(buildTaskMap(tasks));
+
       const problemMap = new Map<string, ProblemWithProject[]>();
       for (const p of problems) {
         const ymd = normalizeDueDateToYmd(p.dueDate);
@@ -148,18 +224,17 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
         arr.push(p);
         problemMap.set(ymd, arr);
       }
-      setTasksByYmd(taskMap);
       setProblemsByYmd(problemMap);
-      setAbsencesByYmd(absencesService.getAbsencesMapByYmd(absencesList));
+      if (__DEV__) {
+        console.log(`[HomeCalendarSheet] Loaded ${tasks.length} tasks, ${problems.length} problems`);
+      }
     } catch (e) {
       console.warn("[HomeCalendarSheet] Failed to load tasks/problems:", e);
-      setTasksByYmd(new Map());
-      setProblemsByYmd(new Map());
-      setAbsencesByYmd(new Map());
+      setLoadError(true);
     } finally {
       setLoading(false);
     }
-  }, [user?.id, currentMonth, refreshTrigger]);
+  }, [user?.id, currentMonth, refreshTrigger, seedTasks]);
 
   useEffect(() => {
     loadTasks();
@@ -178,8 +253,15 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
     [sheetRef]
   );
 
+  const todayYmd = toYmd(new Date());
   const selectedYmd = selectedDate ? toYmd(selectedDate) : null;
-  const tasksForSelected = selectedYmd ? (tasksByYmd.get(selectedYmd) ?? []) : [];
+  const tasksForSelected = useMemo(
+    () =>
+      selectedYmd
+        ? mergeTasksForSelectedDay(selectedYmd, todayYmd, tasksByYmd)
+        : [],
+    [selectedYmd, todayYmd, tasksByYmd]
+  );
   const problemsForSelected = selectedYmd ? (problemsByYmd.get(selectedYmd) ?? []) : [];
   const absencesForSelected = selectedYmd ? (absencesByYmd.get(selectedYmd) ?? []) : [];
 
@@ -192,11 +274,16 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
     return { color: ABSENCE_COLOR[chosen.type], pending: chosen.status === "pending" };
   };
 
-  const todayYmd = toYmd(new Date());
-  const isTaskOverdue = (t: TaskWithProject) =>
-    !!t.dueDate && t.dueDate < todayYmd && normalizeStatusValue(t.status) !== "DONE";
-  const isTaskCompletedPastDue = (t: TaskWithProject) =>
-    !!t.dueDate && t.dueDate < todayYmd && normalizeStatusValue(t.status) === "DONE";
+  const isTaskOverdue = (t: TaskWithProject) => {
+    const due = normalizeDueDateToYmd(t.dueDate);
+    return !!due && due < todayYmd && normalizeStatusValue(t.status) !== "DONE";
+  };
+  const isTaskCompletedOnDay = (t: TaskWithProject, dayYmd: string) =>
+    normalizeStatusValue(t.status) === "DONE" && calendarTaskYmds(t).includes(dayYmd);
+  const isTaskCompletedPastDue = (t: TaskWithProject) => {
+    const due = normalizeDueDateToYmd(t.dueDate);
+    return !!due && due < todayYmd && normalizeStatusValue(t.status) === "DONE";
+  };
   const isProblemOverdue = (p: ProblemWithProject) => {
     const ymd = normalizeDueDateToYmd(p.dueDate);
     if (!ymd || ymd >= todayYmd) return false;
@@ -206,8 +293,10 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
   const getProblemsForDay = (day: Date) => problemsByYmd.get(toYmd(day)) ?? [];
   const hasOverdueOnDay = (day: Date) =>
     getTasksForDay(day).some(isTaskOverdue) || getProblemsForDay(day).some(isProblemOverdue);
-  const hasCompletedPastDueOnDay = (day: Date) =>
-    getTasksForDay(day).some(isTaskCompletedPastDue);
+  const hasCompletedOnDay = (day: Date) => {
+    const dayYmd = toYmd(day);
+    return getTasksForDay(day).some((t) => isTaskCompletedOnDay(t, dayYmd));
+  };
   const getTaskCalendarBucket = (t: TaskWithProject): "BUILD" | "TRADE" | "service" => {
     if (t.equipmentId || t.serviceRuleId) return "service";
     return getProjectEngine(t.projectType);
@@ -215,7 +304,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
   const hasTypeOnDay = (day: Date, type: string) => {
     if (type === "problem") return getProblemsForDay(day).length > 0;
     if (type === "overdue") return hasOverdueOnDay(day);
-    if (type === "completed") return hasCompletedPastDueOnDay(day);
+    if (type === "completed") return hasCompletedOnDay(day);
     return getTasksForDay(day).some((t) => getTaskCalendarBucket(t) === type);
   };
   const legendTypesInMonth = useMemo(
@@ -225,6 +314,20 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
       ),
     [days, currentMonth, tasksByYmd, problemsByYmd]
   );
+
+  const absenceLegendTypesInMonth = useMemo(() => {
+    const types = new Set<AbsenceType>();
+    for (const day of days) {
+      if (!isSameMonth(day, currentMonth)) continue;
+      const list = absencesByYmd.get(toYmd(day));
+      if (!list) continue;
+      for (const a of list) {
+        if (a.status === "cancelled" || a.status === "rejected") continue;
+        types.add(a.type);
+      }
+    }
+    return ABSENCE_TYPES_ORDER.filter((t) => types.has(t));
+  }, [days, currentMonth, absencesByYmd]);
 
   const handleTaskPress = useCallback(
     (task: TaskWithProject) => {
@@ -319,7 +422,7 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                 const selected = selectedDate && isSameDay(day, selectedDate);
                 const today = isToday(day);
                 const hasOverdue = hasOverdueOnDay(day);
-                const hasCompleted = hasCompletedPastDueOnDay(day);
+                const hasCompleted = hasCompletedOnDay(day);
                 const absVis = getAbsenceVisualForDay(day);
                 let typesPresent = [...CALENDAR_TASK_BUCKETS, "problem", "overdue", "completed"].filter((t) =>
                   hasTypeOnDay(day, t)
@@ -331,28 +434,28 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                 }
                 const absenceBgColor = absVis
                   ? absVis.pending
-                    ? `${absVis.color}33` // ~20% opacity
-                    : `${absVis.color}55` // ~33% opacity
+                    ? `${absVis.color}44`
+                    : `${absVis.color}dd`
                   : null;
                 return (
-                  <TouchableOpacity
+                  <Pressable
                     key={day.toISOString()}
                     style={[
                       styles.dayCell,
                       !inMonth && styles.dayCellDisabled,
-                      absenceBgColor && !selected && !hasOverdue && !hasCompleted && {
+                      absenceBgColor &&
+                        !selected && {
                         backgroundColor: absenceBgColor,
                         borderWidth: absVis?.pending ? 1 : 0,
-                        borderStyle: "dashed",
+                        borderStyle: absVis?.pending ? "dashed" : "solid",
                         borderColor: absVis ? absVis.color : "transparent",
                       },
                       selected && styles.dayCellSelected,
-                      today && !selected && !hasOverdue && !hasCompleted && !absenceBgColor && styles.dayCellToday,
+                      today && !selected && !hasOverdue && !hasCompleted && styles.dayCellToday,
                       hasOverdue && !selected && styles.dayCellOverdue,
                       hasCompleted && !selected && !hasOverdue && styles.dayCellCompleted,
                     ]}
                     onPress={() => setSelectedDate(day)}
-                    activeOpacity={0.7}
                   >
                     <Text
                       style={[
@@ -379,15 +482,15 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                         />
                       ))}
                     </View>
-                  </TouchableOpacity>
+                  </Pressable>
                 );
               })}
             </View>
         </View>
 
-        {legendTypesInMonth.length > 0 && (
+        {(legendTypesInMonth.length > 0 || absenceLegendTypesInMonth.length > 0) && (
           <View style={styles.legendRow}>
-                {legendTypesInMonth.map((pt) => (
+            {legendTypesInMonth.map((pt) => (
               <View key={pt} style={styles.legendItem}>
                 <View style={[styles.legendDot, { backgroundColor: COLOR_BY_TYPE[pt] ?? "#888" }]} />
                 <Text style={styles.legendText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
@@ -403,6 +506,14 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                 </Text>
               </View>
             ))}
+            {absenceLegendTypesInMonth.map((at) => (
+              <View key={`absence-${at}`} style={styles.legendItem}>
+                <View style={[styles.legendDot, { backgroundColor: ABSENCE_COLOR[at] }]} />
+                <Text style={styles.legendText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                  {t(`absence.legend.${at}`)}
+                </Text>
+              </View>
+            ))}
           </View>
         )}
 
@@ -412,6 +523,9 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                 ? t("home.tasksForDate", { date: selectedYmd })
                 : t("home.selectDayForTasks")}
             </Text>
+            {loadError ? (
+              <Text style={styles.loadErrorText}>{t("home.calendarLoadFailed")}</Text>
+            ) : null}
             {selectedYmd && (
               <>
                 {absencesForSelected.length > 0 && (
@@ -449,9 +563,14 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                   <Ionicons name="add-circle-outline" size={18} color={SHEET_ACTION} />
                   <Text style={styles.absenceAddText}>{t("absence.fab.addForDay")}</Text>
                 </TouchableOpacity>
-                {loading ? (
-                  <Text style={styles.loadingText}>{t("common.saving")}</Text>
-                ) : tasksForSelected.length === 0 && problemsForSelected.length === 0 ? (
+                {loading &&
+                tasksForSelected.length === 0 &&
+                problemsForSelected.length === 0 &&
+                absencesForSelected.length === 0 ? (
+                  <Text style={styles.loadingText}>{t("home.calendarLoading")}</Text>
+                ) : tasksForSelected.length === 0 &&
+                  problemsForSelected.length === 0 &&
+                  absencesForSelected.length === 0 ? (
                   <Text style={styles.emptyTasks}>{t("home.noTasksForDate")}</Text>
                 ) : (
                   <>
@@ -480,19 +599,20 @@ export function HomeCalendarSheet({ sheetRef, onTaskPress, onProblemPress, onSee
                         .slice(0, 5 - problemsForSelected.length)
                         .map((task) => {
                           const overdue = isTaskOverdue(task);
-                          const completedPastDue = isTaskCompletedPastDue(task);
+                          const completedOnDay =
+                            selectedYmd != null && isTaskCompletedOnDay(task, selectedYmd);
                           return (
                           <TouchableOpacity
                             key={`task-${task.projectId}-${task.id}`}
-                            style={[styles.taskRow, overdue && styles.taskRowOverdue, completedPastDue && styles.taskRowCompleted]}
+                            style={[styles.taskRow, overdue && styles.taskRowOverdue, completedOnDay && styles.taskRowCompleted]}
                             onPress={() => handleTaskPress(task)}
                             activeOpacity={0.7}
                           >
-                            <Ionicons name="checkbox-outline" size={18} color={overdue ? COLOR_BY_TYPE.overdue : completedPastDue ? COLOR_BY_TYPE.completed : SHEET_ACTION} />
-                            <Text style={[styles.taskTitle, overdue && styles.taskTitleOverdue, completedPastDue && styles.taskTitleCompleted]} numberOfLines={1}>
+                            <Ionicons name="checkbox-outline" size={18} color={overdue ? COLOR_BY_TYPE.overdue : completedOnDay ? COLOR_BY_TYPE.completed : SHEET_ACTION} />
+                            <Text style={[styles.taskTitle, overdue && styles.taskTitleOverdue, completedOnDay && styles.taskTitleCompleted]} numberOfLines={1}>
                               {task.title || t("tasks.noTitle")}
                             </Text>
-                            <Text style={[styles.taskProject, overdue && styles.taskProjectOverdue, completedPastDue && styles.taskProjectCompleted]} numberOfLines={1}>
+                            <Text style={[styles.taskProject, overdue && styles.taskProjectOverdue, completedOnDay && styles.taskProjectCompleted]} numberOfLines={1}>
                               {task.projectName ?? ""}
                             </Text>
                           </TouchableOpacity>
@@ -702,6 +822,11 @@ const styles = StyleSheet.create({
   emptyTasks: {
     fontSize: 14,
     color: "rgba(255,255,255,0.6)",
+  },
+  loadErrorText: {
+    fontSize: 14,
+    color: "#ef4444",
+    marginBottom: spacing.sm,
   },
   taskRow: {
     flexDirection: "row",

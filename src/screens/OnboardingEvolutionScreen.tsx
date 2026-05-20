@@ -16,13 +16,13 @@ import { SafeAreaView, useSafeAreaInsets } from "react-native-safe-area-context"
 import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import Svg, { Defs, LinearGradient, Rect, Stop } from "react-native-svg";
+import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import type { Locale } from "../i18n/translations";
+import { ONBOARDING_HERO_LOCALES } from "../i18n/translations";
 import { colors, radius, spacing } from "../theme";
-
-/** Rýchly výber na hero welcome (zvyšok cez „Ďalšie jazyky“). */
-const HERO_BAR_LOCALES: Locale[] = ["en", "de", "es", "pl"];
+import { LANGUAGE_SELECTION_DONE_KEY } from "./LanguageSelectionScreen";
 
 type OnboardingStep = {
   id: string;
@@ -146,6 +146,22 @@ export function OnboardingEvolutionScreen() {
     (navigation as { navigate: (screen: string) => void }).navigate("Login");
   }, [navigation]);
 
+  const onPickLocale = useCallback(
+    (code: Locale) => {
+      if (__DEV__) {
+        console.log("[LanguageDebug]", {
+          previousLanguage: locale,
+          nextLanguage: code,
+          persisted: true,
+          source: "OnboardingEvolutionScreen.hero",
+        });
+      }
+      setLocale(code);
+      AsyncStorage.setItem(LANGUAGE_SELECTION_DONE_KEY, "1").catch(() => {});
+    },
+    [locale, setLocale]
+  );
+
   const onMoreLanguages = useCallback(() => {
     (navigation as { navigate: (screen: string) => void }).navigate("LanguageSelect");
   }, [navigation]);
@@ -265,12 +281,12 @@ export function OnboardingEvolutionScreen() {
                   style={styles.heroLangPillsScroll}
                   contentContainerStyle={styles.heroLangPillsContent}
                 >
-                  {HERO_BAR_LOCALES.map((code) => {
+                  {ONBOARDING_HERO_LOCALES.map((code) => {
                     const active = locale === code;
                     return (
                       <Pressable
                         key={code}
-                        onPress={() => setLocale(code)}
+                        onPress={() => onPickLocale(code)}
                         hitSlop={6}
                         style={[styles.langPill, active && styles.langPillActive]}
                         accessibilityRole="button"

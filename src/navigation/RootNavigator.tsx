@@ -6,7 +6,10 @@ import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { LoginScreen } from "../screens/LoginScreen";
 import { RegisterScreen } from "../screens/RegisterScreen";
-import { LanguageSelectionScreen } from "../screens/LanguageSelectionScreen";
+import {
+  LanguageSelectionScreen,
+  LANGUAGE_SELECTION_DONE_KEY,
+} from "../screens/LanguageSelectionScreen";
 import { OnboardingEvolutionScreen } from "../screens/OnboardingEvolutionScreen";
 import { ConsentRequiredScreen } from "../screens/ConsentRequiredScreen";
 import { OnboardingMvpScreen } from "../screens/OnboardingMvpScreen";
@@ -73,7 +76,9 @@ import { getExtraEnv } from "../lib/env";
 
 const FIRST_LOGIN_TRIAL_POPUP_KEY = "first_login_trial_popup_shown";
 const TRIAL_REMINDER_3D_LAST_SHOWN_KEY = "trial_reminder_3d_last_shown";
-const LANGUAGE_SELECTION_DONE_KEY = "language_selection_done";
+const STAVETO_LOCALE_KEY = "staveto_locale";
+/** After logout from post-register GDPR, open this auth stack screen (Register | Login). */
+const STAVETO_AUTH_RESUME_SCREEN_KEY = "staveto_auth_resume_screen";
 
 const Stack = createNativeStackNavigator();
 
@@ -96,13 +101,14 @@ export function RootNavigator() {
     } catch {}
   }, []);
   // #endregion
-  const { token, loading, onboardingDone, onboardingLoaded, user } = useAuth();
+  const { token, loading, onboardingDone, onboardingLoaded, user, logout } = useAuth();
   const { t } = useI18n();
   const [gateLoading, setGateLoading] = useState(true);
   const [consentOk, setConsentOk] = useState(false);
   const [onboardingOk, setOnboardingOk] = useState(false);
   const [languageSelectionDone, setLanguageSelectionDone] = useState<boolean | null>(null);
   const [showConsentAgain, setShowConsentAgain] = useState(false);
+  const [authEntryRoute, setAuthEntryRoute] = useState<"Login" | "Register">("Login");
   const hasShownTrialPopup = useRef(false);
   /** Set from onboarding when an employee redeems an invite with immediate `active` membership. */
   const pendingOpenBusinessStack = useRef(false);
@@ -112,9 +118,37 @@ export function RootNavigator() {
   }, []);
 
   useEffect(() => {
-    AsyncStorage.getItem(LANGUAGE_SELECTION_DONE_KEY).then((v) => {
-      setLanguageSelectionDone(v === "1");
-    });
+    if (token || !onboardingLoaded) return;
+    (async () => {
+      const resume = await AsyncStorage.getItem(STAVETO_AUTH_RESUME_SCREEN_KEY);
+      await AsyncStorage.removeItem(STAVETO_AUTH_RESUME_SCREEN_KEY);
+      setAuthEntryRoute(resume === "Register" ? "Register" : "Login");
+    })();
+  }, [token, onboardingLoaded]);
+
+  useEffect(() => {
+    (async () => {
+      const done = await AsyncStorage.getItem(LANGUAGE_SELECTION_DONE_KEY);
+      if (done === "1") {
+        setLanguageSelectionDone(true);
+        return;
+      }
+      const savedLocale = await AsyncStorage.getItem(STAVETO_LOCALE_KEY);
+      const valid =
+        savedLocale === "en" ||
+        savedLocale === "de" ||
+        savedLocale === "sk" ||
+        savedLocale === "cs" ||
+        savedLocale === "es" ||
+        savedLocale === "it" ||
+        savedLocale === "pl";
+      if (valid) {
+        await AsyncStorage.setItem(LANGUAGE_SELECTION_DONE_KEY, "1");
+        setLanguageSelectionDone(true);
+        return;
+      }
+      setLanguageSelectionDone(false);
+    })();
   }, []);
 
   const checkGate = useCallback(async () => {
@@ -282,11 +316,16 @@ export function RootNavigator() {
     return <LoadingScreen />;
   }
   if (!token) {
+    const signedOutInitial = !onboardingDone
+      ? "OnboardingIntro"
+      : authEntryRoute === "Register"
+        ? "Register"
+        : "Login";
     return (
       <Stack.Navigator
-        key={onboardingDone ? "signed-out-intro-done" : "signed-out-intro-pending"}
+        key={onboardingDone ? `signed-out-${signedOutInitial}` : "signed-out-intro-pending"}
         screenOptions={{ headerShown: false }}
-        initialRouteName={onboardingDone ? "Login" : "OnboardingIntro"}
+        initialRouteName={signedOutInitial}
       >
         <Stack.Screen name="LanguageSelect" component={LanguageSelectionScreen} />
         <Stack.Screen name="OnboardingIntro" component={OnboardingEvolutionScreen} />
@@ -317,8 +356,12 @@ export function RootNavigator() {
         }}
         onBack={async () => {
           setShowConsentAgain(false);
-          await AsyncStorage.setItem(LANGUAGE_SELECTION_DONE_KEY, "");
-          setLanguageSelectionDone(false);
+          try {
+            await AsyncStorage.setItem(STAVETO_AUTH_RESUME_SCREEN_KEY, "Register");
+            await logout();
+          } catch (e) {
+            if (__DEV__) console.warn("[RootNavigator] consent back to register failed:", e);
+          }
         }}
       />
     );

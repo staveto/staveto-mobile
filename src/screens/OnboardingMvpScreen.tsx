@@ -150,6 +150,18 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
     if (step === 4) setPhoneCountryCode(primaryCountry);
   }, [step, primaryCountry]);
 
+  useEffect(() => {
+    if (!__DEV__) return;
+    console.log("[OnboardingFlowDebug]", {
+      step,
+      selectedLanguage: locale,
+      usageMode,
+      authUid: user?.id ?? null,
+      onboardingCompleted: false,
+      inviteRedeemStatus: step === 8 ? (joinBusy ? "busy" : "idle") : "n/a",
+    });
+  }, [step, locale, usageMode, user?.id, joinBusy]);
+
   const saveCountryStep = () => {
     if (!primaryCountry) return;
     setError("");
@@ -354,6 +366,16 @@ export function OnboardingMvpScreen({ onFinished, onBack, onBusinessFlowRequeste
     setError("");
     try {
       const result = await redeemBusinessInviteCode({ code: normalizedCode });
+      if (__DEV__) {
+        console.log("[OnboardingFlowDebug]", {
+          step: 8,
+          selectedLanguage: locale,
+          usageMode,
+          authUid: user?.id ?? null,
+          onboardingCompleted: false,
+          inviteRedeemStatus: result.status,
+        });
+      }
       if (result.status === "active") {
         setActiveBusinessOrgId(result.orgId);
         await refreshActiveBusinessOrg();

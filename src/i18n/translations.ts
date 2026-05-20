@@ -4,6 +4,12 @@
  */
 export type Locale = "en" | "de" | "sk" | "cs" | "es" | "it" | "pl";
 
+/** Welcome hero quick-pick; full list via „More languages“. */
+export const ONBOARDING_HERO_LOCALES: Locale[] = ["sk", "de", "en", "cs"];
+
+/** Full onboarding / language-picker order. */
+export const ONBOARDING_LOCALE_ORDER: Locale[] = ["sk", "de", "en", "cs", "pl", "es", "it"];
+
 export const translations: Record<Locale, Record<string, string>> = {
   en: {
     "business.landing.title": "Staveto Business",
@@ -4696,7 +4702,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "onboarding.usageMode.joinCompany.title": "Som súčasťou firmy",
     "onboarding.usageMode.joinCompany.body": "Mám kód alebo QR od zamestnávateľa.",
     "onboarding.usageMode.solo.title": "Chcem vyskúšať Staveto",
-    "onboarding.usageMode.solo.body": "Pokračovať ako samostatný používateľ.",
+    "onboarding.usageMode.solo.body": "Som remeselník alebo si spravujem vlastné zákazky.",
     "onboarding.joinCompany.title": "Pripojit sa k firme",
     "onboarding.joinCompany.subtitle": "Zadaj firemny kod od zamestnavatela.",
     "onboarding.joinCompany.codePlaceholder": "napr. AB12CD34",

@@ -13,7 +13,7 @@ import {
   RefreshControl,
   useWindowDimensions,
 } from "react-native";
-import { InAppAttachmentViewer, inferInAppViewerMode } from "../components/InAppAttachmentViewer";
+import { InAppAttachmentViewer } from "../components/InAppAttachmentViewer";
 import { useRoute, useNavigation } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
@@ -167,7 +167,7 @@ export function ProjectPhotosScreen() {
         }}
         url={viewingUrl}
         fileName={viewingPhoto?.fileName ?? ""}
-        mode={viewingPhoto ? inferInAppViewerMode(viewingPhoto) : "image"}
+        mode="image"
         debugOpenSource="projectPhotosGrid"
       />
     </View>

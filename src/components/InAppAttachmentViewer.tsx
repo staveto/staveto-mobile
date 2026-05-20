@@ -28,6 +28,15 @@ export type InAppViewerMode = "image" | "pdf" | "web";
 
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|heic|heif|gif|bmp)$/i;
 
+function isFirebaseStorageDownloadUrl(uri: string): boolean {
+  try {
+    const host = new URL(uri).host.toLowerCase();
+    return host.includes("firebasestorage.googleapis.com") || host.includes("storage.googleapis.com");
+  } catch {
+    return false;
+  }
+}
+
 /** True when URL path or fileName looks like a photo (Firebase paths often omit metadata). */
 export function urlLooksLikeImage(uri: string | null, fileName?: string): boolean {
   if (!uri) return false;
@@ -38,6 +47,20 @@ export function urlLooksLikeImage(uri: string | null, fileName?: string): boolea
     return IMAGE_EXT_RE.test(path);
   } catch {
     return IMAGE_EXT_RE.test(uri.toLowerCase());
+  }
+}
+
+export function urlLooksLikePdf(uri: string | null, fileName?: string): boolean {
+  const fn = (fileName || "").toLowerCase();
+  if (fn.endsWith(".pdf")) return true;
+  if (!uri) return false;
+  const lower = uri.toLowerCase();
+  if (lower.includes(".pdf")) return true;
+  try {
+    const path = decodeURIComponent(new URL(uri).pathname).toLowerCase();
+    return path.includes(".pdf");
+  } catch {
+    return false;
   }
 }
 
@@ -61,7 +84,10 @@ export function inferInAppViewerMode(
   return "web";
 }
 
-/** Never use WebView for storage image URLs ? Android opens them in Chrome. */
+/**
+ * Never use WebView for Firebase Storage image URLs ? Android opens them in Chrome.
+ * Paths like .../attachments/{uuid}?alt=media often have no file extension.
+ */
 export function resolveInAppViewerMode(
   mode: InAppViewerMode,
   url: string | null,
@@ -69,8 +95,10 @@ export function resolveInAppViewerMode(
 ): InAppViewerMode {
   if (mode === "image") return "image";
   if (urlLooksLikeImage(url, fileName)) return "image";
-  if (mode === "pdf") return "pdf";
-  if (fileName.toLowerCase().endsWith(".pdf")) return "pdf";
+  if (mode === "pdf" || urlLooksLikePdf(url, fileName)) return "pdf";
+  if (url && isFirebaseStorageDownloadUrl(url) && !urlLooksLikePdf(url, fileName)) {
+    return "image";
+  }
   return mode;
 }
 
@@ -123,7 +151,9 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
   const [webError, setWebError] = useState(false);
   /** Local file:// URI after cache download; for PDF fallback equals remote `url`. */
   const [pdfDisplayUri, setPdfDisplayUri] = useState<string | null>(null);
+  const [imageDisplayUri, setImageDisplayUri] = useState<string | null>(null);
   const pdfCachePathRef = useRef<string | null>(null);
+  const imageCachePathRef = useRef<string | null>(null);
   const pdfEmbedStageRef = useRef<"direct" | "gdocs">("direct");
   const loadSessionRef = useRef(0);
   const loadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -179,6 +209,7 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
     setWebLoading(true);
     setWebError(false);
     setPdfDisplayUri(null);
+    setImageDisplayUri(null);
   }, [clearPreviewTimers]);
 
   useEffect(() => {
@@ -197,8 +228,86 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
     }
   }, []);
 
+  const purgeCachedImage = useCallback(async () => {
+    const p = imageCachePathRef.current;
+    imageCachePathRef.current = null;
+    if (p) {
+      try {
+        await deleteAsync(p, { idempotent: true });
+      } catch {
+        /* ignore */
+      }
+    }
+  }, []);
+
   useEffect(() => {
-    if (!visible || resolvedMode !== "image" || !url) return;
+    if (!visible || resolvedMode !== "image" || !url) {
+      setImageDisplayUri(null);
+      return;
+    }
+
+    if (Platform.OS !== "android" || url.startsWith("file://") || url.startsWith("content://")) {
+      setImageDisplayUri(url);
+      return;
+    }
+
+    let cancelled = false;
+
+    const run = async () => {
+      const prev = imageCachePathRef.current;
+      if (prev) {
+        try {
+          await deleteAsync(prev, { idempotent: true });
+        } catch {
+          /* ignore */
+        }
+        imageCachePathRef.current = null;
+      }
+
+      try {
+        const dir = cacheDirectory;
+        if (!dir) {
+          if (!cancelled) setImageDisplayUri(url);
+          return;
+        }
+        const extMatch = (fileName || "").match(/\.(jpe?g|png|webp|heic|heif|gif|bmp)$/i);
+        const ext = extMatch ? extMatch[1].toLowerCase().replace("jpeg", "jpg") : "jpg";
+        const dest = `${dir}staveto_inapp_img_${Date.now()}.${ext}`;
+        const res = await downloadAsync(url, dest, {
+          sessionType: FileSystemSessionType.FOREGROUND,
+        });
+        if (cancelled) {
+          try {
+            await deleteAsync(dest, { idempotent: true });
+          } catch {
+            /* ignore */
+          }
+          return;
+        }
+        if (res.status >= 400) {
+          setImageDisplayUri(url);
+          return;
+        }
+        imageCachePathRef.current = res.uri;
+        setImageDisplayUri(res.uri);
+        debugPreview("imageUriReady", { viewerMode: "android-cached" });
+      } catch {
+        if (!cancelled) {
+          setImageDisplayUri(url);
+          debugPreview("imageUriReady", { viewerMode: "android-remote-fallback" });
+        }
+      }
+    };
+
+    void run();
+
+    return () => {
+      cancelled = true;
+    };
+  }, [visible, resolvedMode, url, fileName, debugPreview]);
+
+  useEffect(() => {
+    if (!visible || resolvedMode !== "image" || !url || !imageDisplayUri) return;
     clearPreviewTimers();
     imageTimeoutRef.current = setTimeout(() => {
       setImgLoading(false);
@@ -211,7 +320,7 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
         imageTimeoutRef.current = null;
       }
     };
-  }, [visible, resolvedMode, url, clearPreviewTimers, debugPreview]);
+  }, [visible, resolvedMode, url, imageDisplayUri, clearPreviewTimers, debugPreview]);
 
   useEffect(() => {
     if (!visible || !url || (resolvedMode !== "pdf" && resolvedMode !== "web")) {
@@ -324,9 +433,10 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
   const handleClose = useCallback(() => {
     clearPreviewTimers();
     void purgeCachedPdf();
+    void purgeCachedImage();
     resetState();
     onClose();
-  }, [onClose, purgeCachedPdf, resetState, clearPreviewTimers]);
+  }, [onClose, purgeCachedPdf, purgeCachedImage, resetState, clearPreviewTimers]);
 
   const finishWebLoad = useCallback(() => {
     clearPreviewTimers();
@@ -363,6 +473,7 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
     (targetUrl: string) => {
       if (resolvedMode === "image") return false;
       if (urlLooksLikeImage(targetUrl, fileName)) return false;
+      if (isFirebaseStorageDownloadUrl(targetUrl) && !urlLooksLikePdf(targetUrl, fileName)) return false;
       return true;
     },
     [resolvedMode, fileName]
@@ -431,6 +542,12 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
 
         {resolvedMode === "image" && url ? (
           <View style={[styles.body, styles.imageBody]}>
+            {!imageDisplayUri && !imgError ? (
+              <View style={styles.centerFill}>
+                <ActivityIndicator size="large" color={colors.primary} />
+                <Text style={styles.hint}>{t("attachments.inAppPreviewLoading")}</Text>
+              </View>
+            ) : null}
             {imgError ? (
               <View style={styles.fallback}>
                 <Text style={styles.fallbackText}>{t("attachments.inAppPreviewFailed")}</Text>
@@ -438,10 +555,10 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
                   <Text style={styles.fallbackBtnText}>{t("attachments.openInBrowser")}</Text>
                 </TouchableOpacity>
               </View>
-            ) : (
+            ) : imageDisplayUri ? (
               <View style={styles.imageStage}>
                 <Image
-                  source={{ uri: url }}
+                  source={{ uri: imageDisplayUri }}
                   style={[styles.image, { maxWidth: PREVIEW_MAX_W, maxHeight: PREVIEW_MAX_H }]}
                   resizeMode="contain"
                   onLoadStart={() => {
@@ -474,7 +591,7 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
                   </View>
                 ) : null}
               </View>
-            )}
+            ) : null}
           </View>
         ) : null}
 
@@ -506,6 +623,7 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
                 setSupportMultipleWindows={false}
                 startInLoadingState={false}
                 onShouldStartLoadWithRequest={(event) => shouldAllowWebViewNavigation(event.url)}
+                onOpenWindow={() => false}
                 onLoadStart={() => {
                   setWebLoading(true);
                   setWebError(false);

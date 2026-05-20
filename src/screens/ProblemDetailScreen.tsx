@@ -8,7 +8,6 @@ import {
   TouchableOpacity,
   Alert,
   Image,
-  Linking,
   RefreshControl,
   TextInput,
   Platform,
@@ -30,6 +29,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { useAuth } from "../context/AuthContext";
 import { useProjectAccess } from "../hooks/useProjectAccess";
+import { InAppAttachmentViewer } from "../components/InAppAttachmentViewer";
 import * as problemsService from "../services/problems";
 import * as problemPhotosService from "../services/problemPhotos";
 import * as attachmentsService from "../services/attachments";
@@ -72,6 +72,8 @@ export function ProblemDetailScreen() {
   const [showArchiveInput, setShowArchiveInput] = useState(false);
   const [resolutionNote, setResolutionNote] = useState("");
   const [noteExpanded, setNoteExpanded] = useState(false);
+  const [viewingPhotoUrl, setViewingPhotoUrl] = useState<string | null>(null);
+  const [viewingPhotoName, setViewingPhotoName] = useState("photo.jpg");
   const soundRef = React.useRef<{ unloadAsync: () => Promise<void>; playAsync: () => Promise<void>; pauseAsync: () => Promise<void> } | null>(null);
 
   const canEdit =
@@ -234,8 +236,10 @@ export function ProblemDetailScreen() {
     );
   };
 
-  const openPhoto = (url: string) => {
-    Linking.openURL(url).catch(() => {});
+  const openPhoto = (url: string, path?: string) => {
+    const name = path?.split("/").pop() || "photo.jpg";
+    setViewingPhotoName(name.includes(".") ? name : `${name}.jpg`);
+    setViewingPhotoUrl(url);
   };
 
   if (loading || !problem) {
@@ -249,6 +253,7 @@ export function ProblemDetailScreen() {
   const statusFlow: ProblemStatus[] = ["open", "in_progress", "fixed", "verified", "rejected"];
 
   return (
+    <>
     <ScrollView
       style={styles.container}
       contentContainerStyle={styles.content}
@@ -281,7 +286,7 @@ export function ProblemDetailScreen() {
                 return (
                   <TouchableOpacity
                     key={ph.path}
-                    onPress={() => openPhoto(url)}
+                    onPress={() => openPhoto(url, ph.path)}
                     accessibilityRole="button"
                     accessibilityLabel={t("problems.photos")}
                     hitSlop={ICON_HIT_SLOP}
@@ -579,6 +584,15 @@ export function ProblemDetailScreen() {
         )}
       </View>
     </ScrollView>
+    <InAppAttachmentViewer
+      visible={viewingPhotoUrl !== null}
+      onClose={() => setViewingPhotoUrl(null)}
+      url={viewingPhotoUrl}
+      fileName={viewingPhotoName}
+      mode="image"
+      debugOpenSource="problemDetail"
+    />
+    </>
   );
 }
 

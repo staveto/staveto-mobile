@@ -10,7 +10,7 @@ import {
   serverTimestamp,
   firestoreTimestampFromDate,
 } from "../lib/rnFirestore";
-import { getDocsSmart } from "./firestoreSmartRead";
+import { getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { firestoreValueToIsoString } from "../utils/date";
@@ -971,26 +971,37 @@ export async function createExpense(
   };
 }
 
+function mapExpenseSnapshot(
+  snap: { docs: { id: string; data: () => Record<string, unknown> }[] }
+): ExpenseDoc[] {
+  const list = snap.docs
+    .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }))
+    .filter((e): e is ExpenseDoc => e != null);
+  list.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  return list;
+}
+
 /**
- * List all expenses for a project
+ * List all expenses for a project.
+ * Uses unordered collection read so legacy docs without `date` are not dropped by orderBy.
  */
-export async function listExpensesByProject(projectId: string): Promise<ExpenseDoc[]> {
+export async function listExpensesByProject(
+  projectId: string,
+  readOpts?: SmartReadOptions
+): Promise<ExpenseDoc[]> {
   const pid = typeof projectId === "string" ? projectId.trim() : "";
   if (!pid) {
     if (__DEV__) console.warn("[expenses] listExpensesByProject: empty projectId, returning []");
     return [];
   }
   const c = collection(db, paths.projectExpenses(pid));
-  const q = query(c, orderBy("date", "desc"));
   try {
-    const snap = await getDocsSmart(q);
-    const list = snap.docs
-      .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }))
-      .filter((e): e is ExpenseDoc => e != null);
-    return list;
+    const snap = await getDocsSmart(c, readOpts);
+    return mapExpenseSnapshot(snap);
   } catch (error: any) {
     const code = String(error?.code ?? "");
-    if (code === "permission-denied" || code.includes("permission-denied")) {
+    const msg = String(error?.message ?? "");
+    if (code === "permission-denied" || msg.includes("permission-denied")) {
       return [];
     }
     throw error;

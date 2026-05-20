@@ -11,6 +11,7 @@ import {
   setDoc,
   where,
 } from "../lib/rnFirestore";
+import { getDocsSmart } from "./firestoreSmartRead";
 import { auth, db } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { ProjectEvent, ProjectEventType } from "../lib/types";
@@ -97,7 +98,7 @@ export async function addProjectEvent(
 export async function listProjectEvents(projectId: string, limitN: number = 30): Promise<ProjectEvent[]> {
   const eventsRef = collection(db, paths.projectEvents(projectId));
   const q = query(eventsRef, orderBy("createdAt", "desc"), limit(limitN));
-  const snap = await getDocs(q);
+  const snap = await getDocsSmart(q, { preferCacheWhenPoor: false });
   return snap.docs.map((d) => toProjectEvent({ id: d.id, data: d.data.bind(d) }));
 }
 

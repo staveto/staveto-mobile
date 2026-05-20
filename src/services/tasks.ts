@@ -14,7 +14,7 @@ import {
   serverTimestamp,
   writeBatch,
 } from "../lib/rnFirestore";
-import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
+import { getDocSmart, getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { firestoreValueToIsoString, normalizeDueDateToYmd } from "../utils/date";
@@ -338,7 +338,10 @@ export async function createTask(
  * Filters out archived tasks (isActive === false)
  * Legacy tasks (isActive === undefined) are treated as active
  */
-export async function listTasksByProject(projectId: string): Promise<TaskDoc[]> {
+export async function listTasksByProject(
+  projectId: string,
+  readOpts?: SmartReadOptions
+): Promise<TaskDoc[]> {
   if (!projectId || typeof projectId !== "string") {
     console.warn("[tasks] listTasksByProject: invalid projectId, returning empty array");
     return [];
@@ -355,15 +358,9 @@ export async function listTasksByProject(projectId: string): Promise<TaskDoc[]> 
     return [];
   }
   
-  try {
-    const c = collection(db, paths.projectTasks(projectId));
-    // Query with filter for active tasks (isActive !== false)
-    // Note: Firestore doesn't support != null, so we query all and filter in code
-    const q = query(c, orderBy("order", "asc"));
-    console.log(`[tasks] listTasksByProject: querying tasks collection...`);
-    const snap = await getDocsSmart(q);
-    console.log(`[tasks] Found ${snap.docs.length} tasks in Firestore (before filtering)`);
-    
+  const mapAndSortTasks = (
+    snap: { docs: { id: string; data: () => Record<string, unknown> }[] }
+  ): TaskDoc[] => {
     const list = snap.docs
       .map((d) => {
         try {
@@ -374,38 +371,65 @@ export async function listTasksByProject(projectId: string): Promise<TaskDoc[]> 
         }
       })
       .filter((task): task is TaskDoc => task != null)
-      .filter((task) => {
-        // Filter: isActive !== false (include true and undefined/legacy)
-        return task.isActive !== false;
-      });
-    
-    console.log(`[tasks] After filtering archived tasks: ${list.length} active tasks`);
-    
+      .filter((task) => task.isActive !== false);
     list.sort((a, b) => {
       const oA = a.order ?? 0;
       const oB = b.order ?? 0;
       if (oA !== oB) return oA - oB;
-      // Compare createdAt as strings (ISO format)
-      const createdAtA = a.createdAt ?? "";
-      const createdAtB = b.createdAt ?? "";
-      return createdAtA.localeCompare(createdAtB);
+      return (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
     });
+    return list;
+  };
+
+  try {
+    const c = collection(db, paths.projectTasks(projectId));
+    // Unordered read: orderBy("order") omits legacy tasks that have no `order` field.
+    console.log(`[tasks] listTasksByProject: querying tasks collection (unordered)...`);
+    const snap = await getDocsSmart(c, readOpts);
+    console.log(`[tasks] Found ${snap.docs.length} tasks in Firestore (before filtering)`);
+    const list = mapAndSortTasks(snap);
+    console.log(`[tasks] After filtering archived tasks: ${list.length} active tasks`);
     return list;
   } catch (error: any) {
     console.error(`[tasks] listTasksByProject error:`, error);
-    const errorCode = String(error.code || '');
-    const errorMessage = error.message || 'Unknown error';
-    
-    if (errorCode === 'permission-denied' || errorCode.includes('permission-denied')) {
+    const errorCode = String(error.code || "");
+    const errorMessage = String(error.message || "");
+
+    if (errorCode === "permission-denied" || errorMessage.includes("permission-denied")) {
       console.error(`[tasks] listTasksByProject: PERMISSION DENIED for project ${projectId}`);
-      console.error(`[tasks] listTasksByProject: auth.currentUser.uid = "${currentUserUid}"`);
-      console.error(`[tasks] listTasksByProject: Firestore rule: projectOwner(${projectId})`);
-      console.error(`[tasks] listTasksByProject: Rule check: get(projects/${projectId}).data.ownerId == ${currentUserUid}`);
-      console.error(`[tasks] listTasksByProject: Returning empty array instead of throwing error`);
-      // Return empty array instead of throwing - allows app to continue
       return [];
     }
-    
+
+    // Missing composite index: fall back to unordered collection read (sort in memory).
+    if (errorCode === "failed-precondition" || errorMessage.includes("index")) {
+      try {
+        const fallbackRef = collection(db, paths.projectTasks(projectId));
+        const snap = await getDocsSmart(fallbackRef, readOpts);
+        const list = snap.docs
+          .map((d) => {
+            try {
+              return toDoc({ id: d.id, data: d.data.bind(d) }, projectId);
+            } catch {
+              return null;
+            }
+          })
+          .filter((task): task is TaskDoc => task != null)
+          .filter((task) => task.isActive !== false);
+        list.sort((a, b) => {
+          const oA = a.order ?? 0;
+          const oB = b.order ?? 0;
+          if (oA !== oB) return oA - oB;
+          return (a.createdAt ?? "").localeCompare(b.createdAt ?? "");
+        });
+        if (__DEV__) {
+          console.warn(`[tasks] listTasksByProject: recovered ${list.length} tasks via unordered fallback`);
+        }
+        return list;
+      } catch (fallbackErr) {
+        console.error(`[tasks] listTasksByProject unordered fallback failed:`, fallbackErr);
+      }
+    }
+
     throw error;
   }
 }

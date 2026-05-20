@@ -24,6 +24,8 @@ const DEFAULT_POOR_TYPES: NetInfoStateType[] = ["unknown"];
 const FORCE_SERVER_TIMEOUT_MS = 8000;
 /** Cap server round-trips so UI never hangs forever (emulator / bad network). */
 const SERVER_READ_TIMEOUT_MS = 15000;
+/** When server read times out, an empty cache snapshot can hide real data — retry server once. */
+const EMPTY_CACHE_SERVER_RETRY_MS = 28000;
 
 let NetInfoModule: {
   fetch: () => Promise<{
@@ -142,6 +144,36 @@ export async function getDocSmart(
 }
 
 /**
+ * Server timeout often yields an empty cache snapshot; one server retry avoids false empty lists.
+ */
+async function retryGetDocsIfEmptyCache(
+  queryRef: QueryOrColRef,
+  snap: FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>,
+  opts: { status: NetworkStatus }
+): Promise<FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>> {
+  if (opts.status === "offline" || snap.docs.length > 0) {
+    return snap;
+  }
+  // Empty online result is often a stale/timeout cache snapshot — always try server once.
+  try {
+    const serverSnap = await withTimeout(
+      queryRef.get({ source: "server" }),
+      EMPTY_CACHE_SERVER_RETRY_MS,
+      "getDocsSmart:emptyCacheRetry"
+    );
+    if (serverSnap.docs.length > 0) {
+      if (__DEV__) {
+        console.warn("[firestoreSmartRead] getDocs: recovered non-empty result after empty cache retry");
+      }
+      return serverSnap;
+    }
+  } catch (retryErr) {
+    if (__DEV__) console.warn("[firestoreSmartRead] getDocs empty-cache server retry failed:", retryErr);
+  }
+  return snap;
+}
+
+/**
  * Smart getDocs: same logic as getDocSmart for queries.
  */
 export async function getDocsSmart(
@@ -152,19 +184,24 @@ export async function getDocsSmart(
   const preferCacheWhenPoor = opts?.preferCacheWhenPoor !== false;
   const preferCache = status === "offline" || (status === "poor" && preferCacheWhenPoor);
   const forceServer = opts?.forceServer === true;
+  const retryOpts = { status };
 
   if (forceServer) {
     try {
-      return await withTimeout(
-        queryRef.get({ source: "server" }),
-        FORCE_SERVER_TIMEOUT_MS,
-        "getDocsSmart:forceServer"
+      return await retryGetDocsIfEmptyCache(
+        queryRef,
+        await withTimeout(
+          queryRef.get({ source: "server" }),
+          SERVER_READ_TIMEOUT_MS,
+          "getDocsSmart:forceServer"
+        ),
+        retryOpts
       );
     } catch (err) {
       try {
         const cached = await queryRef.get({ source: "cache" });
         if (__DEV__) console.log("[firestoreSmartRead] getDocs server failed, used cache");
-        return cached;
+        return retryGetDocsIfEmptyCache(queryRef, cached, retryOpts);
       } catch {
         throw addContext(err, "getDocsSmart", "(query)");
       }
@@ -174,21 +211,24 @@ export async function getDocsSmart(
   if (preferCache) {
     if (__DEV__) console.log("[firestoreSmartRead] getDocs cache-first (offline/poor)");
     try {
-      return await queryRef.get({ source: "cache" });
+      const cached = await queryRef.get({ source: "cache" });
+      return retryGetDocsIfEmptyCache(queryRef, cached, retryOpts);
     } catch (cacheErr) {
       if (status === "offline") {
         throw addContext(cacheErr, "getDocsSmart (offline, cache miss)", "(query)");
       }
       if (__DEV__) console.log("[firestoreSmartRead] getDocs cache miss, fallback server");
       try {
-        return await withTimeout(
+        const serverSnap = await withTimeout(
           queryRef.get({ source: "server" }),
           SERVER_READ_TIMEOUT_MS,
           "getDocsSmart:server"
         );
+        return retryGetDocsIfEmptyCache(queryRef, serverSnap, retryOpts);
       } catch (serverErr) {
         try {
-          return await queryRef.get({ source: "cache" });
+          const cached = await queryRef.get({ source: "cache" });
+          return retryGetDocsIfEmptyCache(queryRef, cached, retryOpts);
         } catch {
           throw addContext(serverErr, "getDocsSmart", "(query)");
         }
@@ -198,16 +238,17 @@ export async function getDocsSmart(
 
   if (__DEV__) console.log("[firestoreSmartRead] getDocs server-first (online)");
   try {
-    return await withTimeout(
+    const serverSnap = await withTimeout(
       queryRef.get({ source: "server" }),
       SERVER_READ_TIMEOUT_MS,
       "getDocsSmart:server"
     );
+    return retryGetDocsIfEmptyCache(queryRef, serverSnap, retryOpts);
   } catch (err) {
     try {
       const cached = await queryRef.get({ source: "cache" });
       if (__DEV__) console.log("[firestoreSmartRead] getDocs server failed or timeout, used cache");
-      return cached;
+      return retryGetDocsIfEmptyCache(queryRef, cached, retryOpts);
     } catch {
       throw addContext(err, "getDocsSmart", "(query)");
     }

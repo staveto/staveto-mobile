@@ -1779,6 +1779,120 @@ export function HomeScreen() {
         </View>
       ) : null}
 
+      {user?.id &&
+      !isHomeEmptyByConfig &&
+      (showQuickTime || (orgId && enabledSectionIds.has("quick_capture_card"))) ? (
+        <View style={[styles.homeQuickTilesWrap, { paddingHorizontal: spacing.lg }]}>
+          <View style={styles.homeQuickTilesRow}>
+            {showQuickTime ? (
+              <TouchableOpacity
+                style={[
+                  styles.homeQuickTile,
+                  styles.homeQuickTileTimer,
+                  activeTimer ? styles.homeQuickTileTimerOn : null,
+                ]}
+                onPress={openQuickTimeSheet}
+                activeOpacity={0.88}
+                accessibilityRole="button"
+                accessibilityLabel={
+                  activeTimer
+                    ? `${activeTimer.status === "paused" ? t("time.timerPaused") : t("time.timerRunning")}: ${activeTimer.projectNameSnapshot}, ${formatHomeTimerHms(timeTracking.calculateActiveTimerWorkMs(activeTimer))}`
+                    : t("time.title")
+                }
+              >
+                <View style={[styles.homeQuickTileIconWrap, activeTimer ? styles.homeQuickTileIconWrapTimerOn : null]}>
+                  <Ionicons
+                    name={activeTimer ? (activeTimer.status === "paused" ? "pause" : "time") : "time-outline"}
+                    size={28}
+                    color={
+                      activeTimer
+                        ? activeTimer.status === "paused"
+                          ? ACTIVE_TIMER_PAUSED_AMBER
+                          : ACTIVE_TIMER_GREEN
+                        : "#fff"
+                    }
+                  />
+                  {activeTimer && activeTimer.status !== "paused" ? <View style={styles.homeQuickTileLiveDot} /> : null}
+                </View>
+                <Text style={styles.homeQuickTileLabel} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                  {t("time.title")}
+                </Text>
+                {activeTimer ? (
+                  <Text
+                    key={timerTick}
+                    style={[
+                      styles.homeQuickTileHms,
+                      activeTimer.status === "paused" ? { color: ACTIVE_TIMER_PAUSED_AMBER } : null,
+                    ]}
+                    numberOfLines={1}
+                    maxFontSizeMultiplier={1.25}
+                  >
+                    {formatHomeTimerHms(timeTracking.calculateActiveTimerWorkMs(activeTimer))}
+                  </Text>
+                ) : null}
+              </TouchableOpacity>
+            ) : null}
+            {orgId && enabledSectionIds.has("quick_capture_card") ? (
+              <TouchableOpacity
+                style={[styles.homeQuickTile, styles.homeQuickTileNote]}
+                onPress={() => setShowQuickNoteModal(true)}
+                activeOpacity={0.88}
+                accessibilityRole="button"
+                accessibilityLabel={t("home.quickCaptureTitle")}
+              >
+                <View style={[styles.homeQuickTileIconWrap, styles.homeQuickTileIconWrapNote]}>
+                  <Ionicons name="create-outline" size={28} color="#fff" />
+                </View>
+                <Text style={styles.homeQuickTileLabel} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                  {t("quickNotes.add")}
+                </Text>
+                {pendingQuickNotesCount > 0 ? (
+                  <Text style={styles.homeQuickTileBadge} numberOfLines={1} maxFontSizeMultiplier={1.2}>
+                    {pendingQuickNotesCount}
+                  </Text>
+                ) : null}
+              </TouchableOpacity>
+            ) : null}
+          </View>
+          {showQuickTime && activeTimer ? (
+            <View style={styles.homeTimerStatusBarActions}>
+              <TouchableOpacity
+                style={styles.homeTimerStatusBarLinkBtn}
+                onPress={() =>
+                  stackNav.navigate("ProjectTimeDetail", {
+                    projectId: activeTimer.projectId,
+                    projectName: activeTimer.projectNameSnapshot || undefined,
+                  })
+                }
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={t("time.openTime")}
+              >
+                <Text style={styles.homeTimerStatusBarLinkText} maxFontSizeMultiplier={1.15}>
+                  {t("time.openTime")}
+                </Text>
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={[styles.homeTimerStatusBarStopCompact, homeStopLoading ? styles.homeTimerStatusBarBtnDisabled : null]}
+                onPress={handleHomeStopTimer}
+                disabled={homeStopLoading}
+                activeOpacity={0.85}
+                accessibilityRole="button"
+                accessibilityLabel={t("time.stop")}
+              >
+                {homeStopLoading ? (
+                  <ActivityIndicator color="#fff" size="small" />
+                ) : (
+                  <Text style={styles.homeTimerStatusBarStopCompactText} maxFontSizeMultiplier={1.15}>
+                    {t("time.stop")}
+                  </Text>
+                )}
+              </TouchableOpacity>
+            </View>
+          ) : null}
+        </View>
+      ) : null}
+
       <FlatList
         data={[] as ProjectDoc[]}
         keyExtractor={(_item, index) => `home-${index}`}
@@ -1980,117 +2094,6 @@ export function HomeScreen() {
                     </TouchableOpacity>
                   ) : null}
                 </View>
-              </View>
-            ) : null}
-            {user?.id &&
-            !isHomeEmptyByConfig &&
-            (showQuickTime || (orgId && enabledSectionIds.has("quick_capture_card")) || !!orgId) ? (
-              <View style={{ marginBottom: spacing.sm }}>
-                <Text style={styles.cmpSectionHeading}>{t("home.compact.quickActions")}</Text>
-                <View style={styles.cmpQuickRow}>
-                  {showQuickTime ? (
-                    <TouchableOpacity
-                      style={[styles.cmpQuickPill, activeTimer ? styles.cmpQuickPillActive : null]}
-                      onPress={openQuickTimeSheet}
-                      activeOpacity={0.88}
-                      accessibilityRole="button"
-                      accessibilityLabel={
-                        activeTimer
-                          ? `${activeTimer.status === "paused" ? t("time.timerPaused") : t("time.timerRunning")}: ${activeTimer.projectNameSnapshot}`
-                          : t("time.title")
-                      }
-                    >
-                      <Ionicons
-                        name={activeTimer ? (activeTimer.status === "paused" ? "pause" : "time") : "time-outline"}
-                        size={15}
-                        color={
-                          activeTimer
-                            ? activeTimer.status === "paused"
-                              ? ACTIVE_TIMER_PAUSED_AMBER
-                              : ACTIVE_TIMER_GREEN
-                            : colors.textMuted
-                        }
-                      />
-                      <Text style={styles.cmpQuickPillLabel} numberOfLines={2} maxFontSizeMultiplier={1.08}>
-                        {t("home.pro.quickTime")}
-                      </Text>
-                      {activeTimer ? (
-                        <Text key={timerTick} style={styles.cmpQuickPillHms} numberOfLines={1} maxFontSizeMultiplier={1.15}>
-                          {formatHomeTimerHms(timeTracking.calculateActiveTimerWorkMs(activeTimer))}
-                        </Text>
-                      ) : null}
-                    </TouchableOpacity>
-                  ) : null}
-                  {orgId && enabledSectionIds.has("quick_capture_card") ? (
-                    <TouchableOpacity
-                      style={styles.cmpQuickPill}
-                      onPress={() => setShowQuickNoteModal(true)}
-                      activeOpacity={0.88}
-                      accessibilityRole="button"
-                      accessibilityLabel={t("home.quickCaptureTitle")}
-                    >
-                      <Ionicons name="create-outline" size={15} color={colors.textMuted} />
-                      <Text style={styles.cmpQuickPillLabel} numberOfLines={2} maxFontSizeMultiplier={1.08}>
-                        {t("home.pro.quickNote")}
-                      </Text>
-                      {pendingQuickNotesCount > 0 ? (
-                        <Text style={styles.cmpQuickPillBadge} numberOfLines={1}>
-                          {String(pendingQuickNotesCount)}
-                        </Text>
-                      ) : null}
-                    </TouchableOpacity>
-                  ) : null}
-                  {orgId ? (
-                    <TouchableOpacity
-                      style={styles.cmpQuickPill}
-                      onPress={() => runContextAction("photo")}
-                      activeOpacity={0.88}
-                      accessibilityRole="button"
-                      accessibilityLabel={t("home.pro.quickPhoto")}
-                    >
-                      <Ionicons name="camera-outline" size={15} color={colors.textMuted} />
-                      <Text style={styles.cmpQuickPillLabel} numberOfLines={2} maxFontSizeMultiplier={1.08}>
-                        {t("home.pro.quickPhoto")}
-                      </Text>
-                    </TouchableOpacity>
-                  ) : null}
-                </View>
-                {showQuickTime && activeTimer ? (
-                  <View style={styles.homeTimerStatusBarActions}>
-                    <TouchableOpacity
-                      style={styles.homeTimerStatusBarLinkBtn}
-                      onPress={() =>
-                        stackNav.navigate("ProjectTimeDetail", {
-                          projectId: activeTimer.projectId,
-                          projectName: activeTimer.projectNameSnapshot || undefined,
-                        })
-                      }
-                      activeOpacity={0.85}
-                      accessibilityRole="button"
-                      accessibilityLabel={t("time.openTime")}
-                    >
-                      <Text style={styles.homeTimerStatusBarLinkText} maxFontSizeMultiplier={1.15}>
-                        {t("time.openTime")}
-                      </Text>
-                    </TouchableOpacity>
-                    <TouchableOpacity
-                      style={[styles.homeTimerStatusBarStopCompact, homeStopLoading ? styles.homeTimerStatusBarBtnDisabled : null]}
-                      onPress={handleHomeStopTimer}
-                      disabled={homeStopLoading}
-                      activeOpacity={0.85}
-                      accessibilityRole="button"
-                      accessibilityLabel={t("time.stop")}
-                    >
-                      {homeStopLoading ? (
-                        <ActivityIndicator color="#fff" size="small" />
-                      ) : (
-                        <Text style={styles.homeTimerStatusBarStopCompactText} maxFontSizeMultiplier={1.15}>
-                          {t("time.stop")}
-                        </Text>
-                      )}
-                    </TouchableOpacity>
-                  </View>
-                ) : null}
               </View>
             ) : null}
             {!isHomeEmptyByConfig && enabledSectionIds.has("other_projects") && data.projects.length > 0 ? (

@@ -41,7 +41,8 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useCapabilities } from "../hooks/useCapabilities";
-import { useProjectAccess } from "../hooks/useProjectAccess";
+import { useProjectAccess, fetchProjectAccess } from "../hooks/useProjectAccess";
+import type { SmartReadOptions } from "../services/firestoreSmartRead";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
 import { auth } from "../firebase";
@@ -107,6 +108,7 @@ import {
   resolveInAppViewerMode,
 } from "../components/InAppAttachmentViewer";
 import { AppBottomMenu, getAppBottomMenuExtraPadding } from "../components/AppBottomMenu";
+import { useIsInsideMainTabNavigator } from "../navigation/tabBarVisibility";
 import { CurrencyDropdown } from "../components/CurrencyDropdown";
 import { trackPaywallEvent, checkAndShowPaywall } from "../services/paywallTrigger";
 import {
@@ -117,6 +119,14 @@ import {
   projectOverviewLoadsEquipmentAndServiceRules,
   projectOverviewIsTradeOrMaintenanceFlatTasks,
 } from "../lib/projectTypeModel";
+
+/** First paint: server-first + empty-cache retry (no parallel 28s forceServer timeouts). */
+const PROJECT_DETAIL_LOAD_OPTS: SmartReadOptions = { preferCacheWhenPoor: false };
+/** Pull-to-refresh / refocus: bypass stale cache. */
+const PROJECT_DETAIL_REFRESH_OPTS: SmartReadOptions = {
+  forceServer: true,
+  preferCacheWhenPoor: false,
+};
 
 const DONE_COLOR = "#2e7d32";
 
@@ -147,6 +157,8 @@ export function ProjectOverviewScreen() {
   const insets = useSafeAreaInsets();
   const { t, locale } = useI18n();
   const { user, orgId } = useAuth();
+  /** Solo namespace for writes; never block saves when AuthContext orgId is briefly null. */
+  const ownerIdForWrite = orgId ?? user?.id ?? null;
   const routeParams = (route.params as {
     projectId?: string;
     projectName?: string;
@@ -196,6 +208,9 @@ export function ProjectOverviewScreen() {
 
   const routeProjectIdRef = useRef(projectId);
   routeProjectIdRef.current = projectId;
+  const projectDataLoadedOnceRef = useRef(false);
+  /** Bumps on project change / new load — stale async results are ignored (no in-flight mutex). */
+  const projectLoadGenerationRef = useRef(0);
 
   const [phases, setPhases] = useState<ProjectPhaseDoc[]>([]);
   const [tasks, setTasks] = useState<TaskDoc[]>([]);
@@ -376,8 +391,11 @@ export function ProjectOverviewScreen() {
     attachmentId?: string;
     storagePath?: string;
   } | null>(null);
-  const isOwner = !!projectOwnerId && projectOwnerId === user?.id;
   const access = useProjectAccess(projectId, projectOwnerId);
+  const isOwner = access.isOwner || (!!projectOwnerId && !!user?.id && projectOwnerId === user.id);
+  /** Native tab bar is visible inside HomeStack; custom dock would duplicate it. */
+  const insideMainTabs = useIsInsideMainTabNavigator();
+  const showAppBottomMenu = !insideMainTabs;
   const capabilities = useCapabilities({
     projectWorkspaceType,
     projectOrgId,
@@ -605,21 +623,37 @@ export function ProjectOverviewScreen() {
       setLoading(false);
       return;
     }
-    
+    const loadGeneration = ++projectLoadGenerationRef.current;
+    if (__DEV__) {
+      console.log(
+        `[ProjectOverview] load() invoked refresh=${isRefresh} gen=${loadGeneration} projectId="${projectId}"`
+      );
+    }
+
+    const readOpts = isRefresh ? PROJECT_DETAIL_REFRESH_OPTS : PROJECT_DETAIL_LOAD_OPTS;
+
     if (isRefresh) {
       setRefreshing(true);
-    } else {
+    } else if (!projectDataLoadedOnceRef.current) {
       setLoading(true);
     }
-    
+
     const loadForProjectId = projectId;
 
     try {
-      // DEBUG: Check auth state first
-      const { auth: authInstance } = await import('../firebase');
-      const currentUserUid = authInstance.currentUser?.uid;
-      console.log(`[ProjectOverview] DEBUG: auth.currentUser?.uid = "${currentUserUid}"`);
-      console.log(`[ProjectOverview] DEBUG: projectId = "${projectId}"`);
+      // Use static auth import — dynamic import("../firebase") can hang (circular deps / HMR).
+      const currentUserUid = auth.currentUser?.uid ?? user?.id ?? null;
+      let fbProjectId = "(unknown)";
+      try {
+        fbProjectId =
+          (require("@react-native-firebase/app").getApp()?.options as { projectId?: string })?.projectId ??
+          "(unknown)";
+      } catch {
+        /* ignore */
+      }
+      console.log(
+        `[ProjectOverview] load start refresh=${isRefresh} uid="${currentUserUid}" projectId="${projectId}" firebase="${fbProjectId}"`
+      );
       
       if (!currentUserUid) {
         throw new Error('Musíte byť prihlásený na načítanie projektu.');
@@ -669,26 +703,21 @@ export function ProjectOverviewScreen() {
       const isBuildProject = isBuildLikeStorageType(projectTypeForLoad);
       const isAiGeneratedPlan = project?.templateId === "ai-generated";
       
-      // Owner from project doc, cached projectOwnerId, or access hook (handles access timeout before ownerId state updates).
-      const isProjectOwner = !!(
-        project?.ownerId &&
-        currentUserUid &&
-        project.ownerId === currentUserUid
-      );
-      const isOwnerForLoad =
-        isProjectOwner ||
-        access.isOwner ||
-        (!!projectOwnerId && !!currentUserUid && projectOwnerId === currentUserUid);
-      const canReadPhases = isOwnerForLoad || access.canReadPhases;
-      const canReadTasks = isOwnerForLoad || access.canReadTasks;
-      const canReadExpenses = isOwnerForLoad || access.canReadExpenses;
-      const canReadDiary = isOwnerForLoad || access.canReadDiary;
-      const canReadDocuments = isOwnerForLoad || access.canReadDocuments;
+      const resolvedOwnerId = project?.ownerId ?? projectOwnerId ?? null;
+      const liveAccess = await fetchProjectAccess(projectId, currentUserUid, resolvedOwnerId);
+
+      const isProjectOwner = !!(resolvedOwnerId && resolvedOwnerId === currentUserUid);
+      const isOwnerForLoad = isProjectOwner || liveAccess.isOwner;
+      const canReadPhases = isOwnerForLoad || liveAccess.canReadPhases;
+      const canReadTasks = isOwnerForLoad || liveAccess.canReadTasks;
+      const canReadExpenses = isOwnerForLoad || liveAccess.canReadExpenses;
+      const canReadDiary = isOwnerForLoad || liveAccess.canReadDiary;
+      const canReadDocuments = isOwnerForLoad || liveAccess.canReadDocuments;
       /** Firestore rules: attachments read = tasks OR expenses OR documents */
       const canReadAttachments = canReadTasks || canReadExpenses || canReadDocuments;
       
       console.log(
-        `[ProjectOverview] Loading data for projectType="${projectTypeForLoad}", isProjectOwner=${isProjectOwner}, isOwnerForLoad=${isOwnerForLoad}, access.isOwner=${access.isOwner}, canRead: phases=${canReadPhases}, tasks=${canReadTasks}, expenses=${canReadExpenses}, diary=${canReadDiary}, documents=${canReadDocuments}...`
+        `[ProjectOverview] Loading data for projectType="${projectTypeForLoad}", isProjectOwner=${isProjectOwner}, isOwnerForLoad=${isOwnerForLoad}, liveAccess.isOwner=${liveAccess.isOwner}, canRead: phases=${canReadPhases}, tasks=${canReadTasks}, expenses=${canReadExpenses}, diary=${canReadDiary}, documents=${canReadDocuments}...`
       );
       const loadPromises: Promise<any>[] = [];
       
@@ -696,7 +725,7 @@ export function ProjectOverviewScreen() {
         (isBuildProject || isAiGeneratedPlan || projectTypeForLoad === "TRADE") && canReadPhases;
       if (shouldLoadProjectPhases) {
         loadPromises.push(
-          projectsService.listProjectPhases(projectId).catch((error: any) => {
+          projectsService.listProjectPhases(projectId, readOpts).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading phases:`, error);
             if (error.code === 'permission-denied') {
               console.error(`[ProjectOverview] PERMISSION DENIED loading phases for project ${projectId}`);
@@ -711,7 +740,7 @@ export function ProjectOverviewScreen() {
       
       if (canReadTasks) {
         loadPromises.push(
-          tasksService.listTasksByProject(projectId).catch((error: any) => {
+          tasksService.listTasksByProject(projectId, readOpts).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading tasks:`, error);
             if (error.code === 'permission-denied') return [];
             return [];
@@ -723,7 +752,7 @@ export function ProjectOverviewScreen() {
       
       if (canReadExpenses) {
         loadPromises.push(
-          expensesService.listExpensesByProject(projectId).catch((error: any) => {
+          expensesService.listExpensesByProject(projectId, readOpts).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading expenses:`, error);
             return [];
           })
@@ -737,7 +766,7 @@ export function ProjectOverviewScreen() {
       const hasDocuments = projectOverviewLoadsDocuments(projectTypeForLoad);
       if (hasDiary && canReadDiary) {
         loadPromises.push(
-          constructionDiaryService.listDiaryEntries(projectId).catch((error: any) => {
+          constructionDiaryService.listDiaryEntries(projectId, readOpts).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading diary entries:`, error);
             return [];
           })
@@ -745,14 +774,14 @@ export function ProjectOverviewScreen() {
       } else if (hasDiary) {
         loadPromises.push(Promise.resolve([]));
       }
-      if (hasDocuments && canReadDocuments) {
+      if (canReadDocuments) {
         loadPromises.push(
-          projectDocumentsService.listProjectDocuments(projectId).catch((error: any) => {
+          projectDocumentsService.listProjectDocuments(projectId, readOpts).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading project documents:`, error);
             return [];
           })
         );
-      } else if (hasDocuments) {
+      } else {
         loadPromises.push(Promise.resolve([]));
       }
       loadPromises.push(
@@ -767,9 +796,21 @@ export function ProjectOverviewScreen() {
       const tk = results[1];
       const exp = results[2];
       const diary = hasDiary ? results[3] : [];
-      const docs = hasDocuments ? results[hasDiary ? 4 : 3] : [];
+      const docs = canReadDocuments ? results[hasDiary ? 4 : 3] : [];
       const members = (results[results.length - 1] ?? []) as ProjectMemberDoc[];
       
+      if (
+        routeProjectIdRef.current !== loadForProjectId ||
+        loadGeneration !== projectLoadGenerationRef.current
+      ) {
+        if (__DEV__) {
+          console.log(
+            `[ProjectOverview] Skipping stale load apply for ${loadForProjectId} gen=${loadGeneration}`
+          );
+        }
+        return;
+      }
+
       console.log(`[ProjectOverview] Loaded ${ph.length} phases, ${tk.length} tasks, ${exp.length} expenses, ${members.length} members for projectType="${projectTypeForLoad}"`);
       if (hasDiary || hasDocuments) {
         console.log(`[ProjectOverview] Loaded ${diary.length} diary entries, ${docs.length} documents`);
@@ -803,7 +844,7 @@ export function ProjectOverviewScreen() {
       setTasks(tk || []);
       setExpenses(exp || []);
       setDiaryEntries(hasDiary ? diary : []);
-      setProjectDocuments(hasDocuments ? docs : []);
+      setProjectDocuments(canReadDocuments ? docs : []);
       setProjectMembers(members);
 
       // MAINTENANCE v2: load equipment and service rules count only for MAINTENANCE projects
@@ -841,7 +882,7 @@ export function ProjectOverviewScreen() {
       // Attachment counts on tasks/expenses — only when rules allow reading `attachments`
       if (canReadAttachments) {
         try {
-          const allAttachments = await attachmentsService.listAttachments(projectId);
+          const allAttachments = await attachmentsService.listAttachments(projectId, undefined, readOpts);
           const safeAttachments = Array.isArray(allAttachments) ? allAttachments : [];
           console.log(`[ProjectOverview] Loaded ${safeAttachments.length} total attachments`);
 
@@ -903,19 +944,13 @@ export function ProjectOverviewScreen() {
         setExpandedPhases(new Map());
       }
     } finally {
-      setLoading(false);
-      setRefreshing(false);
+      if (loadGeneration === projectLoadGenerationRef.current) {
+        projectDataLoadedOnceRef.current = true;
+        setLoading(false);
+        setRefreshing(false);
+      }
     }
-  }, [
-    projectId,
-    projectOwnerId,
-    access.isOwner,
-    access.canReadPhases,
-    access.canReadTasks,
-    access.canReadExpenses,
-    access.canReadDiary,
-    access.canReadDocuments,
-  ]);
+  }, [projectId, projectOwnerId, projectType, user?.id]);
   
   const toLocalYmd = useCallback((d: Date): string => {
     const y = d.getFullYear();
@@ -1129,18 +1164,20 @@ export function ProjectOverviewScreen() {
 
   useEffect(() => {
     if (!projectId || access.loading) return;
-    load();
-  }, [projectId, projectOwnerId, access.loading, access.isOwner, load]);
+    void load();
+  }, [projectId, access.loading, access.isOwner, access.canReadTasks, user?.id, load]);
 
-  const projectDataFocusRef = useRef(false);
+  useEffect(() => {
+    projectDataLoadedOnceRef.current = false;
+    projectLoadGenerationRef.current += 1;
+  }, [projectId]);
+
   useFocusEffect(
     useCallback(() => {
       if (!projectId || access.loading) return () => {};
-      if (!projectDataFocusRef.current) {
-        projectDataFocusRef.current = true;
-        return () => {};
-      }
-      load(true);
+      // Initial data load is handled by useEffect; only refresh on re-focus after success.
+      if (!projectDataLoadedOnceRef.current) return () => {};
+      void load(true);
       loadActivity();
       return () => {};
     }, [projectId, access.loading, load, loadActivity])
@@ -1363,7 +1400,7 @@ export function ProjectOverviewScreen() {
   };
 
   const onCreateTask = async () => {
-    if (!orgId || !projectId) return;
+    if (!ownerIdForWrite || !projectId) return;
     
     // For TRADE/MAINTENANCE: require either text or voice recording
     if (isTradeOrMaintenance && !newTitle.trim() && !recordingUri) {
@@ -1394,7 +1431,7 @@ export function ProjectOverviewScreen() {
       
       console.log(`[ProjectOverview] Creating custom task: projectType="${projectType}", phaseId="${taskPhaseId || 'none'}", hasVoice=${!!recordingUri}`);
       
-      const taskDoc = await tasksService.createTask(orgId, projectId, taskTitle, {
+      const taskDoc = await tasksService.createTask(ownerIdForWrite, projectId, taskTitle, {
         phaseId: taskPhaseId,
         phaseTitle: taskPhaseTitle,
         dueDate: newTaskDueDate.trim() || undefined,
@@ -1606,12 +1643,12 @@ export function ProjectOverviewScreen() {
   };
 
   const handleSaveEditTask = async () => {
-    if (!orgId || !projectId || !editingTask || !editTaskTitle.trim()) return;
+    if (!ownerIdForWrite || !projectId || !editingTask || !editTaskTitle.trim()) return;
     
     setSubmitting(true);
     try {
       console.log(`[ProjectOverview] Updating task ${editingTask.id}: title="${editTaskTitle.trim()}", dueDate="${editTaskDueDate || 'null'}"`);
-      await tasksService.updateTaskTitle(orgId, projectId, editingTask.id, editTaskTitle.trim(), editTaskDueDate.trim() || null);
+      await tasksService.updateTaskTitle(ownerIdForWrite, projectId, editingTask.id, editTaskTitle.trim(), editTaskDueDate.trim() || null);
       setShowEditTaskModal(false);
       setEditingTask(null);
       setEditTaskTitle("");
@@ -1643,10 +1680,10 @@ export function ProjectOverviewScreen() {
           text: t("common.delete"),
           style: 'destructive',
           onPress: async () => {
-            if (!orgId) return;
+            if (!ownerIdForWrite) return;
             try {
               console.log(`[ProjectOverview] Deleting task ${task.id}`);
-              await tasksService.deleteTask(orgId, projectId, task.id);
+              await tasksService.deleteTask(ownerIdForWrite, projectId, task.id);
               await load(true);
               console.log(`[ProjectOverview] Task deleted successfully`);
             } catch (error: any) {
@@ -1872,14 +1909,18 @@ export function ProjectOverviewScreen() {
   }, [projectId, coverImageUrl, coverImagePath, t, load]);
 
   const handleSaveEdit = async () => {
-    if (!editProjectName.trim() || !projectId || !orgId) return;
+    if (!editProjectName.trim() || !projectId) return;
+    if (!ownerIdForWrite) {
+      Alert.alert(t("common.error"), t("login.required") || "Musíte byť prihlásený.");
+      return;
+    }
     setSubmitting(true);
     try {
       console.log(
         `[ProjectOverview] Updating project ${projectId}: name="${editProjectName.trim()}", address="${editProjectAddress.trim()}"`
       );
       await projectsService.updateProject(
-        orgId,
+        ownerIdForWrite,
         projectId,
         editProjectName.trim(),
         editProjectAddress.trim(),
@@ -2135,9 +2176,9 @@ export function ProjectOverviewScreen() {
 
   const applyAssigneeSelection = useCallback(
     (candidate: { key: string; assigneeId: string | null; assigneeName: string | null; label: string }) => {
-      if (!orgId || !projectId || !assigneeTask) return;
+      if (!ownerIdForWrite || !projectId || !assigneeTask) return;
       tasksService
-        .updateTaskAssignee(orgId, projectId, assigneeTask.id, candidate.assigneeId, candidate.assigneeName, {
+        .updateTaskAssignee(ownerIdForWrite, projectId, assigneeTask.id, candidate.assigneeId, candidate.assigneeName, {
           taskTitle: assigneeTask.title ?? null,
           projectName: projectName || null,
         })
@@ -2151,7 +2192,7 @@ export function ProjectOverviewScreen() {
           setAssigneeTask(null);
         });
     },
-    [assigneeTask, orgId, projectId, load, t]
+    [assigneeTask, ownerIdForWrite, projectId, load, t]
   );
 
   // Expenses handlers
@@ -2778,7 +2819,7 @@ export function ProjectOverviewScreen() {
       console.warn("[ProjectOverview] Ignoring duplicate save click while busy.");
       return;
     }
-    if (!projectId || !orgId) return;
+    if (!projectId || !ownerIdForWrite) return;
     const canUseOcrDraft = !editingExpense && isExpenseOcrAttachmentKind(expenseAttachment?.kind);
     const isTravel = expenseCategory === "TRAVEL";
 
@@ -2940,7 +2981,7 @@ export function ProjectOverviewScreen() {
         Alert.alert(t("common.success"), t("projectOverview.expenseUpdated"));
       } else {
         // For new expense: create expense first, then upload attachment with expenseId
-        const newExpense = await expensesService.createExpense(orgId, projectId, {
+        const newExpense = await expensesService.createExpense(ownerIdForWrite, projectId, {
           title: titleValue,
           amount,
           currency: expenseCurrency || "EUR",
@@ -3245,7 +3286,7 @@ export function ProjectOverviewScreen() {
   };
 
   const handleSaveDiaryEntry = async () => {
-    if (!projectId || !orgId) return;
+    if (!projectId || !ownerIdForWrite) return;
     
     // Validate: need either text or voice recording
     if (!diaryWorkDescription.trim() && !diaryWorkDescriptionRecordingUri) {
@@ -3334,7 +3375,7 @@ export function ProjectOverviewScreen() {
         });
         Alert.alert(t("common.success"), t("projectOverview.diaryEntryUpdated"));
       } else {
-        await constructionDiaryService.createDiaryEntry(orgId, projectId, {
+        await constructionDiaryService.createDiaryEntry(ownerIdForWrite, projectId, {
           date: entryDate,
           weather: diaryWeather.trim() || undefined,
           workers: diaryWorkers.trim() || undefined,
@@ -3409,7 +3450,7 @@ export function ProjectOverviewScreen() {
   };
 
   const handleSaveDocument = async () => {
-    if (!documentName.trim() || !projectId || !orgId) return;
+    if (!documentName.trim() || !projectId || !ownerIdForWrite) return;
     
     if (!documentAttachment && !editingDocument) {
       Alert.alert(t("common.error"), t("projectOverview.mustAddDocumentFile"));
@@ -3461,7 +3502,7 @@ export function ProjectOverviewScreen() {
           return;
         }
         
-        await projectDocumentsService.createProjectDocument(orgId, projectId, {
+        await projectDocumentsService.createProjectDocument(ownerIdForWrite, projectId, {
           name: documentName.trim(),
           type: documentType,
           description: documentDescription.trim() || undefined,
@@ -3703,7 +3744,7 @@ export function ProjectOverviewScreen() {
     kind: 'image' | 'document' | 'pdf',
     mimeType?: string
   ) => {
-    if (!projectId || !orgId || !attachmentContext) return;
+    if (!projectId || !ownerIdForWrite || !attachmentContext) return;
 
     setUploadingAttachment(true);
     try {
@@ -4174,7 +4215,11 @@ export function ProjectOverviewScreen() {
         style={styles.scrollContent}
         contentContainerStyle={[
           styles.scrollContentContainer,
-          { paddingBottom: spacing.xl * 3 + getAppBottomMenuExtraPadding(insets.bottom) },
+          {
+            paddingBottom:
+              spacing.xl * 3 +
+              (showAppBottomMenu ? getAppBottomMenuExtraPadding(insets.bottom) : Math.max(insets.bottom, spacing.lg)),
+          },
         ]}
         nestedScrollEnabled
         refreshControl={
@@ -5252,8 +5297,8 @@ export function ProjectOverviewScreen() {
           </View>
         )}
 
-        {/* Project Documents Section - For BUILD and MANAGEMENT projects, only if can read documents */}
-        {!access.loading && (projectType === 'BUILD' || projectType === 'MANAGEMENT') && access.canReadDocuments && (
+        {/* Project documents — build-like projects (BUILD / legacy MANAGEMENT) */}
+        {!access.loading && isBuildLikeStorageType(projectType) && access.canReadDocuments && (
           <View style={styles.expensesSection}>
           <TouchableOpacity 
             style={styles.expensesHeader}
@@ -5269,7 +5314,7 @@ export function ProjectOverviewScreen() {
               <Text style={styles.expensesHeaderText}>{t("projectOverview.projectDocuments")}</Text>
               <Text style={styles.expensesCount}>({projectDocuments.length})</Text>
             </View>
-            {access.canWrite && access.sharedItems?.documents === true && (
+            {access.canWrite && (access.isOwner || access.sharedItems?.documents !== false) && (
             <TouchableOpacity
               onPress={() => {
                 setEditingDocument(null);
@@ -5326,7 +5371,7 @@ export function ProjectOverviewScreen() {
                       >
                         <Ionicons name="eye-outline" size={20} color={colors.textMuted} />
                       </TouchableOpacity>
-                      {access.canWrite && access.sharedItems?.documents === true && (
+                      {access.canWrite && (access.isOwner || access.sharedItems?.documents !== false) && (
                       <>
                       <TouchableOpacity
                         style={styles.expenseActionButton}
@@ -5498,7 +5543,7 @@ export function ProjectOverviewScreen() {
         ) : null}
       </View>
 
-      <AppBottomMenu activeTab="Projects" />
+      {showAppBottomMenu ? <AppBottomMenu activeTab="Projects" /> : null}
 
       <Modal
         visible={showAssigneeModal}

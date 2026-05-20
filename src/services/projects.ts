@@ -1,6 +1,6 @@
 import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
 import { collection, collectionGroup, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, setDoc, serverTimestamp, limit } from "../lib/rnFirestore";
-import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
+import { getDocSmart, getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { withTimeout } from "../utils/withTimeout";
 import { db, auth } from "../firebase";
 import { getApp } from "@react-native-firebase/app";
@@ -220,7 +220,10 @@ export async function createProject(ownerId: string, name: string): Promise<Proj
   return { id: ref.id, name: name.trim() };
 }
 
-export async function listProjectPhases(projectId: string): Promise<ProjectPhaseDoc[]> {
+export async function listProjectPhases(
+  projectId: string,
+  readOpts?: SmartReadOptions
+): Promise<ProjectPhaseDoc[]> {
   console.log(`[projects] listProjectPhases called for projectId: ${projectId}`);
   
   // DEBUG: Check auth state
@@ -235,11 +238,10 @@ export async function listProjectPhases(projectId: string): Promise<ProjectPhase
   
   try {
     const c = collection(db, paths.projectPhases(projectId));
-    const q = query(c, orderBy("order", "asc"));
-    console.log(`[projects] listProjectPhases: querying phases collection...`);
-    const snap = await getDocsSmart(q);
+    console.log(`[projects] listProjectPhases: querying phases collection (unordered)...`);
+    const snap = await getDocsSmart(c, readOpts);
     console.log(`[projects] Found ${snap.docs.length} phases in Firestore`);
-    
+
     const phases = snap.docs
       .map((d) => {
         try {
@@ -260,6 +262,7 @@ export async function listProjectPhases(projectId: string): Promise<ProjectPhase
         }
       })
       .filter((p): p is { id: string; name: string; description?: string; order: number } => p != null);
+    phases.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
     return phases;
   } catch (error: any) {
     console.error(`[projects] listProjectPhases error:`, error);

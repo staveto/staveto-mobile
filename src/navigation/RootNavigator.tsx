@@ -44,6 +44,7 @@ import { UpdatesScreen } from "../screens/projects/UpdatesScreen";
 import { ProjectTeamScreen } from "../screens/projects/ProjectTeamScreen";
 import { ProjectInvitesScreen } from "../screens/ProjectInvitesScreen";
 import { ProblemsListScreen } from "../screens/ProblemsListScreen";
+import { ProblemDetailScreen } from "../screens/ProblemDetailScreen";
 import { CreateProblemScreen } from "../screens/CreateProblemScreen";
 import { AbsenceHomeScreen } from "../screens/absence/AbsenceHomeScreen";
 import { AbsenceRequestScreen } from "../screens/absence/AbsenceRequestScreen";
@@ -51,18 +52,6 @@ import { AbsenceDetailScreen } from "../screens/absence/AbsenceDetailScreen";
 import { QuickActionsSetup } from "../components/QuickActionsSetup";
 import { navigationRef } from "../components/PushNotificationHandler";
 
-// Lazy-load ProblemDetailScreen (react-native-maps) – speeds up initial app load
-const ProblemDetailScreenLazy = React.lazy(() =>
-  import("../screens/ProblemDetailScreen").then((m) => ({ default: m.ProblemDetailScreen }))
-);
-
-function ProblemDetailScreenWithSuspense(props: object) {
-  return (
-    <React.Suspense fallback={<LoadingScreen />}>
-      <ProblemDetailScreenLazy {...props} />
-    </React.Suspense>
-  );
-}
 import { AppDrawer } from "./AppDrawer";
 import { BusinessStack } from "./BusinessStack";
 import { AdminStack } from "./AdminStack";
@@ -468,7 +457,7 @@ export function RootNavigator() {
       />
       <Stack.Screen
         name="ProblemDetail"
-        component={ProblemDetailScreenWithSuspense}
+        component={ProblemDetailScreen}
         options={{ headerShown: true, title: t("problems.detail") || "Detail problému" }}
       />
       <Stack.Screen

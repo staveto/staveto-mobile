@@ -1,17 +1,14 @@
 import {
   collection,
   addDoc,
-  query,
-  where,
-  getDocs,
   updateDoc,
   deleteDoc,
   doc,
-  orderBy,
   serverTimestamp,
   Timestamp,
   getDoc,
 } from "../lib/rnFirestore";
+import { getDocSmart, getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { isPlainObject } from "../utils/isPlainObject";
@@ -96,7 +93,7 @@ export async function createProjectDocument(
   // Verify attachment exists
   try {
     const attachmentRef = doc(db, paths.projectAttachment(projectId, data.attachmentId));
-    const attachmentSnap = await getDoc(attachmentRef);
+    const attachmentSnap = await getDocSmart(attachmentRef);
     if (!attachmentSnap.exists()) {
       throw new Error('Príloha neexistuje.');
     }
@@ -134,17 +131,19 @@ export async function createProjectDocument(
   };
 }
 
-export async function listProjectDocuments(projectId: string): Promise<ProjectDocumentDoc[]> {
+export async function listProjectDocuments(
+  projectId: string,
+  readOpts?: SmartReadOptions
+): Promise<ProjectDocumentDoc[]> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
-    throw new Error('Musíte byť prihlásený na načítanie dokumentov.');
+    throw new Error("Musíte byť prihlásený na načítanie dokumentov.");
   }
-  
-  const c = collection(db, paths.projectDocuments(projectId));
-  const q = query(c, orderBy("createdAt", "desc"));
-  const snap = await getDocs(q);
 
-  return snap.docs
+  const c = collection(db, paths.projectDocuments(projectId));
+  const snap = await getDocsSmart(c, readOpts);
+
+  const list = snap.docs
     .map((d) => {
       try {
         return toDoc({ id: d.id, data: d.data.bind(d) });
@@ -154,6 +153,8 @@ export async function listProjectDocuments(projectId: string): Promise<ProjectDo
       }
     })
     .filter((x): x is ProjectDocumentDoc => x != null);
+  list.sort((a, b) => (b.createdAt ?? "").localeCompare(a.createdAt ?? ""));
+  return list;
 }
 
 export async function updateProjectDocument(
@@ -194,7 +195,7 @@ export async function deleteProjectDocument(projectId: string, documentId: strin
   
   // Get document to delete attachment
   const docRef = doc(db, paths.projectDocument(projectId, documentId));
-  const docSnap = await getDoc(docRef);
+  const docSnap = await getDocSmart(docRef);
   
   if (docSnap.exists()) {
     const data = docSnap.data();
@@ -206,7 +207,7 @@ export async function deleteProjectDocument(projectId: string, documentId: strin
       if (attachmentId) {
         try {
           const attachmentRef = doc(db, paths.projectAttachment(projectId, attachmentId));
-          const attachmentSnap = await getDoc(attachmentRef);
+          const attachmentSnap = await getDocSmart(attachmentRef);
           if (attachmentSnap.exists()) {
             const attachmentRaw = attachmentSnap.data();
             const attachmentData = isPlainObject(attachmentRaw) ? attachmentRaw : {};

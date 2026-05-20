@@ -1,4 +1,5 @@
-import { collection, addDoc, query, where, getDocs, deleteDoc, doc, orderBy, serverTimestamp, Timestamp, getDoc, updateDoc } from "../lib/rnFirestore";
+import { collection, addDoc, query, where, deleteDoc, doc, serverTimestamp, Timestamp, getDoc, updateDoc } from "../lib/rnFirestore";
+import { getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { getStorage, db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import type { AttachmentMetadata, AttachmentKind } from "../lib/attachmentTypes";
@@ -234,26 +235,22 @@ export async function listAttachments(
     taskId?: string;
     expenseId?: string;
     phaseId?: string;
-  }
+  },
+  readOpts?: SmartReadOptions
 ): Promise<AttachmentDoc[]> {
   const c = collection(db, paths.projectAttachments(projectId));
-  
-  // Build query: if we have filters, use where() without orderBy to avoid composite index requirement
-  // Then sort in JavaScript. If no filters, use orderBy directly.
-  let q;
-  
+
+  let snap;
   if (filters?.taskId) {
-    q = query(c, where("taskId", "==", filters.taskId));
+    snap = await getDocsSmart(query(c, where("taskId", "==", filters.taskId)), readOpts);
   } else if (filters?.expenseId) {
-    q = query(c, where("expenseId", "==", filters.expenseId));
+    snap = await getDocsSmart(query(c, where("expenseId", "==", filters.expenseId)), readOpts);
   } else if (filters?.phaseId) {
-    q = query(c, where("phaseId", "==", filters.phaseId));
+    snap = await getDocsSmart(query(c, where("phaseId", "==", filters.phaseId)), readOpts);
   } else {
-    // No filters: can use orderBy directly (no composite index needed)
-    q = query(c, orderBy("createdAt", "desc"));
+    snap = await getDocsSmart(c, readOpts);
   }
 
-  const snap = await getDocs(q);
   const attachments = snap.docs
     .map((d) => {
       try {
@@ -264,16 +261,13 @@ export async function listAttachments(
       }
     })
     .filter((x): x is AttachmentDoc => x != null);
-  
-  // Sort by createdAt descending if we used filters (to avoid composite index)
-  if (filters?.taskId || filters?.expenseId || filters?.phaseId) {
-    attachments.sort((a, b) => {
-      const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
-      const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
-      return dateB - dateA; // Descending order
-    });
-  }
-  
+
+  attachments.sort((a, b) => {
+    const dateA = a.createdAt ? new Date(a.createdAt).getTime() : 0;
+    const dateB = b.createdAt ? new Date(b.createdAt).getTime() : 0;
+    return dateB - dateA;
+  });
+
   return attachments;
 }
 

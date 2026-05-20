@@ -93,9 +93,17 @@ export function ProblemDetailScreen() {
     problem?.assigneeUid === user?.id;
 
   const load = useCallback(async () => {
-    if (!projectId || !problemId) return;
+    if (!projectId || !problemId) {
+      setLoading(false);
+      setRefreshing(false);
+      return;
+    }
     try {
       const p = await problemsService.getProblem(projectId, problemId);
+      if (!p) {
+        setProblem(null);
+        return;
+      }
       setProblem(p);
       if (p?.photos?.length) {
         const urls = new Map<string, string>();
@@ -299,10 +307,24 @@ export function ProblemDetailScreen() {
     setPhotoPreviewLoading(false);
   }, []);
 
-  if (loading || !problem) {
+  if (loading) {
     return (
       <View style={styles.center}>
         <ActivityIndicator size="large" color={colors.primary} />
+      </View>
+    );
+  }
+
+  if (!problem) {
+    return (
+      <View style={styles.center}>
+        <Ionicons name="alert-circle-outline" size={48} color={colors.textMuted} />
+        <Text style={styles.notFoundText} maxFontSizeMultiplier={1.2}>
+          {t("problems.notFound") || "Problém sa nenašiel alebo k nemu nemáte prístup."}
+        </Text>
+        <TouchableOpacity style={styles.notFoundBtn} onPress={() => navigation.goBack()} accessibilityRole="button">
+          <Text style={styles.notFoundBtnText}>{t("common.back") || "Späť"}</Text>
+        </TouchableOpacity>
       </View>
     );
   }
@@ -683,7 +705,21 @@ export function ProblemDetailScreen() {
 const styles = StyleSheet.create({
   container: { flex: 1, backgroundColor: colors.background },
   content: { padding: spacing.md, paddingBottom: 80 },
-  center: { flex: 1, justifyContent: "center", alignItems: "center" },
+  center: { flex: 1, justifyContent: "center", alignItems: "center", padding: spacing.lg },
+  notFoundText: {
+    marginTop: spacing.md,
+    fontSize: 15,
+    color: colors.textMuted,
+    textAlign: "center",
+  },
+  notFoundBtn: {
+    marginTop: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius,
+    backgroundColor: colors.primary,
+  },
+  notFoundBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   card: {
     backgroundColor: colors.card,
     borderRadius: radius,

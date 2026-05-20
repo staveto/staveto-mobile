@@ -12,6 +12,7 @@ import {
   Timestamp,
   getDoc,
 } from "../lib/rnFirestore";
+import { getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { isPlainObject } from "../utils/isPlainObject";
@@ -169,17 +170,19 @@ export async function createDiaryEntry(
   };
 }
 
-export async function listDiaryEntries(projectId: string): Promise<DiaryEntryDoc[]> {
+export async function listDiaryEntries(
+  projectId: string,
+  readOpts?: SmartReadOptions
+): Promise<DiaryEntryDoc[]> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
-    throw new Error('Musíte byť prihlásený na načítanie zápisov denníka.');
+    throw new Error("Musíte byť prihlásený na načítanie zápisov denníka.");
   }
-  
-  const c = collection(db, paths.constructionDiary(projectId));
-  const q = query(c, orderBy("date", "desc"));
-  const snap = await getDocs(q);
 
-  return snap.docs
+  const c = collection(db, paths.constructionDiary(projectId));
+  const snap = await getDocsSmart(c, readOpts);
+
+  const list = snap.docs
     .map((d) => {
       try {
         return toDoc({ id: d.id, data: d.data.bind(d) });
@@ -189,6 +192,8 @@ export async function listDiaryEntries(projectId: string): Promise<DiaryEntryDoc
       }
     })
     .filter((x): x is DiaryEntryDoc => x != null);
+  list.sort((a, b) => (b.date ?? "").localeCompare(a.date ?? ""));
+  return list;
 }
 
 export async function updateDiaryEntry(

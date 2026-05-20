@@ -56,7 +56,17 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setLocale = useCallback((l: Locale) => {
-    setLocaleState(l);
+    setLocaleState((prev) => {
+      if (__DEV__) {
+        console.log("[LanguageDebug]", {
+          previousLanguage: prev,
+          nextLanguage: l,
+          persisted: true,
+          source: "I18nContext.setLocale",
+        });
+      }
+      return l;
+    });
     AsyncStorage.setItem(STORAGE_KEY, l);
   }, []);
 

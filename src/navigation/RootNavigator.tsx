@@ -6,7 +6,10 @@ import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
 import { LoginScreen } from "../screens/LoginScreen";
 import { RegisterScreen } from "../screens/RegisterScreen";
-import { LanguageSelectionScreen } from "../screens/LanguageSelectionScreen";
+import {
+  LanguageSelectionScreen,
+  LANGUAGE_SELECTION_DONE_KEY,
+} from "../screens/LanguageSelectionScreen";
 import { OnboardingEvolutionScreen } from "../screens/OnboardingEvolutionScreen";
 import { ConsentRequiredScreen } from "../screens/ConsentRequiredScreen";
 import { OnboardingMvpScreen } from "../screens/OnboardingMvpScreen";
@@ -73,7 +76,7 @@ import { getExtraEnv } from "../lib/env";
 
 const FIRST_LOGIN_TRIAL_POPUP_KEY = "first_login_trial_popup_shown";
 const TRIAL_REMINDER_3D_LAST_SHOWN_KEY = "trial_reminder_3d_last_shown";
-const LANGUAGE_SELECTION_DONE_KEY = "language_selection_done";
+const STAVETO_LOCALE_KEY = "staveto_locale";
 
 const Stack = createNativeStackNavigator();
 
@@ -112,9 +115,28 @@ export function RootNavigator() {
   }, []);
 
   useEffect(() => {
-    AsyncStorage.getItem(LANGUAGE_SELECTION_DONE_KEY).then((v) => {
-      setLanguageSelectionDone(v === "1");
-    });
+    (async () => {
+      const done = await AsyncStorage.getItem(LANGUAGE_SELECTION_DONE_KEY);
+      if (done === "1") {
+        setLanguageSelectionDone(true);
+        return;
+      }
+      const savedLocale = await AsyncStorage.getItem(STAVETO_LOCALE_KEY);
+      const valid =
+        savedLocale === "en" ||
+        savedLocale === "de" ||
+        savedLocale === "sk" ||
+        savedLocale === "cs" ||
+        savedLocale === "es" ||
+        savedLocale === "it" ||
+        savedLocale === "pl";
+      if (valid) {
+        await AsyncStorage.setItem(LANGUAGE_SELECTION_DONE_KEY, "1");
+        setLanguageSelectionDone(true);
+        return;
+      }
+      setLanguageSelectionDone(false);
+    })();
   }, []);
 
   const checkGate = useCallback(async () => {

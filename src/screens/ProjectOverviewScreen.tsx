@@ -669,22 +669,27 @@ export function ProjectOverviewScreen() {
       const isBuildProject = isBuildLikeStorageType(projectTypeForLoad);
       const isAiGeneratedPlan = project?.templateId === "ai-generated";
       
-      // If useProjectAccess failed (e.g. first getDoc timed out) but getProject succeeded,
-      // still load subcollections when the loaded project shows this user is the owner.
+      // Owner from project doc, cached projectOwnerId, or access hook (handles access timeout before ownerId state updates).
       const isProjectOwner = !!(
         project?.ownerId &&
         currentUserUid &&
         project.ownerId === currentUserUid
       );
-      const canReadPhases = isProjectOwner || access.canReadPhases;
-      const canReadTasks = isProjectOwner || access.canReadTasks;
-      const canReadExpenses = isProjectOwner || access.canReadExpenses;
-      const canReadDiary = isProjectOwner || access.canReadDiary;
-      const canReadDocuments = isProjectOwner || access.canReadDocuments;
+      const isOwnerForLoad =
+        isProjectOwner ||
+        access.isOwner ||
+        (!!projectOwnerId && !!currentUserUid && projectOwnerId === currentUserUid);
+      const canReadPhases = isOwnerForLoad || access.canReadPhases;
+      const canReadTasks = isOwnerForLoad || access.canReadTasks;
+      const canReadExpenses = isOwnerForLoad || access.canReadExpenses;
+      const canReadDiary = isOwnerForLoad || access.canReadDiary;
+      const canReadDocuments = isOwnerForLoad || access.canReadDocuments;
       /** Firestore rules: attachments read = tasks OR expenses OR documents */
       const canReadAttachments = canReadTasks || canReadExpenses || canReadDocuments;
       
-      console.log(`[ProjectOverview] Loading data for projectType="${projectTypeForLoad}", isProjectOwner=${isProjectOwner}, canRead: phases=${canReadPhases}, tasks=${canReadTasks}, expenses=${canReadExpenses}, diary=${canReadDiary}, documents=${canReadDocuments}...`);
+      console.log(
+        `[ProjectOverview] Loading data for projectType="${projectTypeForLoad}", isProjectOwner=${isProjectOwner}, isOwnerForLoad=${isOwnerForLoad}, access.isOwner=${access.isOwner}, canRead: phases=${canReadPhases}, tasks=${canReadTasks}, expenses=${canReadExpenses}, diary=${canReadDiary}, documents=${canReadDocuments}...`
+      );
       const loadPromises: Promise<any>[] = [];
       
       const shouldLoadProjectPhases =
@@ -890,17 +895,21 @@ export function ProjectOverviewScreen() {
       expandedPhasesRef.current = expanded;
       setExpandedPhases(expanded);
     } catch (error: any) {
-      console.error('[ProjectOverview] Error loading data:', error);
-      setPhases([]);
-      setTasks([]);
-      setExpenses([]);
-      setExpandedPhases(new Map());
+      console.error("[ProjectOverview] Error loading data:", error);
+      if (!isRefresh) {
+        setPhases([]);
+        setTasks([]);
+        setExpenses([]);
+        setExpandedPhases(new Map());
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
     }
   }, [
     projectId,
+    projectOwnerId,
+    access.isOwner,
     access.canReadPhases,
     access.canReadTasks,
     access.canReadExpenses,
@@ -1121,7 +1130,21 @@ export function ProjectOverviewScreen() {
   useEffect(() => {
     if (!projectId || access.loading) return;
     load();
-  }, [projectId, access.loading, load]);
+  }, [projectId, projectOwnerId, access.loading, access.isOwner, load]);
+
+  const projectDataFocusRef = useRef(false);
+  useFocusEffect(
+    useCallback(() => {
+      if (!projectId || access.loading) return () => {};
+      if (!projectDataFocusRef.current) {
+        projectDataFocusRef.current = true;
+        return () => {};
+      }
+      load(true);
+      loadActivity();
+      return () => {};
+    }, [projectId, access.loading, load, loadActivity])
+  );
 
   useEffect(() => {
     loadActivity();
@@ -4911,7 +4934,15 @@ export function ProjectOverviewScreen() {
                   style={{ marginRight: spacing.sm }}
                 />
                 <Text style={styles.expensesHeaderText}>{t("projectOverview.timeDetailTitle")}</Text>
-                <Text style={styles.expensesCount}>({projectTimeWeekEntryCount})</Text>
+                <Text style={styles.expensesCount}>
+                  (
+                  {projectTimeWeekEntryCount > 0
+                    ? projectTimeWeekEntryCount
+                    : projectHoursMinutes > 0
+                      ? "…"
+                      : 0}
+                  )
+                </Text>
               </View>
               <View style={{ flexDirection: "row", alignItems: "center", gap: spacing.sm }}>
                 {timeCardLoading ? <ActivityIndicator size="small" color={colors.primary} /> : null}

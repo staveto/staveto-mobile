@@ -19,7 +19,7 @@
     "ios": {
       "supportsTablet": true,
       "usesAppleSignIn": true,
-      "buildNumber": "86",
+      "buildNumber": "87",
       "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
         "NSCameraUsageDescription": "Camera access for photographing invoices and documents.",
@@ -110,7 +110,7 @@
       "eas": {
         "projectId": "359dbeac-adc6-411f-bd76-5494d2064f58"
       },
-      "buildTimestamp": "2026-05-19"
+      "buildTimestamp": "2026-05-21"
     }
   }
 }

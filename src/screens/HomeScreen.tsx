@@ -31,7 +31,35 @@ import * as attachmentsService from "../services/attachments";
 import { processInvoiceAttachment } from "../services/invoiceProcessing";
 import { getConfidenceAwareExpensePrefill } from "../services/documentPrefill";
 import * as dashboardService from "../services/dashboard";
-import type { TodaysWorkTask } from "../services/dashboard";
+import type { DashboardViewModel, TodaysWorkTask } from "../services/dashboard";
+
+const EMPTY_HOME_DASHBOARD: DashboardViewModel = {
+  projects: [],
+  todayTasks: [],
+  todaysWorkTasks: [],
+  kpis: {
+    openCount: 0,
+    doneTodayCount: 0,
+    blockedCount: 0,
+    overdueCount: 0,
+    expensesMonthSum: 0,
+    expensesTotalSum: 0,
+    hasExpensesAccess: false,
+  },
+  projectStats: new Map(),
+  timeTrackingProjectIds: [],
+};
+
+const DASHBOARD_LOAD_TIMEOUT_MS = 25_000;
+
+function withTimeout<T>(promise: Promise<T>, ms: number, label: string): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>((_, reject) => {
+      setTimeout(() => reject(new Error(`${label}_TIMEOUT`)), ms);
+    }),
+  ]);
+}
 import * as projectEventsService from "../services/projectEvents";
 import * as projectCoverService from "../services/projectCover";
 import type { ProjectDoc } from "../services/projects";
@@ -789,7 +817,10 @@ export function HomeScreen() {
   const loadDashboard = useCallback(async (isRefresh = false) => {
     if (!orgId) {
       setEquipmentHomeSummary(null);
+      setDashboardData(EMPTY_HOME_DASHBOARD);
+      setLoadError(false);
       setLoading(false);
+      setRefreshing(false);
       return;
     }
 
@@ -802,17 +833,21 @@ export function HomeScreen() {
     try {
       if (isRefresh) {
         try {
-          await getCallable("syncMyProjectsSharedCount")({});
+          await withTimeout(getCallable("syncMyProjectsSharedCount")({}), 12_000, "syncMyProjectsSharedCount");
         } catch (e) {
           console.warn("[HomeScreen] syncMyProjectsSharedCount failed:", e);
           try {
-            await getCallable("backfillProjectSharedCounts")({});
+            await withTimeout(getCallable("backfillProjectSharedCounts")({}), 12_000, "backfillProjectSharedCounts");
           } catch (e2) {
             console.warn("[HomeScreen] backfillProjectSharedCounts failed:", e2);
           }
         }
       }
-      const data = await dashboardService.loadDashboardData(orgId, { forceServerRead: isRefresh });
+      const data = await withTimeout(
+        dashboardService.loadDashboardData(orgId, { forceServerRead: isRefresh }),
+        DASHBOARD_LOAD_TIMEOUT_MS,
+        "loadDashboardData"
+      );
       let monthlyMins = 0;
       try {
         monthlyMins = user?.id
@@ -868,25 +903,14 @@ export function HomeScreen() {
         setEquipmentHomeSummary(null);
       }
     } catch (error: any) {
+      const timedOut = error instanceof Error && error.message.includes("TIMEOUT");
       console.error("[HomeScreen] Error loading dashboard:", error);
       setLoadError(true);
-      setDashboardData({
-        projects: [],
-        todayTasks: [],
-        todaysWorkTasks: [],
-        kpis: {
-          openCount: 0,
-          doneTodayCount: 0,
-          blockedCount: 0,
-          overdueCount: 0,
-          expensesMonthSum: 0,
-          expensesTotalSum: 0,
-          hasExpensesAccess: false,
-        },
-        projectStats: new Map(),
-        timeTrackingProjectIds: [],
-      });
+      setDashboardData(EMPTY_HOME_DASHBOARD);
       setEquipmentHomeSummary(null);
+      if (timedOut) {
+        console.warn("[HomeScreen] Dashboard load timed out — showing empty state");
+      }
     } finally {
       setLoading(false);
       setRefreshing(false);
@@ -1048,8 +1072,7 @@ export function HomeScreen() {
 
   useFocusEffect(
     useCallback(() => {
-      loadDashboard(false);
-      if (isOnline) loadDashboard(true);
+      loadDashboard(isOnline);
       setCalendarRefreshTrigger((prev) => prev + 1);
       (async () => {
         await trackPaywallEvent("app_opened");

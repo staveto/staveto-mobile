@@ -50,13 +50,15 @@ export function useOrgAccess() {
       isActiveMember &&
       (trialActive || businessEnabled || hasActiveBusinessOrder);
 
+    const statusAllowsDashboard =
+      orgStatus === "active" || orgStatus === "trialing"
+        ? businessEnabled
+        : orgStatus === "pending_payment"
+          ? pendingCanAccess
+          : false;
+
     const canViewBusinessDashboard =
-      !!activeBusinessOrgId &&
-      isActiveMember &&
-      businessEnabled &&
-      (orgStatus === "active" ||
-        orgStatus === "trialing" ||
-        (orgStatus === "pending_payment" && pendingCanAccess));
+      !!activeBusinessOrgId && isActiveMember && statusAllowsDashboard;
 
     const canAccessBusiness =
       !!activeBusinessOrgId &&
@@ -69,7 +71,10 @@ export function useOrgAccess() {
       dashboardBlockReason = "missing_active_business_org_id";
     } else if (!isActiveMember) {
       dashboardBlockReason = `membership_not_active:${status ?? "none"}`;
-    } else if (!businessEnabled) {
+    } else if (
+      (orgStatus === "active" || orgStatus === "trialing") &&
+      !businessEnabled
+    ) {
       dashboardBlockReason = "business_not_enabled";
     } else if (orgStatus === "suspended") {
       dashboardBlockReason = "org_suspended";

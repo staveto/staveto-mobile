@@ -59,7 +59,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const [openToWork, setOpenToWork] = useState(false);
   const [updatingOpenToWork, setUpdatingOpenToWork] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
-  const businessEnabled = isBusinessFeatureEnabled();
+  const businessFeatureFlag = isBusinessFeatureEnabled();
   const adminEnabled = isAdminEmail(user?.email);
 
   const sendAgentDebugLog = useCallback(
@@ -295,7 +295,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
 
   const { count: unreadCount } = useUnreadCount();
   const { activeBusinessOrgId, activeOrganization, activeMembership } = useActiveOrg();
-  const { canViewBusinessDashboard, canAccessBusiness } = useOrgAccess();
+  const { canViewBusinessDashboard, canAccessBusiness, pendingCanAccess } = useOrgAccess();
   const displayName = user?.name ?? user?.firstName ?? user?.email ?? "—";
   const initials = displayName !== "—" ? displayName.slice(0, 2).toUpperCase() : "?";
   const isProTier = planTier === "PRO";
@@ -321,19 +321,37 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       canViewBusinessDashboard ||
       canAccessBusiness);
 
+  const showBusinessMenu = Boolean(
+    businessFeatureFlag ||
+      showBusinessCompanyLine ||
+      (!!activeBusinessOrgId && (canViewBusinessDashboard || canAccessBusiness))
+  );
+
   useEffect(() => {
-    if (!__DEV__ || !activeBusinessOrgId) return;
+    if (!__DEV__) return;
     console.log("[DrawerBusinessDebug]", {
-      companyName: displayCompanyName || null,
-      activeBusinessOrgId,
+      featureFlagBusinessEnabled: businessFeatureFlag,
+      activeBusinessOrgId: activeBusinessOrgId ?? null,
+      orgStatus: activeOrganization?.status ?? null,
+      orgBusinessEnabled: activeOrganization?.businessEnabled ?? null,
       membershipStatus: activeMembership?.status ?? null,
+      canAccessBusiness,
+      canViewBusinessDashboard,
+      pendingCanAccess,
       showBusinessCompanyLine,
+      showBusinessMenu,
     });
   }, [
+    businessFeatureFlag,
     activeBusinessOrgId,
+    activeOrganization?.status,
+    activeOrganization?.businessEnabled,
     activeMembership?.status,
-    displayCompanyName,
+    canAccessBusiness,
+    canViewBusinessDashboard,
+    pendingCanAccess,
     showBusinessCompanyLine,
+    showBusinessMenu,
   ]);
 
   const mainNavItems: NavItem[] = [
@@ -357,7 +375,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       },
     },
   ];
-  if (businessEnabled) {
+  if (showBusinessMenu) {
     mainNavItems.push({
       id: "business",
       icon: "business-outline",

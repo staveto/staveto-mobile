@@ -2,7 +2,7 @@
   "expo": {
     "name": "Staveto",
     "slug": "stavetoapp",
-    "version": "1.28.0",
+    "version": "1.30.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "dark",
@@ -19,7 +19,7 @@
     "ios": {
       "supportsTablet": true,
       "usesAppleSignIn": true,
-      "buildNumber": "87",
+      "buildNumber": "88",
       "googleServicesFile": "./GoogleService-Info.plist",
       "infoPlist": {
         "NSCameraUsageDescription": "Camera access for photographing invoices and documents.",
@@ -42,7 +42,7 @@
     },
     "android": {
       "package": "com.staveto.app",
-      "versionCode": 51,
+      "versionCode": 52,
       "softwareKeyboardLayoutMode": "resize",
       "googleServicesFile": "./google-services.json",
       "adaptiveIcon": {

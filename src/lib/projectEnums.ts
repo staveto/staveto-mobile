@@ -82,3 +82,67 @@ export type BusinessMode = "DIRECT" | "SUBCONTRACT" | "INTERNAL";
  *   the source picker → reuses the existing `CloneProjectModal` flow.
  */
 export type CreationMode = "AI" | "MANUAL" | "TEMPLATE" | "CLONE";
+
+/**
+ * Unified creation flow: what the user is creating (UI-only in Phase 1).
+ * Passed to AI via `projectDetails` hints; not persisted until later phases.
+ */
+export type NewJobArchetype =
+  | "service_inspection"
+  | "customer_job"
+  | "large_construction_project"
+  | "own_build"
+  | "internal_project";
+
+export const NEW_JOB_ARCHETYPES: readonly NewJobArchetype[] = [
+  "service_inspection",
+  "customer_job",
+  "large_construction_project",
+  "own_build",
+  "internal_project",
+] as const;
+
+/** Context string appended to AI `projectDetails` (no backend schema change). */
+export function getNewJobArchetypeAiContextHint(archetype: NewJobArchetype): string {
+  switch (archetype) {
+    case "service_inspection":
+      return (
+        "Job archetype: service/inspection visit (diagnostics, repair, warranty, short on-site work). " +
+        "Prefer a compact checklist: diagnosis, work steps, materials, safety, handover. " +
+        "Avoid long multi-phase house construction unless the brief clearly requires it."
+      );
+    case "customer_job":
+      return (
+        "Job archetype: customer job for a client (may start with an offer before execution). " +
+        "Structure for clear quoting and later execution; use phases or work packages suitable for client communication."
+      );
+    case "large_construction_project":
+      return (
+        "Job archetype: large construction (full house build, major renovation, long phased project). " +
+        "Use a realistic phased construction sequence with coordination-friendly tasks."
+      );
+    case "own_build":
+      return (
+        "Job archetype: owner's own house build or renovation (not a subcontractor job for a client). " +
+        "Homeowner-friendly phased plan; balance coordination and on-site execution tasks."
+      );
+    case "internal_project":
+      return (
+        "Job archetype: internal company work (preparation, inventory, admin, internal coordination). " +
+        "Compact task groups; avoid client-facing offer or sales language."
+      );
+    default:
+      return "";
+  }
+}
+
+export function resolveInternalProjectTypeFromArchetype(archetype: NewJobArchetype): "BUILD" | "TRADE" {
+  if (archetype === "large_construction_project" || archetype === "own_build") return "BUILD";
+  return "TRADE";
+}
+
+export function resolveJobWorkflowKindFromArchetype(
+  archetype: NewJobArchetype
+): JobWorkflowKind | undefined {
+  return archetype === "service_inspection" ? "SERVICE" : undefined;
+}

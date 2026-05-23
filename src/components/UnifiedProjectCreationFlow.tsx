@@ -93,6 +93,21 @@ function tArchetypeKey(archetype: NewJobArchetype, suffix: string): string {
   return `createProject.archetype.${archetype}.${suffix}`;
 }
 
+function tArchetype(
+  t: (key: string, params?: Record<string, string>) => string,
+  archetype: NewJobArchetype | null | undefined,
+  suffix: string,
+  fallbackKey: string,
+  params?: Record<string, string>
+): string {
+  if (archetype) {
+    const key = tArchetypeKey(archetype, suffix);
+    const translated = t(key, params);
+    if (translated !== key) return translated;
+  }
+  return t(fallbackKey, params);
+}
+
 export function UnifiedProjectCreationFlow({
   variant,
   existingProjects,
@@ -292,7 +307,15 @@ export function UnifiedProjectCreationFlow({
         <Text style={styles.backLinkText}>{t("createProject.unified.changeArchetype")}</Text>
       </TouchableOpacity>
 
-      <Text style={styles.screenTitle}>{t("createProject.unified.title")}</Text>
+      {jobArchetype ? (
+        <Text style={styles.flowTitle}>
+          {tArchetype(t, jobArchetype, "flowTitle", "projects.modalTitle")}
+        </Text>
+      ) : null}
+
+      <Text style={styles.screenTitle}>
+        {tArchetype(t, jobArchetype, "choose.title", "createProject.unified.title")}
+      </Text>
       {selectedArchetypeLabel ? (
         <View style={styles.archetypeChip}>
           <Text style={styles.archetypeChipText}>
@@ -302,12 +325,19 @@ export function UnifiedProjectCreationFlow({
           </Text>
         </View>
       ) : null}
-      <Text style={styles.screenSubtitle}>{t("createProject.unified.subtitle")}</Text>
+      <Text style={styles.screenSubtitle}>
+        {tArchetype(t, jobArchetype, "choose.subtitle", "createProject.unified.subtitle")}
+      </Text>
 
       <OptionCard
         icon="sparkles-outline"
-        title={t("createProject.unified.card.ai.title")}
-        description={t("createProject.unified.card.ai.description")}
+        title={tArchetype(t, jobArchetype, "card.ai.title", "createProject.unified.card.ai.title")}
+        description={tArchetype(
+          t,
+          jobArchetype,
+          "card.ai.description",
+          "createProject.unified.card.ai.description"
+        )}
         onPress={() => {
           setLastStartMethod("ai");
           logNewJobFlowDebug({
@@ -321,8 +351,13 @@ export function UnifiedProjectCreationFlow({
       />
       <OptionCard
         icon="create-outline"
-        title={t("createProject.unified.card.manual.title")}
-        description={t("createProject.unified.card.manual.description")}
+        title={tArchetype(t, jobArchetype, "card.manual.title", "createProject.unified.card.manual.title")}
+        description={tArchetype(
+          t,
+          jobArchetype,
+          "card.manual.description",
+          "createProject.unified.card.manual.description"
+        )}
         onPress={() => {
           setLastStartMethod("manual");
           logNewJobFlowDebug({
@@ -336,8 +371,13 @@ export function UnifiedProjectCreationFlow({
       />
       <OptionCard
         icon="copy-outline"
-        title={t("createProject.unified.card.copy.title")}
-        description={t("createProject.unified.card.copy.description")}
+        title={tArchetype(t, jobArchetype, "card.copy.title", "createProject.unified.card.copy.title")}
+        description={tArchetype(
+          t,
+          jobArchetype,
+          "card.copy.description",
+          "createProject.unified.card.copy.description"
+        )}
         onPress={onCopyTap}
         disabled={busy || !allowCopy}
         dimmed={!allowCopy}
@@ -356,6 +396,11 @@ export function UnifiedProjectCreationFlow({
           <Ionicons name="chevron-back" size={20} color={colors.primary} />
           <Text style={styles.backLinkText}>{t("createProject.unified.chooseAnotherWay")}</Text>
         </TouchableOpacity>
+        {jobArchetype ? (
+          <Text style={styles.flowTitle}>
+            {tArchetype(t, jobArchetype, "flowTitle", "projects.modalTitle")}
+          </Text>
+        ) : null}
         <Text style={styles.screenTitle}>{t(manualTitleKey)}</Text>
         <Text style={styles.fieldLabel}>{t(manualNameLabelKey)}</Text>
         <TextInput
@@ -530,6 +575,12 @@ const styles = StyleSheet.create({
   column: { flex: 1 },
   scroll: { flex: 1 },
   chooseScrollContent: { paddingHorizontal: spacing.md, paddingTop: spacing.sm },
+  flowTitle: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: colors.text,
+    marginBottom: spacing.xs,
+  },
   archetypePickerHeader: {
     flexDirection: "row",
     alignItems: "flex-start",

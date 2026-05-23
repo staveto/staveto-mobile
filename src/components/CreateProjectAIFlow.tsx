@@ -515,9 +515,48 @@ export function CreateProjectAIFlow({
         "ai.briefMissing",
         "createProject.unified.ai.briefMissing"
       ),
+      flowTitle: tForArchetype(t, jobArchetype, "flowTitle", "projects.modalTitle"),
+      aiNamePlaceholder: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.namePlaceholder",
+        "createProject.unified.ai.namePlaceholder"
+      ),
+      aiDescriptionPlaceholder: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.descriptionPlaceholder",
+        "createProject.unified.ai.descriptionPlaceholder"
+      ),
+      aiProjectNumberLabel: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.projectNumberLabel",
+        "createProject.aiDraft.projectNumberLabel"
+      ),
+      aiAttachTitle: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.attachTitle",
+        "createProject.unified.ai.attachTitle"
+      ),
+      aiAttachHint: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.attachHint",
+        "createProject.unified.ai.attachHint"
+      ),
+      aiAddScreenshot: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.addScreenshot",
+        "createProject.ai.addPhoto"
+      ),
     }),
     [jobArchetype, t]
   );
+
+  const showCustomerScreenshotBtn = isUnified && jobArchetype === "customer_job";
 
   const pickPhoto = async () => {
     if (!ImagePicker) {
@@ -975,6 +1014,9 @@ export function CreateProjectAIFlow({
         <ScrollView style={styles.briefScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {isUnified ? (
             <>
+              {jobArchetype ? (
+                <Text style={styles.flowTitle}>{archetypeCopy.flowTitle}</Text>
+              ) : null}
               <Text style={styles.title}>{archetypeCopy.aiScreenTitle}</Text>
               <Text style={styles.subtitle}>{archetypeCopy.aiScreenSubtitle}</Text>
               <Text style={styles.mainLabel}>{archetypeCopy.aiNameLabel}</Text>
@@ -985,7 +1027,7 @@ export function CreateProjectAIFlow({
                   setUnifiedName(text);
                   clearAiUiError();
                 }}
-                placeholder={t("createProject.unified.ai.namePlaceholder")}
+                placeholder={archetypeCopy.aiNamePlaceholder}
                 placeholderTextColor={colors.textMuted}
               />
               <Text style={[styles.mainLabel, { marginTop: spacing.md }]}>
@@ -999,14 +1041,14 @@ export function CreateProjectAIFlow({
                   setUnifiedDescription(text);
                   clearAiUiError();
                 }}
-                placeholder={t("createProject.unified.ai.descriptionPlaceholder")}
+                placeholder={archetypeCopy.aiDescriptionPlaceholder}
                 placeholderTextColor={colors.textMuted}
                 multiline
                 numberOfLines={5}
                 textAlignVertical="top"
               />
               <Text style={[styles.mainLabel, { marginTop: spacing.md }]}>
-                {t("createProject.aiDraft.projectNumberLabel")}
+                {archetypeCopy.aiProjectNumberLabel}
               </Text>
               <TextInput
                 style={styles.tradeFieldInput}
@@ -1171,21 +1213,30 @@ export function CreateProjectAIFlow({
             </>
           )}
           <View style={styles.attachSection}>
+            {/* TODO: Add dedicated screenshot capture/paste input in Phase 1.5 */}
             <Text style={styles.attachSectionTitle}>
               {isUnified
-                ? t("createProject.unified.ai.attachTitle")
+                ? archetypeCopy.aiAttachTitle
                 : isTradeAi
                   ? t("createProject.ai.attachTitleTrade")
                   : t("createProject.ai.attachTitle")}
             </Text>
             <Text style={styles.attachSectionHint}>
               {isUnified
-                ? t("createProject.unified.ai.attachHint")
+                ? archetypeCopy.aiAttachHint
                 : isTradeAi
                   ? t("createProject.ai.attachHintTrade")
                   : t("createProject.ai.attachHint")}
             </Text>
             <View style={styles.attachButtons}>
+              {showCustomerScreenshotBtn ? (
+                <TouchableOpacity style={styles.attachBtn} onPress={pickPhoto}>
+                  <View style={styles.attachIconWrap}>
+                    <Ionicons name="images-outline" size={28} color={colors.primary} />
+                  </View>
+                  <Text style={styles.attachBtnText}>{archetypeCopy.aiAddScreenshot}</Text>
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity style={styles.attachBtn} onPress={pickPhoto}>
                 <View style={styles.attachIconWrap}>
                   <Ionicons name="camera-outline" size={28} color={colors.primary} />
@@ -1436,6 +1487,7 @@ export function CreateProjectAIFlow({
             setDraftPlan((prev) => (prev ? { ...prev, projectNumber: value } : prev))
           }
           projectNameLabel={isUnified ? archetypeCopy.aiDraftNameLabel : undefined}
+          projectNumberLabel={isUnified ? archetypeCopy.aiProjectNumberLabel : undefined}
           refiningKey={refiningKey}
           onRefinePhase={(phaseId, pi) => setRefineSheet({ kind: "phase", phaseId, pi })}
           onRefineTask={(phaseId, taskId, pi, ti) =>
@@ -1681,6 +1733,12 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "center",
     padding: spacing.xl,
+  },
+  flowTitle: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: colors.text,
+    marginBottom: spacing.xs,
   },
   title: {
     fontSize: 20,

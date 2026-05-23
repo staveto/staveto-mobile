@@ -28,6 +28,8 @@ export type ProjectAIDraftReviewProps = {
   onChangeProjectNumber: (value: string) => void;
   /** Override default project name field label (archetype-specific). */
   projectNameLabel?: string;
+  /** Override default reference number field label (archetype-specific). */
+  projectNumberLabel?: string;
   /** `${phaseId}:${taskId}` when refining task; phaseId only when refining phase */
   refiningKey: string | null;
   onRefinePhase: (phaseId: string, phaseIndex: number) => void;
@@ -46,6 +48,7 @@ export function ProjectAIDraftReview({
   editedProjectNumber,
   onChangeProjectNumber,
   projectNameLabel,
+  projectNumberLabel,
   refiningKey,
   onRefinePhase,
   onRefineTask,
@@ -114,7 +117,9 @@ export function ProjectAIDraftReview({
           />
         </View>
         <View style={styles.headerFieldFlexSmall}>
-          <Text style={styles.fieldLabel}>{t("createProject.aiDraft.projectNumberLabel")}</Text>
+          <Text style={styles.fieldLabel}>
+            {projectNumberLabel ?? t("createProject.aiDraft.projectNumberLabel")}
+          </Text>
           <TextInput
             style={styles.titleInput}
             value={editedProjectNumber}

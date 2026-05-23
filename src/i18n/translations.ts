@@ -203,6 +203,19 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.activation.payOnline": "Pay online",
     "business.dashboard.activation.changePlan": "Change plan",
     "business.dashboard.activation.bankTransfer": "Bank transfer",
+    "business.dashboard.billing.pending.title": "Complete Business activation",
+    "business.dashboard.billing.pending.body":
+      "Your payment is pending. After payment, all Business features will be activated.",
+    "business.dashboard.billing.trialing.title": "Activate Business",
+    "business.dashboard.billing.trialing.body":
+      "Choose or complete payment so Business continues after the trial period.",
+    "business.dashboard.billing.active.title": "Subscription",
+    "business.dashboard.billing.active.body": "Manage your plan, licenses, and payment details.",
+    "business.dashboard.billing.active.hint":
+      "Stripe Customer Portal will be available in a later phase. Use change plan or payment details for now.",
+    "business.dashboard.billing.completePayment": "Complete payment",
+    "business.dashboard.billing.changePlan": "Change plan",
+    "business.dashboard.billing.paymentDetails": "Payment details",
     "business.chat.title": "Messages",
     "business.chat.generalTitle": "Company chat",
     "business.chat.empty": "No chats yet.",
@@ -2662,6 +2675,19 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.activation.payOnline": "Online bezahlen",
     "business.dashboard.activation.changePlan": "Plan ändern",
     "business.dashboard.activation.bankTransfer": "Banküberweisung",
+    "business.dashboard.billing.pending.title": "Business-Aktivierung abschließen",
+    "business.dashboard.billing.pending.body":
+      "Ihre Zahlung steht aus. Nach der Zahlung werden alle Business-Funktionen aktiviert.",
+    "business.dashboard.billing.trialing.title": "Business aktivieren",
+    "business.dashboard.billing.trialing.body":
+      "Wählen oder schließen Sie die Zahlung ab, damit Business nach der Testphase weiterläuft.",
+    "business.dashboard.billing.active.title": "Abonnement",
+    "business.dashboard.billing.active.body": "Verwalten Sie Plan, Lizenzen und Zahlungsdetails.",
+    "business.dashboard.billing.active.hint":
+      "Das Stripe Customer Portal wird in einer späteren Phase verfügbar sein. Nutzen Sie vorerst Plan ändern oder Zahlungsdetails.",
+    "business.dashboard.billing.completePayment": "Zahlung abschließen",
+    "business.dashboard.billing.changePlan": "Plan ändern",
+    "business.dashboard.billing.paymentDetails": "Zahlungsdetails",
     "business.chat.title": "Nachrichten",
     "business.chat.generalTitle": "Firmenchat",
     "business.chat.empty": "Noch keine Chats.",
@@ -4650,6 +4676,19 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.activation.payOnline": "Zaplatiť online",
     "business.dashboard.activation.changePlan": "Zmeniť plán",
     "business.dashboard.activation.bankTransfer": "Bankový prevod",
+    "business.dashboard.billing.pending.title": "Dokončite aktiváciu Business",
+    "business.dashboard.billing.pending.body":
+      "Vaša platba čaká. Po dokončení platby sa aktivujú všetky Business funkcie.",
+    "business.dashboard.billing.trialing.title": "Aktivujte Business",
+    "business.dashboard.billing.trialing.body":
+      "Vyberte alebo dokončite platbu, aby Business pokračoval aj po skúšobnom období.",
+    "business.dashboard.billing.active.title": "Predplatné",
+    "business.dashboard.billing.active.body": "Spravujte plán, licencie a platobné údaje.",
+    "business.dashboard.billing.active.hint":
+      "Stripe Customer Portal bude dostupný v neskoršej fáze. Zatiaľ použite zmenu plánu alebo platobné údaje.",
+    "business.dashboard.billing.completePayment": "Dokončiť platbu",
+    "business.dashboard.billing.changePlan": "Zmeniť plán",
+    "business.dashboard.billing.paymentDetails": "Platobné údaje",
     "business.chat.title": "Spravy",
     "business.chat.generalTitle": "Firemny chat",
     "business.chat.empty": "Zatial ziadne chaty.",
@@ -7007,6 +7046,19 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.activation.payOnline": "Zaplatit online",
     "business.dashboard.activation.changePlan": "Změnit plán",
     "business.dashboard.activation.bankTransfer": "Bankovní převod",
+    "business.dashboard.billing.pending.title": "Dokončete aktivaci Business",
+    "business.dashboard.billing.pending.body":
+      "Vaše platba čeká. Po dokončení platby se aktivují všechny Business funkce.",
+    "business.dashboard.billing.trialing.title": "Aktivujte Business",
+    "business.dashboard.billing.trialing.body":
+      "Vyberte nebo dokončete platbu, aby Business pokračoval i po zkušební době.",
+    "business.dashboard.billing.active.title": "Předplatné",
+    "business.dashboard.billing.active.body": "Spravujte plán, licence a platební údaje.",
+    "business.dashboard.billing.active.hint":
+      "Stripe Customer Portal bude dostupný v pozdější fázi. Zatím použijte změnu plánu nebo platební údaje.",
+    "business.dashboard.billing.completePayment": "Dokončit platbu",
+    "business.dashboard.billing.changePlan": "Změnit plán",
+    "business.dashboard.billing.paymentDetails": "Platební údaje",
     "business.chat.title": "Zpravy",
     "business.chat.generalTitle": "Firemni chat",
     "business.chat.empty": "Zatim zadne chaty.",
@@ -9052,6 +9104,19 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.activation.payOnline": "Pagar online",
     "business.dashboard.activation.changePlan": "Cambiar plan",
     "business.dashboard.activation.bankTransfer": "Transferencia bancaria",
+    "business.dashboard.billing.pending.title": "Complete la activacion de Business",
+    "business.dashboard.billing.pending.body":
+      "Su pago esta pendiente. Tras el pago se activaran todas las funciones de Business.",
+    "business.dashboard.billing.trialing.title": "Active Business",
+    "business.dashboard.billing.trialing.body":
+      "Elija o complete el pago para que Business continue despues del periodo de prueba.",
+    "business.dashboard.billing.active.title": "Suscripcion",
+    "business.dashboard.billing.active.body": "Gestione plan, licencias y datos de pago.",
+    "business.dashboard.billing.active.hint":
+      "El portal de clientes de Stripe estara disponible en una fase posterior. Use cambiar plan o datos de pago por ahora.",
+    "business.dashboard.billing.completePayment": "Completar pago",
+    "business.dashboard.billing.changePlan": "Cambiar plan",
+    "business.dashboard.billing.paymentDetails": "Datos de pago",
     "business.chat.title": "Mensajes",
     "business.chat.generalTitle": "Chat de empresa",
     "business.chat.empty": "Aun no hay chats.",
@@ -10408,6 +10473,19 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.activation.payOnline": "Paga online",
     "business.dashboard.activation.changePlan": "Cambia piano",
     "business.dashboard.activation.bankTransfer": "Bonifico bancario",
+    "business.dashboard.billing.pending.title": "Completa l'attivazione Business",
+    "business.dashboard.billing.pending.body":
+      "Il pagamento e in sospeso. Dopo il pagamento verranno attivate tutte le funzioni Business.",
+    "business.dashboard.billing.trialing.title": "Attiva Business",
+    "business.dashboard.billing.trialing.body":
+      "Scegli o completa il pagamento per continuare Business dopo il periodo di prova.",
+    "business.dashboard.billing.active.title": "Abbonamento",
+    "business.dashboard.billing.active.body": "Gestisci piano, licenze e dati di pagamento.",
+    "business.dashboard.billing.active.hint":
+      "Il portale clienti Stripe sara disponibile in una fase successiva. Per ora usa cambia piano o dati di pagamento.",
+    "business.dashboard.billing.completePayment": "Completa pagamento",
+    "business.dashboard.billing.changePlan": "Cambia piano",
+    "business.dashboard.billing.paymentDetails": "Dati di pagamento",
     "business.chat.title": "Messaggi",
     "business.chat.generalTitle": "Chat aziendale",
     "business.chat.empty": "Ancora nessuna chat.",
@@ -12245,6 +12323,19 @@ export const translations: Record<Locale, Record<string, string>> = {
     "business.dashboard.activation.payOnline": "Zaplac online",
     "business.dashboard.activation.changePlan": "Zmien plan",
     "business.dashboard.activation.bankTransfer": "Przelew bankowy",
+    "business.dashboard.billing.pending.title": "Dokoncz aktywacje Business",
+    "business.dashboard.billing.pending.body":
+      "Twoja platnosc oczekuje. Po oplaceniu zostana aktywowane wszystkie funkcje Business.",
+    "business.dashboard.billing.trialing.title": "Aktywuj Business",
+    "business.dashboard.billing.trialing.body":
+      "Wybierz lub dokoncz platnosc, aby Business dzialal po okresie probnym.",
+    "business.dashboard.billing.active.title": "Subskrypcja",
+    "business.dashboard.billing.active.body": "Zarzadzaj planem, licencjami i danymi platnosci.",
+    "business.dashboard.billing.active.hint":
+      "Portal klienta Stripe bedzie dostepny w pozniejszej fazie. Na razie uzyj zmiany planu lub danych platnosci.",
+    "business.dashboard.billing.completePayment": "Dokoncz platnosc",
+    "business.dashboard.billing.changePlan": "Zmien plan",
+    "business.dashboard.billing.paymentDetails": "Dane platnosci",
     "business.chat.title": "Wiadomosci",
     "business.chat.generalTitle": "Chat firmowy",
     "business.chat.empty": "Brak chatow.",

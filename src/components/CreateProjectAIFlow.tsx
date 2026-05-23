@@ -53,6 +53,11 @@ import type {
   WorkType,
   JobWorkflowKind,
   ServiceMaintenanceScope,
+  NewJobArchetype,
+} from "../lib/projectEnums";
+import {
+  getNewJobArchetypeAiContextHint,
+  resolveJobWorkflowKindFromArchetype,
 } from "../lib/projectEnums";
 
 let DocumentPicker: typeof import("expo-document-picker") | null = null;
@@ -83,7 +88,28 @@ type Props = {
   initialBrief?: string;
   jobWorkflowKind?: JobWorkflowKind | null;
   serviceMaintenanceScope?: ServiceMaintenanceScope | null;
+  /** Unified flow: archetype from first step (prompt + UI labels only in Phase 1). */
+  jobArchetype?: NewJobArchetype | null;
 };
+
+function logNewJobFlowDebug(payload: Record<string, unknown>) {
+  if (__DEV__) console.log("[NewJobFlowDebug]", payload);
+}
+
+function tForArchetype(
+  t: (key: string, params?: Record<string, string>) => string,
+  archetype: NewJobArchetype | null | undefined,
+  suffix: string,
+  fallbackKey: string,
+  params?: Record<string, string>
+): string {
+  if (archetype) {
+    const key = `createProject.archetype.${archetype}.${suffix}`;
+    const translated = t(key, params);
+    if (translated !== key) return translated;
+  }
+  return t(fallbackKey, params);
+}
 
 function getCategoryLabel(category: string, t: (key: string) => string): string {
   const key = `createProject.ai.category.${category}`;
@@ -302,13 +328,21 @@ function buildTradeDetailsPayload(
 const TRADE_AI_STRUCTURE_HINT =
   "Task context: craftsman's trade job (Handwerksauftrag / service visit), not residential new-build shell construction. Prefer a compact checklist of on-site work steps, materials, safety, and handover — avoid generic multi-phase house construction unless the brief clearly describes that.";
 
-function buildUnifiedOptionalDetails(extra: string): string | undefined {
+function buildUnifiedOptionalDetails(
+  extra: string,
+  archetype?: NewJobArchetype | null
+): string | undefined {
+  const parts: string[] = [];
+  if (archetype) {
+    parts.push(getNewJobArchetypeAiContextHint(archetype));
+  } else {
+    parts.push(
+      "Infer internally whether work fits phased construction vs compact trade/service tasks. Do not ask the user to classify the project."
+    );
+  }
   const e = extra.trim();
-  if (!e) return undefined;
-  return [
-    e,
-    "Infer internally whether work fits phased construction vs compact trade/service tasks. Do not ask the user to classify the project.",
-  ].join(" | ");
+  if (e) parts.push(e);
+  return parts.length > 0 ? parts.join(" | ") : undefined;
 }
 
 function mergeAiProjectDetails(
@@ -355,6 +389,7 @@ export function CreateProjectAIFlow({
   initialBrief,
   jobWorkflowKind,
   serviceMaintenanceScope,
+  jobArchetype,
 }: Props) {
   const { t } = useI18n();
   const isUnified = flowVariant === "unified";
@@ -416,14 +451,72 @@ export function CreateProjectAIFlow({
 
   const isTradeAi = !isUnified && engineType === "TRADE";
 
+  const unifiedJobWorkflowKind = useMemo(
+    () =>
+      isUnified && jobArchetype ? resolveJobWorkflowKindFromArchetype(jobArchetype) : undefined,
+    [isUnified, jobArchetype]
+  );
+
   const aiOptionsBase = useMemo(
     () => ({
       engineType: isUnified ? undefined : engineType,
       workType: isUnified ? undefined : workType,
-      jobWorkflowKind: isUnified ? undefined : jobWorkflowKind ?? undefined,
+      jobWorkflowKind: isUnified
+        ? unifiedJobWorkflowKind
+        : jobWorkflowKind ?? undefined,
       serviceMaintenanceScope: isUnified ? undefined : serviceMaintenanceScope ?? undefined,
     }),
-    [engineType, workType, jobWorkflowKind, serviceMaintenanceScope, isUnified]
+    [engineType, workType, jobWorkflowKind, serviceMaintenanceScope, isUnified, unifiedJobWorkflowKind]
+  );
+
+  const archetypeCopy = useMemo(
+    () => ({
+      aiScreenTitle: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.screenTitle",
+        "createProject.unified.ai.screenTitle"
+      ),
+      aiScreenSubtitle: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.screenSubtitle",
+        "createProject.unified.ai.screenSubtitle"
+      ),
+      aiNameLabel: tForArchetype(t, jobArchetype, "ai.nameLabel", "createProject.unified.ai.nameLabel"),
+      aiDescriptionLabel: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.descriptionLabel",
+        "createProject.unified.ai.descriptionLabel"
+      ),
+      aiDescriptionHelper: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.descriptionHelper",
+        "createProject.unified.ai.descriptionHelper"
+      ),
+      aiGenerateCta: tForArchetype(t, jobArchetype, "ai.generateCta", "createProject.ai.withAi"),
+      aiConfirmCta: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.confirmCta",
+        "createProject.aiDraft.confirmProject"
+      ),
+      aiDraftNameLabel: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.nameLabel",
+        "createProject.aiDraft.projectNameLabel"
+      ),
+      aiBriefMissing: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.briefMissing",
+        "createProject.unified.ai.briefMissing"
+      ),
+    }),
+    [jobArchetype, t]
   );
 
   const pickPhoto = async () => {
@@ -531,7 +624,7 @@ export function CreateProjectAIFlow({
       : brief.trim();
     if (!trimmed) {
       setLastAiDiagnostic(null);
-      setError(isUnified ? t("createProject.unified.ai.briefMissing") : t("createProject.ai.briefRequired"));
+      setError(isUnified ? archetypeCopy.aiBriefMissing : t("createProject.ai.briefRequired"));
       return;
     }
     if (isUnified && !unifiedName.trim()) {
@@ -568,7 +661,7 @@ export function CreateProjectAIFlow({
       }
 
       const projectDetails = isUnified
-        ? buildUnifiedOptionalDetails(unifiedExtra)
+        ? buildUnifiedOptionalDetails(unifiedExtra, jobArchetype)
         : mergeAiProjectDetails(
             engineType,
             t,
@@ -594,6 +687,13 @@ export function CreateProjectAIFlow({
       setEditedPlanTitle(
         resolveFinalProjectTitle(isUnified ? unifiedName : brief, result.projectTitle ?? "")
       );
+      logNewJobFlowDebug({
+        selectedArchetype: jobArchetype ?? null,
+        startMethod: "ai",
+        generatedPhaseCount: draft.phases.length,
+        generatedTaskCount: draft.phases.reduce((sum, p) => sum + p.tasks.length, 0),
+        createMode: "ai_generated",
+      });
       setStep("review");
     } catch (e) {
       const msg = normalizeAiErrorMessage(e instanceof Error ? e.message : String(e));
@@ -657,7 +757,7 @@ export function CreateProjectAIFlow({
         setUploadingDocs(false);
       }
       const projectDetails = isUnified
-        ? buildUnifiedOptionalDetails(unifiedExtra)
+        ? buildUnifiedOptionalDetails(unifiedExtra, jobArchetype)
         : mergeAiProjectDetails(
             engineType,
             t,
@@ -704,7 +804,7 @@ export function CreateProjectAIFlow({
     }
     if (!briefForAiCalls.trim()) {
       throw new Error(
-        isUnified ? t("createProject.unified.ai.briefMissing") : t("createProject.ai.briefRequired")
+        isUnified ? archetypeCopy.aiBriefMissing : t("createProject.ai.briefRequired")
       );
     }
 
@@ -811,22 +911,32 @@ export function CreateProjectAIFlow({
       };
       const projectId = await createProjectFromAiPlan(params);
 
+      const patch: Record<string, unknown> = {};
       if (!isUnified) {
-        const patch: Record<string, unknown> = {};
         if (jobWorkflowKind === "STANDARD" || jobWorkflowKind === "SERVICE") {
           patch.jobWorkflowKind = jobWorkflowKind;
         }
         if (serviceMaintenanceScope === "PROPERTY" || serviceMaintenanceScope === "EQUIPMENT") {
           patch.serviceMaintenanceScope = serviceMaintenanceScope;
         }
-        if (Object.keys(patch).length > 0) {
-          try {
-            await patchProjectDocument(projectId, patch);
-          } catch (patchErr) {
-            if (__DEV__) console.warn("[CreateProjectAIFlow] workflow patch failed", patchErr);
-          }
+      } else if (unifiedJobWorkflowKind === "SERVICE") {
+        patch.jobWorkflowKind = "SERVICE";
+      }
+      if (Object.keys(patch).length > 0) {
+        try {
+          await patchProjectDocument(projectId, patch);
+        } catch (patchErr) {
+          if (__DEV__) console.warn("[CreateProjectAIFlow] workflow patch failed", patchErr);
         }
       }
+
+      logNewJobFlowDebug({
+        selectedArchetype: jobArchetype ?? null,
+        startMethod: "ai",
+        generatedPhaseCount: draftPlan.phases.length,
+        generatedTaskCount: draftPlan.phases.reduce((sum, p) => sum + p.tasks.length, 0),
+        createMode: "ai_create_confirmed",
+      });
 
       onCreated(projectId);
     } catch (e) {
@@ -865,9 +975,9 @@ export function CreateProjectAIFlow({
         <ScrollView style={styles.briefScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {isUnified ? (
             <>
-              <Text style={styles.title}>{t("createProject.unified.ai.screenTitle")}</Text>
-              <Text style={styles.subtitle}>{t("createProject.unified.ai.screenSubtitle")}</Text>
-              <Text style={styles.mainLabel}>{t("createProject.unified.ai.nameLabel")}</Text>
+              <Text style={styles.title}>{archetypeCopy.aiScreenTitle}</Text>
+              <Text style={styles.subtitle}>{archetypeCopy.aiScreenSubtitle}</Text>
+              <Text style={styles.mainLabel}>{archetypeCopy.aiNameLabel}</Text>
               <TextInput
                 style={styles.tradeFieldInput}
                 value={unifiedName}
@@ -879,9 +989,9 @@ export function CreateProjectAIFlow({
                 placeholderTextColor={colors.textMuted}
               />
               <Text style={[styles.mainLabel, { marginTop: spacing.md }]}>
-                {t("createProject.unified.ai.descriptionLabel")}
+                {archetypeCopy.aiDescriptionLabel}
               </Text>
-              <Text style={styles.mainHelper}>{t("createProject.unified.ai.descriptionHelper")}</Text>
+              <Text style={styles.mainHelper}>{archetypeCopy.aiDescriptionHelper}</Text>
               <TextInput
                 style={styles.textArea}
                 value={unifiedDescription}
@@ -1198,7 +1308,7 @@ export function CreateProjectAIFlow({
             <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={runGeneration}>
               <Ionicons name="sparkles" size={18} color="#fff" />
               <Text style={styles.btnPrimaryText}>
-                {error ? t("createProject.ai.tryAgain") : t("createProject.ai.withAi")}
+                {error ? t("createProject.ai.tryAgain") : archetypeCopy.aiGenerateCta}
               </Text>
             </TouchableOpacity>
             <View style={[styles.secondaryActions, narrowActions && styles.secondaryActionsColumn]}>
@@ -1325,6 +1435,7 @@ export function CreateProjectAIFlow({
           onChangeProjectNumber={(value) =>
             setDraftPlan((prev) => (prev ? { ...prev, projectNumber: value } : prev))
           }
+          projectNameLabel={isUnified ? archetypeCopy.aiDraftNameLabel : undefined}
           refiningKey={refiningKey}
           onRefinePhase={(phaseId, pi) => setRefineSheet({ kind: "phase", phaseId, pi })}
           onRefineTask={(phaseId, taskId, pi, ti) =>
@@ -1426,7 +1537,9 @@ export function CreateProjectAIFlow({
             {submitting ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Text style={styles.btnPrimaryTextCompact}>{t("createProject.aiDraft.confirmProject")}</Text>
+              <Text style={styles.btnPrimaryTextCompact}>
+                {isUnified ? archetypeCopy.aiConfirmCta : t("createProject.aiDraft.confirmProject")}
+              </Text>
             )}
           </TouchableOpacity>
           <TouchableOpacity style={styles.cancelInlineBtn} onPress={onCancel} hitSlop={{ top: 8, bottom: 8, left: 16, right: 16 }}>

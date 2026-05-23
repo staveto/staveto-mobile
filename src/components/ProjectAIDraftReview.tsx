@@ -26,6 +26,8 @@ export type ProjectAIDraftReviewProps = {
   onChangeTitle: (title: string) => void;
   editedProjectNumber: string;
   onChangeProjectNumber: (value: string) => void;
+  /** Override default project name field label (archetype-specific). */
+  projectNameLabel?: string;
   /** `${phaseId}:${taskId}` when refining task; phaseId only when refining phase */
   refiningKey: string | null;
   onRefinePhase: (phaseId: string, phaseIndex: number) => void;
@@ -43,6 +45,7 @@ export function ProjectAIDraftReview({
   onChangeTitle,
   editedProjectNumber,
   onChangeProjectNumber,
+  projectNameLabel,
   refiningKey,
   onRefinePhase,
   onRefineTask,
@@ -55,13 +58,20 @@ export function ProjectAIDraftReview({
   const { t } = useI18n();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
 
+  const phaseCount = draft.phases.length;
+  const taskCount = useMemo(
+    () => draft.phases.reduce((sum, p) => sum + p.tasks.length, 0),
+    [draft.phases]
+  );
+  const collapsePhasesByDefault = phaseCount > 3;
+
   const defaultExpanded = useMemo(() => {
     const m: Record<string, boolean> = {};
     draft.phases.forEach((p) => {
-      m[p.id] = true;
+      m[p.id] = !collapsePhasesByDefault;
     });
     return m;
-  }, [draft.phases]);
+  }, [collapsePhasesByDefault, draft.phases]);
 
   const isOpen = (id: string) => (expanded[id] !== undefined ? expanded[id] : defaultExpanded[id]);
 
@@ -74,6 +84,16 @@ export function ProjectAIDraftReview({
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
+      <View style={styles.structureSummaryCard}>
+        <Ionicons name="layers-outline" size={20} color={colors.primary} />
+        <Text style={styles.structureSummaryText}>
+          {t("createProject.aiDraft.structureSummary", {
+            phaseCount: String(phaseCount),
+            taskCount: String(taskCount),
+          })}
+        </Text>
+      </View>
+
       <View style={styles.hintCard}>
         <Ionicons name="finger-print-outline" size={18} color={colors.primary} />
         <Text style={styles.hintCardText} numberOfLines={2}>
@@ -83,7 +103,9 @@ export function ProjectAIDraftReview({
 
       <View style={styles.headerCard}>
         <View style={styles.headerFieldFlexLarge}>
-          <Text style={styles.fieldLabel}>{t("createProject.aiDraft.projectNameLabel")}</Text>
+          <Text style={styles.fieldLabel}>
+            {projectNameLabel ?? t("createProject.aiDraft.projectNameLabel")}
+          </Text>
           <TextInput
             style={styles.titleInput}
             value={editedTitle}
@@ -233,6 +255,25 @@ export function ProjectAIDraftReview({
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: spacing.md },
+  structureSummaryCard: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+  },
+  structureSummaryText: {
+    flex: 1,
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.text,
+    lineHeight: 20,
+  },
   hintCard: {
     flexDirection: "row",
     alignItems: "center",

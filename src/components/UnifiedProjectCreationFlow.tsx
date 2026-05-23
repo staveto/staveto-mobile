@@ -1,5 +1,5 @@
 /**
- * Shared project creation UX: AI, manual blank, or copy — no BUILD/TRADE pick.
+ * Shared project creation UX: archetype → AI, manual blank, or copy.
  */
 
 import React, { useCallback, useMemo, useState } from "react";
@@ -25,6 +25,11 @@ import {
   isKnownStorageType,
   isLegacyMaintenanceEquipmentHub,
 } from "../lib/projectTypeModel";
+import {
+  NEW_JOB_ARCHETYPES,
+  resolveInternalProjectTypeFromArchetype,
+  type NewJobArchetype,
+} from "../lib/projectEnums";
 import { CreateProjectAIFlow } from "./CreateProjectAIFlow";
 import { CloneProjectModal } from "./CloneProjectModal";
 import { CloneSourcePickerModal } from "./CloneSourcePickerModal";
@@ -43,9 +48,11 @@ export type UnifiedProjectCreationSuccess = {
   internalProjectType: "BUILD" | "TRADE";
 };
 
-type Step = "choose" | "ai" | "manual";
+type Step = "archetype" | "choose" | "ai" | "manual";
 
 type ClonePhase = "idle" | "pick" | "modal";
+
+type StartMethod = "ai" | "manual" | "clone";
 
 type Props = {
   variant: UnifiedProjectCreationVariant;
@@ -56,6 +63,18 @@ type Props = {
   onSuccess: (payload: UnifiedProjectCreationSuccess) => void | Promise<void>;
 };
 
+const ARCHETYPE_ICONS: Record<NewJobArchetype, keyof typeof Ionicons.glyphMap> = {
+  service_inspection: "medkit-outline",
+  customer_job: "briefcase-outline",
+  large_construction_project: "home-outline",
+  own_build: "hammer-outline",
+  internal_project: "business-outline",
+};
+
+function logNewJobFlowDebug(payload: Record<string, unknown>) {
+  if (__DEV__) console.log("[NewJobFlowDebug]", payload);
+}
+
 function filterCloneSources(projects: ProjectDoc[]): ProjectDoc[] {
   return projects.filter((p) => {
     if (!p.projectType || !isKnownStorageType(p.projectType)) return false;
@@ -63,6 +82,10 @@ function filterCloneSources(projects: ProjectDoc[]): ProjectDoc[] {
     const active = getActiveProductProjectType(p);
     return active === "BUILD" || active === "TRADE";
   });
+}
+
+function tArchetypeKey(archetype: NewJobArchetype, suffix: string): string {
+  return `createProject.archetype.${archetype}.${suffix}`;
 }
 
 export function UnifiedProjectCreationFlow({
@@ -75,7 +98,9 @@ export function UnifiedProjectCreationFlow({
   const { t } = useI18n();
   const { user } = useAuth();
   const insets = useSafeAreaInsets();
-  const [step, setStep] = useState<Step>("choose");
+  const [step, setStep] = useState<Step>("archetype");
+  const [jobArchetype, setJobArchetype] = useState<NewJobArchetype | null>(null);
+  const [lastStartMethod, setLastStartMethod] = useState<StartMethod | null>(null);
   const [clonePhase, setClonePhase] = useState<ClonePhase>("idle");
   const [manualName, setManualName] = useState("");
   const [manualDescription, setManualDescription] = useState("");
@@ -85,12 +110,13 @@ export function UnifiedProjectCreationFlow({
   const cloneSources = useMemo(() => filterCloneSources(existingProjects), [existingProjects]);
   const allowCopy = variant === "inApp" && cloneSources.length > 0;
 
-  const resetAll = useCallback(() => {
-    setStep("choose");
+  const goArchetype = useCallback(() => {
+    setStep("archetype");
     setClonePhase("idle");
     setManualName("");
     setManualDescription("");
     setCloneSource(null);
+    setLastStartMethod(null);
   }, []);
 
   const goChoose = useCallback(() => {
@@ -99,6 +125,12 @@ export function UnifiedProjectCreationFlow({
     setManualName("");
     setManualDescription("");
     setCloneSource(null);
+  }, []);
+
+  const selectArchetype = useCallback((archetype: NewJobArchetype) => {
+    setJobArchetype(archetype);
+    logNewJobFlowDebug({ selectedArchetype: archetype, startMethod: null, createMode: "archetype_pick" });
+    setStep("choose");
   }, []);
 
   const handleManualSubmit = useCallback(async () => {
@@ -114,10 +146,17 @@ export function UnifiedProjectCreationFlow({
         description: manualDescription.trim() || undefined,
         hints: internalHints,
       });
-      const internalProjectType = resolveManualBlankInternalMetadata(internalHints, {
-        name,
-        description: manualDescription,
-      }).projectType;
+      const internalProjectType = jobArchetype
+        ? resolveInternalProjectTypeFromArchetype(jobArchetype)
+        : resolveManualBlankInternalMetadata(internalHints, {
+            name,
+            description: manualDescription,
+          }).projectType;
+      logNewJobFlowDebug({
+        selectedArchetype: jobArchetype,
+        startMethod: "manual",
+        createMode: "manual_create",
+      });
       await onSuccess({ projectId, source: "manual", internalProjectType });
     } catch (e) {
       const msg = e instanceof Error ? e.message : String(e ?? "");
@@ -125,17 +164,60 @@ export function UnifiedProjectCreationFlow({
     } finally {
       setCreating(false);
     }
-  }, [internalHints, manualDescription, manualName, onSuccess, t]);
+  }, [internalHints, jobArchetype, manualDescription, manualName, onSuccess, t]);
 
   const onCopyTap = useCallback(() => {
     if (!allowCopy) {
       Alert.alert("", t("createProject.unified.copyEmpty"));
       return;
     }
+    setLastStartMethod("clone");
+    logNewJobFlowDebug({
+      selectedArchetype: jobArchetype,
+      startMethod: "clone",
+      createMode: "clone_pick",
+    });
     setClonePhase("pick");
-  }, [allowCopy, t]);
+  }, [allowCopy, jobArchetype, t]);
 
   const busy = creating || !!parentSubmitting;
+
+  const selectedArchetypeLabel = jobArchetype
+    ? t(tArchetypeKey(jobArchetype, "label"))
+    : "";
+
+  const manualTitleKey = jobArchetype
+    ? tArchetypeKey(jobArchetype, "manual.title")
+    : "createProject.unified.manual.title";
+  const manualNameLabelKey = jobArchetype
+    ? tArchetypeKey(jobArchetype, "manual.nameLabel")
+    : "createProject.unified.manual.nameLabel";
+  const manualCreateCtaKey = jobArchetype
+    ? tArchetypeKey(jobArchetype, "manual.createCta")
+    : "createProject.unified.manual.createCta";
+
+  const renderArchetypePicker = () => (
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={[styles.chooseScrollContent, { paddingBottom: insets.bottom + spacing.lg }]}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      <Text style={styles.screenTitle}>{t("createProject.archetypePicker.title")}</Text>
+      <Text style={styles.screenSubtitle}>{t("createProject.archetypePicker.subtitle")}</Text>
+
+      {NEW_JOB_ARCHETYPES.map((archetype) => (
+        <OptionCard
+          key={archetype}
+          icon={ARCHETYPE_ICONS[archetype]}
+          title={t(tArchetypeKey(archetype, "label"))}
+          description={t(tArchetypeKey(archetype, "description"))}
+          onPress={() => selectArchetype(archetype)}
+          disabled={busy}
+        />
+      ))}
+    </ScrollView>
+  );
 
   const renderChoose = () => (
     <ScrollView
@@ -144,21 +226,51 @@ export function UnifiedProjectCreationFlow({
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
+      <TouchableOpacity style={styles.backLink} onPress={goArchetype} disabled={busy}>
+        <Ionicons name="chevron-back" size={20} color={colors.primary} />
+        <Text style={styles.backLinkText}>{t("createProject.unified.changeArchetype")}</Text>
+      </TouchableOpacity>
+
       <Text style={styles.screenTitle}>{t("createProject.unified.title")}</Text>
+      {selectedArchetypeLabel ? (
+        <View style={styles.archetypeChip}>
+          <Text style={styles.archetypeChipText}>
+            {t("createProject.unified.selectedArchetypeLabel", {
+              label: selectedArchetypeLabel,
+            })}
+          </Text>
+        </View>
+      ) : null}
       <Text style={styles.screenSubtitle}>{t("createProject.unified.subtitle")}</Text>
 
       <OptionCard
         icon="sparkles-outline"
         title={t("createProject.unified.card.ai.title")}
         description={t("createProject.unified.card.ai.description")}
-        onPress={() => setStep("ai")}
+        onPress={() => {
+          setLastStartMethod("ai");
+          logNewJobFlowDebug({
+            selectedArchetype: jobArchetype,
+            startMethod: "ai",
+            createMode: "ai_brief",
+          });
+          setStep("ai");
+        }}
         disabled={busy}
       />
       <OptionCard
         icon="create-outline"
         title={t("createProject.unified.card.manual.title")}
         description={t("createProject.unified.card.manual.description")}
-        onPress={() => setStep("manual")}
+        onPress={() => {
+          setLastStartMethod("manual");
+          logNewJobFlowDebug({
+            selectedArchetype: jobArchetype,
+            startMethod: "manual",
+            createMode: "manual_form",
+          });
+          setStep("manual");
+        }}
         disabled={busy}
       />
       <OptionCard
@@ -179,8 +291,12 @@ export function UnifiedProjectCreationFlow({
         contentContainerStyle={{ paddingBottom: insets.bottom + spacing.lg, paddingHorizontal: spacing.md }}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.screenTitle}>{t("createProject.unified.manual.title")}</Text>
-        <Text style={styles.fieldLabel}>{t("createProject.unified.manual.nameLabel")}</Text>
+        <TouchableOpacity style={styles.backLink} onPress={goChoose} disabled={busy}>
+          <Ionicons name="chevron-back" size={20} color={colors.primary} />
+          <Text style={styles.backLinkText}>{t("createProject.unified.chooseAnotherWay")}</Text>
+        </TouchableOpacity>
+        <Text style={styles.screenTitle}>{t(manualTitleKey)}</Text>
+        <Text style={styles.fieldLabel}>{t(manualNameLabelKey)}</Text>
         <TextInput
           style={styles.input}
           value={manualName}
@@ -216,7 +332,7 @@ export function UnifiedProjectCreationFlow({
           {busy ? (
             <ActivityIndicator color="#fff" />
           ) : (
-            <Text style={styles.btnPrimaryText}>{t("createProject.unified.manual.createCta")}</Text>
+            <Text style={styles.btnPrimaryText}>{t(manualCreateCtaKey)}</Text>
           )}
         </TouchableOpacity>
       </View>
@@ -227,13 +343,21 @@ export function UnifiedProjectCreationFlow({
 
   return (
     <>
+      {step === "archetype" ? renderArchetypePicker() : null}
       {step === "choose" ? renderChoose() : null}
-      {step === "ai" ? (
+      {step === "ai" && jobArchetype ? (
         <View style={styles.flex}>
           <CreateProjectAIFlow
             flowVariant="unified"
+            jobArchetype={jobArchetype}
             onCreated={async (projectId) => {
-              await onSuccess({ projectId, source: "ai", internalProjectType: "TRADE" });
+              const internalProjectType = resolveInternalProjectTypeFromArchetype(jobArchetype);
+              logNewJobFlowDebug({
+                selectedArchetype: jobArchetype,
+                startMethod: lastStartMethod ?? "ai",
+                createMode: "ai_create_confirmed",
+              });
+              await onSuccess({ projectId, source: "ai", internalProjectType });
             }}
             onManual={() => setStep("manual")}
             onCancel={goChoose}
@@ -270,8 +394,16 @@ export function UnifiedProjectCreationFlow({
           const picked = cloneSource;
           setClonePhase("idle");
           setCloneSource(null);
-          const internalProjectType =
-            picked && getActiveProductProjectType(picked) === "BUILD" ? "BUILD" : "TRADE";
+          const internalProjectType = jobArchetype
+            ? resolveInternalProjectTypeFromArchetype(jobArchetype)
+            : picked && getActiveProductProjectType(picked) === "BUILD"
+              ? "BUILD"
+              : "TRADE";
+          logNewJobFlowDebug({
+            selectedArchetype: jobArchetype,
+            startMethod: "clone",
+            createMode: "clone_create_confirmed",
+          });
           await onSuccess({
             projectId: newId,
             source: "clone",
@@ -342,6 +474,33 @@ const styles = StyleSheet.create({
     opacity: 0.85,
     lineHeight: 20,
     marginBottom: spacing.lg,
+  },
+  backLink: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    marginBottom: spacing.sm,
+    alignSelf: "flex-start",
+  },
+  backLinkText: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.primary,
+  },
+  archetypeChip: {
+    alignSelf: "flex-start",
+    backgroundColor: "rgba(224, 103, 55, 0.12)",
+    borderRadius: 999,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 6,
+    marginBottom: spacing.sm,
+    borderWidth: 1,
+    borderColor: "rgba(224, 103, 55, 0.35)",
+  },
+  archetypeChipText: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.text,
   },
   card: {
     flexDirection: "row",

@@ -68,3 +68,10 @@ functions/.env.local
 submit-*-debug.txt
 *.bak.png
 *.bak
+backups/
+auth-export.json
+firebase-debug.log
+.tmp*
+*.log
+!docs/**/*.log
+*service-account*.json

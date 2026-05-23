@@ -453,6 +453,13 @@ export function BusinessDashboardScreen() {
           onPress={() => nav.navigate("BusinessTeamManagement")}
         />
         <ActionCard
+          icon="card-outline"
+          title={t("business.dashboard.modules.customers")}
+          body={t("business.dashboard.actionCustomersBody")}
+          openLabel={t("business.dashboard.modules.open")}
+          onPress={() => nav.navigate("BusinessCustomersList")}
+        />
+        <ActionCard
           icon="construct-outline"
           title={t("business.dashboard.modules.projects")}
           body={t("business.dashboard.actionProjectsBody")}

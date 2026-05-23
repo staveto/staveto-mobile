@@ -2,7 +2,7 @@
  * Shared project creation UX: archetype → AI, manual blank, or copy.
  */
 
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -33,6 +33,11 @@ import {
 import { CreateProjectAIFlow } from "./CreateProjectAIFlow";
 import { CloneProjectModal } from "./CloneProjectModal";
 import { CloneSourcePickerModal } from "./CloneSourcePickerModal";
+import { ProjectTypeCustomizeSheet } from "./ProjectTypeCustomizeSheet";
+import {
+  loadVisibleProjectArchetypes,
+  logProjectTypePreferencesDebug,
+} from "../services/projectArchetypePreferences";
 import {
   createManualBlankProject,
   resolveManualBlankInternalMetadata,
@@ -106,6 +111,39 @@ export function UnifiedProjectCreationFlow({
   const [manualDescription, setManualDescription] = useState("");
   const [creating, setCreating] = useState(false);
   const [cloneSource, setCloneSource] = useState<ProjectDoc | null>(null);
+  const [visibleArchetypes, setVisibleArchetypes] = useState<NewJobArchetype[]>([...NEW_JOB_ARCHETYPES]);
+  const [customizeOpen, setCustomizeOpen] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      const { visible, defaultUsed } = await loadVisibleProjectArchetypes();
+      if (cancelled) return;
+      setVisibleArchetypes(visible);
+      const hidden = NEW_JOB_ARCHETYPES.filter((id) => !visible.includes(id));
+      logProjectTypePreferencesDebug({
+        visibleArchetypes: visible,
+        hiddenArchetypes: hidden,
+        defaultUsed,
+      });
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!jobArchetype) return;
+    if (!visibleArchetypes.includes(jobArchetype)) {
+      const next = visibleArchetypes[0] ?? null;
+      setJobArchetype(next);
+      logNewJobFlowDebug({
+        selectedArchetype: next,
+        startMethod: lastStartMethod,
+        createMode: "archetype_reset_hidden",
+      });
+    }
+  }, [jobArchetype, lastStartMethod, visibleArchetypes]);
 
   const cloneSources = useMemo(() => filterCloneSources(existingProjects), [existingProjects]);
   const allowCopy = variant === "inApp" && cloneSources.length > 0;
@@ -196,6 +234,16 @@ export function UnifiedProjectCreationFlow({
     ? tArchetypeKey(jobArchetype, "manual.createCta")
     : "createProject.unified.manual.createCta";
 
+  const handleArchetypePrefsSaved = useCallback((visible: NewJobArchetype[]) => {
+    setVisibleArchetypes(visible);
+    const hidden = NEW_JOB_ARCHETYPES.filter((id) => !visible.includes(id));
+    logProjectTypePreferencesDebug({
+      visibleArchetypes: visible,
+      hiddenArchetypes: hidden,
+      defaultUsed: false,
+    });
+  }, []);
+
   const renderArchetypePicker = () => (
     <ScrollView
       style={styles.scroll}
@@ -203,10 +251,23 @@ export function UnifiedProjectCreationFlow({
       keyboardShouldPersistTaps="handled"
       showsVerticalScrollIndicator={false}
     >
-      <Text style={styles.screenTitle}>{t("createProject.archetypePicker.title")}</Text>
+      <View style={styles.archetypePickerHeader}>
+        <View style={styles.archetypePickerHeaderText}>
+          <Text style={styles.screenTitle}>{t("createProject.archetypePicker.title")}</Text>
+        </View>
+        <TouchableOpacity
+          style={styles.customizeBtn}
+          onPress={() => setCustomizeOpen(true)}
+          disabled={busy}
+          accessibilityRole="button"
+          accessibilityLabel={t("createProject.archetypeCustomize.accessibilityLabel")}
+        >
+          <Ionicons name="options-outline" size={22} color={colors.primary} />
+        </TouchableOpacity>
+      </View>
       <Text style={styles.screenSubtitle}>{t("createProject.archetypePicker.subtitle")}</Text>
 
-      {NEW_JOB_ARCHETYPES.map((archetype) => (
+      {visibleArchetypes.map((archetype) => (
         <OptionCard
           key={archetype}
           icon={ARCHETYPE_ICONS[archetype]}
@@ -366,6 +427,13 @@ export function UnifiedProjectCreationFlow({
       ) : null}
       {step === "manual" ? renderManual() : null}
 
+      <ProjectTypeCustomizeSheet
+        visible={customizeOpen}
+        enabledArchetypes={visibleArchetypes}
+        onDismiss={() => setCustomizeOpen(false)}
+        onSaved={handleArchetypePrefsSaved}
+      />
+
       <CloneSourcePickerModal
         visible={clonePhase === "pick"}
         engineType="ALL"
@@ -462,6 +530,25 @@ const styles = StyleSheet.create({
   column: { flex: 1 },
   scroll: { flex: 1 },
   chooseScrollContent: { paddingHorizontal: spacing.md, paddingTop: spacing.sm },
+  archetypePickerHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  archetypePickerHeaderText: { flex: 1, minWidth: 0 },
+  customizeBtn: {
+    width: 44,
+    height: 44,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    backgroundColor: colors.card,
+    alignItems: "center",
+    justifyContent: "center",
+    marginTop: 2,
+  },
   screenTitle: {
     fontSize: 22,
     fontWeight: "700",

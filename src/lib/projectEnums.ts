@@ -102,6 +102,10 @@ export const NEW_JOB_ARCHETYPES: readonly NewJobArchetype[] = [
   "internal_project",
 ] as const;
 
+export function isNewJobArchetype(value: string): value is NewJobArchetype {
+  return (NEW_JOB_ARCHETYPES as readonly string[]).includes(value);
+}
+
 /** Context string appended to AI `projectDetails` (no backend schema change). */
 export function getNewJobArchetypeAiContextHint(archetype: NewJobArchetype): string {
   switch (archetype) {

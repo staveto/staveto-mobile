@@ -11,6 +11,9 @@ import { BusinessTeamManagementScreen } from "../screens/business/BusinessTeamMa
 import { BusinessMemberRoleScreen } from "../screens/business/BusinessMemberRoleScreen";
 import { BusinessChatListScreen } from "../screens/business/BusinessChatListScreen";
 import { BusinessChatRoomScreen } from "../screens/business/BusinessChatRoomScreen";
+import { BusinessCustomersListScreen } from "../screens/business/BusinessCustomersListScreen";
+import { BusinessCustomerDetailScreen } from "../screens/business/BusinessCustomerDetailScreen";
+import { BusinessCustomerEditScreen } from "../screens/business/BusinessCustomerEditScreen";
 import { useActiveOrg } from "../hooks/useActiveOrg";
 import { colors } from "../theme";
 
@@ -36,6 +39,30 @@ function BusinessChatRoomWithGate() {
   return (
     <BusinessGate>
       <BusinessChatRoomScreen />
+    </BusinessGate>
+  );
+}
+
+function BusinessCustomersListWithGate() {
+  return (
+    <BusinessGate>
+      <BusinessCustomersListScreen />
+    </BusinessGate>
+  );
+}
+
+function BusinessCustomersDetailWithGate() {
+  return (
+    <BusinessGate>
+      <BusinessCustomerDetailScreen />
+    </BusinessGate>
+  );
+}
+
+function BusinessCustomersEditWithGate() {
+  return (
+    <BusinessGate>
+      <BusinessCustomerEditScreen />
     </BusinessGate>
   );
 }
@@ -110,6 +137,21 @@ export function BusinessStack() {
         name="BusinessChatRoom"
         component={BusinessChatRoomWithGate}
         options={{ title: "Chat" }}
+      />
+      <Stack.Screen
+        name="BusinessCustomersList"
+        component={BusinessCustomersListWithGate}
+        options={{ title: "Customers" }}
+      />
+      <Stack.Screen
+        name="BusinessCustomerDetail"
+        component={BusinessCustomersDetailWithGate}
+        options={{ title: "Customer" }}
+      />
+      <Stack.Screen
+        name="BusinessCustomerEdit"
+        component={BusinessCustomersEditWithGate}
+        options={{ title: "Customer" }}
       />
     </Stack.Navigator>
   );

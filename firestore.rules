@@ -40,6 +40,56 @@ service cloud.firestore {
           || get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['owner', 'admin', 'manager', 'worker']
         );
     }
+    function isOrgManager(orgId, u) {
+      return isOrgMember(orgId, u)
+        && (
+          isOrgOwner(orgId, u)
+          || get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['admin', 'manager']
+        );
+    }
+    function customerIsActive() {
+      return !('archivedAt' in resource.data) || resource.data.archivedAt == null;
+    }
+    function customerOptionalStringField(field) {
+      return !(field in request.resource.data)
+        || request.resource.data[field] is string
+        || request.resource.data[field] == null;
+    }
+    function customerCreateKeysValid() {
+      return request.resource.data.displayName is string
+        && request.resource.data.displayName.size() > 0
+        && request.resource.data.createdBy == uid()
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && customerOptionalStringField('companyName')
+        && customerOptionalStringField('email')
+        && customerOptionalStringField('phone')
+        && customerOptionalStringField('address')
+        && customerOptionalStringField('notes')
+        && (!('archivedAt' in request.resource.data) || request.resource.data.archivedAt == null);
+    }
+    function customerUpdateKeysValid() {
+      return request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName',
+          'companyName',
+          'email',
+          'phone',
+          'address',
+          'notes',
+          'updatedAt',
+          'archivedAt'
+        ])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() > 0
+        && customerOptionalStringField('companyName')
+        && customerOptionalStringField('email')
+        && customerOptionalStringField('phone')
+        && customerOptionalStringField('address')
+        && customerOptionalStringField('notes');
+    }
 
     function projectOwner(projectId) {
       return signedIn()
@@ -232,6 +282,20 @@ service cloud.firestore {
           || (resource.data.userId == uid() && resource.data.status == 'active')
         );
         allow update, delete: if signedIn() && isOrgAdmin(orgId, uid());
+      }
+
+      // B2B Customers (org CRM — client CRUD for owner/admin/manager)
+      match /customers/{customerId} {
+        allow read: if signedIn()
+          && isOrgMemberActive(orgId)
+          && (isOrgManager(orgId, uid()) || customerIsActive());
+        allow create: if signedIn()
+          && isOrgManager(orgId, uid())
+          && customerCreateKeysValid();
+        allow update: if signedIn()
+          && isOrgManager(orgId, uid())
+          && customerUpdateKeysValid();
+        allow delete: if false;
       }
 
       // B2B Team chat (MVP)

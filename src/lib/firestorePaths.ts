@@ -90,12 +90,14 @@ export const paths = {
   absences: () => `absences`,
   absence: (id: string) => `absences/${id}`,
   // ─────────────────────────────────────────────────────────────────────────
-  // Staveto Business (B2B) — organizations & memberships. READ-ONLY use-sites
-  // only in Phase 1; writes happen via Cloud Functions in later phases.
+  // Staveto Business (B2B) — organizations, memberships, customers (rules-gated client CRUD).
   organization: (orgId: string) => `organizations/${orgId}`,
   organizationMembers: (orgId: string) => `organizations/${orgId}/members`,
   organizationMember: (orgId: string, userId: string) =>
     `organizations/${orgId}/members/${userId}`,
+  organizationCustomers: (orgId: string) => `organizations/${orgId}/customers`,
+  organizationCustomer: (orgId: string, customerId: string) =>
+    `organizations/${orgId}/customers/${customerId}`,
   invites: () => `invites`,
   invite: (inviteId: string) => `invites/${inviteId}`,
 };

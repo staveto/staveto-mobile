@@ -1,0 +1,35 @@
+# Local git worktrees (not part of this app release)
+mobile-contacts-pr-a/
+mobile-newjob-contact/
+mobile-fix-pdf-preview/
+mobile-billing-fix/
+mobile-price-fix/
+mobile-customers-pr-a/
+mobile-fix-admin-drawer/
+mobile-pr-plan-choice/
+mobile-pr-stripe/
+mobile-pr-team-chat-clean/
+mobile-pr14-clean/
+mobile-base-check/
+
+# Expo / build artefacts
+.expo/
+.expo-tmp-bundle-check/
+node_modules/
+dist/
+build/
+coverage/
+
+# Backups and local exports
+staveto-*/
+../staveto-*/
+*.bundle
+*.patch
+*.log
+
+# Secrets (never upload)
+.env
+.env.*
+auth-export.json
+credentials/
+serviceAccount*.json

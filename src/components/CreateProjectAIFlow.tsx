@@ -59,6 +59,13 @@ import {
   getNewJobArchetypeAiContextHint,
   resolveJobWorkflowKindFromArchetype,
 } from "../lib/projectEnums";
+import type { BusinessContact } from "../services/businessContacts";
+import {
+  appendContactToProjectDetails,
+  formatContactSummaryLine,
+  patchPrimaryContactToProject,
+  logNewJobContactDebug,
+} from "../lib/newJobContact";
 
 let DocumentPicker: typeof import("expo-document-picker") | null = null;
 let ImagePicker: typeof import("expo-image-picker") | null = null;
@@ -90,6 +97,11 @@ type Props = {
   serviceMaintenanceScope?: ServiceMaintenanceScope | null;
   /** Unified flow: archetype from first step (prompt + UI labels only in Phase 1). */
   jobArchetype?: NewJobArchetype | null;
+  /** Business contact selected in unified flow (null = continue without contact). */
+  selectedContact?: BusinessContact | null;
+  showContactSummary?: boolean;
+  hasActiveBusinessOrgId?: boolean;
+  onRequestChangeContact?: () => void;
 };
 
 function logNewJobFlowDebug(payload: Record<string, unknown>) {
@@ -390,9 +402,26 @@ export function CreateProjectAIFlow({
   jobWorkflowKind,
   serviceMaintenanceScope,
   jobArchetype,
+  selectedContact = null,
+  showContactSummary = false,
+  hasActiveBusinessOrgId = false,
+  onRequestChangeContact,
 }: Props) {
   const { t } = useI18n();
   const isUnified = flowVariant === "unified";
+
+  useEffect(() => {
+    if (!showContactSummary || !jobArchetype) return;
+    logNewJobContactDebug({
+      archetype: jobArchetype,
+      hasActiveBusinessOrgId,
+      hasSelectedContact: !!selectedContact,
+      selectedContactType: selectedContact?.contactType ?? null,
+      hasEmail: !!selectedContact?.email?.trim(),
+      hasPhone: !!selectedContact?.phone?.trim(),
+      hasAddress: !!selectedContact?.address?.trim(),
+    });
+  }, [showContactSummary, hasActiveBusinessOrgId, jobArchetype, selectedContact]);
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const narrowActions = width < 380;
@@ -699,7 +728,7 @@ export function CreateProjectAIFlow({
         setUploadingDocs(false);
       }
 
-      const projectDetails = isUnified
+      const baseDetails = isUnified
         ? buildUnifiedOptionalDetails(unifiedExtra, jobArchetype)
         : mergeAiProjectDetails(
             engineType,
@@ -713,6 +742,7 @@ export function CreateProjectAIFlow({
             jobWorkflowKind,
             serviceMaintenanceScope
           );
+      const projectDetails = appendContactToProjectDetails(baseDetails, selectedContact);
 
       const result = await generateProjectStructureWithAI(trimmed, {
         ...aiOptionsBase,
@@ -795,7 +825,7 @@ export function CreateProjectAIFlow({
         }
         setUploadingDocs(false);
       }
-      const projectDetails = isUnified
+      const baseDetailsAgain = isUnified
         ? buildUnifiedOptionalDetails(unifiedExtra, jobArchetype)
         : mergeAiProjectDetails(
             engineType,
@@ -809,6 +839,7 @@ export function CreateProjectAIFlow({
             jobWorkflowKind,
             serviceMaintenanceScope
           );
+      const projectDetails = appendContactToProjectDetails(baseDetailsAgain, selectedContact);
 
       const result = await generateProjectStructureWithAI(trimmedAgain, {
         ...aiOptionsBase,
@@ -968,6 +999,21 @@ export function CreateProjectAIFlow({
           if (__DEV__) console.warn("[CreateProjectAIFlow] workflow patch failed", patchErr);
         }
       }
+      if (selectedContact) {
+        try {
+          await patchPrimaryContactToProject(projectId, selectedContact);
+        } catch (patchErr) {
+          if (__DEV__) console.warn("[CreateProjectAIFlow] primaryContact patch failed", patchErr);
+        }
+      }
+
+      logNewJobFlowDebug({
+        selectedArchetype: jobArchetype ?? null,
+        startMethod: "ai",
+        generatedPhaseCount: draftPlan.phases.length,
+        generatedTaskCount: draftPlan.phases.reduce((sum, p) => sum + p.tasks.length, 0),
+        createMode: "ai_create_confirmed",
+      });
 
       logNewJobFlowDebug({
         selectedArchetype: jobArchetype ?? null,
@@ -1016,6 +1062,25 @@ export function CreateProjectAIFlow({
             <>
               {jobArchetype ? (
                 <Text style={styles.flowTitle}>{archetypeCopy.flowTitle}</Text>
+              ) : null}
+              {showContactSummary ? (
+                <View style={styles.contactBriefCard}>
+                  <Text style={styles.contactBriefLabel}>
+                    {t("createProject.newJob.contact.summaryTitle")}
+                  </Text>
+                  <Text style={styles.contactBriefValue}>
+                    {selectedContact
+                      ? formatContactSummaryLine(selectedContact)
+                      : t("createProject.newJob.contact.noneSelected")}
+                  </Text>
+                  {onRequestChangeContact ? (
+                    <TouchableOpacity onPress={onRequestChangeContact} activeOpacity={0.85}>
+                      <Text style={styles.contactBriefChange}>
+                        {t("createProject.newJob.contact.changeContact")}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
               ) : null}
               <Text style={styles.title}>{archetypeCopy.aiScreenTitle}</Text>
               <Text style={styles.subtitle}>{archetypeCopy.aiScreenSubtitle}</Text>
@@ -1559,41 +1624,39 @@ export function CreateProjectAIFlow({
         <View
           style={[
             styles.previewFooter,
-            { paddingBottom: Math.max(insets.bottom, spacing.xs) },
+            { paddingBottom: Math.max(insets.bottom, spacing.sm) },
           ]}
         >
-          <View style={[styles.previewActionsSecondary, narrowActions && styles.secondaryActionsColumn]}>
-            <TouchableOpacity
-              style={[styles.btn, styles.btnSecondary, styles.btnCompact, narrowActions && styles.btnFullWidth]}
-              onPress={handleChangeDescription}
-            >
-              <Text style={styles.btnSecondaryTextCompact} numberOfLines={1}>
-                {t("createProject.aiDraft.backToPrompt")}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.btn, styles.btnSecondary, styles.btnCompact, narrowActions && styles.btnFullWidth]}
-              onPress={handleGenerateAgain}
-              disabled={refiningKey !== null}
-            >
-              <Text style={styles.btnSecondaryTextCompact} numberOfLines={1}>
-                {t("createProject.aiDraft.regenerateWholeDraft")}
-              </Text>
-            </TouchableOpacity>
-          </View>
           <TouchableOpacity
-            style={[styles.btn, styles.btnPrimary, styles.createBtnCompact]}
+            style={[styles.btn, styles.btnPrimary, styles.previewPrimaryBtn]}
             onPress={handleCreate}
             disabled={submitting || refiningKey !== null}
           >
             {submitting ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Text style={styles.btnPrimaryTextCompact}>
+              <Text style={styles.btnPrimaryText}>
                 {isUnified ? archetypeCopy.aiConfirmCta : t("createProject.aiDraft.confirmProject")}
               </Text>
             )}
           </TouchableOpacity>
+          <View style={styles.previewLinkRow}>
+            <TouchableOpacity
+              onPress={handleChangeDescription}
+              disabled={refiningKey !== null}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.previewLinkText}>{t("createProject.aiDraft.backToPrompt")}</Text>
+            </TouchableOpacity>
+            <Text style={styles.previewLinkSep}>·</Text>
+            <TouchableOpacity
+              onPress={handleGenerateAgain}
+              disabled={refiningKey !== null}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.previewLinkText}>{t("createProject.aiDraft.regenerateWholeDraft")}</Text>
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity style={styles.cancelInlineBtn} onPress={onCancel} hitSlop={{ top: 8, bottom: 8, left: 16, right: 16 }}>
             <Text style={styles.cancelText}>{t("projects.cancel")}</Text>
           </TouchableOpacity>
@@ -1785,6 +1848,31 @@ const styles = StyleSheet.create({
   },
   briefScroll: {
     flex: 1,
+  },
+  contactBriefCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  contactBriefLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textMuted,
+  },
+  contactBriefValue: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.text,
+    marginTop: 4,
+  },
+  contactBriefChange: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.primary,
+    marginTop: spacing.xs,
   },
   optionalToggle: {
     flexDirection: "row",
@@ -2148,9 +2236,30 @@ const styles = StyleSheet.create({
   },
   previewFooter: {
     borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: spacing.sm,
+    borderTopColor: colors.formPanelBorder,
+    paddingTop: spacing.md,
+    gap: spacing.sm,
+    backgroundColor: colors.card,
+  },
+  previewPrimaryBtn: {
+    width: "100%",
+    minHeight: 48,
+  },
+  previewLinkRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "center",
     gap: spacing.xs,
+  },
+  previewLinkText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.primary,
+  },
+  previewLinkSep: {
+    fontSize: 14,
+    color: colors.textMuted,
   },
   previewActionsSecondary: {
     flexDirection: "row",

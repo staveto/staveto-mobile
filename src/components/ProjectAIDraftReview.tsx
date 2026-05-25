@@ -66,7 +66,7 @@ export function ProjectAIDraftReview({
     () => draft.phases.reduce((sum, p) => sum + p.tasks.length, 0),
     [draft.phases]
   );
-  const collapsePhasesByDefault = phaseCount > 3;
+  const collapsePhasesByDefault = phaseCount > 1;
 
   const defaultExpanded = useMemo(() => {
     const m: Record<string, boolean> = {};
@@ -87,55 +87,42 @@ export function ProjectAIDraftReview({
 
   return (
     <ScrollView style={styles.scroll} contentContainerStyle={styles.scrollContent} keyboardShouldPersistTaps="handled">
-      <View style={styles.structureSummaryCard}>
-        <Ionicons name="layers-outline" size={20} color={colors.primary} />
-        <Text style={styles.structureSummaryText}>
+      <View style={styles.topInfoCard}>
+        <Text style={styles.topInfoTitle}>
           {t("createProject.aiDraft.structureSummary", {
             phaseCount: String(phaseCount),
             taskCount: String(taskCount),
           })}
         </Text>
-      </View>
-
-      <View style={styles.hintCard}>
-        <Ionicons name="finger-print-outline" size={18} color={colors.primary} />
-        <Text style={styles.hintCardText} numberOfLines={2}>
-          {t("createProject.aiDraft.tapPhaseTaskHint")}
-        </Text>
+        <Text style={styles.topInfoHint}>{t("createProject.aiDraft.tapPhaseTaskHint")}</Text>
       </View>
 
       <View style={styles.headerCard}>
-        <View style={styles.headerFieldFlexLarge}>
-          <Text style={styles.fieldLabel}>
-            {projectNameLabel ?? t("createProject.aiDraft.projectNameLabel")}
-          </Text>
-          <TextInput
-            style={styles.titleInput}
-            value={editedTitle}
-            onChangeText={onChangeTitle}
-            placeholderTextColor={colors.inputPlaceholderOnLight}
-          />
-        </View>
-        <View style={styles.headerFieldFlexSmall}>
-          <Text style={styles.fieldLabel}>
-            {projectNumberLabel ?? t("createProject.aiDraft.projectNumberLabel")}
-          </Text>
-          <TextInput
-            style={styles.titleInput}
-            value={editedProjectNumber}
-            onChangeText={onChangeProjectNumber}
-            placeholder={t("createProject.aiDraft.projectNumberPlaceholder")}
-            placeholderTextColor={colors.inputPlaceholderOnLight}
-            autoCapitalize="characters"
-          />
-        </View>
+        <Text style={styles.fieldLabel}>
+          {projectNameLabel ?? t("createProject.aiDraft.projectNameLabel")}
+        </Text>
+        <TextInput
+          style={styles.titleInput}
+          value={editedTitle}
+          onChangeText={onChangeTitle}
+          placeholderTextColor={colors.inputPlaceholderOnLight}
+        />
+        <Text style={[styles.fieldLabel, styles.fieldLabelSpaced]}>
+          {projectNumberLabel ?? t("createProject.aiDraft.projectNumberLabel")}
+        </Text>
+        <TextInput
+          style={styles.titleInput}
+          value={editedProjectNumber}
+          onChangeText={onChangeProjectNumber}
+          placeholder={t("createProject.aiDraft.projectNumberPlaceholder")}
+          placeholderTextColor={colors.inputPlaceholderOnLight}
+          autoCapitalize="characters"
+        />
       </View>
 
       {summaryLine ? (
         <View style={styles.summaryCard}>
-          <Text style={styles.summaryBody} numberOfLines={3}>
-            {summaryLine}
-          </Text>
+          <Text style={styles.summaryBody}>{summaryLine}</Text>
         </View>
       ) : null}
 
@@ -144,41 +131,52 @@ export function ProjectAIDraftReview({
       {draft.phases.map((phase, pi) => {
         const open = isOpen(phase.id);
         const refiningPhase = refiningKey === phase.id;
+        const phaseTaskCount = phase.tasks.length;
+        const phaseTitle = phase.name?.trim() || t("createProject.aiDraft.unnamedPhase");
 
         return (
           <View key={phase.id} style={styles.phaseCard}>
             <View style={styles.phaseHeaderRow}>
               <Pressable
                 style={({ pressed }) => [styles.phaseTapArea, pressed && styles.phaseTapPressed]}
-                onPress={() => onRefinePhase(phase.id, pi)}
-                disabled={!!refiningKey}
+                onPress={() => toggle(phase.id)}
                 accessibilityRole="button"
-                accessibilityHint={t("createProject.aiDraft.refine")}
+                accessibilityLabel={phaseTitle}
               >
-                <Text style={styles.phaseTitle} numberOfLines={4}>
-                  {phase.name}
+                <Text style={styles.phaseTitle} numberOfLines={open ? 4 : 2}>
+                  {phaseTitle}
                 </Text>
-                {phase.description?.trim() ? (
-                  <Text style={styles.phaseDesc} numberOfLines={open ? 8 : 2}>
+                {!open ? (
+                  <Text style={styles.phaseMeta}>
+                    {t("createProject.aiDraft.phaseTaskCount", { count: String(phaseTaskCount) })}
+                  </Text>
+                ) : phase.description?.trim() ? (
+                  <Text style={styles.phaseDesc} numberOfLines={6}>
                     {phase.description.trim()}
                   </Text>
                 ) : null}
-                <View style={styles.phaseTapFooter}>
-                  <Text style={styles.phaseTapCue}>{t("createProject.aiDraft.refine")}</Text>
-                  {refiningPhase ? (
-                    <Text style={styles.dotBusy}> … </Text>
-                  ) : (
-                    <Ionicons name="sparkles-outline" size={18} color={colors.primary} />
-                  )}
-                </View>
               </Pressable>
               <TouchableOpacity
-                style={styles.phaseChevronBtn}
+                style={styles.phaseIconBtn}
+                onPress={() => onRefinePhase(phase.id, pi)}
+                disabled={!!refiningKey}
+                hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+                accessibilityRole="button"
+                accessibilityLabel={t("createProject.aiDraft.refine")}
+              >
+                {refiningPhase ? (
+                  <Text style={styles.dotBusy}>…</Text>
+                ) : (
+                  <Ionicons name="sparkles-outline" size={20} color={colors.primary} />
+                )}
+              </TouchableOpacity>
+              <TouchableOpacity
+                style={styles.phaseIconBtn}
                 onPress={() => toggle(phase.id)}
                 hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
                 accessibilityRole="button"
               >
-                <Ionicons name={open ? "chevron-up" : "chevron-down"} size={22} color={colors.text} />
+                <Ionicons name={open ? "chevron-up" : "chevron-down"} size={22} color={colors.textMuted} />
               </TouchableOpacity>
             </View>
 
@@ -200,30 +198,34 @@ export function ProjectAIDraftReview({
                 {phase.tasks.map((task, ti) => {
                   const rk = `${phase.id}:${task.id}`;
                   const busyTask = refiningKey === rk;
+                  const taskTitle = task.title?.trim() || t("createProject.aiDraft.unnamedTask");
                   return (
                     <View key={task.id} style={styles.taskRow}>
-                      <Pressable
-                        style={({ pressed }) => [styles.taskTapArea, pressed && styles.taskTapPressed]}
-                        onPress={() => onRefineTask(phase.id, task.id, pi, ti)}
-                        disabled={!!refiningKey}
-                        accessibilityRole="button"
-                      >
-                        <Text style={styles.taskTitle} numberOfLines={5}>
-                          {task.title}
+                      <View style={styles.taskTapArea}>
+                        <Text style={styles.taskTitle} numberOfLines={3}>
+                          {taskTitle}
                         </Text>
                         {task.description?.trim() ? (
-                          <Text style={styles.taskDesc} numberOfLines={5}>
+                          <Text style={styles.taskDesc} numberOfLines={3}>
                             {task.description.trim()}
                           </Text>
                         ) : null}
-                        <View style={styles.taskTapCueRow}>
-                          <Text style={styles.taskTapCue}>{t("createProject.aiDraft.refine")}</Text>
-                          {busyTask ? <Text style={styles.dotBusy}>…</Text> : null}
-                          {!busyTask ? (
-                            <Ionicons name="chevron-forward" size={16} color={colors.primary} />
-                          ) : null}
-                        </View>
-                      </Pressable>
+                        <TouchableOpacity
+                          style={styles.taskRefineBtn}
+                          onPress={() => onRefineTask(phase.id, task.id, pi, ti)}
+                          disabled={!!refiningKey}
+                          hitSlop={{ top: 6, bottom: 6, left: 6, right: 6 }}
+                        >
+                          {busyTask ? (
+                            <Text style={styles.dotBusy}>…</Text>
+                          ) : (
+                            <>
+                              <Ionicons name="sparkles-outline" size={16} color={colors.primary} />
+                              <Text style={styles.taskRefineLabel}>{t("createProject.aiDraft.refine")}</Text>
+                            </>
+                          )}
+                        </TouchableOpacity>
+                      </View>
                       <View style={styles.taskSideActions}>
                         <TouchableOpacity
                           style={styles.iconBtn}
@@ -260,56 +262,29 @@ export function ProjectAIDraftReview({
 const styles = StyleSheet.create({
   scroll: { flex: 1 },
   scrollContent: { paddingBottom: spacing.md },
-  structureSummaryCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.sm,
+  topInfoCard: {
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
-    marginBottom: spacing.sm,
+    marginBottom: spacing.md,
     borderRadius: radius,
     borderWidth: 1,
-    borderColor: colors.border,
-    backgroundColor: colors.card,
+    borderColor: colors.formPanelBorder,
+    backgroundColor: colors.formPanel,
   },
-  structureSummaryText: {
-    flex: 1,
-    fontSize: 14,
-    fontWeight: "600",
+  topInfoTitle: {
+    fontSize: 15,
+    fontWeight: "700",
     color: colors.text,
-    lineHeight: 20,
+    lineHeight: 21,
+    marginBottom: 4,
   },
-  hintCard: {
-    flexDirection: "row",
-    alignItems: "center",
-    gap: spacing.xs,
-    paddingVertical: spacing.xs,
-    paddingHorizontal: spacing.sm,
-    marginBottom: spacing.sm,
-    borderRadius: radius,
-    borderWidth: 1,
-    borderColor: "rgba(224, 103, 55, 0.35)",
-    backgroundColor: "rgba(224, 103, 55, 0.09)",
-  },
-  hintCardText: {
-    flex: 1,
-    fontSize: 12,
-    fontWeight: "600",
-    color: colors.text,
-    lineHeight: 16,
+  topInfoHint: {
+    fontSize: 13,
+    color: colors.textMuted,
+    lineHeight: 18,
   },
   headerCard: {
-    flexDirection: "row",
-    gap: spacing.sm,
-    marginBottom: spacing.sm,
-  },
-  headerFieldFlexLarge: {
-    flex: 2,
-    minWidth: 0,
-  },
-  headerFieldFlexSmall: {
-    flex: 1,
-    minWidth: 0,
+    marginBottom: spacing.md,
   },
   fieldLabel: {
     fontSize: 12,
@@ -317,23 +292,26 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginBottom: 4,
   },
+  fieldLabelSpaced: {
+    marginTop: spacing.sm,
+  },
   titleInput: {
-    backgroundColor: colors.card,
+    backgroundColor: "#fff",
     borderRadius: radius,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs + 2,
     fontSize: 14,
     color: colors.text,
   },
   summaryCard: {
-    backgroundColor: colors.card,
+    backgroundColor: "#fff",
     borderRadius: radius,
     paddingHorizontal: spacing.sm,
     paddingVertical: spacing.xs + 2,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     marginBottom: spacing.sm,
   },
   summaryBody: {
@@ -348,13 +326,11 @@ const styles = StyleSheet.create({
     marginBottom: spacing.xs,
   },
   phaseCard: {
-    backgroundColor: colors.card,
+    backgroundColor: "#fff",
     borderRadius: radius,
     borderWidth: 1,
-    borderColor: colors.border,
-    borderLeftWidth: 4,
-    borderLeftColor: colors.primary,
-    marginBottom: spacing.md,
+    borderColor: colors.formPanelBorder,
+    marginBottom: spacing.sm,
     overflow: "hidden",
   },
   phaseHeaderRow: {
@@ -371,21 +347,14 @@ const styles = StyleSheet.create({
   phaseTapPressed: {
     backgroundColor: "rgba(0,0,0,0.04)",
   },
-  phaseTapFooter: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "flex-end",
-    gap: 6,
-    marginTop: spacing.sm,
-  },
-  phaseTapCue: {
+  phaseMeta: {
     fontSize: 13,
-    fontWeight: "700",
-    color: colors.primary,
+    color: colors.textMuted,
+    marginTop: 2,
   },
-  phaseChevronBtn: {
-    justifyContent: "flex-start",
-    paddingRight: spacing.md,
+  phaseIconBtn: {
+    justifyContent: "center",
+    paddingHorizontal: spacing.xs,
     paddingTop: spacing.md,
   },
   phaseTitle: {
@@ -404,7 +373,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: spacing.md,
     paddingBottom: spacing.md,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    borderTopColor: colors.formPanelBorder,
   },
   phaseActions: {
     flexDirection: "row",
@@ -421,7 +390,7 @@ const styles = StyleSheet.create({
     paddingHorizontal: 10,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     backgroundColor: "#fff",
   },
   actionChipText: {
@@ -435,7 +404,7 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.sm,
     gap: spacing.sm,
     borderTopWidth: StyleSheet.hairlineWidth,
-    borderTopColor: colors.border,
+    borderTopColor: colors.formPanelBorder,
   },
   taskTapArea: {
     flex: 1,
@@ -444,19 +413,16 @@ const styles = StyleSheet.create({
     paddingRight: 4,
     borderRadius: radius - 2,
   },
-  taskTapPressed: {
-    backgroundColor: "rgba(0,0,0,0.045)",
-  },
-  taskTapCueRow: {
+  taskRefineBtn: {
     flexDirection: "row",
     alignItems: "center",
     gap: 4,
-    marginTop: 6,
-    justifyContent: "flex-start",
+    marginTop: spacing.xs,
+    alignSelf: "flex-start",
   },
-  taskTapCue: {
+  taskRefineLabel: {
     fontSize: 12,
-    fontWeight: "700",
+    fontWeight: "600",
     color: colors.primary,
   },
   taskSideActions: {

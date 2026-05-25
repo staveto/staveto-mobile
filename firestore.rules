@@ -40,6 +40,64 @@ service cloud.firestore {
           || get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['owner', 'admin', 'manager', 'worker']
         );
     }
+    function isOrgManager(orgId, u) {
+      return isOrgMember(orgId, u)
+        && (
+          isOrgOwner(orgId, u)
+          || get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['admin', 'manager']
+        );
+    }
+    function contactIsActive() {
+      return !('archivedAt' in resource.data) || resource.data.archivedAt == null;
+    }
+    function contactTypeValid(value) {
+      return value in ['customer', 'supplier', 'subcontractor', 'architect', 'authority', 'other'];
+    }
+    function contactOptionalStringField(field) {
+      return !(field in request.resource.data)
+        || request.resource.data[field] is string
+        || request.resource.data[field] == null;
+    }
+    function contactCreateKeysValid() {
+      return request.resource.data.displayName is string
+        && request.resource.data.displayName.size() > 0
+        && request.resource.data.contactType is string
+        && contactTypeValid(request.resource.data.contactType)
+        && request.resource.data.createdBy == uid()
+        && request.resource.data.createdAt is timestamp
+        && request.resource.data.updatedAt is timestamp
+        && contactOptionalStringField('companyName')
+        && contactOptionalStringField('email')
+        && contactOptionalStringField('phone')
+        && contactOptionalStringField('address')
+        && contactOptionalStringField('notes')
+        && (!('archivedAt' in request.resource.data) || request.resource.data.archivedAt == null);
+    }
+    function contactUpdateKeysValid() {
+      return request.resource.data.createdBy == resource.data.createdBy
+        && request.resource.data.createdAt == resource.data.createdAt
+        && request.resource.data.updatedAt is timestamp
+        && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'displayName',
+          'companyName',
+          'contactType',
+          'email',
+          'phone',
+          'address',
+          'notes',
+          'updatedAt',
+          'archivedAt'
+        ])
+        && request.resource.data.displayName is string
+        && request.resource.data.displayName.size() > 0
+        && request.resource.data.contactType is string
+        && contactTypeValid(request.resource.data.contactType)
+        && contactOptionalStringField('companyName')
+        && contactOptionalStringField('email')
+        && contactOptionalStringField('phone')
+        && contactOptionalStringField('address')
+        && contactOptionalStringField('notes');
+    }
 
     function projectOwner(projectId) {
       return signedIn()
@@ -232,6 +290,20 @@ service cloud.firestore {
           || (resource.data.userId == uid() && resource.data.status == 'active')
         );
         allow update, delete: if signedIn() && isOrgAdmin(orgId, uid());
+      }
+
+      // B2B Contacts (org CRM — client CRUD for owner/admin/manager)
+      match /contacts/{contactId} {
+        allow read: if signedIn()
+          && isOrgMemberActive(orgId)
+          && (isOrgManager(orgId, uid()) || contactIsActive());
+        allow create: if signedIn()
+          && isOrgManager(orgId, uid())
+          && contactCreateKeysValid();
+        allow update: if signedIn()
+          && isOrgManager(orgId, uid())
+          && contactUpdateKeysValid();
+        allow delete: if false;
       }
 
       // B2B Team chat (MVP)

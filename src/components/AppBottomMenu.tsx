@@ -64,11 +64,11 @@ export function AppBottomMenu({ activeTab }: Props) {
   }, []);
 
   const items: { key: AppBottomMenuTabKey; label: string }[] = [
-    { key: "Home", label: t("navigation.bottom.home") },
-    { key: "Projects", label: t("navigation.bottom.projects") },
-    { key: "Equipment", label: t("navigation.bottom.equipment") },
-    { key: "Notifications", label: t("navigation.bottom.notifications") },
-    { key: "Account", label: t("navigation.bottom.account") },
+    { key: "Home", label: t("tabs.home") },
+    { key: "Projects", label: t("tabs.projects") },
+    { key: "Equipment", label: t("tabs.equipment") },
+    { key: "Notifications", label: t("tabs.notifications") },
+    { key: "Account", label: t("tabs.account") },
   ];
 
   return (

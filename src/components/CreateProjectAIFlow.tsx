@@ -53,7 +53,19 @@ import type {
   WorkType,
   JobWorkflowKind,
   ServiceMaintenanceScope,
+  NewJobArchetype,
 } from "../lib/projectEnums";
+import {
+  getNewJobArchetypeAiContextHint,
+  resolveJobWorkflowKindFromArchetype,
+} from "../lib/projectEnums";
+import type { BusinessContact } from "../services/businessContacts";
+import {
+  appendContactToProjectDetails,
+  formatContactSummaryLine,
+  patchPrimaryContactToProject,
+  logNewJobContactDebug,
+} from "../lib/newJobContact";
 
 let DocumentPicker: typeof import("expo-document-picker") | null = null;
 let ImagePicker: typeof import("expo-image-picker") | null = null;
@@ -83,7 +95,33 @@ type Props = {
   initialBrief?: string;
   jobWorkflowKind?: JobWorkflowKind | null;
   serviceMaintenanceScope?: ServiceMaintenanceScope | null;
+  /** Unified flow: archetype from first step (prompt + UI labels only in Phase 1). */
+  jobArchetype?: NewJobArchetype | null;
+  /** Business contact selected in unified flow (null = continue without contact). */
+  selectedContact?: BusinessContact | null;
+  showContactSummary?: boolean;
+  hasActiveBusinessOrgId?: boolean;
+  onRequestChangeContact?: () => void;
 };
+
+function logNewJobFlowDebug(payload: Record<string, unknown>) {
+  if (__DEV__) console.log("[NewJobFlowDebug]", payload);
+}
+
+function tForArchetype(
+  t: (key: string, params?: Record<string, string>) => string,
+  archetype: NewJobArchetype | null | undefined,
+  suffix: string,
+  fallbackKey: string,
+  params?: Record<string, string>
+): string {
+  if (archetype) {
+    const key = `createProject.archetype.${archetype}.${suffix}`;
+    const translated = t(key, params);
+    if (translated !== key) return translated;
+  }
+  return t(fallbackKey, params);
+}
 
 function getCategoryLabel(category: string, t: (key: string) => string): string {
   const key = `createProject.ai.category.${category}`;
@@ -302,13 +340,21 @@ function buildTradeDetailsPayload(
 const TRADE_AI_STRUCTURE_HINT =
   "Task context: craftsman's trade job (Handwerksauftrag / service visit), not residential new-build shell construction. Prefer a compact checklist of on-site work steps, materials, safety, and handover — avoid generic multi-phase house construction unless the brief clearly describes that.";
 
-function buildUnifiedOptionalDetails(extra: string): string | undefined {
+function buildUnifiedOptionalDetails(
+  extra: string,
+  archetype?: NewJobArchetype | null
+): string | undefined {
+  const parts: string[] = [];
+  if (archetype) {
+    parts.push(getNewJobArchetypeAiContextHint(archetype));
+  } else {
+    parts.push(
+      "Infer internally whether work fits phased construction vs compact trade/service tasks. Do not ask the user to classify the project."
+    );
+  }
   const e = extra.trim();
-  if (!e) return undefined;
-  return [
-    e,
-    "Infer internally whether work fits phased construction vs compact trade/service tasks. Do not ask the user to classify the project.",
-  ].join(" | ");
+  if (e) parts.push(e);
+  return parts.length > 0 ? parts.join(" | ") : undefined;
 }
 
 function mergeAiProjectDetails(
@@ -355,9 +401,27 @@ export function CreateProjectAIFlow({
   initialBrief,
   jobWorkflowKind,
   serviceMaintenanceScope,
+  jobArchetype,
+  selectedContact = null,
+  showContactSummary = false,
+  hasActiveBusinessOrgId = false,
+  onRequestChangeContact,
 }: Props) {
   const { t } = useI18n();
   const isUnified = flowVariant === "unified";
+
+  useEffect(() => {
+    if (!showContactSummary || !jobArchetype) return;
+    logNewJobContactDebug({
+      archetype: jobArchetype,
+      hasActiveBusinessOrgId,
+      hasSelectedContact: !!selectedContact,
+      selectedContactType: selectedContact?.contactType ?? null,
+      hasEmail: !!selectedContact?.email?.trim(),
+      hasPhone: !!selectedContact?.phone?.trim(),
+      hasAddress: !!selectedContact?.address?.trim(),
+    });
+  }, [showContactSummary, hasActiveBusinessOrgId, jobArchetype, selectedContact]);
   const { width } = useWindowDimensions();
   const insets = useSafeAreaInsets();
   const narrowActions = width < 380;
@@ -416,15 +480,112 @@ export function CreateProjectAIFlow({
 
   const isTradeAi = !isUnified && engineType === "TRADE";
 
+  const unifiedJobWorkflowKind = useMemo(
+    () =>
+      isUnified && jobArchetype ? resolveJobWorkflowKindFromArchetype(jobArchetype) : undefined,
+    [isUnified, jobArchetype]
+  );
+
   const aiOptionsBase = useMemo(
     () => ({
       engineType: isUnified ? undefined : engineType,
       workType: isUnified ? undefined : workType,
-      jobWorkflowKind: isUnified ? undefined : jobWorkflowKind ?? undefined,
+      jobWorkflowKind: isUnified
+        ? unifiedJobWorkflowKind
+        : jobWorkflowKind ?? undefined,
       serviceMaintenanceScope: isUnified ? undefined : serviceMaintenanceScope ?? undefined,
     }),
-    [engineType, workType, jobWorkflowKind, serviceMaintenanceScope, isUnified]
+    [engineType, workType, jobWorkflowKind, serviceMaintenanceScope, isUnified, unifiedJobWorkflowKind]
   );
+
+  const archetypeCopy = useMemo(
+    () => ({
+      aiScreenTitle: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.screenTitle",
+        "createProject.unified.ai.screenTitle"
+      ),
+      aiScreenSubtitle: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.screenSubtitle",
+        "createProject.unified.ai.screenSubtitle"
+      ),
+      aiNameLabel: tForArchetype(t, jobArchetype, "ai.nameLabel", "createProject.unified.ai.nameLabel"),
+      aiDescriptionLabel: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.descriptionLabel",
+        "createProject.unified.ai.descriptionLabel"
+      ),
+      aiDescriptionHelper: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.descriptionHelper",
+        "createProject.unified.ai.descriptionHelper"
+      ),
+      aiGenerateCta: tForArchetype(t, jobArchetype, "ai.generateCta", "createProject.ai.withAi"),
+      aiConfirmCta: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.confirmCta",
+        "createProject.aiDraft.confirmProject"
+      ),
+      aiDraftNameLabel: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.nameLabel",
+        "createProject.aiDraft.projectNameLabel"
+      ),
+      aiBriefMissing: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.briefMissing",
+        "createProject.unified.ai.briefMissing"
+      ),
+      flowTitle: tForArchetype(t, jobArchetype, "flowTitle", "projects.modalTitle"),
+      aiNamePlaceholder: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.namePlaceholder",
+        "createProject.unified.ai.namePlaceholder"
+      ),
+      aiDescriptionPlaceholder: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.descriptionPlaceholder",
+        "createProject.unified.ai.descriptionPlaceholder"
+      ),
+      aiProjectNumberLabel: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.projectNumberLabel",
+        "createProject.aiDraft.projectNumberLabel"
+      ),
+      aiAttachTitle: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.attachTitle",
+        "createProject.unified.ai.attachTitle"
+      ),
+      aiAttachHint: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.attachHint",
+        "createProject.unified.ai.attachHint"
+      ),
+      aiAddScreenshot: tForArchetype(
+        t,
+        jobArchetype,
+        "ai.addScreenshot",
+        "createProject.ai.addPhoto"
+      ),
+    }),
+    [jobArchetype, t]
+  );
+
+  const showCustomerScreenshotBtn = isUnified && jobArchetype === "customer_job";
 
   const pickPhoto = async () => {
     if (!ImagePicker) {
@@ -531,7 +692,7 @@ export function CreateProjectAIFlow({
       : brief.trim();
     if (!trimmed) {
       setLastAiDiagnostic(null);
-      setError(isUnified ? t("createProject.unified.ai.briefMissing") : t("createProject.ai.briefRequired"));
+      setError(isUnified ? archetypeCopy.aiBriefMissing : t("createProject.ai.briefRequired"));
       return;
     }
     if (isUnified && !unifiedName.trim()) {
@@ -567,8 +728,8 @@ export function CreateProjectAIFlow({
         setUploadingDocs(false);
       }
 
-      const projectDetails = isUnified
-        ? buildUnifiedOptionalDetails(unifiedExtra)
+      const baseDetails = isUnified
+        ? buildUnifiedOptionalDetails(unifiedExtra, jobArchetype)
         : mergeAiProjectDetails(
             engineType,
             t,
@@ -581,6 +742,7 @@ export function CreateProjectAIFlow({
             jobWorkflowKind,
             serviceMaintenanceScope
           );
+      const projectDetails = appendContactToProjectDetails(baseDetails, selectedContact);
 
       const result = await generateProjectStructureWithAI(trimmed, {
         ...aiOptionsBase,
@@ -594,6 +756,13 @@ export function CreateProjectAIFlow({
       setEditedPlanTitle(
         resolveFinalProjectTitle(isUnified ? unifiedName : brief, result.projectTitle ?? "")
       );
+      logNewJobFlowDebug({
+        selectedArchetype: jobArchetype ?? null,
+        startMethod: "ai",
+        generatedPhaseCount: draft.phases.length,
+        generatedTaskCount: draft.phases.reduce((sum, p) => sum + p.tasks.length, 0),
+        createMode: "ai_generated",
+      });
       setStep("review");
     } catch (e) {
       const msg = normalizeAiErrorMessage(e instanceof Error ? e.message : String(e));
@@ -656,8 +825,8 @@ export function CreateProjectAIFlow({
         }
         setUploadingDocs(false);
       }
-      const projectDetails = isUnified
-        ? buildUnifiedOptionalDetails(unifiedExtra)
+      const baseDetailsAgain = isUnified
+        ? buildUnifiedOptionalDetails(unifiedExtra, jobArchetype)
         : mergeAiProjectDetails(
             engineType,
             t,
@@ -670,6 +839,7 @@ export function CreateProjectAIFlow({
             jobWorkflowKind,
             serviceMaintenanceScope
           );
+      const projectDetails = appendContactToProjectDetails(baseDetailsAgain, selectedContact);
 
       const result = await generateProjectStructureWithAI(trimmedAgain, {
         ...aiOptionsBase,
@@ -704,7 +874,7 @@ export function CreateProjectAIFlow({
     }
     if (!briefForAiCalls.trim()) {
       throw new Error(
-        isUnified ? t("createProject.unified.ai.briefMissing") : t("createProject.ai.briefRequired")
+        isUnified ? archetypeCopy.aiBriefMissing : t("createProject.ai.briefRequired")
       );
     }
 
@@ -811,22 +981,39 @@ export function CreateProjectAIFlow({
       };
       const projectId = await createProjectFromAiPlan(params);
 
+      const patch: Record<string, unknown> = {};
       if (!isUnified) {
-        const patch: Record<string, unknown> = {};
         if (jobWorkflowKind === "STANDARD" || jobWorkflowKind === "SERVICE") {
           patch.jobWorkflowKind = jobWorkflowKind;
         }
         if (serviceMaintenanceScope === "PROPERTY" || serviceMaintenanceScope === "EQUIPMENT") {
           patch.serviceMaintenanceScope = serviceMaintenanceScope;
         }
-        if (Object.keys(patch).length > 0) {
-          try {
-            await patchProjectDocument(projectId, patch);
-          } catch (patchErr) {
-            if (__DEV__) console.warn("[CreateProjectAIFlow] workflow patch failed", patchErr);
-          }
+      } else if (unifiedJobWorkflowKind === "SERVICE") {
+        patch.jobWorkflowKind = "SERVICE";
+      }
+      if (Object.keys(patch).length > 0) {
+        try {
+          await patchProjectDocument(projectId, patch);
+        } catch (patchErr) {
+          if (__DEV__) console.warn("[CreateProjectAIFlow] workflow patch failed", patchErr);
         }
       }
+      if (selectedContact) {
+        try {
+          await patchPrimaryContactToProject(projectId, selectedContact);
+        } catch (patchErr) {
+          if (__DEV__) console.warn("[CreateProjectAIFlow] primaryContact patch failed", patchErr);
+        }
+      }
+
+      logNewJobFlowDebug({
+        selectedArchetype: jobArchetype ?? null,
+        startMethod: "ai",
+        generatedPhaseCount: draftPlan.phases.length,
+        generatedTaskCount: draftPlan.phases.reduce((sum, p) => sum + p.tasks.length, 0),
+        createMode: "ai_create_confirmed",
+      });
 
       onCreated(projectId);
     } catch (e) {
@@ -865,9 +1052,31 @@ export function CreateProjectAIFlow({
         <ScrollView style={styles.briefScroll} showsVerticalScrollIndicator={false} keyboardShouldPersistTaps="handled">
           {isUnified ? (
             <>
-              <Text style={styles.title}>{t("createProject.unified.ai.screenTitle")}</Text>
-              <Text style={styles.subtitle}>{t("createProject.unified.ai.screenSubtitle")}</Text>
-              <Text style={styles.mainLabel}>{t("createProject.unified.ai.nameLabel")}</Text>
+              {jobArchetype ? (
+                <Text style={styles.flowTitle}>{archetypeCopy.flowTitle}</Text>
+              ) : null}
+              {showContactSummary ? (
+                <View style={styles.contactBriefCard}>
+                  <Text style={styles.contactBriefLabel}>
+                    {t("createProject.newJob.contact.summaryTitle")}
+                  </Text>
+                  <Text style={styles.contactBriefValue}>
+                    {selectedContact
+                      ? formatContactSummaryLine(selectedContact)
+                      : t("createProject.newJob.contact.noneSelected")}
+                  </Text>
+                  {onRequestChangeContact ? (
+                    <TouchableOpacity onPress={onRequestChangeContact} activeOpacity={0.85}>
+                      <Text style={styles.contactBriefChange}>
+                        {t("createProject.newJob.contact.changeContact")}
+                      </Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
+              ) : null}
+              <Text style={styles.title}>{archetypeCopy.aiScreenTitle}</Text>
+              <Text style={styles.subtitle}>{archetypeCopy.aiScreenSubtitle}</Text>
+              <Text style={styles.mainLabel}>{archetypeCopy.aiNameLabel}</Text>
               <TextInput
                 style={styles.tradeFieldInput}
                 value={unifiedName}
@@ -875,13 +1084,13 @@ export function CreateProjectAIFlow({
                   setUnifiedName(text);
                   clearAiUiError();
                 }}
-                placeholder={t("createProject.unified.ai.namePlaceholder")}
+                placeholder={archetypeCopy.aiNamePlaceholder}
                 placeholderTextColor={colors.textMuted}
               />
               <Text style={[styles.mainLabel, { marginTop: spacing.md }]}>
-                {t("createProject.unified.ai.descriptionLabel")}
+                {archetypeCopy.aiDescriptionLabel}
               </Text>
-              <Text style={styles.mainHelper}>{t("createProject.unified.ai.descriptionHelper")}</Text>
+              <Text style={styles.mainHelper}>{archetypeCopy.aiDescriptionHelper}</Text>
               <TextInput
                 style={styles.textArea}
                 value={unifiedDescription}
@@ -889,14 +1098,14 @@ export function CreateProjectAIFlow({
                   setUnifiedDescription(text);
                   clearAiUiError();
                 }}
-                placeholder={t("createProject.unified.ai.descriptionPlaceholder")}
+                placeholder={archetypeCopy.aiDescriptionPlaceholder}
                 placeholderTextColor={colors.textMuted}
                 multiline
                 numberOfLines={5}
                 textAlignVertical="top"
               />
               <Text style={[styles.mainLabel, { marginTop: spacing.md }]}>
-                {t("createProject.aiDraft.projectNumberLabel")}
+                {archetypeCopy.aiProjectNumberLabel}
               </Text>
               <TextInput
                 style={styles.tradeFieldInput}
@@ -1061,21 +1270,30 @@ export function CreateProjectAIFlow({
             </>
           )}
           <View style={styles.attachSection}>
+            {/* TODO: Add dedicated screenshot capture/paste input in Phase 1.5 */}
             <Text style={styles.attachSectionTitle}>
               {isUnified
-                ? t("createProject.unified.ai.attachTitle")
+                ? archetypeCopy.aiAttachTitle
                 : isTradeAi
                   ? t("createProject.ai.attachTitleTrade")
                   : t("createProject.ai.attachTitle")}
             </Text>
             <Text style={styles.attachSectionHint}>
               {isUnified
-                ? t("createProject.unified.ai.attachHint")
+                ? archetypeCopy.aiAttachHint
                 : isTradeAi
                   ? t("createProject.ai.attachHintTrade")
                   : t("createProject.ai.attachHint")}
             </Text>
             <View style={styles.attachButtons}>
+              {showCustomerScreenshotBtn ? (
+                <TouchableOpacity style={styles.attachBtn} onPress={pickPhoto}>
+                  <View style={styles.attachIconWrap}>
+                    <Ionicons name="images-outline" size={28} color={colors.primary} />
+                  </View>
+                  <Text style={styles.attachBtnText}>{archetypeCopy.aiAddScreenshot}</Text>
+                </TouchableOpacity>
+              ) : null}
               <TouchableOpacity style={styles.attachBtn} onPress={pickPhoto}>
                 <View style={styles.attachIconWrap}>
                   <Ionicons name="camera-outline" size={28} color={colors.primary} />
@@ -1198,7 +1416,7 @@ export function CreateProjectAIFlow({
             <TouchableOpacity style={[styles.btn, styles.btnPrimary]} onPress={runGeneration}>
               <Ionicons name="sparkles" size={18} color="#fff" />
               <Text style={styles.btnPrimaryText}>
-                {error ? t("createProject.ai.tryAgain") : t("createProject.ai.withAi")}
+                {error ? t("createProject.ai.tryAgain") : archetypeCopy.aiGenerateCta}
               </Text>
             </TouchableOpacity>
             <View style={[styles.secondaryActions, narrowActions && styles.secondaryActionsColumn]}>
@@ -1325,6 +1543,8 @@ export function CreateProjectAIFlow({
           onChangeProjectNumber={(value) =>
             setDraftPlan((prev) => (prev ? { ...prev, projectNumber: value } : prev))
           }
+          projectNameLabel={isUnified ? archetypeCopy.aiDraftNameLabel : undefined}
+          projectNumberLabel={isUnified ? archetypeCopy.aiProjectNumberLabel : undefined}
           refiningKey={refiningKey}
           onRefinePhase={(phaseId, pi) => setRefineSheet({ kind: "phase", phaseId, pi })}
           onRefineTask={(phaseId, taskId, pi, ti) =>
@@ -1396,39 +1616,39 @@ export function CreateProjectAIFlow({
         <View
           style={[
             styles.previewFooter,
-            { paddingBottom: Math.max(insets.bottom, spacing.xs) },
+            { paddingBottom: Math.max(insets.bottom, spacing.sm) },
           ]}
         >
-          <View style={[styles.previewActionsSecondary, narrowActions && styles.secondaryActionsColumn]}>
-            <TouchableOpacity
-              style={[styles.btn, styles.btnSecondary, styles.btnCompact, narrowActions && styles.btnFullWidth]}
-              onPress={handleChangeDescription}
-            >
-              <Text style={styles.btnSecondaryTextCompact} numberOfLines={1}>
-                {t("createProject.aiDraft.backToPrompt")}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.btn, styles.btnSecondary, styles.btnCompact, narrowActions && styles.btnFullWidth]}
-              onPress={handleGenerateAgain}
-              disabled={refiningKey !== null}
-            >
-              <Text style={styles.btnSecondaryTextCompact} numberOfLines={1}>
-                {t("createProject.aiDraft.regenerateWholeDraft")}
-              </Text>
-            </TouchableOpacity>
-          </View>
           <TouchableOpacity
-            style={[styles.btn, styles.btnPrimary, styles.createBtnCompact]}
+            style={[styles.btn, styles.btnPrimary, styles.previewPrimaryBtn]}
             onPress={handleCreate}
             disabled={submitting || refiningKey !== null}
           >
             {submitting ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Text style={styles.btnPrimaryTextCompact}>{t("createProject.aiDraft.confirmProject")}</Text>
+              <Text style={styles.btnPrimaryText}>
+                {isUnified ? archetypeCopy.aiConfirmCta : t("createProject.aiDraft.confirmProject")}
+              </Text>
             )}
           </TouchableOpacity>
+          <View style={styles.previewLinkRow}>
+            <TouchableOpacity
+              onPress={handleChangeDescription}
+              disabled={refiningKey !== null}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.previewLinkText}>{t("createProject.aiDraft.backToPrompt")}</Text>
+            </TouchableOpacity>
+            <Text style={styles.previewLinkSep}>·</Text>
+            <TouchableOpacity
+              onPress={handleGenerateAgain}
+              disabled={refiningKey !== null}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.previewLinkText}>{t("createProject.aiDraft.regenerateWholeDraft")}</Text>
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity style={styles.cancelInlineBtn} onPress={onCancel} hitSlop={{ top: 8, bottom: 8, left: 16, right: 16 }}>
             <Text style={styles.cancelText}>{t("projects.cancel")}</Text>
           </TouchableOpacity>
@@ -1569,6 +1789,12 @@ const styles = StyleSheet.create({
     justifyContent: "center",
     padding: spacing.xl,
   },
+  flowTitle: {
+    fontSize: 24,
+    fontWeight: "800",
+    color: colors.text,
+    marginBottom: spacing.xs,
+  },
   title: {
     fontSize: 20,
     fontWeight: "700",
@@ -1614,6 +1840,31 @@ const styles = StyleSheet.create({
   },
   briefScroll: {
     flex: 1,
+  },
+  contactBriefCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  contactBriefLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textMuted,
+  },
+  contactBriefValue: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.text,
+    marginTop: 4,
+  },
+  contactBriefChange: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.primary,
+    marginTop: spacing.xs,
   },
   optionalToggle: {
     flexDirection: "row",
@@ -1977,9 +2228,30 @@ const styles = StyleSheet.create({
   },
   previewFooter: {
     borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: spacing.sm,
+    borderTopColor: colors.formPanelBorder,
+    paddingTop: spacing.md,
+    gap: spacing.sm,
+    backgroundColor: colors.card,
+  },
+  previewPrimaryBtn: {
+    width: "100%",
+    minHeight: 48,
+  },
+  previewLinkRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "center",
     gap: spacing.xs,
+  },
+  previewLinkText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.primary,
+  },
+  previewLinkSep: {
+    fontSize: 14,
+    color: colors.textMuted,
   },
   previewActionsSecondary: {
     flexDirection: "row",

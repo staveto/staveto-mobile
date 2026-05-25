@@ -11,6 +11,7 @@
  */
 
 import { getExtraEnv } from "./env";
+import { getAuth } from "../firebase";
 
 const TRUTHY_VALUES = new Set(["1", "true", "yes", "on"]);
 
@@ -37,6 +38,10 @@ export function isBusinessFeatureEnabled(): boolean {
  * Used by the admin screens (later phase) as a defense-in-depth check on top of
  * the server-side custom claim `admin: true`.
  *
+ * Production EAS: set `EXPO_PUBLIC_ADMIN_EMAILS` to the exact Firebase Auth email(s)
+ * (comma-separated). Values are baked into the app at build time via `app.config.js`
+ * `extra`; changing them requires a new production build.
+ *
  * Returned emails are trimmed and lowercased. Empty / missing env yields `[]`.
  */
 export function getAdminEmails(): string[] {
@@ -57,4 +62,32 @@ export function isAdminEmail(email: string | null | undefined): boolean {
   const list = getAdminEmails();
   if (list.length === 0) return false;
   return list.includes(email.trim().toLowerCase());
+}
+
+function hasFirebaseAdminClaim(claims: Record<string, unknown> | undefined): boolean {
+  return claims?.admin === true;
+}
+
+/** Firebase custom claim `admin: true` (platform admin, not org owner). */
+export async function readFirebaseAdminClaim(): Promise<boolean> {
+  const auth = getAuth();
+  const fbUser = auth?.currentUser;
+  if (!fbUser) return false;
+  try {
+    const token = await fbUser.getIdTokenResult();
+    return hasFirebaseAdminClaim(token.claims as Record<string, unknown>);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Drawer / client UI: show Admin when email is whitelisted OR Firebase custom claim admin=true.
+ * Does not use Business org role. Server-side checks remain authoritative.
+ */
+export async function resolveAdminMenuEnabled(
+  email: string | null | undefined
+): Promise<boolean> {
+  if (isAdminEmail(email)) return true;
+  return readFirebaseAdminClaim();
 }

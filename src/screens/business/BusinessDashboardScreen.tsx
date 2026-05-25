@@ -556,6 +556,13 @@ export function BusinessDashboardScreen() {
           openLabel={t("business.dashboard.modules.open")}
           onPress={() => nav.navigate("BusinessChatList")}
         />
+        <ActionCard
+          icon="people-circle-outline"
+          title={t("business.dashboard.modules.contacts")}
+          body={t("business.dashboard.actionContactsBody")}
+          openLabel={t("business.dashboard.modules.openContacts")}
+          onPress={() => nav.navigate("BusinessContactsList")}
+        />
       </View>
 
       <Modal

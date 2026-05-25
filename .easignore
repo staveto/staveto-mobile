@@ -20,6 +20,10 @@ dist/
 build/
 coverage/
 
+# Stale local native dirs (gitignored); EAS should prebuild from app.json
+android/
+ios/
+
 # Backups and local exports
 staveto-*/
 ../staveto-*/

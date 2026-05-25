@@ -18,7 +18,16 @@ import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useI18n } from "../i18n/I18nContext";
 import { useAuth } from "../context/AuthContext";
+import { useActiveOrg } from "../hooks/useActiveOrg";
 import { colors, radius, spacing } from "../theme";
+import { ContactPickerSheet } from "./ContactPickerSheet";
+import {
+  isCustomerFacingJobArchetype,
+  formatContactSummaryLine,
+  patchPrimaryContactToProject,
+  logNewJobContactDebug,
+} from "../lib/newJobContact";
+import type { BusinessContact } from "../services/businessContacts";
 import type { ProjectDoc } from "../services/projects";
 import {
   getActiveProductProjectType,
@@ -53,7 +62,7 @@ export type UnifiedProjectCreationSuccess = {
   internalProjectType: "BUILD" | "TRADE";
 };
 
-type Step = "archetype" | "choose" | "ai" | "manual";
+type Step = "archetype" | "contact" | "choose" | "ai" | "manual";
 
 type ClonePhase = "idle" | "pick" | "modal";
 
@@ -117,9 +126,13 @@ export function UnifiedProjectCreationFlow({
 }: Props) {
   const { t } = useI18n();
   const { user } = useAuth();
+  const { activeBusinessOrgId } = useActiveOrg();
   const insets = useSafeAreaInsets();
   const [step, setStep] = useState<Step>("archetype");
   const [jobArchetype, setJobArchetype] = useState<NewJobArchetype | null>(null);
+  const [selectedContact, setSelectedContact] = useState<BusinessContact | null>(null);
+  const [contactPickerOpen, setContactPickerOpen] = useState(false);
+  const [contactPickerMode, setContactPickerMode] = useState<"list" | "create">("list");
   const [lastStartMethod, setLastStartMethod] = useState<StartMethod | null>(null);
   const [clonePhase, setClonePhase] = useState<ClonePhase>("idle");
   const [manualName, setManualName] = useState("");
@@ -170,6 +183,8 @@ export function UnifiedProjectCreationFlow({
     setManualDescription("");
     setCloneSource(null);
     setLastStartMethod(null);
+    setSelectedContact(null);
+    setContactPickerOpen(false);
   }, []);
 
   const goChoose = useCallback(() => {
@@ -182,9 +197,31 @@ export function UnifiedProjectCreationFlow({
 
   const selectArchetype = useCallback((archetype: NewJobArchetype) => {
     setJobArchetype(archetype);
+    setSelectedContact(null);
     logNewJobFlowDebug({ selectedArchetype: archetype, startMethod: null, createMode: "archetype_pick" });
-    setStep("choose");
+    setStep(isCustomerFacingJobArchetype(archetype) ? "contact" : "choose");
   }, []);
+
+  const goContact = useCallback(() => {
+    if (jobArchetype && isCustomerFacingJobArchetype(jobArchetype)) {
+      setStep("contact");
+    } else {
+      goArchetype();
+    }
+  }, [goArchetype, jobArchetype]);
+
+  useEffect(() => {
+    if (step !== "contact" || !jobArchetype) return;
+    logNewJobContactDebug({
+      archetype: jobArchetype,
+      hasActiveBusinessOrgId: !!activeBusinessOrgId,
+      hasSelectedContact: !!selectedContact,
+      selectedContactType: selectedContact?.contactType ?? null,
+      hasEmail: !!selectedContact?.email?.trim(),
+      hasPhone: !!selectedContact?.phone?.trim(),
+      hasAddress: !!selectedContact?.address?.trim(),
+    });
+  }, [step, jobArchetype, activeBusinessOrgId, selectedContact]);
 
   const handleManualSubmit = useCallback(async () => {
     const name = manualName.trim();
@@ -199,6 +236,9 @@ export function UnifiedProjectCreationFlow({
         description: manualDescription.trim() || undefined,
         hints: internalHints,
       });
+      if (selectedContact) {
+        await patchPrimaryContactToProject(projectId, selectedContact);
+      }
       const internalProjectType = jobArchetype
         ? resolveInternalProjectTypeFromArchetype(jobArchetype)
         : resolveManualBlankInternalMetadata(internalHints, {
@@ -217,7 +257,7 @@ export function UnifiedProjectCreationFlow({
     } finally {
       setCreating(false);
     }
-  }, [internalHints, jobArchetype, manualDescription, manualName, onSuccess, t]);
+  }, [internalHints, jobArchetype, manualDescription, manualName, onSuccess, selectedContact, t]);
 
   const onCopyTap = useCallback(() => {
     if (!allowCopy) {
@@ -295,7 +335,7 @@ export function UnifiedProjectCreationFlow({
     </ScrollView>
   );
 
-  const renderChoose = () => (
+  const renderContact = () => (
     <ScrollView
       style={styles.scroll}
       contentContainerStyle={[styles.chooseScrollContent, { paddingBottom: insets.bottom + spacing.lg }]}
@@ -303,6 +343,82 @@ export function UnifiedProjectCreationFlow({
       showsVerticalScrollIndicator={false}
     >
       <TouchableOpacity style={styles.backLink} onPress={goArchetype} disabled={busy}>
+        <Ionicons name="chevron-back" size={20} color={colors.primary} />
+        <Text style={styles.backLinkText}>{t("createProject.unified.changeArchetype")}</Text>
+      </TouchableOpacity>
+      {jobArchetype ? (
+        <Text style={styles.flowTitle}>
+          {tArchetype(t, jobArchetype, "flowTitle", "projects.modalTitle")}
+        </Text>
+      ) : null}
+      <Text style={styles.screenTitle}>{t("createProject.newJob.contact.title")}</Text>
+      <Text style={styles.screenSubtitle}>{t("createProject.newJob.contact.subtitle")}</Text>
+      {selectedContact ? (
+        <View style={styles.contactSummaryCard}>
+          <Text style={styles.contactSummaryLabel}>{t("createProject.newJob.contact.summaryTitle")}</Text>
+          <Text style={styles.contactSummaryValue}>{formatContactSummaryLine(selectedContact)}</Text>
+        </View>
+      ) : null}
+      {activeBusinessOrgId ? (
+        <>
+          <OptionCard
+            icon="person-outline"
+            title={t("createProject.newJob.contact.selectContact")}
+            description=""
+            onPress={() => {
+              setContactPickerMode("list");
+              setContactPickerOpen(true);
+            }}
+            disabled={busy}
+          />
+          <OptionCard
+            icon="person-add-outline"
+            title={t("createProject.newJob.contact.createContact")}
+            description=""
+            onPress={() => {
+              setContactPickerMode("create");
+              setContactPickerOpen(true);
+            }}
+            disabled={busy}
+          />
+        </>
+      ) : null}
+      <TouchableOpacity
+        style={[styles.btnGhost, { marginTop: spacing.md }]}
+        onPress={() => {
+          setSelectedContact(null);
+          setStep("choose");
+        }}
+        disabled={busy}
+      >
+        <Text style={styles.btnGhostText}>{t("createProject.newJob.contact.continueWithout")}</Text>
+      </TouchableOpacity>
+      {selectedContact ? (
+        <TouchableOpacity
+          style={[styles.btnPrimary, { marginTop: spacing.sm }]}
+          onPress={() => setStep("choose")}
+          disabled={busy}
+        >
+          <Text style={styles.btnPrimaryText}>{t("common.continue")}</Text>
+        </TouchableOpacity>
+      ) : null}
+    </ScrollView>
+  );
+
+  const renderChoose = () => (
+    <ScrollView
+      style={styles.scroll}
+      contentContainerStyle={[styles.chooseScrollContent, { paddingBottom: insets.bottom + spacing.lg }]}
+      keyboardShouldPersistTaps="handled"
+      showsVerticalScrollIndicator={false}
+    >
+      <TouchableOpacity
+        style={styles.backLink}
+        onPress={
+          jobArchetype && isCustomerFacingJobArchetype(jobArchetype) ? goContact : goArchetype
+        }
+        disabled={busy}
+      >
         <Ionicons name="chevron-back" size={20} color={colors.primary} />
         <Text style={styles.backLinkText}>{t("createProject.unified.changeArchetype")}</Text>
       </TouchableOpacity>
@@ -324,6 +440,17 @@ export function UnifiedProjectCreationFlow({
             })}
           </Text>
         </View>
+      ) : null}
+      {jobArchetype && isCustomerFacingJobArchetype(jobArchetype) ? (
+        <TouchableOpacity style={styles.contactChip} onPress={goContact} disabled={busy}>
+          <Text style={styles.contactChipLabel}>{t("createProject.newJob.contact.summaryTitle")}</Text>
+          <Text style={styles.contactChipValue}>
+            {selectedContact
+              ? formatContactSummaryLine(selectedContact)
+              : t("createProject.newJob.contact.noneSelected")}
+          </Text>
+          <Text style={styles.contactChipAction}>{t("createProject.newJob.contact.changeContact")}</Text>
+        </TouchableOpacity>
       ) : null}
       <Text style={styles.screenSubtitle}>
         {tArchetype(t, jobArchetype, "choose.subtitle", "createProject.unified.subtitle")}
@@ -450,12 +577,20 @@ export function UnifiedProjectCreationFlow({
   return (
     <>
       {step === "archetype" ? renderArchetypePicker() : null}
+      {step === "contact" ? renderContact() : null}
       {step === "choose" ? renderChoose() : null}
       {step === "ai" && jobArchetype ? (
         <View style={styles.flex}>
           <CreateProjectAIFlow
             flowVariant="unified"
             jobArchetype={jobArchetype}
+            selectedContact={selectedContact}
+            showContactSummary={isCustomerFacingJobArchetype(jobArchetype)}
+            hasActiveBusinessOrgId={!!activeBusinessOrgId}
+            onRequestChangeContact={() => {
+              setContactPickerMode("list");
+              setContactPickerOpen(true);
+            }}
             onCreated={async (projectId) => {
               const internalProjectType = resolveInternalProjectTypeFromArchetype(jobArchetype);
               logNewJobFlowDebug({
@@ -471,6 +606,19 @@ export function UnifiedProjectCreationFlow({
         </View>
       ) : null}
       {step === "manual" ? renderManual() : null}
+
+      <ContactPickerSheet
+        visible={contactPickerOpen}
+        orgId={activeBusinessOrgId}
+        jobArchetype={jobArchetype}
+        initialMode={contactPickerMode}
+        onDismiss={() => setContactPickerOpen(false)}
+        onSelect={(contact) => {
+          setSelectedContact(contact);
+          setContactPickerOpen(false);
+          if (step === "contact") setStep("choose");
+        }}
+      />
 
       <ProjectTypeCustomizeSheet
         visible={customizeOpen}
@@ -639,6 +787,50 @@ const styles = StyleSheet.create({
     fontSize: 13,
     fontWeight: "600",
     color: colors.text,
+  },
+  contactSummaryCard: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  contactSummaryLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textMuted,
+    marginBottom: 4,
+  },
+  contactSummaryValue: {
+    fontSize: 16,
+    fontWeight: "600",
+    color: colors.text,
+  },
+  contactChip: {
+    backgroundColor: colors.card,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.border,
+    padding: spacing.md,
+    marginBottom: spacing.md,
+  },
+  contactChipLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: colors.textMuted,
+  },
+  contactChipValue: {
+    fontSize: 15,
+    fontWeight: "600",
+    color: colors.text,
+    marginTop: 4,
+  },
+  contactChipAction: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.primary,
+    marginTop: spacing.xs,
   },
   card: {
     flexDirection: "row",

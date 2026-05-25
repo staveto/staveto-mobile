@@ -72,6 +72,10 @@ export function useOrgAccess() {
     const canAccessBusinessChat =
       !!activeBusinessOrgId && isActiveMember && statusAllowsDashboard;
 
+    const canViewContacts = canViewBusinessDashboard;
+    const canManageContacts =
+      canViewContacts && (isOwner || isAdmin || isManager);
+
     let dashboardBlockReason = "dashboard_allowed";
     if (!activeBusinessOrgId) {
       dashboardBlockReason = "missing_active_business_org_id";
@@ -113,6 +117,8 @@ export function useOrgAccess() {
       canViewBusinessDashboard,
       canAccessBusiness,
       canAccessBusinessChat,
+      canViewContacts,
+      canManageContacts,
       dashboardBlockReason,
     };
   }, [activeBusinessOrgId, activeMembership, activeOrganization]);

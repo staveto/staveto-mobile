@@ -14,6 +14,7 @@ import {
 import { WebView } from "react-native-webview";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { File } from "expo-file-system";
 import {
   cacheDirectory,
   deleteAsync,
@@ -25,6 +26,9 @@ import { colors, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
 
 export type InAppViewerMode = "image" | "pdf" | "web";
+
+/** Bump when changing in-app preview strategy (Metro bundle sanity check). */
+const ATTACHMENT_PREVIEW_VIEWER_VERSION = "pdf-base64-v2";
 
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|heic|heif|gif|bmp)$/i;
 
@@ -138,6 +142,69 @@ function isGoogleDocsViewerUri(uri: string): boolean {
   return uri.includes("docs.google.com/viewer");
 }
 
+function isLocalPreviewUri(uri: string): boolean {
+  return uri.startsWith("file://") || uri.startsWith("content://");
+}
+
+type PdfEmbedStage = "direct" | "base64" | "gdocs" | "pdfjs";
+
+/** Keep base64 WebView payloads bounded (Hermes string limits). */
+const PDF_BASE64_MAX_BYTES = 12 * 1024 * 1024;
+
+function mozillaPdfJsViewerUrl(remoteUrl: string): string {
+  return `https://mozilla.github.io/pdf.js/web/viewer.html?file=${encodeURIComponent(remoteUrl)}`;
+}
+
+function uint8ArrayToBase64(bytes: Uint8Array): string {
+  const encode = globalThis.btoa;
+  if (!encode) return "";
+  let binary = "";
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    const slice = bytes.subarray(i, i + chunk);
+    for (let j = 0; j < slice.length; j++) {
+      binary += String.fromCharCode(slice[j]);
+    }
+  }
+  return encode(binary);
+}
+
+function buildPdfBase64Html(base64: string): string {
+  return `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0,maximum-scale=5,user-scalable=yes"/></head><body style="margin:0;height:100vh;overflow:hidden;background:#0f172a"><iframe src="data:application/pdf;base64,${base64}" type="application/pdf" width="100%" height="100%" style="border:0"></iframe></body></html>`;
+}
+
+function buildAndroidLocalPdfHtml(localUri: string): string {
+  const safe = localUri.replace(/"/g, "%22");
+  return `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0,maximum-scale=4,user-scalable=yes"/></head><body style="margin:0;height:100vh;overflow:hidden;background:#0f172a"><embed src="${safe}" type="application/pdf" width="100%" height="100%"/></body></html>`;
+}
+
+async function readCachedPdfArrayBuffer(localUri: string): Promise<ArrayBuffer | null> {
+  try {
+    const response = await fetch(localUri);
+    if (response.ok) return await response.arrayBuffer();
+  } catch {
+    /* file:// fetch can fail on some Android builds */
+  }
+  try {
+    return await new File(localUri).arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
+/** Android: render downloaded PDF inside WebView without Google/CDN (works on emulator offline). */
+async function buildPdfBase64HtmlFromCachedFile(localUri: string): Promise<string | null> {
+  try {
+    const ab = await readCachedPdfArrayBuffer(localUri);
+    if (!ab || ab.byteLength === 0 || ab.byteLength > PDF_BASE64_MAX_BYTES) return null;
+    const base64 = uint8ArrayToBase64(new Uint8Array(ab));
+    if (!base64) return null;
+    return buildPdfBase64Html(base64);
+  } catch {
+    return null;
+  }
+}
+
 export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, debugOpenSource }: Props) {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
@@ -151,10 +218,12 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
   const [webError, setWebError] = useState(false);
   /** Local file:// URI after cache download; for PDF fallback equals remote `url`. */
   const [pdfDisplayUri, setPdfDisplayUri] = useState<string | null>(null);
+  /** Android last resort: HTML embed of cached file:// PDF */
+  const [pdfHtmlSource, setPdfHtmlSource] = useState<string | null>(null);
   const [imageDisplayUri, setImageDisplayUri] = useState<string | null>(null);
   const pdfCachePathRef = useRef<string | null>(null);
   const imageCachePathRef = useRef<string | null>(null);
-  const pdfEmbedStageRef = useRef<"direct" | "gdocs">("direct");
+  const pdfEmbedStageRef = useRef<PdfEmbedStage>("direct");
   const loadSessionRef = useRef(0);
   const loadTimeoutRef = useRef<ReturnType<typeof setTimeout> | null>(null);
   const gdocsEscalateRef = useRef<ReturnType<typeof setTimeout> | null>(null);
@@ -209,12 +278,24 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
     setWebLoading(true);
     setWebError(false);
     setPdfDisplayUri(null);
+    setPdfHtmlSource(null);
     setImageDisplayUri(null);
   }, [clearPreviewTimers]);
 
   useEffect(() => {
     if (visible) resetState();
   }, [visible, url, resolvedMode, resetState]);
+
+  useEffect(() => {
+    if (!__DEV__ || !visible) return;
+    console.log("[AttachmentPreviewRuntime]", {
+      viewerVersion: ATTACHMENT_PREVIEW_VIEWER_VERSION,
+      platform: Platform.OS,
+      resolvedMode,
+      hasUrl: !!url,
+      openSource: debugOpenSource,
+    });
+  }, [visible, resolvedMode, url, debugOpenSource]);
 
   const purgeCachedPdf = useCallback(async () => {
     const p = pdfCachePathRef.current;
@@ -327,7 +408,7 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
       clearPreviewTimers();
       return;
     }
-    if (resolvedMode === "pdf" && !pdfDisplayUri) return;
+    if (resolvedMode === "pdf" && !pdfDisplayUri && !pdfHtmlSource) return;
 
     const session = ++loadSessionRef.current;
     debugPreview("loadStart", { loadStart: true });
@@ -346,7 +427,8 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
       url &&
       pdfEmbedStageRef.current === "direct" &&
       pdfDisplayUri &&
-      !isGoogleDocsViewerUri(pdfDisplayUri)
+      !isGoogleDocsViewerUri(pdfDisplayUri) &&
+      !pdfDisplayUri.includes("mozilla.github.io/pdf.js")
     ) {
       gdocsEscalateRef.current = setTimeout(() => {
         if (loadSessionRef.current !== session) return;
@@ -366,18 +448,9 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
       return;
     }
 
-    /**
-     * iOS: prefetch to cache (avoids system download UI). Android: direct storage URL first;
-     * escalate to Google Docs embed in WebView if load stalls (see timeout effect).
-     */
-    if (Platform.OS !== "ios") {
-      pdfEmbedStageRef.current = "direct";
-      setPdfDisplayUri(url);
-      debugPreview("pdfUriReady", { viewerMode: "direct-remote" });
-      return;
-    }
-
+    /** Prefetch PDF to cache (avoids Android system download UI and WebView stalls on remote URLs). */
     let cancelled = false;
+    pdfEmbedStageRef.current = "direct";
 
     const run = async () => {
       const prev = pdfCachePathRef.current;
@@ -413,12 +486,33 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
           return;
         }
         pdfCachePathRef.current = res.uri;
-        setPdfDisplayUri(res.uri);
-        debugPreview("pdfUriReady", { viewerMode: "ios-cached" });
+        if (Platform.OS === "android") {
+          const base64Html = await buildPdfBase64HtmlFromCachedFile(res.uri);
+          if (cancelled) return;
+          if (base64Html) {
+            pdfEmbedStageRef.current = "base64";
+            setPdfHtmlSource(base64Html);
+            setPdfDisplayUri("base64-html");
+            debugPreview("pdfUriReady", { viewerMode: "android-base64" });
+            return;
+          }
+          pdfEmbedStageRef.current = "gdocs";
+          setPdfDisplayUri(googleDocsEmbedUrl(url));
+          debugPreview("pdfUriReady", { viewerMode: "android-gdocs-after-cache" });
+        } else {
+          setPdfDisplayUri(res.uri);
+          debugPreview("pdfUriReady", { viewerMode: "cached-local" });
+        }
       } catch {
         if (!cancelled) {
-          setPdfDisplayUri(url);
-          debugPreview("pdfUriReady", { viewerMode: "ios-remote-fallback" });
+          if (Platform.OS === "android") {
+            pdfEmbedStageRef.current = "gdocs";
+            setPdfDisplayUri(googleDocsEmbedUrl(url));
+            debugPreview("pdfUriReady", { viewerMode: "android-gdocs-fallback" });
+          } else {
+            setPdfDisplayUri(url);
+            debugPreview("pdfUriReady", { viewerMode: "remote-fallback" });
+          }
         }
       }
     };
@@ -428,7 +522,7 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
     return () => {
       cancelled = true;
     };
-  }, [visible, url, resolvedMode]);
+  }, [visible, url, resolvedMode, debugPreview]);
 
   const handleClose = useCallback(() => {
     clearPreviewTimers();
@@ -446,27 +540,48 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
 
   const failWebLoad = useCallback(
     (reason: string) => {
-      if (
-        Platform.OS === "android" &&
-        resolvedMode === "pdf" &&
-        url &&
-        pdfEmbedStageRef.current === "direct" &&
-        pdfDisplayUri &&
-        !isGoogleDocsViewerUri(pdfDisplayUri)
-      ) {
-        debugPreview("loadError", { loadError: reason, retry: "gdocs" });
-        pdfEmbedStageRef.current = "gdocs";
-        setWebError(false);
-        setWebLoading(true);
-        setPdfDisplayUri(googleDocsEmbedUrl(url));
-        return;
+      if (Platform.OS === "android" && resolvedMode === "pdf" && url) {
+        if (pdfEmbedStageRef.current === "base64") {
+          debugPreview("loadError", { loadError: reason, retry: "gdocs" });
+          setPdfHtmlSource(null);
+          pdfEmbedStageRef.current = "gdocs";
+          setWebError(false);
+          setWebLoading(true);
+          setPdfDisplayUri(googleDocsEmbedUrl(url));
+          return;
+        }
+        if (pdfEmbedStageRef.current === "direct") {
+          debugPreview("loadError", { loadError: reason, retry: "gdocs" });
+          pdfEmbedStageRef.current = "gdocs";
+          setWebError(false);
+          setWebLoading(true);
+          setPdfDisplayUri(googleDocsEmbedUrl(url));
+          return;
+        }
+        if (pdfEmbedStageRef.current === "gdocs") {
+          debugPreview("loadError", { loadError: reason, retry: "pdfjs" });
+          pdfEmbedStageRef.current = "pdfjs";
+          setWebError(false);
+          setWebLoading(true);
+          setPdfDisplayUri(mozillaPdfJsViewerUrl(url));
+          return;
+        }
+        const cached = pdfCachePathRef.current;
+        if (cached && !pdfHtmlSource) {
+          debugPreview("loadError", { loadError: reason, retry: "local-html" });
+          setPdfHtmlSource(buildAndroidLocalPdfHtml(cached));
+          setPdfDisplayUri("local-html");
+          setWebError(false);
+          setWebLoading(true);
+          return;
+        }
       }
       clearPreviewTimers();
       setWebLoading(false);
       setWebError(true);
       debugPreview("loadError", { loadError: reason, loadEnd: false });
     },
-    [resolvedMode, url, pdfDisplayUri, clearPreviewTimers, debugPreview]
+    [resolvedMode, url, pdfHtmlSource, clearPreviewTimers, debugPreview]
   );
 
   const shouldAllowWebViewNavigation = useCallback(
@@ -486,24 +601,36 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
 
   const webSource = useMemo(() => {
     if (resolvedMode === "pdf") {
-      return pdfDisplayUri ? { uri: pdfDisplayUri } : undefined;
+      if (pdfHtmlSource) {
+        return {
+          html: pdfHtmlSource,
+          baseUrl: pdfCachePathRef.current ?? undefined,
+        };
+      }
+      return pdfDisplayUri && pdfDisplayUri !== "local-html" ? { uri: pdfDisplayUri } : undefined;
     }
     return url ? { uri: url } : undefined;
-  }, [resolvedMode, pdfDisplayUri, url]);
+  }, [resolvedMode, pdfDisplayUri, pdfHtmlSource, url]);
+
+  const pdfWebReady =
+    !!pdfHtmlSource ||
+    (!!pdfDisplayUri &&
+      pdfDisplayUri !== "local-html" &&
+      pdfDisplayUri !== "base64-html");
 
   const canShowWeb =
-    resolvedMode === "web" ? !!url : resolvedMode === "pdf" ? !!pdfDisplayUri : false;
+    resolvedMode === "web" ? !!url : resolvedMode === "pdf" ? pdfWebReady : false;
 
   const showWebLoader =
     !webError &&
     (resolvedMode === "web"
       ? !!url && webLoading
       : resolvedMode === "pdf"
-        ? !pdfDisplayUri || webLoading
+        ? (!pdfDisplayUri && !pdfHtmlSource) || webLoading
         : false);
 
   const loaderHint =
-    resolvedMode === "pdf" && !pdfDisplayUri
+    resolvedMode === "pdf" && !pdfDisplayUri && !pdfHtmlSource
       ? t("attachments.fetchingPdf")
       : t("attachments.inAppPreviewLoading");
 
@@ -619,7 +746,13 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
               </View>
             ) : canShowWeb ? (
               <WebView
-                key={resolvedMode === "pdf" ? pdfDisplayUri ?? url : url}
+                key={
+                  resolvedMode === "pdf"
+                    ? pdfHtmlSource
+                      ? "pdf-html"
+                      : (pdfDisplayUri ?? url)
+                    : url
+                }
                 source={webSource}
                 style={styles.web}
                 originWhitelist={["*"]}
@@ -637,8 +770,15 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
                   debugPreview("webViewLoadStart");
                 }}
                 onLoadEnd={finishWebLoad}
+                onNavigationStateChange={(navState) => {
+                  if (!navState.loading) finishWebLoad();
+                }}
                 onError={() => failWebLoad("webview-error")}
                 onHttpError={(e) => {
+                  if (resolvedMode === "pdf") {
+                    // Hosted PDF viewers often trigger subresource 4xx; ignore for in-app PDF.
+                    return;
+                  }
                   const status = e.nativeEvent.statusCode;
                   if (status >= 400) {
                     failWebLoad(`http-${status}`);
@@ -647,6 +787,8 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
                 {...(Platform.OS === "android"
                   ? {
                       overScrollMode: "never" as const,
+                      allowFileAccess: true,
+                      allowUniversalAccessFromFileURLs: true,
                     }
                   : {})}
               />

@@ -20,7 +20,7 @@ import {
 import firestore from "@react-native-firebase/firestore";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
-import { safeFirestoreDocData } from "../lib/safeFirestoreDocData";
+import { plainFirestoreDocData, safeFirestoreDocData } from "../lib/safeFirestoreDocData";
 import { getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { getCurrentPositionSafe, requestLocationPermission, type GpsPoint } from "../lib/location";
 import { cancelLegacyReminderIds, clearRunningTimerNotification, replaceRunningTimerNotification } from "./timerReminders";
@@ -30,6 +30,10 @@ import { postDebugIngest } from "../lib/debugIngest";
 
 /** Project time reads: avoid cache-first on poor network (stale empty snapshot before server sync). */
 const TIME_ENTRIES_READ_OPTS: SmartReadOptions = { preferCacheWhenPoor: false };
+
+function lteDevLog(...args: unknown[]): void {
+  if (__DEV__) console.log(...args);
+}
 
 /**
  * Always prefer server for time entry queries: persistent local cache can stay empty after
@@ -244,7 +248,7 @@ export type GetActiveTimerReadOpts = {
 function coerceTimerPauses(raw: unknown): TimerPause[] {
   if (!Array.isArray(raw)) return [];
   const out: TimerPause[] = [];
-  for (const item of raw) {
+  for (const item of raw.slice(0, 200)) {
     if (!item || typeof item !== "object") continue;
     const map = item as Record<string, unknown>;
     const startedAt = toIso(map.startedAt) ?? (typeof map.startedAt === "string" ? map.startedAt : "");
@@ -957,7 +961,7 @@ function parseTimeEntryDoc(d: { id: string; data: () => unknown }): TimeEntryDoc
     if (__DEV__) console.warn("[timeTracking][parseTimeEntryDoc] data() threw", { id: d.id, err: e });
     raw = undefined;
   }
-  const data = safeFirestoreDocData(raw, `parseTimeEntryDoc:${d.id}`);
+  const data = plainFirestoreDocData(raw, `parseTimeEntryDoc:${d.id}`);
   let startedAt = toIso(data.startedAt) ?? (typeof data.startedAt === "string" ? data.startedAt : "");
   let endedAt = toIso(data.endedAt) ?? (typeof data.endedAt === "string" ? data.endedAt : "");
   if (!startedAt && endedAt) {
@@ -1143,58 +1147,58 @@ export async function listTimeEntriesByProject(
   let snapWideSize = 0;
 
   try {
-    console.log("[LTE] projectId branch: start", { pid, fromYmd, toYmd });
-    console.log("[LTE] projectId branch: before query()");
+    lteDevLog("[LTE] projectId branch: start", { pid, fromYmd, toYmd });
+    lteDevLog("[LTE] projectId branch: before query()");
     const qProj = query(c, where("projectId", "==", pid), limit(MAX_TIME_ENTRIES_PER_PROJECT_READ));
-    console.log("[LTE] projectId branch: before getDocsSmart");
+    lteDevLog("[LTE] projectId branch: before getDocsSmart");
     const snapProj = await getDocsTimeEntriesQuerySnap(qProj);
-    console.log("[LTE] projectId branch: after getDocsSmart", {
+    lteDevLog("[LTE] projectId branch: after getDocsSmart", {
       snapNull: snapProj == null,
       hasDocsProp: snapProj != null && typeof (snapProj as { docs?: unknown }).docs !== "undefined",
     });
     let docsProj: typeof snapProj.docs;
     try {
       docsProj = snapProj.docs;
-      console.log("[LTE] projectId branch: read snap.docs ok", { len: docsProj?.length });
+      lteDevLog("[LTE] projectId branch: read snap.docs ok", { len: docsProj?.length });
     } catch (e) {
       console.warn("[LTE] projectId branch: read snapProj.docs threw", e);
       throw e;
     }
     try {
       snapProjSize = docsProj.length;
-      console.log("[LTE] projectId branch: snapProjSize", snapProjSize);
+      lteDevLog("[LTE] projectId branch: snapProjSize", snapProjSize);
     } catch (e) {
       console.warn("[LTE] projectId branch: snapProj.docs.length threw", e);
       throw e;
     }
 
-    console.log("[LTE BRANCH] before map projectId", docsProj.length);
+    lteDevLog("[LTE BRANCH] before map projectId", docsProj.length);
     let acceptedProj = 0;
     let idxP = 0;
     for (const d of docsProj) {
       idxP += 1;
-      console.log("[LTE DOC] projectId iter start", { idxP, len: docsProj.length });
+      lteDevLog("[LTE DOC] projectId iter start", { idxP, len: docsProj.length });
       let docId = "(unknown)";
       try {
         docId = d.id;
-        console.log("[LTE DOC] before data()", docId);
+        lteDevLog("[LTE DOC] before data()", docId);
       } catch (e) {
         console.warn("[LTE DOC] d.id threw", { idxP, err: e });
         continue;
       }
       let raw: unknown;
       try {
-        raw = d.data();
-        console.log("[LTE DOC] after data()", docId, ltePreviewRaw(raw));
+        raw = plainFirestoreDocData(d.data(), `lte-doc:${docId}`);
+        lteDevLog("[LTE DOC] after data()", docId, ltePreviewRaw(raw));
       } catch (err) {
         console.warn("[LTE DOC] data() failed", { id: docId, err });
         continue;
       }
       let parsed: TimeEntryDoc;
       try {
-        console.log("[LTE DOC] before parse", docId);
+        lteDevLog("[LTE DOC] before parse", docId);
         parsed = parseTimeEntryDoc({ id: docId, data: () => raw });
-        console.log("[LTE DOC] after parse", docId, {
+        lteDevLog("[LTE DOC] after parse", docId, {
           id: parsed.id,
           mode: parsed.mode,
           durationMinutes: parsed.durationMinutes,
@@ -1205,9 +1209,9 @@ export async function listTimeEntriesByProject(
         continue;
       }
       try {
-        console.log("[LTE DOC] before range check", docId);
+        lteDevLog("[LTE DOC] before range check", docId);
         const inRange = entryCalendarDayInRange(parsed, fromYmd, toYmd);
-        console.log("[LTE DOC] after range check", docId, inRange);
+        lteDevLog("[LTE DOC] after range check", docId, inRange);
         if (inRange) {
           merged.set(parsed.id, parsed);
           acceptedProj += 1;
@@ -1216,7 +1220,7 @@ export async function listTimeEntriesByProject(
         console.warn("[LTE DOC] range or merge failed", { id: docId, err });
       }
     }
-    console.log("[LTE BRANCH] after map projectId", { acceptedIntoMerge: acceptedProj, mergedSize: merged.size });
+    lteDevLog("[LTE BRANCH] after map projectId", { acceptedIntoMerge: acceptedProj, mergedSize: merged.size });
   } catch (err) {
     console.warn("[timeTracking] listTimeEntriesByProject(projectId):", err);
     // #region agent log
@@ -1236,55 +1240,55 @@ export async function listTimeEntriesByProject(
      * project's entries when the user has many timer rows elsewhere in the same window.
      */
     try {
-      console.log("[LTE] userId+projectId branch: start", { uid: uid.slice(0, 8) + "…", pid });
-      console.log("[LTE] userId+projectId branch: before query()");
+      lteDevLog("[LTE] userId+projectId branch: start", { uid: uid.slice(0, 8) + "…", pid });
+      lteDevLog("[LTE] userId+projectId branch: before query()");
       const qSelf = query(c, where("userId", "==", uid), where("projectId", "==", pid), limit(5000));
-      console.log("[LTE] userId+projectId branch: before getDocsSmart");
+      lteDevLog("[LTE] userId+projectId branch: before getDocsSmart");
       const snapSelf = await getDocsTimeEntriesQuerySnap(qSelf);
-      console.log("[LTE] userId+projectId branch: after getDocsSmart");
+      lteDevLog("[LTE] userId+projectId branch: after getDocsSmart");
       let docsSelf: typeof snapSelf.docs;
       try {
         docsSelf = snapSelf.docs;
-        console.log("[LTE] userId+projectId branch: read snap.docs ok", { len: docsSelf?.length });
+        lteDevLog("[LTE] userId+projectId branch: read snap.docs ok", { len: docsSelf?.length });
       } catch (e) {
         console.warn("[LTE] userId+projectId branch: read snapSelf.docs threw", e);
         throw e;
       }
       try {
         snapSelfSize = docsSelf.length;
-        console.log("[LTE] userId+projectId branch: snapSelfSize", snapSelfSize);
+        lteDevLog("[LTE] userId+projectId branch: snapSelfSize", snapSelfSize);
       } catch (e) {
         console.warn("[LTE] userId+projectId branch: .docs.length threw", e);
         throw e;
       }
 
-      console.log("[LTE BRANCH] before map userId+projectId", docsSelf.length);
+      lteDevLog("[LTE BRANCH] before map userId+projectId", docsSelf.length);
       let acceptedSelf = 0;
       let idxS = 0;
       for (const d of docsSelf) {
         idxS += 1;
-        console.log("[LTE DOC] userId+projectId iter start", { idxS, len: docsSelf.length });
+        lteDevLog("[LTE DOC] userId+projectId iter start", { idxS, len: docsSelf.length });
         let docId = "(unknown)";
         try {
           docId = d.id;
-          console.log("[LTE DOC] before data()", docId);
+          lteDevLog("[LTE DOC] before data()", docId);
         } catch (e) {
           console.warn("[LTE DOC] d.id threw (self)", { idxS, err: e });
           continue;
         }
         let raw: unknown;
         try {
-          raw = d.data();
-          console.log("[LTE DOC] after data()", docId, ltePreviewRaw(raw));
+          raw = plainFirestoreDocData(d.data(), `lte-doc:${docId}`);
+          lteDevLog("[LTE DOC] after data()", docId, ltePreviewRaw(raw));
         } catch (err) {
           console.warn("[LTE DOC] data() failed (self)", { id: docId, err });
           continue;
         }
         let parsed: TimeEntryDoc;
         try {
-          console.log("[LTE DOC] before parse (self)", docId);
+          lteDevLog("[LTE DOC] before parse (self)", docId);
           parsed = parseTimeEntryDoc({ id: docId, data: () => raw });
-          console.log("[LTE DOC] after parse (self)", docId, {
+          lteDevLog("[LTE DOC] after parse (self)", docId, {
             id: parsed.id,
             mode: parsed.mode,
             projectId: parsed.projectId,
@@ -1295,9 +1299,9 @@ export async function listTimeEntriesByProject(
           continue;
         }
         try {
-          console.log("[LTE DOC] before range check (self)", docId);
+          lteDevLog("[LTE DOC] before range check (self)", docId);
           const inRange = entryCalendarDayInRange(parsed, fromYmd, toYmd);
-          console.log("[LTE DOC] after range check (self)", docId, inRange);
+          lteDevLog("[LTE DOC] after range check (self)", docId, inRange);
           if (inRange) {
             merged.set(parsed.id, parsed);
             acceptedSelf += 1;
@@ -1306,7 +1310,7 @@ export async function listTimeEntriesByProject(
           console.warn("[LTE DOC] range or merge failed (self)", { id: docId, err });
         }
       }
-      console.log("[LTE BRANCH] after map userId+projectId", { acceptedIntoMerge: acceptedSelf, mergedSize: merged.size });
+      lteDevLog("[LTE BRANCH] after map userId+projectId", { acceptedIntoMerge: acceptedSelf, mergedSize: merged.size });
     } catch (err) {
       console.warn("[timeTracking] listTimeEntriesByProject(userId+projectId):", err);
       // #region agent log
@@ -1318,46 +1322,46 @@ export async function listTimeEntriesByProject(
       });
       // #endregion
       try {
-        console.log("[LTE] legacy userId+orderBy branch: start", { uid: uid.slice(0, 8) + "…", fromYmd, toYmd });
+        lteDevLog("[LTE] legacy userId+orderBy branch: start", { uid: uid.slice(0, 8) + "…", fromYmd, toYmd });
         const qLegacy = query(c, where("userId", "==", uid), orderBy("startedAt", "desc"), limit(6000));
-        console.log("[LTE] legacy range branch: before getDocsSmart");
+        lteDevLog("[LTE] legacy range branch: before getDocsSmart");
         const snapLegacy = await getDocsTimeEntriesQuerySnap(qLegacy);
-        console.log("[LTE] legacy range branch: after getDocsSmart");
+        lteDevLog("[LTE] legacy range branch: after getDocsSmart");
         let docsLeg: typeof snapLegacy.docs;
         try {
           docsLeg = snapLegacy.docs;
-          console.log("[LTE] legacy range branch: read snap.docs ok", { len: docsLeg?.length });
+          lteDevLog("[LTE] legacy range branch: read snap.docs ok", { len: docsLeg?.length });
         } catch (e) {
           console.warn("[LTE] legacy range branch: read snapLegacy.docs threw", e);
           throw e;
         }
-        console.log("[LTE BRANCH] before map legacy", docsLeg.length);
+        lteDevLog("[LTE BRANCH] before map legacy", docsLeg.length);
         let acceptedLeg = 0;
         let idxL = 0;
         for (const d of docsLeg) {
           idxL += 1;
-          console.log("[LTE DOC] legacy iter start", { idxL, len: docsLeg.length });
+          lteDevLog("[LTE DOC] legacy iter start", { idxL, len: docsLeg.length });
           let docId = "(unknown)";
           try {
             docId = d.id;
-            console.log("[LTE DOC] before data() (legacy)", docId);
+            lteDevLog("[LTE DOC] before data() (legacy)", docId);
           } catch (e) {
             console.warn("[LTE DOC] d.id threw (legacy)", { idxL, err: e });
             continue;
           }
           let raw: unknown;
           try {
-            raw = d.data();
-            console.log("[LTE DOC] after data() (legacy)", docId, ltePreviewRaw(raw));
+            raw = plainFirestoreDocData(d.data(), `lte-doc:${docId}`);
+            lteDevLog("[LTE DOC] after data() (legacy)", docId, ltePreviewRaw(raw));
           } catch (err) {
             console.warn("[LTE DOC] data() failed (legacy)", { id: docId, err });
             continue;
           }
           let parsed: TimeEntryDoc;
           try {
-            console.log("[LTE DOC] before parse (legacy)", docId);
+            lteDevLog("[LTE DOC] before parse (legacy)", docId);
             parsed = parseTimeEntryDoc({ id: docId, data: () => raw });
-            console.log("[LTE DOC] after parse (legacy)", docId, {
+            lteDevLog("[LTE DOC] after parse (legacy)", docId, {
               id: parsed.id,
               projectId: parsed.projectId,
               pidMatch: parsed.projectId === pid,
@@ -1367,11 +1371,11 @@ export async function listTimeEntriesByProject(
             continue;
           }
           try {
-            console.log("[LTE DOC] before projectId filter (legacy)", docId, { parsedPid: parsed.projectId, pid });
+            lteDevLog("[LTE DOC] before projectId filter (legacy)", docId, { parsedPid: parsed.projectId, pid });
             if (parsed.projectId !== pid) continue;
-            console.log("[LTE DOC] before range check (legacy)", docId);
+            lteDevLog("[LTE DOC] before range check (legacy)", docId);
             const inRange = entryCalendarDayInRange(parsed, fromYmd, toYmd);
-            console.log("[LTE DOC] after range check (legacy)", docId, inRange);
+            lteDevLog("[LTE DOC] after range check (legacy)", docId, inRange);
             if (inRange) {
               merged.set(parsed.id, parsed);
               acceptedLeg += 1;
@@ -1380,7 +1384,7 @@ export async function listTimeEntriesByProject(
             console.warn("[LTE DOC] filter/range/merge failed (legacy)", { id: docId, err });
           }
         }
-        console.log("[LTE BRANCH] after map legacy", { acceptedIntoMerge: acceptedLeg, mergedSize: merged.size });
+        lteDevLog("[LTE BRANCH] after map legacy", { acceptedIntoMerge: acceptedLeg, mergedSize: merged.size });
       } catch (err2) {
         console.warn("[timeTracking] listTimeEntriesByProject(userId legacy range):", err2);
       }
@@ -1400,7 +1404,7 @@ export async function listTimeEntriesByProject(
       for (const d of snapW.docs) {
         let raw: unknown;
         try {
-          raw = d.data();
+          raw = plainFirestoreDocData(d.data(), `lte-doc:${d.id}`);
         } catch {
           continue;
         }

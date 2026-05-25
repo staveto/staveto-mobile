@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useState } from "react";
+import React, { useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Linking,
@@ -68,6 +68,8 @@ function getErrorDetails(error: unknown): { code: string; message: string } {
   const message = error instanceof Error ? error.message : String(error);
   return { code, message };
 }
+
+type BillingBannerVariant = "pending" | "trialing" | "active";
 
 export function BusinessDashboardScreen() {
   const { activeOrganization, activeMembership } = useActiveOrg();
@@ -151,7 +153,17 @@ export function BusinessDashboardScreen() {
   const hasValidTrial = trialDaysLeft !== null && trialDaysLeft >= 0;
   const isPendingPayment = activeOrganization?.status === "pending_payment";
   const isTrialing = activeOrganization?.status === "trialing";
+  const isActiveOrg = activeOrganization?.status === "active";
   const isLegacyPending = isPendingPayment && !hasValidTrial;
+  const billingBannerVariant: BillingBannerVariant | null = isPendingPayment
+    ? "pending"
+    : isTrialing
+    ? "trialing"
+    : isActiveOrg
+    ? "active"
+    : null;
+  const canShowPaymentActions = isPendingPayment || isTrialing;
+  const canShowSubscriptionActions = isActiveOrg;
   const billingPeriodRaw =
     activeOrganization?.billingPeriod ??
     activeOrder?.billingPeriod ??
@@ -205,6 +217,43 @@ export function BusinessDashboardScreen() {
   const canChangePlan = activeMembership?.role === "owner" || activeMembership?.role === "admin";
   const orgId = activeOrganization?.id ?? null;
   const orderId = activeOrder?.id ?? activeOrganization?.activeBusinessOrderId ?? null;
+  const hasActiveBusinessOrderId = Boolean(orderId);
+  const businessEnabled = activeOrganization?.businessEnabled === true;
+
+  const billingDebugRef = useRef<string | null>(null);
+  useEffect(() => {
+    if (!__DEV__) return;
+    const actions: string[] = [];
+    if (billingBannerVariant === "pending" || billingBannerVariant === "trialing") {
+      actions.push("completePayment", "changePlan", "paymentDetails");
+    } else if (billingBannerVariant === "active") {
+      actions.push("changePlan", "paymentDetails");
+    }
+    const snapshot = JSON.stringify({
+      orgId: orgId ?? null,
+      status: activeOrganization?.status ?? null,
+      businessEnabled,
+      hasValidTrial,
+      isLegacyPending,
+      hasActiveBusinessOrderId,
+      canShowPaymentActions,
+      canShowSubscriptionActions,
+      actions,
+    });
+    if (billingDebugRef.current === snapshot) return;
+    billingDebugRef.current = snapshot;
+    console.log("[BusinessBillingDebug]", JSON.parse(snapshot));
+  }, [
+    activeOrganization?.status,
+    billingBannerVariant,
+    businessEnabled,
+    canShowPaymentActions,
+    canShowSubscriptionActions,
+    hasActiveBusinessOrderId,
+    hasValidTrial,
+    isLegacyPending,
+    orgId,
+  ]);
 
   const openInviteMemberModal = () => {
     if (freeSeats <= 0) {
@@ -345,6 +394,60 @@ export function BusinessDashboardScreen() {
     Alert.alert(t(titleKey), t("business.dashboard.actionComingSoon"));
   };
 
+  const renderBillingBanner = () => {
+    if (!billingBannerVariant) return null;
+    const showPayButton = billingBannerVariant === "pending" || billingBannerVariant === "trialing";
+    const titleKey = `business.dashboard.billing.${billingBannerVariant}.title`;
+    const bodyKey = `business.dashboard.billing.${billingBannerVariant}.body`;
+
+    return (
+      <View style={styles.banner}>
+        <Text style={styles.bannerTitle}>{t(titleKey)}</Text>
+        <Text style={styles.bannerBody}>{t(bodyKey)}</Text>
+        {billingBannerVariant === "active" ? (
+          <Text style={styles.billingHint}>{t("business.dashboard.billing.active.hint")}</Text>
+        ) : null}
+        <View style={styles.bannerActions}>
+          {showPayButton ? (
+            <TouchableOpacity style={styles.primaryButton} onPress={() => void onPayOnlinePress()}>
+              <Text style={styles.primaryButtonText}>
+                {t("business.dashboard.billing.completePayment")}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+          <TouchableOpacity
+            style={[
+              billingBannerVariant === "active" ? styles.primaryButton : styles.secondaryButton,
+              !canChangePlan && styles.buttonDisabled,
+            ]}
+            disabled={!canChangePlan}
+            onPress={openChangePlan}
+          >
+            <Text
+              style={
+                billingBannerVariant === "active" ? styles.primaryButtonText : styles.secondaryButtonText
+              }
+            >
+              {t("business.dashboard.billing.changePlan")}
+            </Text>
+          </TouchableOpacity>
+          <TouchableOpacity
+            style={billingBannerVariant === "active" ? styles.secondaryButton : styles.linkButton}
+            onPress={openBankTransferDetail}
+          >
+            <Text
+              style={
+                billingBannerVariant === "active" ? styles.secondaryButtonText : styles.linkButtonText
+              }
+            >
+              {t("business.dashboard.billing.paymentDetails")}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      </View>
+    );
+  };
+
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <View style={styles.card}>
@@ -369,27 +472,7 @@ export function BusinessDashboardScreen() {
         </View>
       </View>
 
-      {(isTrialing || isPendingPayment) && !isLegacyPending ? (
-        <View style={styles.banner}>
-          <Text style={styles.bannerTitle}>{t("business.dashboard.activation.title")}</Text>
-          <Text style={styles.bannerBody}>{t("business.dashboard.activation.body")}</Text>
-          <View style={styles.bannerActions}>
-            <TouchableOpacity style={styles.primaryButton} onPress={() => void onPayOnlinePress()}>
-              <Text style={styles.primaryButtonText}>{t("business.dashboard.activation.payOnline")}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.secondaryButton, !canChangePlan && styles.buttonDisabled]}
-              disabled={!canChangePlan}
-              onPress={openChangePlan}
-            >
-              <Text style={styles.secondaryButtonText}>{t("business.dashboard.activation.changePlan")}</Text>
-            </TouchableOpacity>
-            <TouchableOpacity style={styles.linkButton} onPress={openBankTransferDetail}>
-              <Text style={styles.linkButtonText}>{t("business.dashboard.activation.bankTransfer")}</Text>
-            </TouchableOpacity>
-          </View>
-        </View>
-      ) : null}
+      {renderBillingBanner()}
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>{t("business.dashboard.teamCardTitle")}</Text>
@@ -791,6 +874,12 @@ const styles = StyleSheet.create({
     fontSize: 14,
     lineHeight: 20,
     color: "#475569",
+  },
+  billingHint: {
+    marginTop: 8,
+    fontSize: 12,
+    lineHeight: 17,
+    color: "#64748B",
   },
   bannerActions: {
     marginTop: 10,

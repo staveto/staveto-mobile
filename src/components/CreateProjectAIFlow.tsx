@@ -1015,6 +1015,14 @@ export function CreateProjectAIFlow({
         createMode: "ai_create_confirmed",
       });
 
+      logNewJobFlowDebug({
+        selectedArchetype: jobArchetype ?? null,
+        startMethod: "ai",
+        generatedPhaseCount: draftPlan.phases.length,
+        generatedTaskCount: draftPlan.phases.reduce((sum, p) => sum + p.tasks.length, 0),
+        createMode: "ai_create_confirmed",
+      });
+
       onCreated(projectId);
     } catch (e) {
       const msg = normalizeAiErrorMessage(e instanceof Error ? e.message : String(e));

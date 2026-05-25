@@ -321,11 +321,10 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       canViewBusinessDashboard ||
       canAccessBusiness);
 
-  const showBusinessMenu = Boolean(
-    businessFeatureFlag ||
-      showBusinessCompanyLine ||
-      (!!activeBusinessOrgId && (canViewBusinessDashboard || canAccessBusiness))
-  );
+  // Signed-in users always see Business in the drawer (solo onboarding included).
+  // Workspace access stays behind BusinessGate; without an org, BusinessEntry
+  // opens BusinessLandingScreen (register company / choose plan).
+  const showBusinessMenu = !!user?.id;
 
   useEffect(() => {
     if (!__DEV__) return;

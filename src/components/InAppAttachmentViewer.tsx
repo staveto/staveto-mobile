@@ -14,6 +14,7 @@ import {
 import { WebView } from "react-native-webview";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { File } from "expo-file-system";
 import {
   cacheDirectory,
   deleteAsync,
@@ -25,6 +26,9 @@ import { colors, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
 
 export type InAppViewerMode = "image" | "pdf" | "web";
+
+/** Bump when changing in-app preview strategy (Metro bundle sanity check). */
+const ATTACHMENT_PREVIEW_VIEWER_VERSION = "pdf-base64-v2";
 
 const IMAGE_EXT_RE = /\.(jpe?g|png|webp|heic|heif|gif|bmp)$/i;
 
@@ -174,13 +178,25 @@ function buildAndroidLocalPdfHtml(localUri: string): string {
   return `<!DOCTYPE html><html><head><meta name="viewport" content="width=device-width, initial-scale=1.0,maximum-scale=4,user-scalable=yes"/></head><body style="margin:0;height:100vh;overflow:hidden;background:#0f172a"><embed src="${safe}" type="application/pdf" width="100%" height="100%"/></body></html>`;
 }
 
+async function readCachedPdfArrayBuffer(localUri: string): Promise<ArrayBuffer | null> {
+  try {
+    const response = await fetch(localUri);
+    if (response.ok) return await response.arrayBuffer();
+  } catch {
+    /* file:// fetch can fail on some Android builds */
+  }
+  try {
+    return await new File(localUri).arrayBuffer();
+  } catch {
+    return null;
+  }
+}
+
 /** Android: render downloaded PDF inside WebView without Google/CDN (works on emulator offline). */
 async function buildPdfBase64HtmlFromCachedFile(localUri: string): Promise<string | null> {
   try {
-    const response = await fetch(localUri);
-    if (!response.ok) return null;
-    const ab = await response.arrayBuffer();
-    if (ab.byteLength === 0 || ab.byteLength > PDF_BASE64_MAX_BYTES) return null;
+    const ab = await readCachedPdfArrayBuffer(localUri);
+    if (!ab || ab.byteLength === 0 || ab.byteLength > PDF_BASE64_MAX_BYTES) return null;
     const base64 = uint8ArrayToBase64(new Uint8Array(ab));
     if (!base64) return null;
     return buildPdfBase64Html(base64);
@@ -269,6 +285,17 @@ export function InAppAttachmentViewer({ visible, onClose, url, fileName, mode, d
   useEffect(() => {
     if (visible) resetState();
   }, [visible, url, resolvedMode, resetState]);
+
+  useEffect(() => {
+    if (!__DEV__ || !visible) return;
+    console.log("[AttachmentPreviewRuntime]", {
+      viewerVersion: ATTACHMENT_PREVIEW_VIEWER_VERSION,
+      platform: Platform.OS,
+      resolvedMode,
+      hasUrl: !!url,
+      openSource: debugOpenSource,
+    });
+  }, [visible, resolvedMode, url, debugOpenSource]);
 
   const purgeCachedPdf = useCallback(async () => {
     const p = pdfCachePathRef.current;

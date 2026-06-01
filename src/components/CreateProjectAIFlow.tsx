@@ -31,6 +31,8 @@ import {
   type AiDraftDocument,
 } from "../services/aiProjectService";
 import { patchProjectDocument } from "../services/projects";
+import { getAuth } from "../firebase";
+import { saveNewJobAttachmentsToProjectDocuments } from "../services/newJobProjectDocuments";
 import type { AiProjectPlan, AiTask } from "../lib/aiProjectSchema";
 import type { AiProjectDraft } from "../lib/aiProjectDraft";
 import {
@@ -1004,6 +1006,26 @@ export function CreateProjectAIFlow({
           await patchPrimaryContactToProject(projectId, selectedContact);
         } catch (patchErr) {
           if (__DEV__) console.warn("[CreateProjectAIFlow] primaryContact patch failed", patchErr);
+        }
+      }
+
+      const ownerUid = getAuth()?.currentUser?.uid;
+      const attachmentsWithLocal = documents.filter((d) => d.localUri?.trim());
+      if (ownerUid && attachmentsWithLocal.length > 0) {
+        try {
+          await saveNewJobAttachmentsToProjectDocuments(
+            ownerUid,
+            projectId,
+            attachmentsWithLocal.map((d) => ({
+              localUri: d.localUri,
+              fileName: d.fileName,
+              mimeType: d.mimeType,
+            }))
+          );
+        } catch (attachErr) {
+          if (__DEV__) {
+            console.warn("[CreateProjectAIFlow] save New Job attachments to documents failed", attachErr);
+          }
         }
       }
 

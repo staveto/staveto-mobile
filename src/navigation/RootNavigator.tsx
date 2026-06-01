@@ -40,6 +40,7 @@ import { ContractorsListScreen } from "../screens/contractors/ContractorsListScr
 import { ContractorFormScreen } from "../screens/contractors/ContractorFormScreen";
 import { ContractorDetailScreen } from "../screens/contractors/ContractorDetailScreen";
 import { ProjectSuppliersScreen } from "../screens/projects/ProjectSuppliersScreen";
+import { ProjectMaterialsScreen } from "../screens/project/ProjectMaterialsScreen";
 import { UpdatesScreen } from "../screens/projects/UpdatesScreen";
 import { ProjectTeamScreen } from "../screens/projects/ProjectTeamScreen";
 import { ProjectInvitesScreen } from "../screens/ProjectInvitesScreen";
@@ -494,6 +495,11 @@ export function RootNavigator() {
         name="ProjectSuppliers"
         component={ProjectSuppliersScreen}
         options={{ headerShown: true, title: t("nav.contractorsList") }}
+      />
+      <Stack.Screen
+        name="ProjectMaterials"
+        component={ProjectMaterialsScreen}
+        options={{ headerShown: true, title: t("projectMaterials.title") }}
       />
       <Stack.Screen
         name="ProjectTeam"

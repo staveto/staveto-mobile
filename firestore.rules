@@ -462,6 +462,26 @@ service cloud.firestore {
         allow write: if canWriteAsEditor(projectId);
       }
 
+      // materialSuggestions: planned/recommended material (read: project access; write: editors)
+      match /materialSuggestions/{suggestionId} {
+        allow read: if signedIn()
+          && (
+            isOwner(projectId) || isMember(projectId)
+            || (projectOrgId(projectId) != null && isOrgMember(projectOrgId(projectId), uid()))
+          );
+        allow write: if canWriteAsEditor(projectId);
+      }
+
+      // materials: actually used material (read: project access; write: editors)
+      match /materials/{materialId} {
+        allow read: if signedIn()
+          && (
+            isOwner(projectId) || isMember(projectId)
+            || (projectOrgId(projectId) != null && isOrgMember(projectOrgId(projectId), uid()))
+          );
+        allow write: if canWriteAsEditor(projectId);
+      }
+
       // attachments: used for tasks, expenses, and documents - allow read if user can read any of these
       match /attachments/{attachmentId} {
         allow read: if canReadTasks(projectId) || canReadExpenses(projectId) || canReadDocuments(projectId);

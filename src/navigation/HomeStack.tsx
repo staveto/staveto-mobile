@@ -6,6 +6,7 @@ import { AttendanceReportScreen } from "../screens/AttendanceReportScreen";
 import { ProjectTimeDetailScreen } from "../screens/ProjectTimeDetailScreen";
 import { TimeDailyProtocolScreen } from "../screens/TimeDailyProtocolScreen";
 import { ProjectOverviewScreen } from "../screens/ProjectOverviewScreen";
+import { ProjectMaterialsScreen } from "../screens/project/ProjectMaterialsScreen";
 import { ProjectMembersScreen } from "../screens/ProjectMembersScreen";
 import { TasksScreen } from "../screens/TasksScreen";
 import { QuickNotesInboxScreen } from "../screens/QuickNotesInboxScreen";
@@ -24,6 +25,11 @@ export function HomeStack() {
       <Stack.Screen name="ProjectTimeDetail" component={ProjectTimeDetailScreen} options={{ headerShown: false }} />
       <Stack.Screen name="TimeDailyProtocolScreen" component={TimeDailyProtocolScreen} options={{ headerShown: false }} />
       <Stack.Screen name="ProjectOverview" component={ProjectOverviewScreen} />
+      <Stack.Screen
+        name="ProjectMaterials"
+        component={ProjectMaterialsScreen}
+        options={{ headerShown: true, title: t("projectMaterials.title") }}
+      />
       <Stack.Screen name="ProjectMembers" component={ProjectMembersScreen} />
       <Stack.Screen name="Tasks" component={TasksScreen} options={{ headerShown: true, title: t("nav.tasks") }} />
       <Stack.Screen name="QuickNotesInbox" component={QuickNotesInboxScreen} options={{ headerShown: false }} />

@@ -259,3 +259,58 @@ export interface ProjectEvent {
     [key: string]: unknown;
   } | null;
 }
+
+/** Unit for material quantity (planned or used). */
+export type MaterialUnit = "pcs" | "m" | "m2" | "kg" | "l" | "pack" | "hour" | "other";
+
+export type MaterialSuggestionSource = "ai" | "manual";
+export type MaterialSuggestionStatus = "planned" | "accepted" | "rejected";
+export type MaterialConfidence = "low" | "medium" | "high";
+
+/** Planned / recommended material — not counted as actual cost until user confirms used material. */
+export interface MaterialSuggestion {
+  id: string;
+  projectId: string;
+  name: string;
+  description?: string;
+  suggestedQuantity?: number;
+  unit?: MaterialUnit;
+  estimatedUnitPrice?: number;
+  estimatedTotalPrice?: number;
+  currency: string;
+  source: MaterialSuggestionSource;
+  confidence?: MaterialConfidence;
+  sourceDocumentId?: string;
+  sourceNote?: string;
+  phaseId?: string;
+  taskId?: string;
+  status: MaterialSuggestionStatus;
+  createdAt: string;
+  updatedAt?: string;
+  createdBy: string;
+}
+
+/** Actually consumed material on site. */
+export interface ProjectMaterialUsed {
+  id: string;
+  projectId: string;
+  organizationId?: string;
+  name: string;
+  quantity: number;
+  unit: MaterialUnit;
+  unitPrice?: number;
+  totalPrice?: number;
+  currency: string;
+  supplierName?: string;
+  receiptUrl?: string;
+  phaseId?: string;
+  taskId?: string;
+  usedByUserId?: string;
+  usedByName?: string;
+  usedAt: string;
+  notes?: string;
+  createdAt: string;
+  updatedAt?: string;
+  createdBy: string;
+  sourceSuggestionId?: string;
+}

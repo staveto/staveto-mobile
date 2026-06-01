@@ -53,6 +53,11 @@ import * as expensesService from "../services/expenses";
 import * as attachmentsService from "../services/attachments";
 import * as constructionDiaryService from "../services/constructionDiary";
 import * as projectDocumentsService from "../services/projectDocuments";
+import {
+  calculateMaterialTotals,
+  listMaterialSuggestions,
+  listProjectMaterials,
+} from "../services/projectMaterials";
 import * as problemsService from "../services/problems";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectMembersService from "../services/projectMembers";
@@ -529,6 +534,10 @@ export function ProjectOverviewScreen() {
   
   // Project documents state
   const [projectDocuments, setProjectDocuments] = useState<ProjectDocumentDoc[]>([]);
+  const [materialPlannedCount, setMaterialPlannedCount] = useState(0);
+  const [materialUsedCount, setMaterialUsedCount] = useState(0);
+  const [materialTotalPrice, setMaterialTotalPrice] = useState(0);
+  const [materialCurrency, setMaterialCurrency] = useState("EUR");
   const [projectMembers, setProjectMembers] = useState<ProjectMemberDoc[]>([]);
   const [showAssigneeModal, setShowAssigneeModal] = useState(false);
   const [assigneeTask, setAssigneeTask] = useState<TaskDoc | null>(null);
@@ -1209,12 +1218,33 @@ export function ProjectOverviewScreen() {
     toLocalYmd,
   ]);
 
+  const loadMaterialSummary = useCallback(async () => {
+    if (!projectId) return;
+    try {
+      const [suggestions, usedMaterials] = await Promise.all([
+        listMaterialSuggestions(projectId),
+        listProjectMaterials(projectId),
+      ]);
+      setMaterialPlannedCount(suggestions.filter((s) => s.status === "planned").length);
+      setMaterialUsedCount(usedMaterials.length);
+      const totals = calculateMaterialTotals(usedMaterials);
+      setMaterialTotalPrice(totals.totalPrice);
+      setMaterialCurrency(totals.currency);
+    } catch (e) {
+      if (__DEV__) console.warn("[ProjectOverview] loadMaterialSummary failed", e);
+      setMaterialPlannedCount(0);
+      setMaterialUsedCount(0);
+      setMaterialTotalPrice(0);
+    }
+  }, [projectId]);
+
   const onRefresh = useCallback(() => {
     load(true);
     loadActivity();
     loadWeather(true);
     loadProjectTimeSummary();
-  }, [load, loadActivity, loadWeather, loadProjectTimeSummary]);
+    void loadMaterialSummary();
+  }, [load, loadActivity, loadWeather, loadProjectTimeSummary, loadMaterialSummary]);
 
   useEffect(() => {
     if (!projectId || access.loading) return;
@@ -1249,6 +1279,11 @@ export function ProjectOverviewScreen() {
     if (!projectId || access.loading) return;
     void loadProjectTimeSummary();
   }, [projectId, access.loading, loadProjectTimeSummary]);
+
+  useEffect(() => {
+    if (!projectId || access.loading) return;
+    void loadMaterialSummary();
+  }, [projectId, access.loading, loadMaterialSummary]);
 
   useEffect(() => {
     if (!canViewProjectTime) return;
@@ -5379,6 +5414,39 @@ export function ProjectOverviewScreen() {
               <Text style={styles.weatherErrorText}>{weatherError || t("projectOverview.weatherLoadFailed")}</Text>
             )}
           </View>
+        )}
+
+        {/* Project materials — planned vs used (separate from expenses) */}
+        {!access.loading && (access.isOwner || access.isMember) && (
+          <TouchableOpacity
+            style={styles.expensesSection}
+            activeOpacity={0.85}
+            onPress={() =>
+              (navigation as { navigate: (name: string, params?: object) => void }).navigate(
+                "ProjectMaterials",
+                { projectId, projectName }
+              )
+            }
+          >
+            <View style={styles.expensesHeader}>
+              <View style={styles.expensesHeaderLeft}>
+                <Ionicons name="chevron-forward" size={20} color={colors.text} style={{ marginRight: spacing.sm }} />
+                <Text style={styles.expensesHeaderText}>{t("projectOverview.materials")}</Text>
+              </View>
+              <Ionicons name="cube-outline" size={22} color={colors.primary} />
+            </View>
+            <View style={styles.expensesList}>
+              <Text style={styles.expenseNote}>
+                {t("projectOverview.materialsSuggested")}: {materialPlannedCount} ·{" "}
+                {t("projectOverview.materialsUsed")}: {materialUsedCount}
+              </Text>
+              <Text style={styles.expenseTitle}>
+                {t("projectOverview.materialsTotal", {
+                  amount: `${materialTotalPrice.toFixed(2)} ${materialCurrency}`,
+                })}
+              </Text>
+            </View>
+          </TouchableOpacity>
         )}
 
         {/* Project documents — build-like projects (BUILD / legacy MANAGEMENT) */}

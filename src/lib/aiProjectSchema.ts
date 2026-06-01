@@ -43,6 +43,23 @@ export interface AiProjectPlan {
   summary?: string;
   uiMode?: AiUiMode;
   phases: AiPhase[];
+  /**
+   * Optional AI material suggestions — populated when backend supports it.
+   * TODO(backend): generateProjectStructure prompt/schema + createProjectFromAiPlan sync;
+   * keep functions/src/aiProjectSchema.ts in sync with this file.
+   */
+  materialSuggestions?: AiMaterialSuggestion[];
+}
+
+export interface AiMaterialSuggestion {
+  name: string;
+  description?: string;
+  suggestedQuantity?: number;
+  unit?: string;
+  confidence?: "low" | "medium" | "high";
+  sourceNote?: string;
+  phaseName?: string;
+  taskTitle?: string;
 }
 
 const AI_CATEGORIES: AiCategory[] = [

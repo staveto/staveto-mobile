@@ -2675,7 +2675,7 @@ export function ProjectOverviewScreen() {
 
       const result = await ImagePicker.launchCameraAsync({
         mediaTypes: ["images"],
-        allowsEditing: true,
+        allowsEditing: false,
         quality: 0.8,
       });
 
@@ -2708,7 +2708,7 @@ export function ProjectOverviewScreen() {
 
       const result = await ImagePicker.launchImageLibraryAsync({
         mediaTypes: ["images"],
-        allowsEditing: true,
+        allowsEditing: false,
         quality: 0.8,
       });
 

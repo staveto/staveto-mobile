@@ -19,6 +19,7 @@ import {
   RESOLVED_TOTAL_MIN_CONFIDENCE,
 } from "./documentCandidateScoring";
 import { buildExpenseParseDebugSnapshot, parseExpenseDocument } from "./expenseDocumentParser";
+import { extractPossibleInvoiceLineItems } from "../utils/invoiceLineItems";
 
 const MAX_AMOUNT = 999_999.99;
 
@@ -223,6 +224,16 @@ export function buildParsedDocumentData(input: {
     rejected,
   });
 
+  const normalizedForItems = parseBundle.normalizedText || rawText;
+  const items = extractPossibleInvoiceLineItems(normalizedForItems);
+  if (__DEV__) {
+    console.log("[ExpenseLineItemsDebug]", {
+      rawTextLength: normalizedForItems.length,
+      lineItemCount: items.length,
+      hasItems: items.length > 0,
+    });
+  }
+
   return {
     documentType,
     source: parsedSource,
@@ -240,6 +251,7 @@ export function buildParsedDocumentData(input: {
     subtotal,
     taxAmount,
     total,
+    ...(items.length > 0 ? { items } : {}),
     candidates: {
       supplierName: dedupedSupplier.slice(0, 8),
       total: totalScored.slice(0, 8),

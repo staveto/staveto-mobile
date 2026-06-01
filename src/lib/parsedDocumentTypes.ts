@@ -29,9 +29,13 @@ export type ScoredCandidate<T> = {
 export type ParsedDocumentLineItem = {
   description?: string;
   quantity?: number;
+  /** Unit of measure when detected (ks, m, m², kg, …). */
+  unit?: string;
   unitPrice?: number;
   total?: number;
   taxRate?: number;
+  /** Heuristic confidence 0–1 for future review UI. */
+  confidence?: number;
 };
 
 export type ParsedDocumentData = {

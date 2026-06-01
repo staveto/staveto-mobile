@@ -43,6 +43,17 @@ function parsedDocumentToParsedInvoiceData(
     taxAmount: doc.taxAmount,
     currency: doc.currency,
     paymentMethod: doc.paymentMethod,
+    ...(doc.items && doc.items.length > 0
+      ? {
+          items: doc.items.map((row) => ({
+            name: row.description,
+            quantity: row.quantity,
+            unitPrice: row.unitPrice,
+            total: row.total,
+            taxRate: row.taxRate,
+          })),
+        }
+      : {}),
   };
 }
 

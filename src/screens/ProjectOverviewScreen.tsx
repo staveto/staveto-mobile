@@ -81,6 +81,7 @@ import {
   ExpenseLineItemsMaterialImportSheet,
   type ExpenseMaterialImportContext,
 } from "../components/ExpenseLineItemsMaterialImportSheet";
+import { DocumentScanOverlay } from "../components/DocumentScanOverlay";
 import type { ParsedDocumentLineItem } from "../lib/parsedDocumentTypes";
 import { calculateRouteDistanceKm } from "../services/mapsDistance";
 import type { Locale } from "../i18n/translations";
@@ -443,6 +444,7 @@ export function ProjectOverviewScreen() {
   const [expenseAttachmentsMap, setExpenseAttachmentsMap] = useState<Map<string, number>>(new Map());
   const [attachmentThumbnails, setAttachmentThumbnails] = useState<Map<string, string>>(new Map());
   const [ocrLoading, setOcrLoading] = useState(false);
+  const [ocrScannerImageUri, setOcrScannerImageUri] = useState<string | null>(null);
   const expenseModalScrollRef = useRef<ScrollView | null>(null);
   const ocrRequestIdRef = useRef(0);
   const [ocrPendingReview, setOcrPendingReview] = useState<{
@@ -2506,6 +2508,10 @@ export function ProjectOverviewScreen() {
       return;
     }
     try {
+      if (picked.kind === "image") {
+        setOcrScannerImageUri(picked.uri);
+      }
+      setOcrLoading(true);
       setUploadingExpenseAttachment(true);
       const attachment = await attachmentsService.uploadAttachment(projectId, {
         expenseId: null,
@@ -2531,7 +2537,6 @@ export function ProjectOverviewScreen() {
         isLinkedToExpense: false,
       });
       setUploadingExpenseAttachment(false);
-      setOcrLoading(true);
       const result = await processInvoiceAttachment({
         filePath: uploadedFilePath,
         mimeType: picked.mimeType,
@@ -2580,6 +2585,7 @@ export function ProjectOverviewScreen() {
     } finally {
       setUploadingExpenseAttachment(false);
       setOcrLoading(false);
+      setOcrScannerImageUri(null);
     }
   };
 
@@ -2838,6 +2844,7 @@ export function ProjectOverviewScreen() {
   const handleOcrCancel = () => {
     ocrRequestIdRef.current = 0;
     setOcrLoading(false);
+    setOcrScannerImageUri(null);
     const pending = ocrPendingReview;
     setOcrPendingReview(null);
     if (pending) {
@@ -6508,18 +6515,30 @@ export function ProjectOverviewScreen() {
         </View>
       </Modal>
 
-      {/* OCR loading */}
-      <Modal visible={ocrLoading} transparent animationType="fade">
-        <View style={styles.modalOverlay}>
-          <View style={styles.ocrModal}>
-            <ActivityIndicator size="large" color={colors.primary} />
-            <Text style={styles.ocrText}>{t("expense.ocrAnalyzing")}</Text>
-            <TouchableOpacity style={styles.ocrCancelButton} onPress={handleOcrCancel}>
-              <Text style={styles.ocrCancelText}>{t("expense.proceedManually")}</Text>
-            </TouchableOpacity>
+      {/* OCR loading — scanner overlay for cropped receipt photos, spinner for PDF / post-save OCR */}
+      {ocrScannerImageUri ? (
+        <DocumentScanOverlay
+          visible={ocrLoading}
+          imageUri={ocrScannerImageUri}
+          title={t("scanner.scanningDocument")}
+          subtitle={t("scanner.readingInvoiceData")}
+          cancelLabel={t("expense.proceedManually")}
+          onCancel={handleOcrCancel}
+          durationMs={1500}
+        />
+      ) : (
+        <Modal visible={ocrLoading} transparent animationType="fade">
+          <View style={styles.modalOverlay}>
+            <View style={styles.ocrModal}>
+              <ActivityIndicator size="large" color={colors.primary} />
+              <Text style={styles.ocrText}>{t("expense.ocrAnalyzing")}</Text>
+              <TouchableOpacity style={styles.ocrCancelButton} onPress={handleOcrCancel}>
+                <Text style={styles.ocrCancelText}>{t("expense.proceedManually")}</Text>
+              </TouchableOpacity>
+            </View>
           </View>
-        </View>
-      </Modal>
+        </Modal>
+      )}
 
       <ExpenseLineItemsMaterialImportSheet
         visible={materialImportSheet != null}

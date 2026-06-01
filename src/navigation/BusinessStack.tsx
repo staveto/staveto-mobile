@@ -14,6 +14,7 @@ import { BusinessChatRoomScreen } from "../screens/business/BusinessChatRoomScre
 import { BusinessContactsListScreen } from "../screens/business/BusinessContactsListScreen";
 import { BusinessContactDetailScreen } from "../screens/business/BusinessContactDetailScreen";
 import { BusinessContactEditScreen } from "../screens/business/BusinessContactEditScreen";
+import { BusinessMaterialsOverviewScreen } from "../screens/business/BusinessMaterialsOverviewScreen";
 import { useActiveOrg } from "../hooks/useActiveOrg";
 import { colors } from "../theme";
 
@@ -63,6 +64,14 @@ function BusinessContactEditWithGate() {
   return (
     <BusinessGate>
       <BusinessContactEditScreen />
+    </BusinessGate>
+  );
+}
+
+function BusinessMaterialsOverviewWithGate() {
+  return (
+    <BusinessGate>
+      <BusinessMaterialsOverviewScreen />
     </BusinessGate>
   );
 }
@@ -152,6 +161,11 @@ export function BusinessStack() {
         name="BusinessContactEdit"
         component={BusinessContactEditWithGate}
         options={{ title: "Upraviť kontakt" }}
+      />
+      <Stack.Screen
+        name="BusinessMaterialsOverview"
+        component={BusinessMaterialsOverviewWithGate}
+        options={{ title: "Materiál" }}
       />
     </Stack.Navigator>
   );

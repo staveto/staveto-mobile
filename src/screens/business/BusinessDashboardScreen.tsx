@@ -563,6 +563,13 @@ export function BusinessDashboardScreen() {
           openLabel={t("business.dashboard.modules.openContacts")}
           onPress={() => nav.navigate("BusinessContactsList")}
         />
+        <ActionCard
+          icon="cube-outline"
+          title={t("business.dashboard.modules.materials")}
+          body={t("business.dashboard.actionMaterialsBody")}
+          openLabel={t("business.dashboard.modules.open")}
+          onPress={() => nav.navigate("BusinessMaterialsOverview")}
+        />
       </View>
 
       <Modal

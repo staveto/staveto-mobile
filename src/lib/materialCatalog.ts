@@ -158,6 +158,40 @@ export function isInvalidMaterialLineName(name: string): boolean {
   return false;
 }
 
+/** Strip a leading unit token (e.g. bal.) when OCR leaves it in the description column. */
+export function stripUnitTokenFromDescription(description: string, rawUnit?: string): string {
+  if (!rawUnit?.trim()) return description.trim();
+  let desc = description.trim();
+  const escaped = rawUnit.trim().replace(/[.*+?^${}()|[\]\\]/g, "\\$&").replace("m²", "m2").replace("m³", "m3");
+  desc = desc.replace(new RegExp(`^${escaped}\\.?\\s*`, "i"), "").trim();
+  if (new RegExp(`^${escaped}\\.?$`, "i").test(desc)) return "";
+  return desc;
+}
+
+export function shouldRejectOcrMaterialImportItem(item: {
+  description?: string;
+  unit?: string;
+  originalUnit?: string;
+}): boolean {
+  const description = item.description?.trim() ?? "";
+  if (!description) return true;
+  if (isInvalidMaterialLineName(description)) return true;
+
+  const descNorm = normalizeMaterialLineNameForValidation(description);
+  const unitTokens = new Set<string>();
+  for (const token of [item.originalUnit, item.unit]) {
+    if (!token?.trim()) continue;
+    unitTokens.add(normalizeMaterialLineNameForValidation(token));
+    unitTokens.add(normalizeMaterialUnit(token).unit);
+  }
+  if (unitTokens.has(descNorm)) return true;
+
+  if (/\d[.,]\d*\s*,\s*,/.test(description)) return true;
+  if (/\s\d[.,]\s*,?\s*$/.test(description) && description.length < 24) return true;
+
+  return false;
+}
+
 export function isMaterialCategoryExcludedFromAutoSelect(
   category: MaterialCategory,
   confidence?: MaterialConfidence

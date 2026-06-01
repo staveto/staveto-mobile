@@ -21,6 +21,7 @@ import {
   normalizeMaterialUnit,
   numericConfidenceToMaterialConfidence,
   shouldPreselectImportedMaterialRow,
+  shouldRejectOcrMaterialImportItem,
 } from "../lib/materialCatalog";
 import {
   createMaterialSuggestion,
@@ -141,7 +142,8 @@ export function ExpenseLineItemsMaterialImportSheet({
   useEffect(() => {
     if (!visible || !context) return;
     setMode("recommended");
-    const initial = context.items.map((item, i) =>
+    const validItems = context.items.filter((item) => !shouldRejectOcrMaterialImportItem(item));
+    const initial = validItems.map((item, i) =>
       rowFromItem(
         item,
         i,
@@ -309,6 +311,9 @@ export function ExpenseLineItemsMaterialImportSheet({
           <Text style={styles.hint}>{t("expenseMaterialImport.selectItemsHint")}</Text>
 
           <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
+            {rows.length === 0 ? (
+              <Text style={styles.emptyHint}>{t("projectMaterials.noReliableItems")}</Text>
+            ) : null}
             {rows.map((row) => (
               <View key={row.key} style={styles.rowCard}>
                 <TouchableOpacity style={styles.rowHeader} onPress={() => toggleRow(row.key)} activeOpacity={0.85}>
@@ -453,6 +458,7 @@ const styles = StyleSheet.create({
   modeChipText: { fontSize: 13, fontWeight: "600", color: colors.text, textAlign: "center" },
   modeChipTextActive: { color: "#fff" },
   hint: { fontSize: 12, color: colors.textMuted, marginBottom: spacing.xs },
+  emptyHint: { fontSize: 14, color: colors.textMuted, textAlign: "center", paddingVertical: spacing.lg },
   list: { maxHeight: 340 },
   listContent: { paddingBottom: spacing.sm },
   rowCard: {

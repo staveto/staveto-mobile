@@ -4,6 +4,8 @@ import {
   inferMaterialCategoryFromName,
   isInvalidMaterialLineName,
   normalizeMaterialUnit,
+  shouldRejectOcrMaterialImportItem,
+  stripUnitTokenFromDescription,
 } from "../lib/materialCatalog";
 
 const MAX_LINE_ITEMS = 50;
@@ -138,6 +140,9 @@ function parseLineItem(line: string, lineIndex: number, totalLines: number): Par
 
   let description = stripMoneyFromLine(prefix.rest || line, tokens);
   description = description.replace(/\b\d{1,2}\s*%\b/g, "").replace(/\s+/g, " ").trim();
+  if (prefix.unit) {
+    description = stripUnitTokenFromDescription(description, prefix.unit);
+  }
 
   if (description.length < MIN_DESCRIPTION_LEN) {
     if (tokens.length === 1 && line.length < 28) return null;
@@ -229,6 +234,7 @@ export function extractPossibleInvoiceLineItems(
 
     const currency = opts?.currency?.trim().toUpperCase();
     const deduped = dedupeItems(items)
+      .filter((item) => !shouldRejectOcrMaterialImportItem(item))
       .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
       .slice(0, MAX_LINE_ITEMS)
       .map((item) => ({

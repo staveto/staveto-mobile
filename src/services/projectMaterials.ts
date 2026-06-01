@@ -75,10 +75,20 @@ const MATERIAL_UNITS: MaterialUnit[] = ["pcs", "m", "m2", "kg", "l", "pack", "ho
 
 function convertTimestamp(ts: unknown): string | undefined {
   if (!ts) return undefined;
-  if (ts instanceof Timestamp) return ts.toDate().toISOString();
   if (typeof ts === "string") return ts;
-  if (typeof ts === "object" && ts !== null && typeof (ts as { toDate?: unknown }).toDate === "function") {
-    return (ts as { toDate: () => Date }).toDate().toISOString();
+  if (typeof ts === "object" && ts !== null) {
+    const o = ts as { toDate?: () => Date; seconds?: number; nanoseconds?: number };
+    if (typeof o.toDate === "function") {
+      try {
+        return o.toDate().toISOString();
+      } catch {
+        return undefined;
+      }
+    }
+    if (typeof o.seconds === "number") {
+      const nanos = typeof o.nanoseconds === "number" ? o.nanoseconds : 0;
+      return new Date(o.seconds * 1000 + nanos / 1e6).toISOString();
+    }
   }
   return undefined;
 }

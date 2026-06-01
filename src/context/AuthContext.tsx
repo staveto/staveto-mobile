@@ -1,6 +1,8 @@
 import React, { createContext, useContext, useEffect, useRef, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
-import { doc, getDoc } from "../lib/rnFirestore";
+import { doc } from "../lib/rnFirestore";
+import { getDocSmart } from "../services/firestoreSmartRead";
+import { loadCachedUserSummary, saveCachedUserSummary } from "../services/appStateCache";
 import { getAuth, db, getCallable } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
 import { configureGoogleSignInAtStartup, disconnectGoogleSignInSession } from "../services/auth";
@@ -9,6 +11,8 @@ import { getExtraEnv } from "../lib/env";
 import { IOS_SKIP_GOOGLE_SIGNIN } from "../lib/iosDiagnostic";
 import { bootStep, setLastBootStep } from "../lib/bootLogger";
 import { normalizeLegacyUsageMode, persistPrimaryUsageMode } from "../lib/primaryUsageMode";
+import { withTimeout } from "../utils/withTimeout";
+import { hydrateProjectsFromDiskCache } from "../services/projects";
 
 export type BillingStatus = {
   status: "trial" | "active" | "expired";
@@ -98,6 +102,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     loadFromStorage();
+    hydrateProjectsFromDiskCache().catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -130,7 +135,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         };
         try {
           setLastBootStep("user_doc_loading");
-          const snap = await getDoc(doc(db, "users", fbUser.uid));
+          const snap = await getDocSmart(doc(db, "users", fbUser.uid));
           setLastBootStep("user_doc_loaded");
           if (snap.exists()) {
             const d = snap.data() as Record<string, unknown>;
@@ -146,17 +151,33 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             if (usage) {
               persistPrimaryUsageMode(usage).catch(() => {});
             }
+            saveCachedUserSummary({
+              id: user.id,
+              email: user.email,
+              name: user.name,
+              firstName: user.firstName,
+              lastName: user.lastName,
+            }).catch(() => {});
           }
         } catch (e) {
           setLastBootStep("user_doc_error");
           if (__DEV__) console.warn("[auth] load user doc failed:", e);
+          const cached = await loadCachedUserSummary(fbUser.uid);
+          if (cached) {
+            user = {
+              ...user,
+              name: cached.name ?? user.name,
+              firstName: cached.firstName,
+              lastName: cached.lastName,
+            };
+          }
         }
         bootStep("revenuecat_configure_before", "H6", {}).catch(() => {});
         try {
-          await configurePurchases(fbUser.uid);
+          await withTimeout(configurePurchases(fbUser.uid), 5000, "auth:configurePurchases");
           bootStep("revenuecat_configure_after", "H6", {}).catch(() => {});
         } catch (e) {
-          if (__DEV__) console.warn("[auth] configurePurchases failed:", e);
+          if (__DEV__) console.warn("[auth] configurePurchases failed or timed out:", e);
         }
         setLastBootStep("billing_loading");
         let billing: Awaited<ReturnType<typeof fetchBillingStatus>> | null = null;
@@ -261,7 +282,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         email: fbUser.email ?? "",
         name: fbUser.displayName ?? undefined,
       };
-      const snap = await getDoc(doc(db, "users", fbUser.uid));
+      const snap = await getDocSmart(doc(db, "users", fbUser.uid));
       if (snap.exists()) {
         const d = snap.data() as Record<string, unknown>;
         const fn = d.firstName as string | undefined;
@@ -271,6 +292,13 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (ln) user = { ...user, lastName: ln };
         if (dn && !user.name) user = { ...user, name: dn };
         if (!user.name && fn && ln) user = { ...user, name: `${fn} ${ln}`.trim() };
+        saveCachedUserSummary({
+          id: user.id,
+          email: user.email,
+          name: user.name,
+          firstName: user.firstName,
+          lastName: user.lastName,
+        }).catch(() => {});
       }
       const billing = await fetchBillingStatus(fbUser.uid);
       user = { ...user, billing: billing ?? undefined };

@@ -36,7 +36,7 @@ export function OfflineBanner() {
         color="#fff"
         style={styles.icon}
       />
-      <Text style={styles.text} numberOfLines={1}>
+      <Text style={styles.text} numberOfLines={2}>
         {message}
       </Text>
     </View>

@@ -2,6 +2,7 @@ import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
 import { collection, collectionGroup, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, setDoc, serverTimestamp, limit } from "../lib/rnFirestore";
 import { getDocSmart, getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { withTimeout } from "../utils/withTimeout";
+import { loadCachedProjectList, saveCachedProjectList } from "./appStateCache";
 import { db, auth } from "../firebase";
 import { getApp } from "@react-native-firebase/app";
 import { paths } from "../lib/firestorePaths";
@@ -32,13 +33,30 @@ export function getFirestoreErrorCode(error: unknown): string {
 }
 let didLogProjectContext = false;
 let sessionCache: { projects: ProjectDoc[]; fetchedAt: number } | null = null;
+let diskCacheProjects: ProjectDoc[] | null = null;
+let diskCacheHydrated = false;
 let inFlightPromise: Promise<ProjectDoc[]> | null = null;
 let memberQueryPermissionDenied = false;
 let perfCallCount = 0;
 
 function getCachedProjects(): ProjectDoc[] | null {
-  if (!sessionCache || Date.now() - sessionCache.fetchedAt > CACHE_TTL_MS) return null;
-  return sessionCache.projects;
+  if (sessionCache && Date.now() - sessionCache.fetchedAt <= CACHE_TTL_MS) {
+    return sessionCache.projects;
+  }
+  if (diskCacheProjects?.length) return diskCacheProjects;
+  return null;
+}
+
+/** Hydrate in-memory project cache from AsyncStorage for offline startup. */
+export async function hydrateProjectsFromDiskCache(): Promise<void> {
+  if (diskCacheHydrated) return;
+  diskCacheHydrated = true;
+  const projects = await loadCachedProjectList<ProjectDoc>();
+  if (projects?.length) {
+    diskCacheProjects = projects;
+    sessionCache = { projects, fetchedAt: Date.now() };
+    if (__DEV__) console.log(`[projects] hydrated ${projects.length} projects from disk cache`);
+  }
 }
 
 function setCachedProjects(projects: ProjectDoc[]): void {
@@ -48,11 +66,14 @@ function setCachedProjects(projects: ProjectDoc[]): void {
     return;
   }
   sessionCache = { projects, fetchedAt: Date.now() };
+  diskCacheProjects = projects;
+  saveCachedProjectList(projects).catch(() => {});
 }
 
 /** Clears in-memory project list cache (e.g. after delete or leaving a shared project). */
 export function invalidateProjectsSessionCache(): void {
   sessionCache = null;
+  diskCacheProjects = null;
   inFlightPromise = null;
 }
 
@@ -560,6 +581,12 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
       // User might not have any projects yet, or projects have different ownerId
       return [];
     }
+
+    const diskProjects = await loadCachedProjectList<ProjectDoc>();
+    if (diskProjects?.length) {
+      if (__DEV__) console.warn("[projects] load failed, using disk cache:", diskProjects.length);
+      return diskProjects;
+    }
     
     // For other errors, still throw
     throw error;
@@ -574,6 +601,7 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
 export async function listMyProjects(ownerId: string, options?: { forceServerRead?: boolean }): Promise<ProjectDoc[]> {
   const force = options?.forceServerRead === true;
   if (!force) {
+    await hydrateProjectsFromDiskCache();
     const cached = getCachedProjects();
     if (cached) {
       const active = cached.filter((p) => !p.archivedAt);
@@ -609,6 +637,7 @@ export async function listMyProjects(ownerId: string, options?: { forceServerRea
 export async function listAllMyProjects(ownerId: string, options?: { forceServerRead?: boolean }): Promise<ProjectDoc[]> {
   const force = options?.forceServerRead === true;
   if (!force) {
+    await hydrateProjectsFromDiskCache();
     const cached = getCachedProjects();
     if (cached && cached.length > 0) {
       if (__DEV__) console.log(`[projects] listAllMyProjects: cache hit, ${cached.length} projects`);

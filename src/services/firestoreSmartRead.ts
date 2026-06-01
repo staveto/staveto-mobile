@@ -4,8 +4,9 @@
  */
 import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
 import { withTimeout } from "../utils/withTimeout";
+import { fetchNetworkSnapshot, type NetworkStatus } from "./networkStatus";
 
-export type NetworkStatus = "online" | "poor" | "offline";
+export type { NetworkStatus } from "./networkStatus";
 
 /** NetInfo type values (e.g. 'wifi', 'cellular', 'none', 'unknown') */
 export type NetInfoStateType = string;
@@ -29,40 +30,36 @@ const SERVER_READ_TIMEOUT_MS = 15000;
 /** When server read times out, an empty cache snapshot can hide real data — retry server once. */
 const EMPTY_CACHE_SERVER_RETRY_MS = 28000;
 
-let NetInfoModule: {
-  fetch: () => Promise<{
-    isConnected?: boolean | null;
-    isInternetReachable?: boolean | null;
-    type?: string;
-  }>;
-} | null = null;
-
-try {
-  NetInfoModule = require("@react-native-community/netinfo").default;
-} catch {
-  if (__DEV__) console.warn("[firestoreSmartRead] NetInfo not available, assuming online");
+async function getNetworkStatus(opts?: SmartReadOptions): Promise<NetworkStatus> {
+  const snapshot = await fetchNetworkSnapshot();
+  if (snapshot.status === "offline") return "offline";
+  const poorTypes = opts?.poorTypes ?? DEFAULT_POOR_TYPES;
+  if (poorTypes.some((t) => t.toLowerCase() === snapshot.type)) return "poor";
+  return "online";
 }
 
-async function getNetworkStatus(opts?: SmartReadOptions): Promise<NetworkStatus> {
-  if (!NetInfoModule) return "online";
-  try {
-    const state = await NetInfoModule.fetch();
-    const isConnected = state.isConnected === true;
-    const isReachable = state.isInternetReachable !== false;
-    const type = (state.type ?? "unknown").toLowerCase();
+function emptyDocSnapshot(
+  ref: DocRef
+): FirebaseFirestoreTypes.DocumentSnapshot<FirebaseFirestoreTypes.DocumentData> {
+  return {
+    exists: () => false,
+    data: () => undefined,
+    id: ref.id,
+    ref,
+    get: () => undefined,
+    metadata: { fromCache: true, hasPendingWrites: false, isEqual: () => false },
+  } as unknown as FirebaseFirestoreTypes.DocumentSnapshot<FirebaseFirestoreTypes.DocumentData>;
+}
 
-    const offline = !isConnected || type === "none" || (!isReachable && type !== "wifi");
-    if (offline) return "offline";
-
-    const poorTypes = opts?.poorTypes ?? DEFAULT_POOR_TYPES;
-    const poor = poorTypes.some((t) => t.toLowerCase() === type);
-    if (poor) return "poor";
-
-    return "online";
-  } catch (e) {
-    if (__DEV__) console.warn("[firestoreSmartRead] NetInfo.fetch failed:", e);
-    return "online";
-  }
+function emptyQuerySnapshot(): FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData> {
+  return {
+    docs: [],
+    empty: true,
+    size: 0,
+    forEach: () => {},
+    docChanges: () => [],
+    metadata: { fromCache: true, hasPendingWrites: false, isEqual: () => false },
+  } as unknown as FirebaseFirestoreTypes.QuerySnapshot<FirebaseFirestoreTypes.DocumentData>;
 }
 
 type DocRef = FirebaseFirestoreTypes.DocumentReference<FirebaseFirestoreTypes.DocumentData>;
@@ -108,7 +105,8 @@ export async function getDocSmart(
       return await ref.get({ source: "cache" });
     } catch (cacheErr) {
       if (status === "offline") {
-        throw addContext(cacheErr, "getDocSmart (offline, cache miss)", ref.path);
+        if (__DEV__) console.log("[firestoreSmartRead] getDoc offline cache miss, returning empty:", ref.path);
+        return emptyDocSnapshot(ref);
       }
       if (__DEV__) console.log("[firestoreSmartRead] getDoc cache miss, fallback server:", ref.path);
       try {
@@ -217,7 +215,8 @@ export async function getDocsSmart(
       return retryGetDocsIfEmptyCache(queryRef, cached, retryOpts);
     } catch (cacheErr) {
       if (status === "offline") {
-        throw addContext(cacheErr, "getDocsSmart (offline, cache miss)", "(query)");
+        if (__DEV__) console.log("[firestoreSmartRead] getDocs offline cache miss, returning empty");
+        return emptyQuerySnapshot();
       }
       if (__DEV__) console.log("[firestoreSmartRead] getDocs cache miss, fallback server");
       try {
@@ -272,7 +271,9 @@ export async function runSmartRead<T>(
     try {
       return await readFn("cache");
     } catch {
-      if (status === "offline") throw new Error("Offline: cache miss");
+      if (status === "offline") {
+        throw new Error("Offline: cache miss");
+      }
       return readFn("server");
     }
   }

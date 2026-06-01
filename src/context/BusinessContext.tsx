@@ -16,6 +16,11 @@ import {
   type MembershipDoc,
   type OrganizationDoc,
 } from "../services/organizations";
+import {
+  loadCachedBusinessOrgSummary,
+  saveCachedBusinessOrgSummary,
+} from "../services/appStateCache";
+import { fetchNetworkSnapshot } from "../services/networkStatus";
 
 const ACTIVE_BUSINESS_ORG_STORAGE_KEY = "staveto_active_business_org_id";
 
@@ -99,6 +104,12 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       setActiveBusinessOrgIdState(preferred.org.id);
       setActiveOrganization(preferred.org);
       setActiveMembership(preferred.membership);
+      saveCachedBusinessOrgSummary({
+        id: preferred.org.id,
+        name: preferred.org.name,
+        status: preferred.org.status,
+        businessEnabled: preferred.org.businessEnabled,
+      }).catch(() => {});
       await persistActiveBusinessOrgId(preferred.org.id);
       return true;
     },
@@ -185,12 +196,33 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
 
       setActiveOrganization(organization);
       setActiveMembership(membership);
+      saveCachedBusinessOrgSummary({
+        id: organization.id,
+        name: organization.name,
+        status: organization.status,
+        businessEnabled: organization.businessEnabled,
+      }).catch(() => {});
       setLoading(false);
     } catch (e) {
       if (runId !== refreshRunRef.current) {
         return;
       }
       const message = e instanceof Error ? e.message : String(e);
+      const network = await fetchNetworkSnapshot();
+      if (!network.isOnline) {
+        const cached = await loadCachedBusinessOrgSummary(expectedOrgId);
+        if (cached) {
+          setActiveOrganization({
+            id: cached.id,
+            name: cached.name ?? "",
+            ownerUid: "",
+            status: (cached.status as OrganizationDoc["status"]) ?? "active",
+            businessEnabled: cached.businessEnabled ?? false,
+            seatsLimit: 0,
+            seatsUsed: 0,
+          });
+        }
+      }
       setError(`BusinessContext refresh failed: ${message}`);
       setLoading(false);
     }

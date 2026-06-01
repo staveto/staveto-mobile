@@ -1,4 +1,5 @@
 import { useState, useEffect } from "react";
+import { subscribeNetworkStatus, type NetworkSnapshot } from "../services/networkStatus";
 
 export type NetInfoState = {
   isConnected?: boolean | null;
@@ -12,13 +13,31 @@ export type OnlineState = {
   isPoorNetwork: boolean;
   loading: boolean;
   netInfo: NetInfoState | null;
+  isInternetReachable: boolean | null;
+  lastChangedAt: number | null;
 };
+
+function toOnlineState(snapshot: NetworkSnapshot): OnlineState {
+  const isOffline = !snapshot.isOnline;
+  const isPoorNetwork = !isOffline && snapshot.status === "poor";
+  return {
+    isOnline: snapshot.isOnline,
+    isOffline,
+    isPoorNetwork,
+    loading: false,
+    isInternetReachable: snapshot.isInternetReachable,
+    lastChangedAt: snapshot.lastChangedAt,
+    netInfo: {
+      isConnected: snapshot.isOnline,
+      isInternetReachable: snapshot.isInternetReachable,
+      type: snapshot.type,
+    },
+  };
+}
 
 /**
  * Returns { isOnline, isOffline, isPoorNetwork, netInfo }.
  * Uses NetInfo when available; fallback returns isOnline: true.
- * - isOffline: !isConnected OR type==='none' OR isInternetReachable===false
- * - isPoorNetwork: type in ['cellular','unknown'] (weak signal)
  */
 export function useOnlineStatus(): OnlineState {
   const [state, setState] = useState<OnlineState>({
@@ -27,56 +46,15 @@ export function useOnlineStatus(): OnlineState {
     isPoorNetwork: false,
     loading: true,
     netInfo: null,
+    isInternetReachable: null,
+    lastChangedAt: null,
   });
 
   useEffect(() => {
-    let NetInfo: {
-      addEventListener: (cb: (s: NetInfoState) => void) => () => void;
-      fetch?: () => Promise<NetInfoState>;
-    } | null = null;
-    try {
-      NetInfo = require("@react-native-community/netinfo").default;
-    } catch {
-      setState({
-        isOnline: true,
-        isOffline: false,
-        isPoorNetwork: false,
-        loading: false,
-        netInfo: null,
-      });
-      return;
-    }
-
-    const update = (info: NetInfoState) => {
-      const isConnected = info.isConnected === true;
-      const isReachable = info.isInternetReachable !== false;
-      const type = (info.type ?? "unknown").toLowerCase();
-
-      const isOffline =
-        !isConnected ||
-        type === "none" ||
-        (!isReachable && type !== "wifi");
-      const isPoor =
-        !isOffline &&
-        (type === "cellular" || type === "unknown");
-      const isOnline = !isOffline;
-
-      setState({
-        isOnline,
-        isOffline,
-        isPoorNetwork: isPoor,
-        loading: false,
-        netInfo: info,
-      });
-    };
-
-    const unsub = NetInfo.addEventListener(update);
-
-    if (NetInfo.fetch) {
-      NetInfo.fetch().then(update).catch(() => {});
-    }
-
-    return () => unsub();
+    const unsub = subscribeNetworkStatus((snapshot) => {
+      setState(toOnlineState(snapshot));
+    });
+    return unsub;
   }, []);
 
   return state;

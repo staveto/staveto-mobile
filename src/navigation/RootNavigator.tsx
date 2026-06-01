@@ -60,7 +60,10 @@ import { OfflineBanner } from "../components/OfflineBanner";
 import { StoreUpdateGate } from "../components/StoreUpdateGate";
 import { colors, spacing } from "../theme";
 import { getFirestore, db } from "../firebase";
-import { doc, getDoc } from "../lib/rnFirestore";
+import { doc } from "../lib/rnFirestore";
+import { getDocSmart } from "../services/firestoreSmartRead";
+import { useOnlineStatus } from "../hooks/useOnlineStatus";
+import { OfflineLoginRequiredScreen } from "../screens/OfflineLoginRequiredScreen";
 import { CONSENT_PRIVACY_VERSION, CONSENT_TERMS_VERSION, PENDING_CONSENT_KEY } from "../constants/consent";
 import { getExtraEnv } from "../lib/env";
 
@@ -92,6 +95,7 @@ export function RootNavigator() {
   }, []);
   // #endregion
   const { token, loading, onboardingDone, onboardingLoaded, user, logout } = useAuth();
+  const { isOffline, loading: networkLoading } = useOnlineStatus();
   const { t } = useI18n();
   const [gateLoading, setGateLoading] = useState(true);
   const [consentOk, setConsentOk] = useState(false);
@@ -170,7 +174,7 @@ export function RootNavigator() {
       }
       const pendingOnboardingRaw = await AsyncStorage.getItem("pending_onboarding");
       const hasPendingOnboarding = !!pendingOnboardingRaw;
-      const snap = await getDoc(doc(db, "users", user.id));
+      const snap = await getDocSmart(doc(db, "users", user.id));
       if (snap.exists()) {
         const data = snap.data() as {
           termsAcceptedAt?: unknown;
@@ -306,6 +310,9 @@ export function RootNavigator() {
     return <LoadingScreen />;
   }
   if (!token) {
+    if (!networkLoading && isOffline) {
+      return <OfflineLoginRequiredScreen />;
+    }
     const signedOutInitial = !onboardingDone
       ? "OnboardingIntro"
       : authEntryRoute === "Register"

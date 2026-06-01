@@ -8,6 +8,11 @@ import { parseMoneyToNumber } from "../helpers/parseMoney";
 import type { OcrParsed, OcrStatus } from "../services/invoiceOCR";
 import { colors, radius, spacing } from "../theme";
 import { isPlainObject } from "../utils/isPlainObject";
+import type { ParsedDocumentLineItem } from "../lib/parsedDocumentTypes";
+import {
+  ExpenseLineItemsMaterialImportSheet,
+  type ExpenseMaterialImportContext,
+} from "../components/ExpenseLineItemsMaterialImportSheet";
 
 type RouteParams = {
   projectId: string;
@@ -24,6 +29,7 @@ type RouteParams = {
   expenseExtraction?: Record<string, unknown>;
   /** Server-truncated OCR plain text for audit (Firebase expense doc). */
   ocrRawTextTruncated?: string;
+  lineItems?: ParsedDocumentLineItem[];
 };
 
 function parseReviewFieldIds(expenseExtraction?: Record<string, unknown>): string[] {
@@ -114,6 +120,7 @@ export function ExpenseReviewScreen() {
   const [invoiceNumber, setInvoiceNumber] = useState(parsed?.invoiceNumber || "");
   const [vatAmount, setVatAmount] = useState(parsed?.vatAmount != null ? String(parsed.vatAmount) : "");
   const [saving, setSaving] = useState(false);
+  const [materialImportSheet, setMaterialImportSheet] = useState<ExpenseMaterialImportContext | null>(null);
 
   const statusMessage = useMemo(() => {
     if (params.status === "limit") return t("expense.ocrLimit");
@@ -160,7 +167,21 @@ export function ExpenseReviewScreen() {
         ...(ocrAuditSnapshot ? { ocrAuditSnapshot } : {}),
       });
       Alert.alert(t("common.success"), t("projectOverview.expenseUpdated"));
-      (navigation as { goBack: () => void }).goBack();
+      const lineItems = params.lineItems ?? [];
+      if (lineItems.length > 0 && params.attachmentId) {
+        setMaterialImportSheet({
+          projectId: params.projectId,
+          expenseId: params.expenseId,
+          attachmentId: params.attachmentId,
+          currency: effectiveCurrency,
+          supplierName: supplierName.trim() || undefined,
+          expenseTitle: title.trim(),
+          expenseDate: date,
+          items: lineItems,
+        });
+      } else {
+        (navigation as { goBack: () => void }).goBack();
+      }
     } catch (error) {
       console.error("[ExpenseReview] Failed to save OCR review:", error);
       Alert.alert(t("common.error"), t("common.unknown"));
@@ -173,6 +194,7 @@ export function ExpenseReviewScreen() {
   const debugConfidence = parsed?.confidence?.total ?? parsed?.confidence?.overall;
 
   return (
+    <>
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.title}>{t("expense.invoiceReviewTitle")}</Text>
       {reviewFieldIds.length > 0 ? (
@@ -246,6 +268,15 @@ export function ExpenseReviewScreen() {
         </TouchableOpacity>
       </View>
     </ScrollView>
+    <ExpenseLineItemsMaterialImportSheet
+      visible={materialImportSheet != null}
+      context={materialImportSheet}
+      onDismiss={() => {
+        setMaterialImportSheet(null);
+        (navigation as { goBack: () => void }).goBack();
+      }}
+    />
+    </>
   );
 }
 

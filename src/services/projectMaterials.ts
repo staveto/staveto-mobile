@@ -432,4 +432,29 @@ export async function deleteProjectMaterial(projectId: string, materialId: strin
   await deleteDoc(doc(db, paths.projectMaterial(projectId, materialId)));
 }
 
+const EXPENSE_ATTACHMENT_NOTE_PREFIX = "expense_attachment:";
+
+/** Count existing material rows linked to an expense attachment (dedup guard). */
+export async function findExistingMaterialNamesForAttachment(
+  projectId: string,
+  attachmentId: string
+): Promise<{ suggestionCount: number; materialCount: number; suggestionNames: Set<string>; materialNames: Set<string> }> {
+  requireAuth();
+  const aid = attachmentId.trim();
+  const [suggestions, materials] = await Promise.all([
+    listMaterialSuggestions(projectId),
+    listProjectMaterials(projectId),
+  ]);
+  const linkedSuggestions = suggestions.filter((s) => s.sourceDocumentId === aid);
+  const linkedMaterials = materials.filter(
+    (m) => m.notes?.includes(`${EXPENSE_ATTACHMENT_NOTE_PREFIX}${aid}`) ?? false
+  );
+  return {
+    suggestionCount: linkedSuggestions.length,
+    materialCount: linkedMaterials.length,
+    suggestionNames: new Set(linkedSuggestions.map((s) => s.name.trim().toLowerCase())),
+    materialNames: new Set(linkedMaterials.map((m) => m.name.trim().toLowerCase())),
+  };
+}
+
 export { MATERIAL_UNITS };

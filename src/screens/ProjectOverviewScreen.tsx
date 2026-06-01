@@ -77,6 +77,11 @@ import {
   prefillDebugPayload,
 } from "../services/documentPrefill";
 import type { InvoiceExtractionSource } from "../lib/invoiceTypes";
+import {
+  ExpenseLineItemsMaterialImportSheet,
+  type ExpenseMaterialImportContext,
+} from "../components/ExpenseLineItemsMaterialImportSheet";
+import type { ParsedDocumentLineItem } from "../lib/parsedDocumentTypes";
 import { calculateRouteDistanceKm } from "../services/mapsDistance";
 import type { Locale } from "../i18n/translations";
 import { EUROPEAN_COUNTRIES, buildAddressWithCountry, parseCountryFromAddress } from "../utils/europeanCountries";
@@ -450,6 +455,8 @@ export function ProjectOverviewScreen() {
     attachmentId?: string;
     storagePath?: string;
   } | null>(null);
+  const [expenseOcrLineItems, setExpenseOcrLineItems] = useState<ParsedDocumentLineItem[]>([]);
+  const [materialImportSheet, setMaterialImportSheet] = useState<ExpenseMaterialImportContext | null>(null);
   const access = useProjectAccess(projectId, projectOwnerId);
   const isOwner = access.isOwner || (!!projectOwnerId && !!user?.id && projectOwnerId === user.id);
   /** Native tab bar is visible inside HomeStack; custom dock would duplicate it. */
@@ -2429,6 +2436,7 @@ export function ProjectOverviewScreen() {
     if (prefill.currency) setExpenseCurrency(prefill.currency);
     if (prefill.supplierName) setExpenseSupplierName(prefill.supplierName);
     if (prefill.supplierIco) setExpenseSupplierIco(prefill.supplierIco);
+    setExpenseOcrLineItems(ocrResult.parsedDocument?.items ?? []);
   };
 
   const cleanupPreuploadedExpenseAttachment = async (
@@ -2555,6 +2563,7 @@ export function ProjectOverviewScreen() {
       // #endregion
       setExpenseOcrStatus(result.status);
       setExpenseOcrExtractionSource(result.extractionSource ?? null);
+      setExpenseOcrLineItems(result.parsedDocument?.items ?? []);
       if (result.status === "success") {
         applyOcrPrefill(result);
       } else {
@@ -2566,6 +2575,7 @@ export function ProjectOverviewScreen() {
       console.log("[OCR UI] error.code =", error?.code, "message=", error?.message);
       setExpenseOcrStatus("failed");
       setExpenseOcrExtractionSource(null);
+      setExpenseOcrLineItems([]);
       Alert.alert(t("common.warning"), getOcrFallbackMessage(error?.code || error?.message));
     } finally {
       setUploadingExpenseAttachment(false);
@@ -2820,6 +2830,7 @@ export function ProjectOverviewScreen() {
     expenseExtraction?: Record<string, unknown>;
     /** Truncated OCR plain text for audit (avoid huge navigation payloads). */
     ocrRawTextTruncated?: string;
+    lineItems?: ParsedDocumentLineItem[];
   }) => {
     (navigation as { navigate: (name: string, params?: unknown) => void }).navigate("ExpenseReview", params);
   };
@@ -2909,6 +2920,7 @@ export function ProjectOverviewScreen() {
         parsed: result.parsed,
         expenseExtraction: result.expenseExtraction,
         ocrRawTextTruncated: result.rawText?.slice(0, 12_000),
+        lineItems: result.parsedDocument?.items ?? [],
       });
     } catch (error) {
       if (ocrRequestIdRef.current !== requestId) return;
@@ -2996,6 +3008,8 @@ export function ProjectOverviewScreen() {
 
     setSubmitting(true);
     let openedOcrReview = false;
+    let savedExpenseId: string | null = null;
+    let savedAttachmentIdForImport: string | null = null;
     try {
       const form = {
         editing: !!editingExpense,
@@ -3099,7 +3113,6 @@ export function ProjectOverviewScreen() {
         });
         Alert.alert(t("common.success"), t("projectOverview.expenseUpdated"));
       } else {
-        // For new expense: create expense first, then upload attachment with expenseId
         const newExpense = await expensesService.createExpense(ownerIdForWrite, projectId, {
           title: titleValue,
           amount,
@@ -3128,9 +3141,11 @@ export function ProjectOverviewScreen() {
           receipt: form.receipt,
           travel: travelData ?? null,
         });
+        savedExpenseId = newExpense.id;
 
         if (expensePreuploadedAttachment) {
           attachmentId = expensePreuploadedAttachment.attachmentId;
+          savedAttachmentIdForImport = attachmentId;
           await attachmentsService.linkAttachmentToExpense(projectId, expensePreuploadedAttachment.attachmentId, newExpense.id);
           setExpensePreuploadedAttachment((prev) => (
             prev
@@ -3167,6 +3182,7 @@ export function ProjectOverviewScreen() {
               kind: expenseAttachment.kind === 'pdf' ? 'pdf' : expenseAttachment.kind === 'image' ? 'image' : 'document',
             });
             attachmentId = attachment.id;
+            savedAttachmentIdForImport = attachmentId;
             attachmentStoragePath = attachment.storagePath?.trim();
             if (!attachmentStoragePath) {
               throw new Error("Attachment upload returned empty filePath.");
@@ -3235,12 +3251,30 @@ export function ProjectOverviewScreen() {
         }
 
         if (!openedOcrReview) {
-          Alert.alert(t("common.success"), t("projectOverview.expenseAdded"));
+          const shouldOfferMaterialImport =
+            savedExpenseId &&
+            savedAttachmentIdForImport &&
+            expenseOcrLineItems.length > 0;
+          if (shouldOfferMaterialImport && savedExpenseId && savedAttachmentIdForImport) {
+            setMaterialImportSheet({
+              projectId,
+              expenseId: savedExpenseId,
+              attachmentId: savedAttachmentIdForImport,
+              currency: expenseCurrency || "EUR",
+              supplierName: expenseSupplierName.trim() || undefined,
+              expenseTitle: titleValue,
+              expenseDate: expenseDate,
+              items: expenseOcrLineItems,
+            });
+          } else {
+            Alert.alert(t("common.success"), t("projectOverview.expenseAdded"));
+          }
         }
       }
       setShowExpenseModal(false);
       setExpenseAttachment(null);
       setExpensePreuploadedAttachment(null);
+      setExpenseOcrLineItems([]);
       setExpenseCategory(undefined);
       setExpenseSupplierName("");
       setExpenseSupplierIco("");
@@ -6486,6 +6520,12 @@ export function ProjectOverviewScreen() {
           </View>
         </View>
       </Modal>
+
+      <ExpenseLineItemsMaterialImportSheet
+        visible={materialImportSheet != null}
+        context={materialImportSheet}
+        onDismiss={() => setMaterialImportSheet(null)}
+      />
 
       {/* Attachment modal */}
       <Modal visible={showAttachmentModal} transparent animationType="slide">

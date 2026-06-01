@@ -2,7 +2,7 @@
  * Client-side AI draft with stable ids for review/refine without persisting to Firestore until confirm.
  */
 
-import type { AiPhase, AiProjectPlan, AiTask } from "./aiProjectSchema";
+import type { AiPhase, AiProjectPlan, AiTask, AiMaterialSuggestion } from "./aiProjectSchema";
 
 function newDraftNodeId(): string {
   return `d_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 12)}`;
@@ -15,9 +15,15 @@ export type DraftPhase = Omit<AiPhase, "tasks"> & {
   tasks: DraftTask[];
 };
 
-export type AiProjectDraft = Omit<AiProjectPlan, "phases"> & {
+export type DraftMaterialSuggestion = AiMaterialSuggestion & {
+  id: string;
+  selected: boolean;
+};
+
+export type AiProjectDraft = Omit<AiProjectPlan, "phases" | "materialSuggestions"> & {
   draftId: string;
   phases: DraftPhase[];
+  materialSuggestions?: DraftMaterialSuggestion[];
   /** Optional friendly reference entered by user (not Firestore id). */
   projectNumber?: string;
 };
@@ -43,6 +49,15 @@ export function aiPlanToDraft(plan: AiProjectPlan, opts?: { projectNumber?: stri
         taskType: t.taskType,
         priority: t.priority,
       })),
+    })),
+    materialSuggestions: (plan.materialSuggestions ?? []).map((m) => ({
+      ...m,
+      id: newDraftNodeId(),
+      selected:
+        m.confidence !== "low" &&
+        m.category !== "service_or_labor" &&
+        m.category !== "transport" &&
+        m.category !== "discount",
     })),
   };
 }
@@ -78,6 +93,9 @@ export function draftToAiProjectPlan(draft: AiProjectDraft): AiProjectPlan {
     summary: draft.summary,
     uiMode: draft.uiMode,
     phases: draft.phases.map((p) => draftPhaseToAiPhase(p)),
+    materialSuggestions: draft.materialSuggestions
+      ?.filter((m) => m.selected && m.name?.trim())
+      .map(({ id: _id, selected: _selected, ...m }) => m),
   };
 }
 

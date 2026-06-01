@@ -53,9 +53,13 @@ export interface AiProjectPlan {
 
 export interface AiMaterialSuggestion {
   name: string;
+  category?: string;
   description?: string;
   suggestedQuantity?: number;
   unit?: string;
+  estimatedUnitPrice?: number;
+  estimatedTotalPrice?: number;
+  currency?: string;
   confidence?: "low" | "medium" | "high";
   sourceNote?: string;
   phaseName?: string;

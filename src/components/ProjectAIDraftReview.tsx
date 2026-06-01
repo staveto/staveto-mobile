@@ -39,6 +39,7 @@ export type ProjectAIDraftReviewProps = {
   onDeletePhase: (phaseId: string) => void;
   onDeleteTask: (phaseId: string, taskId: string) => void;
   onAddTask: (phaseId: string) => void;
+  onToggleMaterialSuggestion?: (materialId: string) => void;
 };
 
 export function ProjectAIDraftReview({
@@ -57,6 +58,7 @@ export function ProjectAIDraftReview({
   onDeletePhase,
   onDeleteTask,
   onAddTask,
+  onToggleMaterialSuggestion,
 }: ProjectAIDraftReviewProps) {
   const { t } = useI18n();
   const [expanded, setExpanded] = useState<Record<string, boolean>>({});
@@ -124,6 +126,34 @@ export function ProjectAIDraftReview({
         <View style={styles.summaryCard}>
           <Text style={styles.summaryBody}>{summaryLine}</Text>
         </View>
+      ) : null}
+
+      {draft.materialSuggestions && draft.materialSuggestions.length > 0 ? (
+        <>
+          <Text style={styles.sectionHeading}>{t("createProject.aiDraft.materialsHeading")}</Text>
+          <Text style={styles.materialsHint}>{t("createProject.aiDraft.materialsHint")}</Text>
+          {draft.materialSuggestions.map((m) => (
+            <TouchableOpacity
+              key={m.id}
+              style={styles.materialRow}
+              onPress={() => onToggleMaterialSuggestion?.(m.id)}
+              activeOpacity={0.85}
+            >
+              <Ionicons
+                name={m.selected ? "checkbox" : "square-outline"}
+                size={22}
+                color={m.selected ? colors.primary : colors.textMuted}
+              />
+              <View style={styles.materialRowText}>
+                <Text style={styles.materialRowTitle}>{m.name}</Text>
+                <Text style={styles.materialRowMeta}>
+                  {[m.suggestedQuantity, m.unit, m.currency].filter(Boolean).join(" ")}
+                  {m.category ? ` · ${t(`materialCategory.${m.category}`)}` : ""}
+                </Text>
+              </View>
+            </TouchableOpacity>
+          ))}
+        </>
       ) : null}
 
       <Text style={styles.sectionHeading}>{t("createProject.aiDraft.phasesHeading")}</Text>
@@ -325,6 +355,26 @@ const styles = StyleSheet.create({
     color: colors.text,
     marginBottom: spacing.xs,
   },
+  materialsHint: {
+    fontSize: 12,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
+    lineHeight: 17,
+  },
+  materialRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    backgroundColor: "#fff",
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.formPanelBorder,
+    padding: spacing.sm,
+    marginBottom: spacing.xs,
+  },
+  materialRowText: { flex: 1 },
+  materialRowTitle: { fontSize: 14, fontWeight: "700", color: colors.text },
+  materialRowMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   phaseCard: {
     backgroundColor: "#fff",
     borderRadius: radius,

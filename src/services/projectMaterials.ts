@@ -13,16 +13,29 @@ import { db, getAuth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { isPlainObject } from "../utils/isPlainObject";
 import type {
+  MaterialCategory,
   MaterialConfidence,
   MaterialSuggestionSource,
   MaterialSuggestionStatus,
   MaterialUnit,
 } from "../lib/types";
+import {
+  MATERIAL_UNITS,
+  calculateMaterialTotals,
+  parseMaterialCategory,
+  parseMaterialSource,
+  parseMaterialUnit,
+  resolveMaterialCurrency,
+  type MaterialTotals,
+} from "../lib/materialCatalog";
+
+export type { MaterialTotals };
 
 export type MaterialSuggestionDoc = {
   id: string;
   projectId: string;
   name: string;
+  category?: MaterialCategory;
   description?: string;
   suggestedQuantity?: number;
   unit?: MaterialUnit;
@@ -32,6 +45,7 @@ export type MaterialSuggestionDoc = {
   source: MaterialSuggestionSource;
   confidence?: MaterialConfidence;
   sourceDocumentId?: string;
+  sourceExpenseId?: string;
   sourceNote?: string;
   phaseId?: string;
   taskId?: string;
@@ -46,6 +60,7 @@ export type ProjectMaterialDoc = {
   projectId: string;
   organizationId?: string;
   name: string;
+  category?: MaterialCategory;
   quantity: number;
   unit: MaterialUnit;
   unitPrice?: number;
@@ -65,13 +80,9 @@ export type ProjectMaterialDoc = {
   sourceSuggestionId?: string;
 };
 
-export type MaterialTotals = {
-  count: number;
-  totalPrice: number;
-  currency: string;
-};
+export type MaterialTotalsGroup = import("../lib/materialCatalog").MaterialTotalsGroup;
 
-const MATERIAL_UNITS: MaterialUnit[] = ["pcs", "m", "m2", "kg", "l", "pack", "hour", "other"];
+export { calculateMaterialTotals, MATERIAL_UNITS };
 
 function convertTimestamp(ts: unknown): string | undefined {
   if (!ts) return undefined;
@@ -93,9 +104,9 @@ function convertTimestamp(ts: unknown): string | undefined {
   return undefined;
 }
 
+
 function parseUnit(value: unknown): MaterialUnit | undefined {
-  if (typeof value !== "string") return undefined;
-  return (MATERIAL_UNITS as readonly string[]).includes(value) ? (value as MaterialUnit) : undefined;
+  return parseMaterialUnit(value);
 }
 
 function toSuggestionDoc(docSnap: { id: string; data: () => Record<string, unknown> }): MaterialSuggestionDoc | null {
@@ -113,18 +124,20 @@ function toSuggestionDoc(docSnap: { id: string; data: () => Record<string, unkno
     id: docSnap.id,
     projectId: (d.projectId as string) ?? "",
     name,
+    category: parseMaterialCategory(d.category),
     description: typeof d.description === "string" ? d.description : undefined,
     suggestedQuantity: typeof d.suggestedQuantity === "number" ? d.suggestedQuantity : undefined,
     unit: parseUnit(d.unit),
     estimatedUnitPrice: typeof d.estimatedUnitPrice === "number" ? d.estimatedUnitPrice : undefined,
     estimatedTotalPrice: typeof d.estimatedTotalPrice === "number" ? d.estimatedTotalPrice : undefined,
     currency: typeof d.currency === "string" ? d.currency : "EUR",
-    source: d.source === "ai" ? "ai" : "manual",
+    source: parseMaterialSource(d.source),
     confidence:
       d.confidence === "low" || d.confidence === "medium" || d.confidence === "high"
         ? d.confidence
         : undefined,
     sourceDocumentId: typeof d.sourceDocumentId === "string" ? d.sourceDocumentId : undefined,
+    sourceExpenseId: typeof d.sourceExpenseId === "string" ? d.sourceExpenseId : undefined,
     sourceNote: typeof d.sourceNote === "string" ? d.sourceNote : undefined,
     phaseId: typeof d.phaseId === "string" ? d.phaseId : undefined,
     taskId: typeof d.taskId === "string" ? d.taskId : undefined,
@@ -154,6 +167,7 @@ function toMaterialDoc(docSnap: { id: string; data: () => Record<string, unknown
     projectId: (d.projectId as string) ?? "",
     organizationId: typeof d.organizationId === "string" ? d.organizationId : undefined,
     name,
+    category: parseMaterialCategory(d.category),
     quantity,
     unit,
     unitPrice: typeof d.unitPrice === "number" ? d.unitPrice : undefined,
@@ -180,11 +194,6 @@ function requireAuth(): string {
   return uid;
 }
 
-export function calculateMaterialTotals(materials: ProjectMaterialDoc[]): MaterialTotals {
-  const currency = materials[0]?.currency ?? "EUR";
-  const totalPrice = materials.reduce((sum, m) => sum + (m.totalPrice ?? 0), 0);
-  return { count: materials.length, totalPrice, currency };
-}
 
 export async function listMaterialSuggestions(
   projectId: string,
@@ -202,6 +211,7 @@ export async function listMaterialSuggestions(
 
 export type CreateMaterialSuggestionInput = {
   name: string;
+  category?: MaterialCategory;
   description?: string;
   suggestedQuantity?: number;
   unit?: MaterialUnit;
@@ -211,6 +221,7 @@ export type CreateMaterialSuggestionInput = {
   source?: MaterialSuggestionSource;
   confidence?: MaterialConfidence;
   sourceDocumentId?: string;
+  sourceExpenseId?: string;
   sourceNote?: string;
   phaseId?: string;
   taskId?: string;
@@ -224,19 +235,22 @@ export async function createMaterialSuggestion(
   const name = input.name.trim();
   if (!name) throw new Error("Názov materiálu je povinný.");
 
+  const currency = resolveMaterialCurrency({ expenseCurrency: input.currency });
   const c = collection(db, paths.projectMaterialSuggestions(projectId));
   const ref = await addDoc(c, {
     projectId,
     name,
+    category: input.category ?? null,
     description: input.description?.trim() ?? null,
     suggestedQuantity: input.suggestedQuantity ?? null,
     unit: input.unit ?? null,
     estimatedUnitPrice: input.estimatedUnitPrice ?? null,
     estimatedTotalPrice: input.estimatedTotalPrice ?? null,
-    currency: input.currency?.trim() || "EUR",
+    currency,
     source: input.source ?? "manual",
     confidence: input.confidence ?? null,
     sourceDocumentId: input.sourceDocumentId ?? null,
+    sourceExpenseId: input.sourceExpenseId ?? null,
     sourceNote: input.sourceNote?.trim() ?? null,
     phaseId: input.phaseId ?? null,
     taskId: input.taskId ?? null,
@@ -250,15 +264,17 @@ export async function createMaterialSuggestion(
     id: ref.id,
     projectId,
     name,
+    category: input.category,
     description: input.description,
     suggestedQuantity: input.suggestedQuantity,
     unit: input.unit,
     estimatedUnitPrice: input.estimatedUnitPrice,
     estimatedTotalPrice: input.estimatedTotalPrice,
-    currency: input.currency?.trim() || "EUR",
+    currency,
     source: input.source ?? "manual",
     confidence: input.confidence,
     sourceDocumentId: input.sourceDocumentId,
+    sourceExpenseId: input.sourceExpenseId,
     sourceNote: input.sourceNote,
     phaseId: input.phaseId,
     taskId: input.taskId,
@@ -277,13 +293,15 @@ export async function updateMaterialSuggestion(
   requireAuth();
   const updateData: Record<string, unknown> = { updatedAt: serverTimestamp() };
   if (patch.name !== undefined) updateData.name = patch.name.trim();
+  if (patch.category !== undefined) updateData.category = patch.category ?? null;
   if (patch.description !== undefined) updateData.description = patch.description?.trim() ?? null;
   if (patch.suggestedQuantity !== undefined) updateData.suggestedQuantity = patch.suggestedQuantity ?? null;
   if (patch.unit !== undefined) updateData.unit = patch.unit ?? null;
   if (patch.estimatedUnitPrice !== undefined) updateData.estimatedUnitPrice = patch.estimatedUnitPrice ?? null;
   if (patch.estimatedTotalPrice !== undefined) updateData.estimatedTotalPrice = patch.estimatedTotalPrice ?? null;
-  if (patch.currency !== undefined) updateData.currency = patch.currency?.trim() || "EUR";
+  if (patch.currency !== undefined) updateData.currency = resolveMaterialCurrency({ expenseCurrency: patch.currency });
   if (patch.confidence !== undefined) updateData.confidence = patch.confidence ?? null;
+  if (patch.sourceExpenseId !== undefined) updateData.sourceExpenseId = patch.sourceExpenseId ?? null;
   if (patch.sourceNote !== undefined) updateData.sourceNote = patch.sourceNote?.trim() ?? null;
   if (patch.status !== undefined) updateData.status = patch.status;
   const ref = doc(db, paths.projectMaterialSuggestion(projectId, suggestionId));
@@ -315,6 +333,7 @@ export async function listProjectMaterials(
 
 export type CreateProjectMaterialInput = {
   name: string;
+  category?: MaterialCategory;
   quantity: number;
   unit: MaterialUnit;
   unitPrice?: number;
@@ -349,16 +368,18 @@ export async function createProjectMaterial(
   const currentUser = getAuth()?.currentUser;
   const displayName = currentUser?.displayName ?? currentUser?.email ?? undefined;
 
+  const currency = resolveMaterialCurrency({ expenseCurrency: input.currency });
   const c = collection(db, paths.projectMaterials(projectId));
   const ref = await addDoc(c, {
     projectId,
     organizationId: input.organizationId ?? null,
     name,
+    category: input.category ?? null,
     quantity: input.quantity,
     unit: input.unit,
     unitPrice: unitPrice ?? null,
     totalPrice: totalPrice ?? null,
-    currency: input.currency?.trim() || "EUR",
+    currency,
     supplierName: input.supplierName?.trim() ?? null,
     receiptUrl: input.receiptUrl?.trim() ?? null,
     phaseId: input.phaseId ?? null,
@@ -386,11 +407,12 @@ export async function createProjectMaterial(
     projectId,
     organizationId: input.organizationId,
     name,
+    category: input.category,
     quantity: input.quantity,
     unit: input.unit,
     unitPrice,
     totalPrice,
-    currency: input.currency?.trim() || "EUR",
+    currency,
     supplierName: input.supplierName,
     receiptUrl: input.receiptUrl,
     phaseId: input.phaseId,
@@ -414,6 +436,7 @@ export async function updateProjectMaterial(
   requireAuth();
   const updateData: Record<string, unknown> = { updatedAt: serverTimestamp() };
   if (patch.name !== undefined) updateData.name = patch.name.trim();
+  if (patch.category !== undefined) updateData.category = patch.category ?? null;
   if (patch.quantity !== undefined) updateData.quantity = patch.quantity;
   if (patch.unit !== undefined) updateData.unit = patch.unit;
   if (patch.unitPrice !== undefined) updateData.unitPrice = patch.unitPrice ?? null;
@@ -428,7 +451,7 @@ export async function updateProjectMaterial(
       if (price != null) updateData.totalPrice = qty * price;
     }
   }
-  if (patch.currency !== undefined) updateData.currency = patch.currency?.trim() || "EUR";
+  if (patch.currency !== undefined) updateData.currency = resolveMaterialCurrency({ expenseCurrency: patch.currency });
   if (patch.supplierName !== undefined) updateData.supplierName = patch.supplierName?.trim() ?? null;
   if (patch.receiptUrl !== undefined) updateData.receiptUrl = patch.receiptUrl?.trim() ?? null;
   if (patch.notes !== undefined) updateData.notes = patch.notes?.trim() ?? null;
@@ -440,6 +463,20 @@ export async function updateProjectMaterial(
 export async function deleteProjectMaterial(projectId: string, materialId: string): Promise<void> {
   requireAuth();
   await deleteDoc(doc(db, paths.projectMaterial(projectId, materialId)));
+}
+
+/** Persist multiple AI/OCR suggested materials after explicit user confirmation. */
+export async function createMaterialSuggestionsBatch(
+  projectId: string,
+  items: CreateMaterialSuggestionInput[]
+): Promise<number> {
+  let created = 0;
+  for (const item of items) {
+    if (!item.name?.trim()) continue;
+    await createMaterialSuggestion(projectId, item);
+    created += 1;
+  }
+  return created;
 }
 
 const EXPENSE_ATTACHMENT_NOTE_PREFIX = "expense_attachment:";
@@ -466,5 +503,3 @@ export async function findExistingMaterialNamesForAttachment(
     materialNames: new Set(linkedMaterials.map((m) => m.name.trim().toLowerCase())),
   };
 }
-
-export { MATERIAL_UNITS };

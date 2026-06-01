@@ -16,7 +16,12 @@ import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
 import type { ParsedDocumentLineItem } from "../lib/parsedDocumentTypes";
-import type { MaterialConfidence, MaterialUnit } from "../lib/types";
+import type { MaterialCategory, MaterialConfidence } from "../lib/types";
+import {
+  normalizeMaterialUnit,
+  numericConfidenceToMaterialConfidence,
+  shouldPreselectImportedMaterialRow,
+} from "../lib/materialCatalog";
 import {
   createMaterialSuggestion,
   createProjectMaterial,
@@ -40,10 +45,12 @@ type EditableRow = {
   key: string;
   selected: boolean;
   description: string;
+  category?: MaterialCategory;
   quantity: string;
   unit: string;
   unitPrice: string;
   total: string;
+  currency?: string;
   confidence?: number;
   editing: boolean;
 };
@@ -57,24 +64,8 @@ type Props = {
 
 const IMPORT_NOTE_PREFIX = "expense_attachment:";
 
-function normalizeMaterialUnit(unit?: string): MaterialUnit {
-  if (!unit?.trim()) return "pcs";
-  const u = unit.trim().toLowerCase().replace("m²", "m2").replace("m³", "m3");
-  if (u === "m2") return "m2";
-  if (u === "m") return "m";
-  if (u === "kg") return "kg";
-  if (u === "l" || u === "lt") return "l";
-  if (u === "pack" || u === "bal") return "pack";
-  if (u === "hod" || u === "h" || u === "hour") return "hour";
-  if (u === "ks" || u === "pc" || u === "pcs" || u === "st" || u === "stk") return "pcs";
-  return "other";
-}
-
 function toMaterialConfidence(score?: number): MaterialConfidence | undefined {
-  if (score == null || !Number.isFinite(score)) return undefined;
-  if (score >= 0.75) return "high";
-  if (score >= 0.6) return "medium";
-  return "low";
+  return numericConfidenceToMaterialConfidence(score);
 }
 
 function parseDecimal(raw: string): number | undefined {
@@ -89,10 +80,12 @@ function rowFromItem(item: ParsedDocumentLineItem, index: number, defaultSelecte
     key: `${index}-${(item.description ?? "item").slice(0, 24)}`,
     selected: defaultSelected,
     description: item.description?.trim() ?? "",
+    category: item.category,
     quantity: item.quantity != null ? String(item.quantity) : "",
-    unit: item.unit?.trim() ?? "",
+    unit: item.unit?.trim() ?? item.originalUnit?.trim() ?? "",
     unitPrice: item.unitPrice != null ? String(item.unitPrice) : "",
     total: item.total != null ? String(item.total) : "",
+    currency: item.currency,
     confidence: item.confidence,
     editing: false,
   };
@@ -130,7 +123,11 @@ export function ExpenseLineItemsMaterialImportSheet({
     if (!visible || !context) return;
     setMode("recommended");
     const initial = context.items.map((item, i) =>
-      rowFromItem(item, i, (item.confidence ?? 0) >= 0.6)
+      rowFromItem(
+        item,
+        i,
+        shouldPreselectImportedMaterialRow(item, toMaterialConfidence(item.confidence))
+      )
     );
     setRows(initial);
     void findExistingMaterialNamesForAttachment(context.projectId, context.attachmentId)
@@ -200,32 +197,36 @@ export function ExpenseLineItemsMaterialImportSheet({
         const quantity = parseDecimal(row.quantity);
         const unitPrice = parseDecimal(row.unitPrice);
         const totalPrice = parseDecimal(row.total);
-        const unit = normalizeMaterialUnit(row.unit);
+        const unit = normalizeMaterialUnit(row.unit).unit;
         const confidence = toMaterialConfidence(row.confidence);
         const sourceNote = buildSourceNote(context);
+        const currency = row.currency || context.currency || "EUR";
 
         if (mode === "recommended") {
           await createMaterialSuggestion(context.projectId, {
             name,
+            category: row.category,
             suggestedQuantity: quantity,
             unit,
             estimatedUnitPrice: unitPrice,
             estimatedTotalPrice: totalPrice,
-            currency: context.currency || "EUR",
-            source: "ai",
+            currency,
+            source: "ocr",
             confidence,
             sourceDocumentId: context.attachmentId,
+            sourceExpenseId: context.expenseId,
             sourceNote,
           });
         } else {
           const qty = quantity ?? 0;
           await createProjectMaterial(context.projectId, {
             name,
+            category: row.category,
             quantity: qty,
             unit,
             unitPrice,
             totalPrice,
-            currency: context.currency || "EUR",
+            currency,
             supplierName: context.supplierName?.trim() || undefined,
             usedAt: context.expenseDate ? new Date(context.expenseDate) : new Date(),
             notes: `${IMPORT_NOTE_PREFIX}${context.attachmentId} · ${sourceNote}`,

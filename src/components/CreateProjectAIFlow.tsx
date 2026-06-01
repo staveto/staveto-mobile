@@ -48,6 +48,13 @@ import {
   updateDraftPhaseField,
   updateDraftTaskField,
 } from "../lib/aiProjectDraft";
+import {
+  inferMaterialCategoryFromName,
+  normalizeMaterialUnit,
+  parseMaterialCategory,
+  resolveMaterialCurrency,
+} from "../lib/materialCatalog";
+import { createMaterialSuggestionsBatch } from "../services/projectMaterials";
 import { ProjectAIDraftReview } from "./ProjectAIDraftReview";
 import { RefineDraftNodeSheet } from "./RefineDraftNodeSheet";
 import type {
@@ -1029,6 +1036,32 @@ export function CreateProjectAIFlow({
         }
       }
 
+      const aiMaterials = draftPlan.materialSuggestions?.filter((m) => m.selected && m.name?.trim()) ?? [];
+      if (aiMaterials.length > 0) {
+        try {
+          await createMaterialSuggestionsBatch(
+            projectId,
+            aiMaterials.map((m) => ({
+              name: m.name.trim(),
+              category: parseMaterialCategory(m.category) ?? inferMaterialCategoryFromName(m.name),
+              description: m.description?.trim() || undefined,
+              suggestedQuantity: m.suggestedQuantity,
+              unit: normalizeMaterialUnit(m.unit).unit,
+              estimatedUnitPrice: m.estimatedUnitPrice,
+              estimatedTotalPrice: m.estimatedTotalPrice,
+              currency: resolveMaterialCurrency({ expenseCurrency: m.currency }),
+              source: "ai" as const,
+              confidence: m.confidence,
+              sourceNote: m.sourceNote?.trim() || undefined,
+            }))
+          );
+        } catch (materialErr) {
+          if (__DEV__) {
+            console.warn("[CreateProjectAIFlow] save AI material suggestions failed", materialErr);
+          }
+        }
+      }
+
       logNewJobFlowDebug({
         selectedArchetype: jobArchetype ?? null,
         startMethod: "ai",
@@ -1616,6 +1649,18 @@ export function CreateProjectAIFlow({
             setAddTaskPhaseId(phaseId);
             setAddTaskTitle("");
           }}
+          onToggleMaterialSuggestion={(materialId) =>
+            setDraftPlan((prev) =>
+              prev
+                ? {
+                    ...prev,
+                    materialSuggestions: prev.materialSuggestions?.map((m) =>
+                      m.id === materialId ? { ...m, selected: !m.selected } : m
+                    ),
+                  }
+                : prev
+            )
+          }
           />
         </View>
 

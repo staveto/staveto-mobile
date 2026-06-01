@@ -18,7 +18,8 @@ import { useAuth } from "../../context/AuthContext";
 import { useI18n } from "../../i18n/I18nContext";
 import type { Locale } from "../../i18n/translations";
 import { colors, radius, spacing } from "../../theme";
-import type { MaterialUnit } from "../../lib/types";
+import type { MaterialCategory, MaterialUnit } from "../../lib/types";
+import { MATERIAL_CATEGORIES, formatMaterialTotalsDisplay, resolveMaterialCurrency } from "../../lib/materialCatalog";
 import {
   MATERIAL_UNITS,
   calculateMaterialTotals,
@@ -39,10 +40,12 @@ type RouteParams = { projectId: string; projectName?: string };
 type UsedFormState = {
   id?: string;
   name: string;
+  category: MaterialCategory;
   quantity: string;
   unit: MaterialUnit;
   unitPrice: string;
   totalPrice: string;
+  currency: string;
   supplierName: string;
   notes: string;
   usedAt: Date;
@@ -52,18 +55,24 @@ type UsedFormState = {
 type SuggestionFormState = {
   id?: string;
   name: string;
+  category: MaterialCategory;
   description: string;
   suggestedQuantity: string;
   unit: MaterialUnit;
+  unitPrice: string;
+  totalPrice: string;
+  currency: string;
   sourceNote: string;
 };
 
 const EMPTY_USED: UsedFormState = {
   name: "",
+  category: "other_material",
   quantity: "",
   unit: "pcs",
   unitPrice: "",
   totalPrice: "",
+  currency: "EUR",
   supplierName: "",
   notes: "",
   usedAt: new Date(),
@@ -71,9 +80,13 @@ const EMPTY_USED: UsedFormState = {
 
 const EMPTY_SUGGESTION: SuggestionFormState = {
   name: "",
+  category: "other_material",
   description: "",
   suggestedQuantity: "",
   unit: "pcs",
+  unitPrice: "",
+  totalPrice: "",
+  currency: "EUR",
   sourceNote: "",
 };
 
@@ -103,6 +116,12 @@ function unitLabel(t: (k: string) => string, unit: MaterialUnit): string {
   const key = `projectMaterials.unit.${unit}`;
   const v = t(key);
   return v === key ? unit : v;
+}
+
+function categoryLabel(t: (k: string) => string, category: MaterialCategory): string {
+  const key = `materialCategory.${category}`;
+  const v = t(key);
+  return v === key ? category : v;
 }
 
 function FormField({
@@ -185,10 +204,12 @@ export function ProjectMaterialsScreen() {
     setUsedForm({
       id: m.id,
       name: m.name,
+      category: m.category ?? "other_material",
       quantity: String(m.quantity),
       unit: m.unit,
       unitPrice: m.unitPrice != null ? String(m.unitPrice) : "",
       totalPrice: m.totalPrice != null ? String(m.totalPrice) : "",
+      currency: m.currency || "EUR",
       supplierName: m.supplierName ?? "",
       notes: m.notes ?? "",
       usedAt: new Date(m.usedAt),
@@ -201,10 +222,12 @@ export function ProjectMaterialsScreen() {
     setUsedForm({
       ...EMPTY_USED,
       name: s.name,
+      category: s.category ?? "other_material",
       quantity: s.suggestedQuantity != null ? String(s.suggestedQuantity) : "",
       unit: s.unit ?? "pcs",
       unitPrice: s.estimatedUnitPrice != null ? String(s.estimatedUnitPrice) : "",
       totalPrice: s.estimatedTotalPrice != null ? String(s.estimatedTotalPrice) : "",
+      currency: s.currency || "EUR",
       notes: s.description ?? s.sourceNote ?? "",
       usedAt: new Date(),
       sourceSuggestionId: s.id,
@@ -221,9 +244,13 @@ export function ProjectMaterialsScreen() {
     setSuggestionForm({
       id: s.id,
       name: s.name,
+      category: s.category ?? "other_material",
       description: s.description ?? "",
       suggestedQuantity: s.suggestedQuantity != null ? String(s.suggestedQuantity) : "",
       unit: s.unit ?? "pcs",
+      unitPrice: s.estimatedUnitPrice != null ? String(s.estimatedUnitPrice) : "",
+      totalPrice: s.estimatedTotalPrice != null ? String(s.estimatedTotalPrice) : "",
+      currency: s.currency || "EUR",
       sourceNote: s.sourceNote ?? "",
     });
     setSuggestionModalOpen(true);
@@ -250,10 +277,12 @@ export function ProjectMaterialsScreen() {
       if (usedForm.id) {
         await updateProjectMaterial(projectId, usedForm.id, {
           name,
+          category: usedForm.category,
           quantity,
           unit: usedForm.unit,
           unitPrice,
           totalPrice,
+          currency: resolveMaterialCurrency({ expenseCurrency: usedForm.currency }),
           supplierName: usedForm.supplierName.trim() || undefined,
           notes: usedForm.notes.trim() || undefined,
           usedAt: usedForm.usedAt,
@@ -261,10 +290,12 @@ export function ProjectMaterialsScreen() {
       } else {
         await createProjectMaterial(projectId, {
           name,
+          category: usedForm.category,
           quantity,
           unit: usedForm.unit,
           unitPrice,
           totalPrice,
+          currency: resolveMaterialCurrency({ expenseCurrency: usedForm.currency }),
           supplierName: usedForm.supplierName.trim() || undefined,
           notes: usedForm.notes.trim() || undefined,
           usedAt: usedForm.usedAt,
@@ -288,23 +319,35 @@ export function ProjectMaterialsScreen() {
     }
     const qtyRaw = suggestionForm.suggestedQuantity.trim();
     const suggestedQuantity = qtyRaw ? parseFloat(qtyRaw.replace(",", ".")) : undefined;
+    const unitPriceRaw = suggestionForm.unitPrice.trim();
+    const unitPrice = unitPriceRaw ? parseFloat(unitPriceRaw.replace(",", ".")) : undefined;
+    const totalRaw = suggestionForm.totalPrice.trim();
+    const estimatedTotalPrice = totalRaw ? parseFloat(totalRaw.replace(",", ".")) : undefined;
 
     setSaving(true);
     try {
       if (suggestionForm.id) {
         await updateMaterialSuggestion(projectId, suggestionForm.id, {
           name,
+          category: suggestionForm.category,
           description: suggestionForm.description.trim() || undefined,
           suggestedQuantity: Number.isFinite(suggestedQuantity!) ? suggestedQuantity : undefined,
           unit: suggestionForm.unit,
+          estimatedUnitPrice: Number.isFinite(unitPrice!) ? unitPrice : undefined,
+          estimatedTotalPrice: Number.isFinite(estimatedTotalPrice!) ? estimatedTotalPrice : undefined,
+          currency: resolveMaterialCurrency({ expenseCurrency: suggestionForm.currency }),
           sourceNote: suggestionForm.sourceNote.trim() || undefined,
         });
       } else {
         await createMaterialSuggestion(projectId, {
           name,
+          category: suggestionForm.category,
           description: suggestionForm.description.trim() || undefined,
           suggestedQuantity: Number.isFinite(suggestedQuantity!) ? suggestedQuantity : undefined,
           unit: suggestionForm.unit,
+          estimatedUnitPrice: Number.isFinite(unitPrice!) ? unitPrice : undefined,
+          estimatedTotalPrice: Number.isFinite(estimatedTotalPrice!) ? estimatedTotalPrice : undefined,
+          currency: resolveMaterialCurrency({ expenseCurrency: suggestionForm.currency }),
           sourceNote: suggestionForm.sourceNote.trim() || undefined,
           source: "manual",
         });
@@ -354,6 +397,28 @@ export function ProjectMaterialsScreen() {
     ]);
   };
 
+  const renderCategoryPicker = (
+    selected: MaterialCategory,
+    onSelect: (c: MaterialCategory) => void
+  ) => (
+    <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.categoryScroll}>
+      {MATERIAL_CATEGORIES.map((c) => {
+        const active = selected === c;
+        return (
+          <TouchableOpacity
+            key={c}
+            style={[styles.unitChip, active && styles.unitChipActive]}
+            onPress={() => onSelect(c)}
+          >
+            <Text style={[styles.unitChipText, active && styles.unitChipTextActive]}>
+              {categoryLabel(t, c)}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </ScrollView>
+  );
+
   const renderUnitPicker = (
     selected: MaterialUnit,
     onSelect: (u: MaterialUnit) => void
@@ -389,7 +454,7 @@ export function ProjectMaterialsScreen() {
       <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.totalCard}>
           <Text style={styles.totalLabel}>{t("projectMaterials.materialTotal")}</Text>
-          <Text style={styles.totalValue}>{formatMoney(totals.totalPrice, totals.currency)}</Text>
+          <Text style={styles.totalValue}>{formatMaterialTotalsDisplay(totals)}</Text>
           <Text style={styles.totalMeta}>
             {t("projectOverview.materialsSuggested")}: {plannedSuggestions.length} ·{" "}
             {t("projectOverview.materialsUsed")}: {materials.length}
@@ -519,6 +584,12 @@ export function ProjectMaterialsScreen() {
                 />
               </FormField>
 
+              <FormField label={t("projectMaterials.category")}>
+                {renderCategoryPicker(usedForm.category, (category) =>
+                  setUsedForm((p) => ({ ...p, category }))
+                )}
+              </FormField>
+
               <FormField label={t("projectMaterials.quantity")}>
                 <TextInput
                   {...inputProps}
@@ -550,6 +621,15 @@ export function ProjectMaterialsScreen() {
                   placeholder="0.00"
                   keyboardType="decimal-pad"
                   onChangeText={(v) => setUsedForm((p) => ({ ...p, totalPrice: v }))}
+                />
+              </FormField>
+
+              <FormField label={t("projectMaterials.currency")}>
+                <TextInput
+                  {...inputProps}
+                  value={usedForm.currency}
+                  autoCapitalize="characters"
+                  onChangeText={(v) => setUsedForm((p) => ({ ...p, currency: v.toUpperCase() }))}
                 />
               </FormField>
 
@@ -631,13 +711,28 @@ export function ProjectMaterialsScreen() {
                 />
               </FormField>
 
+              <FormField label={t("projectMaterials.category")}>
+                {renderCategoryPicker(suggestionForm.category, (category) =>
+                  setSuggestionForm((p) => ({ ...p, category }))
+                )}
+              </FormField>
+
               <FormField label={t("projectMaterials.quantity")}>
                 <TextInput
                   {...inputProps}
                   value={suggestionForm.suggestedQuantity}
                   placeholder="0"
                   keyboardType="decimal-pad"
-                  onChangeText={(v) => setSuggestionForm((p) => ({ ...p, suggestedQuantity: v }))}
+                  onChangeText={(v) => {
+                    const q = parseFloat(v.replace(",", "."));
+                    const p = parseFloat(suggestionForm.unitPrice.replace(",", "."));
+                    setSuggestionForm((prev) => ({
+                      ...prev,
+                      suggestedQuantity: v,
+                      totalPrice:
+                        Number.isFinite(q) && Number.isFinite(p) ? (q * p).toFixed(2) : prev.totalPrice,
+                    }));
+                  }}
                 />
               </FormField>
 
@@ -645,6 +740,44 @@ export function ProjectMaterialsScreen() {
                 {renderUnitPicker(suggestionForm.unit, (u) =>
                   setSuggestionForm((p) => ({ ...p, unit: u }))
                 )}
+              </FormField>
+
+              <FormField label={t("projectMaterials.unitPrice")}>
+                <TextInput
+                  {...inputProps}
+                  value={suggestionForm.unitPrice}
+                  placeholder="0.00"
+                  keyboardType="decimal-pad"
+                  onChangeText={(v) => {
+                    const q = parseFloat(suggestionForm.suggestedQuantity.replace(",", "."));
+                    const p = parseFloat(v.replace(",", "."));
+                    setSuggestionForm((prev) => ({
+                      ...prev,
+                      unitPrice: v,
+                      totalPrice:
+                        Number.isFinite(q) && Number.isFinite(p) ? (q * p).toFixed(2) : prev.totalPrice,
+                    }));
+                  }}
+                />
+              </FormField>
+
+              <FormField label={t("projectMaterials.totalPrice")}>
+                <TextInput
+                  {...inputProps}
+                  value={suggestionForm.totalPrice}
+                  placeholder="0.00"
+                  keyboardType="decimal-pad"
+                  onChangeText={(v) => setSuggestionForm((p) => ({ ...p, totalPrice: v }))}
+                />
+              </FormField>
+
+              <FormField label={t("projectMaterials.currency")}>
+                <TextInput
+                  {...inputProps}
+                  value={suggestionForm.currency}
+                  autoCapitalize="characters"
+                  onChangeText={(v) => setSuggestionForm((p) => ({ ...p, currency: v.toUpperCase() }))}
+                />
               </FormField>
 
               <FormField label={t("projectMaterials.notes")}>
@@ -811,6 +944,7 @@ const styles = StyleSheet.create({
   },
   dateInputText: { fontSize: 15, color: colors.text, fontWeight: "500" },
   unitRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
+  categoryScroll: { maxHeight: 88, marginBottom: spacing.xs },
   unitChip: {
     paddingHorizontal: spacing.sm,
     paddingVertical: 8,

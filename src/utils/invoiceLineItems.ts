@@ -1,5 +1,10 @@
 import { parseMoneyToNumber } from "../helpers/parseMoney";
 import type { ParsedDocumentLineItem } from "../lib/parsedDocumentTypes";
+import {
+  inferMaterialCategoryFromName,
+  isInvalidMaterialLineName,
+  normalizeMaterialUnit,
+} from "../lib/materialCatalog";
 
 const MAX_LINE_ITEMS = 50;
 const MAX_AMOUNT = 999_999.99;
@@ -9,7 +14,7 @@ const KNOWN_UNITS =
   /\b(ks|pc|pcs|st|stk|bal|bal\.|pack|m2|m²|m3|m³|bm|m|kg|g|l|lt|hod|h|hod\.|deň|den|d)\b/i;
 
 const SKIP_LINE =
-  /\b(spolu|celkom|celkem|total|suma|uhrad|úhrad|uhraden|zaplac|zaplat|subtotal|mezisúčet|medzisucet|základ|zaklad|dph|vat|tax|iban|swift|bic|variabil|konstant|specif|ičo|ico|dič|dic|ič\s*dph|datum|dátum|date|splatn|due\s*date|faktúra|faktura|invoice|dodávate|dodavatel|supplier|odberate|customer|tel\.|telefon|phone|email|www\.|http|objednáv|objednav|payment|platba|hotovos|karta|card|eur\b|€)\b/i;
+  /\b(spolu|celkom|celkem|total|suma|uhrad|úhrad|uhraden|zaplac|zaplat|subtotal|mezisúčet|medzisucet|základ|zaklad|dph|vat|tax|iban|swift|bic|variabil|konstant|specif|ičo|ico|dič|dic|ič\s*dph|datum|dátum|date|splatn|due\s*date|faktúra|faktura|invoice|dodávate|dodavatel|supplier|odberate|customer|tel\.|telefon|phone|email|www\.|http|objednáv|objednav|payment|platba|hotovos|karta|card|eur\b|€|usd|chf|czk|pln|discount|rabat|zľav|zlev|doprav|transport|shipping)\b/i;
 
 const FINAL_TOTAL_LINE =
   /\b(k\s*úhrade|k\s*uhrade|na\s*úhradu|na\s*uhradu|uhradiť|uhradit|amount\s*due|total\s*due|gesamt|razem|grand\s*total|brutto|spolu\s*v\s*eur)\b/i;
@@ -140,13 +145,21 @@ function parseLineItem(line: string, lineIndex: number, totalLines: number): Par
   }
 
   if (/^\d+$/.test(description)) return null;
+  if (isInvalidMaterialLineName(description)) return null;
   if (SKIP_LINE.test(description) && description.length < 20) return null;
 
   const unitMatch = description.match(KNOWN_UNITS);
   let unit = prefix.unit;
+  let originalUnit: string | undefined;
   if (!unit && unitMatch) {
+    originalUnit = unitMatch[1]!;
     unit = unitMatch[1]!.toLowerCase().replace("m²", "m2").replace("m³", "m3");
     description = description.replace(KNOWN_UNITS, "").replace(/\s+/g, " ").trim();
+  }
+  if (unit) {
+    const normalized = normalizeMaterialUnit(unit);
+    unit = normalized.unit;
+    originalUnit = originalUnit ?? normalized.originalUnit;
   }
 
   if (quantity == null && unitPrice != null && amountsConsistent(1, unitPrice, total)) {
@@ -161,8 +174,10 @@ function parseLineItem(line: string, lineIndex: number, totalLines: number): Par
 
   const item: ParsedDocumentLineItem = {
     description: description.slice(0, 200) || undefined,
+    category: inferMaterialCategoryFromName(description),
     quantity,
     unit,
+    originalUnit,
     unitPrice,
     total,
     taxRate,
@@ -194,7 +209,10 @@ function dedupeItems(items: ParsedDocumentLineItem[]): ParsedDocumentLineItem[] 
  * Best-effort extraction of invoice/receipt line items from OCR plain text.
  * Returns [] when uncertain; never throws.
  */
-export function extractPossibleInvoiceLineItems(rawText: string): ParsedDocumentLineItem[] {
+export function extractPossibleInvoiceLineItems(
+  rawText: string,
+  opts?: { currency?: string }
+): ParsedDocumentLineItem[] {
   try {
     const lines = normalizeLines(rawText);
     if (lines.length < 3) return [];
@@ -205,9 +223,14 @@ export function extractPossibleInvoiceLineItems(rawText: string): ParsedDocument
       if (parsed) items.push(parsed);
     }
 
+    const currency = opts?.currency?.trim().toUpperCase();
     const deduped = dedupeItems(items)
       .sort((a, b) => (b.confidence ?? 0) - (a.confidence ?? 0))
-      .slice(0, MAX_LINE_ITEMS);
+      .slice(0, MAX_LINE_ITEMS)
+      .map((item) => ({
+        ...item,
+        currency: item.currency ?? (currency && /^[A-Z]{3}$/.test(currency) ? currency : undefined),
+      }));
 
     return deduped;
   } catch {

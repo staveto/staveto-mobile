@@ -225,7 +225,8 @@ export function buildParsedDocumentData(input: {
   });
 
   const normalizedForItems = parseBundle.normalizedText || rawText;
-  const items = extractPossibleInvoiceLineItems(normalizedForItems);
+  const docCurrency = totalRes.currency !== "UNKNOWN" ? totalRes.currency : undefined;
+  const items = extractPossibleInvoiceLineItems(normalizedForItems, { currency: docCurrency });
   if (__DEV__) {
     console.log("[ExpenseLineItemsDebug]", {
       rawTextLength: normalizedForItems.length,

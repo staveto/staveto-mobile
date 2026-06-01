@@ -4,6 +4,7 @@
  */
 
 import type { ExpenseParseDebugSnapshot, ExtractionQuality } from "./expenseDocumentParseTypes";
+import type { MaterialCategory } from "./types";
 
 export type ParsedDocumentType =
   | "invoice"
@@ -28,12 +29,17 @@ export type ScoredCandidate<T> = {
 
 export type ParsedDocumentLineItem = {
   description?: string;
+  /** Broad material category when inferred from line text. */
+  category?: MaterialCategory;
   quantity?: number;
   /** Unit of measure when detected (ks, m, m², kg, …). */
   unit?: string;
+  /** Raw unit text before normalization. */
+  originalUnit?: string;
   unitPrice?: number;
   total?: number;
   taxRate?: number;
+  currency?: string;
   /** Heuristic confidence 0–1 for future review UI. */
   confidence?: number;
 };

@@ -58,6 +58,7 @@ import {
   listMaterialSuggestions,
   listProjectMaterials,
 } from "../services/projectMaterials";
+import { formatMaterialTotalsDisplay } from "../lib/materialCatalog";
 import * as problemsService from "../services/problems";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectMembersService from "../services/projectMembers";
@@ -547,8 +548,7 @@ export function ProjectOverviewScreen() {
   const [projectDocuments, setProjectDocuments] = useState<ProjectDocumentDoc[]>([]);
   const [materialPlannedCount, setMaterialPlannedCount] = useState(0);
   const [materialUsedCount, setMaterialUsedCount] = useState(0);
-  const [materialTotalPrice, setMaterialTotalPrice] = useState(0);
-  const [materialCurrency, setMaterialCurrency] = useState("EUR");
+  const [materialTotalsDisplay, setMaterialTotalsDisplay] = useState("0.00 EUR");
   const [projectMembers, setProjectMembers] = useState<ProjectMemberDoc[]>([]);
   const [showAssigneeModal, setShowAssigneeModal] = useState(false);
   const [assigneeTask, setAssigneeTask] = useState<TaskDoc | null>(null);
@@ -1239,13 +1239,12 @@ export function ProjectOverviewScreen() {
       setMaterialPlannedCount(suggestions.filter((s) => s.status === "planned").length);
       setMaterialUsedCount(usedMaterials.length);
       const totals = calculateMaterialTotals(usedMaterials);
-      setMaterialTotalPrice(totals.totalPrice);
-      setMaterialCurrency(totals.currency);
+      setMaterialTotalsDisplay(formatMaterialTotalsDisplay(totals));
     } catch (e) {
       if (__DEV__) console.warn("[ProjectOverview] loadMaterialSummary failed", e);
       setMaterialPlannedCount(0);
       setMaterialUsedCount(0);
-      setMaterialTotalPrice(0);
+      setMaterialTotalsDisplay("0.00 EUR");
     }
   }, [projectId]);
 
@@ -5524,7 +5523,7 @@ export function ProjectOverviewScreen() {
               </Text>
               <Text style={styles.expenseTitle}>
                 {t("projectOverview.materialsTotal", {
-                  amount: `${materialTotalPrice.toFixed(2)} ${materialCurrency}`,
+                  amount: materialTotalsDisplay,
                 })}
               </Text>
             </View>

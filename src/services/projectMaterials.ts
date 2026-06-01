@@ -312,6 +312,11 @@ export async function rejectMaterialSuggestion(projectId: string, suggestionId: 
   await updateMaterialSuggestion(projectId, suggestionId, { status: "rejected" });
 }
 
+export async function deleteMaterialSuggestion(projectId: string, suggestionId: string): Promise<void> {
+  requireAuth();
+  await deleteDoc(doc(db, paths.projectMaterialSuggestion(projectId, suggestionId)));
+}
+
 /** Mark suggestion accepted after user confirms used material entry. */
 export async function acceptMaterialSuggestion(projectId: string, suggestionId: string): Promise<void> {
   await updateMaterialSuggestion(projectId, suggestionId, { status: "accepted" });

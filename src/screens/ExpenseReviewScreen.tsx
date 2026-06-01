@@ -13,6 +13,7 @@ import {
   ExpenseLineItemsMaterialImportSheet,
   type ExpenseMaterialImportContext,
 } from "../components/ExpenseLineItemsMaterialImportSheet";
+import { runInvoiceMaterialImportAfterExpense } from "../services/invoiceMaterialImportService";
 
 type RouteParams = {
   projectId: string;
@@ -75,7 +76,7 @@ function toNumber(value: string): number | null {
 }
 
 export function ExpenseReviewScreen() {
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const navigation = useNavigation();
   const route = useRoute();
   const params = route.params as RouteParams;
@@ -167,18 +168,31 @@ export function ExpenseReviewScreen() {
         ...(ocrAuditSnapshot ? { ocrAuditSnapshot } : {}),
       });
       Alert.alert(t("common.success"), t("projectOverview.expenseUpdated"));
-      const lineItems = params.lineItems ?? [];
-      if (lineItems.length > 0 && params.attachmentId) {
-        setMaterialImportSheet({
-          projectId: params.projectId,
-          expenseId: params.expenseId,
-          attachmentId: params.attachmentId,
-          currency: effectiveCurrency,
-          supplierName: supplierName.trim() || undefined,
-          expenseTitle: title.trim(),
-          expenseDate: date,
-          items: lineItems,
-        });
+      const rawText = params.ocrRawTextTruncated ?? "";
+      if (params.attachmentId && rawText.trim().length >= 40) {
+        try {
+          const importCtx = await runInvoiceMaterialImportAfterExpense({
+            projectId: params.projectId,
+            expenseId: params.expenseId,
+            attachmentId: params.attachmentId,
+            storagePath: params.storagePath,
+            rawText,
+            currency: effectiveCurrency,
+            supplierName: supplierName.trim() || undefined,
+            expenseTitle: title.trim(),
+            expenseDate: date,
+            localeHint: locale,
+            regexLineItems: params.lineItems ?? [],
+            aiSourceNote: t("expenseMaterialImport.importedFromInvoiceAi"),
+          });
+          if (importCtx) {
+            setMaterialImportSheet(importCtx);
+          } else {
+            (navigation as { goBack: () => void }).goBack();
+          }
+        } catch {
+          (navigation as { goBack: () => void }).goBack();
+        }
       } else {
         (navigation as { goBack: () => void }).goBack();
       }

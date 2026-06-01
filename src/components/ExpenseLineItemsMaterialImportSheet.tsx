@@ -26,7 +26,10 @@ import {
 import {
   createMaterialSuggestion,
   createProjectMaterial,
+  deleteMaterialSuggestion,
   findExistingMaterialNamesForAttachment,
+  updateMaterialSuggestion,
+  type MaterialSuggestionDoc,
 } from "../services/projectMaterials";
 
 export type ExpenseMaterialImportContext = {
@@ -37,13 +40,19 @@ export type ExpenseMaterialImportContext = {
   supplierName?: string;
   expenseTitle?: string;
   expenseDate?: string;
-  items: ParsedDocumentLineItem[];
+  /** Legacy: import rows on confirm. */
+  items?: ParsedDocumentLineItem[];
+  /** AI/review: suggestions already saved to Firestore. */
+  variant?: "pendingImport" | "savedReview";
+  savedSuggestions?: MaterialSuggestionDoc[];
+  aiExtractionAttempted?: boolean;
 };
 
 type ImportMode = "recommended" | "used";
 
 type EditableRow = {
   key: string;
+  suggestionId?: string;
   selected: boolean;
   description: string;
   category?: MaterialCategory;
@@ -53,6 +62,7 @@ type EditableRow = {
   total: string;
   currency?: string;
   confidence?: number;
+  confidenceLabel?: MaterialConfidence;
   editing: boolean;
 };
 
@@ -95,6 +105,26 @@ function buildImportRowDetailsLine(row: EditableRow, fallbackCurrency: string): 
   return parts.join(" · ");
 }
 
+function rowFromSuggestion(s: MaterialSuggestionDoc, defaultSelected: boolean): EditableRow {
+  const confScore =
+    s.confidence === "high" ? 0.9 : s.confidence === "medium" ? 0.65 : s.confidence === "low" ? 0.4 : undefined;
+  return {
+    key: s.id,
+    suggestionId: s.id,
+    selected: defaultSelected,
+    description: s.name,
+    category: s.category,
+    quantity: s.suggestedQuantity != null ? String(s.suggestedQuantity) : "",
+    unit: s.unit ?? "",
+    unitPrice: s.estimatedUnitPrice != null ? String(s.estimatedUnitPrice) : "",
+    total: s.estimatedTotalPrice != null ? String(s.estimatedTotalPrice) : "",
+    currency: s.currency,
+    confidence: confScore,
+    confidenceLabel: s.confidence,
+    editing: false,
+  };
+}
+
 function rowFromItem(item: ParsedDocumentLineItem, index: number, defaultSelected: boolean): EditableRow {
   return {
     key: `${index}-${(item.description ?? "item").slice(0, 24)}`,
@@ -129,8 +159,8 @@ export function ExpenseLineItemsMaterialImportSheet({
   });
 
   const confidenceLabel = useCallback(
-    (score?: number) => {
-      const c = toMaterialConfidence(score);
+    (score?: number, label?: MaterialConfidence) => {
+      const c = label ?? toMaterialConfidence(score);
       if (c === "high") return t("projectMaterials.confidence.high");
       if (c === "medium") return t("projectMaterials.confidence.medium");
       if (c === "low") return t("projectMaterials.confidence.low");
@@ -139,10 +169,26 @@ export function ExpenseLineItemsMaterialImportSheet({
     [t]
   );
 
+  const isSavedReview = context?.variant === "savedReview";
+
   useEffect(() => {
     if (!visible || !context) return;
     setMode("recommended");
-    const validItems = context.items.filter((item) => !shouldRejectOcrMaterialImportItem(item));
+    if (isSavedReview && context.savedSuggestions?.length) {
+      const initial = context.savedSuggestions.map((s) =>
+        rowFromSuggestion(
+          s,
+          s.confidence !== "low" &&
+            s.category !== "service_or_labor" &&
+            s.category !== "transport" &&
+            s.category !== "discount"
+        )
+      );
+      setRows(initial);
+      setAlreadyImported(false);
+      return;
+    }
+    const validItems = (context.items ?? []).filter((item) => !shouldRejectOcrMaterialImportItem(item));
     const initial = validItems.map((item, i) =>
       rowFromItem(
         item,
@@ -183,16 +229,101 @@ export function ExpenseLineItemsMaterialImportSheet({
     return parts.join(" · ");
   };
 
+  const deleteRow = async (row: EditableRow) => {
+    if (!context || !row.suggestionId) return;
+    try {
+      await deleteMaterialSuggestion(context.projectId, row.suggestionId);
+      setRows((prev) => prev.filter((r) => r.key !== row.key));
+    } catch {
+      Alert.alert(t("common.error"), t("expenseMaterialImport.couldNotAdd"));
+    }
+  };
+
+  const persistRowEdits = async (row: EditableRow) => {
+    if (!context || !row.suggestionId) return;
+    const quantity = parseDecimal(row.quantity);
+    const unitPrice = parseDecimal(row.unitPrice);
+    const totalPrice = parseDecimal(row.total);
+    const unit = normalizeMaterialUnit(row.unit).unit;
+    await updateMaterialSuggestion(context.projectId, row.suggestionId, {
+      name: row.description.trim(),
+      category: row.category,
+      suggestedQuantity: quantity,
+      unit,
+      estimatedUnitPrice: unitPrice,
+      estimatedTotalPrice: totalPrice,
+      currency: row.currency || context.currency,
+    });
+  };
+
   const handleImport = async () => {
     if (!context) return;
     const selected = rows.filter((r) => r.selected);
-    if (selected.length === 0) {
+
+    if (isSavedReview) {
+      if (mode === "recommended") {
+        onDismiss();
+        return;
+      }
+      if (selected.length === 0) {
+        Alert.alert(t("common.error"), t("expenseMaterialImport.noItemsSelected"));
+        return;
+      }
+      const missingQty = selected.filter((r) => {
+        const q = parseDecimal(r.quantity);
+        return q == null || q <= 0;
+      });
+      if (missingQty.length > 0) {
+        Alert.alert(t("common.error"), t("expenseMaterialImport.quantityRequired"));
+        return;
+      }
+      setSaving(true);
+      let created = 0;
+      try {
+        for (const row of selected) {
+          if (row.editing) await persistRowEdits(row);
+          const quantity = parseDecimal(row.quantity) ?? 0;
+          const unitPrice = parseDecimal(row.unitPrice);
+          const totalPrice = parseDecimal(row.total);
+          const unit = normalizeMaterialUnit(row.unit).unit;
+          const currency = row.currency || context.currency || "EUR";
+          const sourceNote = buildSourceNote(context);
+          await createProjectMaterial(context.projectId, {
+            name: row.description.trim(),
+            category: row.category,
+            quantity,
+            unit,
+            unitPrice,
+            totalPrice,
+            currency,
+            supplierName: context.supplierName?.trim() || undefined,
+            usedAt: context.expenseDate ? new Date(context.expenseDate) : new Date(),
+            notes: `${IMPORT_NOTE_PREFIX}${context.attachmentId} · ${sourceNote}`,
+            sourceSuggestionId: row.suggestionId,
+          });
+          created += 1;
+        }
+        if (created > 0) {
+          Alert.alert(t("common.success"), t("expenseMaterialImport.itemsImported", { count: String(created) }));
+          onImported?.(created);
+        }
+        onDismiss();
+      } catch (e) {
+        Alert.alert(t("common.error"), t("expenseMaterialImport.couldNotAdd"));
+      } finally {
+        setSaving(false);
+      }
+      return;
+    }
+
+    const selectedLegacy = selected;
+    if (selectedLegacy.length === 0) {
       Alert.alert(t("common.error"), t("expenseMaterialImport.noItemsSelected"));
       return;
     }
 
     if (mode === "used") {
-      const missingQty = selected.filter((r) => {
+      const missingQty = selectedLegacy.filter((r) => {
         const q = parseDecimal(r.quantity);
         return q == null || q <= 0;
       });
@@ -207,7 +338,7 @@ export function ExpenseLineItemsMaterialImportSheet({
     const importedNames = new Set<string>();
     const existing = existingNamesRef.current;
     try {
-      for (const row of selected) {
+      for (const row of selectedLegacy) {
         const name = row.description.trim();
         if (!name) continue;
         const nameKey = name.toLowerCase();
@@ -276,6 +407,13 @@ export function ExpenseLineItemsMaterialImportSheet({
     }
   };
 
+  const sheetTitle = isSavedReview
+    ? t("expenseMaterialImport.aiAddedTitle")
+    : t("expenseMaterialImport.title");
+  const sheetSubtitle = isSavedReview
+    ? t("expenseMaterialImport.aiAddedSubtitle")
+    : t("expenseMaterialImport.subtitle");
+
   if (!context) return null;
 
   return (
@@ -283,9 +421,9 @@ export function ExpenseLineItemsMaterialImportSheet({
       <Pressable style={styles.overlay} onPress={onDismiss}>
         <Pressable style={[styles.sheet, { paddingBottom: Math.max(insets.bottom, spacing.md) }]} onPress={() => {}}>
           <View style={styles.handle} />
-          <Text style={styles.title}>{t("expenseMaterialImport.title")}</Text>
-          <Text style={styles.subtitle}>{t("expenseMaterialImport.subtitle")}</Text>
-          {alreadyImported ? (
+          <Text style={styles.title}>{sheetTitle}</Text>
+          <Text style={styles.subtitle}>{sheetSubtitle}</Text>
+          {alreadyImported && !isSavedReview ? (
             <Text style={styles.warning}>{t("expenseMaterialImport.alreadyImported")}</Text>
           ) : null}
 
@@ -295,7 +433,9 @@ export function ExpenseLineItemsMaterialImportSheet({
               onPress={() => setMode("recommended")}
             >
               <Text style={[styles.modeChipText, mode === "recommended" && styles.modeChipTextActive]}>
-                {t("expenseMaterialImport.modeRecommended")}
+                {isSavedReview
+                  ? t("expenseMaterialImport.keepRecommended")
+                  : t("expenseMaterialImport.modeRecommended")}
               </Text>
             </TouchableOpacity>
             <TouchableOpacity
@@ -308,7 +448,9 @@ export function ExpenseLineItemsMaterialImportSheet({
             </TouchableOpacity>
           </View>
 
-          <Text style={styles.hint}>{t("expenseMaterialImport.selectItemsHint")}</Text>
+          <Text style={styles.hint}>
+            {isSavedReview ? t("expenseMaterialImport.aiReviewHint") : t("expenseMaterialImport.selectItemsHint")}
+          </Text>
 
           <ScrollView style={styles.list} contentContainerStyle={styles.listContent}>
             {rows.length === 0 ? (
@@ -338,7 +480,9 @@ export function ExpenseLineItemsMaterialImportSheet({
                     ) : null}
                   </View>
                   <View style={styles.confidenceBadge}>
-                    <Text style={styles.confidenceText}>{confidenceLabel(row.confidence)}</Text>
+                    <Text style={styles.confidenceText}>
+                      {confidenceLabel(row.confidence, row.confidenceLabel)}
+                    </Text>
                   </View>
                 </TouchableOpacity>
 
@@ -389,10 +533,18 @@ export function ExpenseLineItemsMaterialImportSheet({
                   </View>
                 ) : null}
 
-                <TouchableOpacity style={styles.editBtn} onPress={() => toggleEdit(row.key)}>
-                  <Ionicons name="create-outline" size={16} color={colors.primary} />
-                  <Text style={styles.editBtnText}>{t("projectMaterials.editMaterial")}</Text>
-                </TouchableOpacity>
+                <View style={styles.rowActions}>
+                  <TouchableOpacity style={styles.editBtn} onPress={() => toggleEdit(row.key)}>
+                    <Ionicons name="create-outline" size={16} color={colors.primary} />
+                    <Text style={styles.editBtnText}>{t("projectMaterials.editMaterial")}</Text>
+                  </TouchableOpacity>
+                  {isSavedReview && row.suggestionId ? (
+                    <TouchableOpacity style={styles.editBtn} onPress={() => deleteRow(row)}>
+                      <Ionicons name="trash-outline" size={16} color="#c0392b" />
+                      <Text style={[styles.editBtnText, styles.deleteBtnText]}>{t("common.delete")}</Text>
+                    </TouchableOpacity>
+                  ) : null}
+                </View>
               </View>
             ))}
           </ScrollView>
@@ -402,15 +554,19 @@ export function ExpenseLineItemsMaterialImportSheet({
               <Text style={styles.skipText}>{t("expenseMaterialImport.skip")}</Text>
             </TouchableOpacity>
             <TouchableOpacity
-              style={[styles.importBtn, (saving || selectedCount === 0) && styles.importBtnDisabled]}
+              style={[styles.importBtn, (saving || (!isSavedReview && selectedCount === 0)) && styles.importBtnDisabled]}
               onPress={handleImport}
-              disabled={saving || selectedCount === 0}
+              disabled={saving || (!isSavedReview && selectedCount === 0)}
             >
               {saving ? (
                 <ActivityIndicator color="#fff" />
               ) : (
                 <Text style={styles.importBtnText}>
-                  {t("expenseMaterialImport.addSelected")} ({selectedCount})
+                  {isSavedReview
+                    ? mode === "used"
+                      ? `${t("expenseMaterialImport.addAsUsed")} (${selectedCount})`
+                      : t("expenseMaterialImport.keepRecommended")
+                    : `${t("expenseMaterialImport.addSelected")} (${selectedCount})`}
                 </Text>
               )}
             </TouchableOpacity>
@@ -495,7 +651,9 @@ const styles = StyleSheet.create({
     marginTop: spacing.xs,
   },
   inputSmall: { flex: 1, marginTop: 0 },
-  editBtn: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: spacing.xs, alignSelf: "flex-start" },
+  editBtn: { flexDirection: "row", alignItems: "center", gap: 4, marginTop: spacing.xs },
+  rowActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.xs },
+  deleteBtnText: { color: "#c0392b" },
   editBtnText: { fontSize: 12, fontWeight: "600", color: colors.primary },
   actions: {
     flexDirection: "row",

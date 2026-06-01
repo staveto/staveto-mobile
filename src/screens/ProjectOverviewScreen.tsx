@@ -82,6 +82,7 @@ import {
   ExpenseLineItemsMaterialImportSheet,
   type ExpenseMaterialImportContext,
 } from "../components/ExpenseLineItemsMaterialImportSheet";
+import { runInvoiceMaterialImportAfterExpense } from "../services/invoiceMaterialImportService";
 import { DocumentScanOverlay } from "../components/DocumentScanOverlay";
 import { autoCropDocumentImage } from "../utils/documentAutoCrop";
 import type { ParsedDocumentLineItem } from "../lib/parsedDocumentTypes";
@@ -461,6 +462,7 @@ export function ProjectOverviewScreen() {
     storagePath?: string;
   } | null>(null);
   const [expenseOcrLineItems, setExpenseOcrLineItems] = useState<ParsedDocumentLineItem[]>([]);
+  const [expenseOcrRawText, setExpenseOcrRawText] = useState<string>("");
   const [materialImportSheet, setMaterialImportSheet] = useState<ExpenseMaterialImportContext | null>(null);
   const access = useProjectAccess(projectId, projectOwnerId);
   const isOwner = access.isOwner || (!!projectOwnerId && !!user?.id && projectOwnerId === user.id);
@@ -2440,6 +2442,7 @@ export function ProjectOverviewScreen() {
     if (prefill.supplierName) setExpenseSupplierName(prefill.supplierName);
     if (prefill.supplierIco) setExpenseSupplierIco(prefill.supplierIco);
     setExpenseOcrLineItems(ocrResult.parsedDocument?.items ?? []);
+    setExpenseOcrRawText(ocrResult.rawText?.slice(0, 12_000) ?? "");
   };
 
   const cleanupPreuploadedExpenseAttachment = async (
@@ -2603,6 +2606,7 @@ export function ProjectOverviewScreen() {
       setExpenseOcrStatus(result.status);
       setExpenseOcrExtractionSource(result.extractionSource ?? null);
       setExpenseOcrLineItems(result.parsedDocument?.items ?? []);
+      setExpenseOcrRawText(result.rawText?.slice(0, 12_000) ?? "");
       if (result.status === "success") {
         applyOcrPrefill(result);
       } else {
@@ -2615,6 +2619,7 @@ export function ProjectOverviewScreen() {
       setExpenseOcrStatus("failed");
       setExpenseOcrExtractionSource(null);
       setExpenseOcrLineItems([]);
+      setExpenseOcrRawText("");
       Alert.alert(t("common.warning"), getOcrFallbackMessage(error?.code || error?.message));
     } finally {
       setUploadingExpenseAttachment(false);
@@ -3298,21 +3303,37 @@ export function ProjectOverviewScreen() {
         }
 
         if (!openedOcrReview) {
-          const shouldOfferMaterialImport =
-            savedExpenseId &&
-            savedAttachmentIdForImport &&
-            expenseOcrLineItems.length > 0;
-          if (shouldOfferMaterialImport && savedExpenseId && savedAttachmentIdForImport) {
-            setMaterialImportSheet({
-              projectId,
-              expenseId: savedExpenseId,
-              attachmentId: savedAttachmentIdForImport,
-              currency: expenseCurrency || "EUR",
-              supplierName: expenseSupplierName.trim() || undefined,
-              expenseTitle: titleValue,
-              expenseDate: expenseDate,
-              items: expenseOcrLineItems,
-            });
+          const canImportMaterials =
+            savedExpenseId && savedAttachmentIdForImport && expenseOcrRawText.trim().length >= 40;
+          if (canImportMaterials && savedExpenseId && savedAttachmentIdForImport) {
+            try {
+              const importCtx = await runInvoiceMaterialImportAfterExpense({
+                projectId,
+                expenseId: savedExpenseId,
+                attachmentId: savedAttachmentIdForImport,
+                storagePath: expensePreuploadedAttachment?.storagePath,
+                rawText: expenseOcrRawText,
+                fileName: expensePreuploadedAttachment?.fileName ?? expenseAttachment?.fileName,
+                mimeType: expensePreuploadedAttachment?.mimeType ?? expenseAttachment?.mimeType,
+                currency: expenseCurrency || "EUR",
+                supplierName: expenseSupplierName.trim() || undefined,
+                expenseTitle: titleValue,
+                expenseDate: expenseDate,
+                localeHint: locale,
+                regexLineItems: expenseOcrLineItems,
+                aiSourceNote: t("expenseMaterialImport.importedFromInvoiceAi"),
+              });
+              if (importCtx) {
+                setMaterialImportSheet(importCtx);
+              } else {
+                Alert.alert(t("common.success"), t("projectOverview.expenseAdded"));
+              }
+            } catch (materialErr) {
+              if (__DEV__) {
+                console.warn("[ProjectOverview] invoice material AI import failed", materialErr);
+              }
+              Alert.alert(t("common.success"), t("projectOverview.expenseAdded"));
+            }
           } else {
             Alert.alert(t("common.success"), t("projectOverview.expenseAdded"));
           }
@@ -3322,6 +3343,7 @@ export function ProjectOverviewScreen() {
       setExpenseAttachment(null);
       setExpensePreuploadedAttachment(null);
       setExpenseOcrLineItems([]);
+      setExpenseOcrRawText("");
       setExpenseCategory(undefined);
       setExpenseSupplierName("");
       setExpenseSupplierIco("");

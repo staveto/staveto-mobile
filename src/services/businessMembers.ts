@@ -372,3 +372,11 @@ export async function updateBusinessMemberRole(
     role: (data.role as OrgRole) ?? input.role,
   };
 }
+
+/** Team project assignment helpers (implemented in `projects.ts`). */
+export {
+  assignMemberToBusinessProject,
+  listBusinessOrgProjects,
+  listBusinessProjectsAssignedToMember,
+  unassignMemberFromBusinessProject,
+} from "./projects";

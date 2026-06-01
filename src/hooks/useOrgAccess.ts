@@ -100,10 +100,16 @@ export function useOrgAccess() {
 
     const canCreateProject = isOwner || isAdmin || permissions.canCreateProject;
 
-    const canViewAllProjects = isOwner || isAdmin || permissions.canViewAllProjects;
+    const canViewAllProjects = isOwner || isAdmin || isManager || permissions.canViewAllProjects;
 
     const canViewAssignedProjects =
-      isOwner || isAdmin || permissions.canViewAssignedProjects || permissions.canViewAllProjects;
+      isOwner || isAdmin || isManager || permissions.canViewAssignedProjects || permissions.canViewAllProjects;
+
+    const restrictsToAssignedProjectsOnly =
+      !!activeBusinessOrgId &&
+      isActiveMember &&
+      !canViewAllProjects &&
+      (isWorker || isViewer);
 
     let dashboardBlockReason = "dashboard_allowed";
     if (!activeBusinessOrgId) {
@@ -157,6 +163,7 @@ export function useOrgAccess() {
       canCreateProject,
       canViewAllProjects,
       canViewAssignedProjects,
+      restrictsToAssignedProjectsOnly,
       canAddDailyReport: isOwner || permissions.canAddDailyReport,
       canAddPhotos: isOwner || permissions.canAddPhotos,
       canAddMaterial: isOwner || permissions.canAddMaterial,

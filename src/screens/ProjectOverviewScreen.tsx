@@ -42,10 +42,12 @@ import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
 import { useCapabilities } from "../hooks/useCapabilities";
+import { useOrgAccess } from "../hooks/useOrgAccess";
 import { useProjectAccess, fetchProjectAccess } from "../hooks/useProjectAccess";
 import type { SmartReadOptions } from "../services/firestoreSmartRead";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
+import { canAccessBusinessTeamProject, isBusinessTeamProject } from "../services/projects";
 import { auth } from "../firebase";
 import { updatePhase, deletePhase, createPhase } from "../services/projects";
 import * as tasksService from "../services/tasks";
@@ -228,6 +230,7 @@ export function ProjectOverviewScreen() {
   const insets = useSafeAreaInsets();
   const { t, locale } = useI18n();
   const { user, orgId } = useAuth();
+  const { role, canViewAllProjects } = useOrgAccess();
   /** Solo namespace for writes; never block saves when AuthContext orgId is briefly null. */
   const ownerIdForWrite = orgId ?? user?.id ?? null;
   const routeParams = (route.params as {
@@ -329,6 +332,7 @@ export function ProjectOverviewScreen() {
   );
   const [expenses, setExpenses] = useState<ExpenseDoc[]>([]);
   const [loading, setLoading] = useState(true);
+  const [businessProjectAccessDenied, setBusinessProjectAccessDenied] = useState(false);
   const [refreshing, setRefreshing] = useState(false);
   const [expandedPhases, setExpandedPhases] = useState<Map<string, boolean>>(new Map());
   const expandedPhasesRef = React.useRef<Map<string, boolean>>(new Map());
@@ -738,13 +742,39 @@ export function ProjectOverviewScreen() {
       // Load project data to get projectType and templateId
       console.log(`[ProjectOverview] Loading project ${projectId}...`);
       let project = null;
+      let projectLoadDenied = false;
       try {
         project = await projectsService.getProject(projectId);
       } catch (error: any) {
         console.error(`[ProjectOverview] Error loading project:`, error);
-        // If project doesn't exist or permission denied, continue without project metadata
-        // Phases/tasks might still load if user has access
+        const code = String(error?.code ?? error?.message ?? "");
+        if (code.includes("permission-denied") || code.includes("Nemáte oprávnenie")) {
+          projectLoadDenied = true;
+        }
         project = null;
+      }
+
+      if (project && isBusinessTeamProject(project)) {
+        const allowed = canAccessBusinessTeamProject(project, {
+          uid: currentUserUid,
+          orgRole: role,
+          canViewAllProjects,
+        });
+        if (!allowed) {
+          if (routeProjectIdRef.current === loadForProjectId) {
+            setBusinessProjectAccessDenied(true);
+          }
+          return;
+        }
+      } else if (projectLoadDenied) {
+        if (routeProjectIdRef.current === loadForProjectId) {
+          setBusinessProjectAccessDenied(true);
+        }
+        return;
+      }
+
+      if (routeProjectIdRef.current === loadForProjectId) {
+        setBusinessProjectAccessDenied(false);
       }
       
       if (project) {
@@ -1026,7 +1056,7 @@ export function ProjectOverviewScreen() {
         setRefreshing(false);
       }
     }
-  }, [projectId, projectOwnerId, projectType, user?.id]);
+  }, [projectId, projectOwnerId, projectType, user?.id, role, canViewAllProjects]);
   
   const toLocalYmd = useCallback((d: Date): string => {
     const y = d.getFullYear();
@@ -4229,6 +4259,22 @@ export function ProjectOverviewScreen() {
     return (
       <View style={styles.centered}>
         <Text style={styles.muted}>{t("projectOverview.projectNotFound") || "Project not found."}</Text>
+      </View>
+    );
+  }
+
+  if (businessProjectAccessDenied) {
+    return (
+      <View style={[styles.centered, { paddingTop: insets.top, paddingHorizontal: 24 }]}>
+        <TouchableOpacity onPress={goBack} style={{ alignSelf: "flex-start", marginBottom: 16 }}>
+          <Ionicons name="arrow-back" size={24} color={colors.textOnDark} />
+        </TouchableOpacity>
+        <Text style={[styles.headerTitle, { textAlign: "center", marginBottom: 8 }]}>
+          {t("business.projects.accessDenied.title")}
+        </Text>
+        <Text style={[styles.muted, { textAlign: "center", lineHeight: 22 }]}>
+          {t("business.projects.accessDenied.body")}
+        </Text>
       </View>
     );
   }

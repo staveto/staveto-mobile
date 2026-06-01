@@ -23,8 +23,16 @@ import { useFocusEffect, useRoute, useNavigation } from "@react-navigation/nativ
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
+import { useActiveOrg } from "../hooks/useActiveOrg";
+import { useOrgAccess } from "../hooks/useOrgAccess";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
+import {
+  isBusinessTeamProject,
+  listBusinessOrgProjects,
+  listBusinessProjectsAssignedToMember,
+  stampBusinessTeamProject,
+} from "../services/projects";
 import * as projectMembersService from "../services/projectMembers";
 import * as tasksService from "../services/tasks";
 import * as projectCoverService from "../services/projectCover";
@@ -123,6 +131,9 @@ export function ProjectsScreen() {
   const navigation = useNavigation();
   const { t, locale } = useI18n();
   const { orgId, user } = useAuth();
+  const { activeBusinessOrgId } = useActiveOrg();
+  const { canViewAllProjects, restrictsToAssignedProjectsOnly } = useOrgAccess();
+  const authUid = user?.id ?? orgId ?? "";
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -265,7 +276,34 @@ export function ProjectsScreen() {
         }
       }
       console.log('[ProjectsScreen] Loading projects for orgId:', orgId);
-      const list = await projectsService.listAllMyProjects(orgId, { forceServerRead: isRefresh });
+      let list = await projectsService.listAllMyProjects(orgId, { forceServerRead: isRefresh });
+
+      if (activeBusinessOrgId && authUid) {
+        if (canViewAllProjects) {
+          const orgProjects = await listBusinessOrgProjects(activeBusinessOrgId);
+          const known = new Set(list.map((p) => p.id));
+          for (const row of orgProjects) {
+            if (!known.has(row.id)) list.push(row);
+          }
+        } else if (restrictsToAssignedProjectsOnly) {
+          const assigned = await listBusinessProjectsAssignedToMember(activeBusinessOrgId, authUid);
+          const known = new Set(list.map((p) => p.id));
+          for (const row of assigned) {
+            if (!known.has(row.id)) {
+              row.isSharedToMe = true;
+              list.push(row);
+            }
+          }
+        }
+      }
+
+      list = list.filter((project) => {
+        if (!isBusinessTeamProject(project)) return true;
+        if (!activeBusinessOrgId || project.orgId !== activeBusinessOrgId) return true;
+        if (canViewAllProjects) return true;
+        return project.ownerId === authUid || (project.assignedMemberIds ?? []).includes(authUid);
+      });
+
       console.log('[ProjectsScreen] Loaded', list.length, 'projects');
       setProjects(list);
       void runLegacyProjectTypeBackfillOncePerSession(list);
@@ -298,7 +336,7 @@ export function ProjectsScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [orgId]);
+  }, [orgId, activeBusinessOrgId, authUid, canViewAllProjects, restrictsToAssignedProjectsOnly]);
 
   const onRefresh = useCallback(() => {
     load(true);
@@ -350,6 +388,9 @@ export function ProjectsScreen() {
         return;
       }
       try {
+        if (activeBusinessOrgId) {
+          await stampBusinessTeamProject(payload.projectId, activeBusinessOrgId);
+        }
         await AsyncStorage.setItem("@staveto:lastUsedProjectId", payload.projectId);
       } catch {
         /* ignore */
@@ -365,7 +406,7 @@ export function ProjectsScreen() {
       await trackPaywallEvent("project_created");
       await checkAndShowPaywall(user?.billing, navigation, "project_created");
     },
-    [load, navigation, orgId, t, user?.billing]
+    [activeBusinessOrgId, load, navigation, orgId, t, user?.billing]
   );
 
   const openProjectMenu = (item: Project) => {
@@ -636,6 +677,9 @@ export function ProjectsScreen() {
     return activeProjects;
   }, [activeProjects, archivedProjects, listStatusFilter, projectStats]);
 
+  const showBusinessWorkerEmpty =
+    restrictsToAssignedProjectsOnly && !loading && visibleProjects.length === 0;
+
   if (loading) {
     return (
       <View style={styles.centered}>
@@ -649,12 +693,21 @@ export function ProjectsScreen() {
       {!visibleProjects.length && !loading ? (
         <View style={[styles.emptyHero, { paddingTop: insets.top + spacing.xl }]}>
           <Ionicons name="folder-open-outline" size={48} color={colors.textMuted} style={styles.emptyHeroIcon} />
-          <Text style={styles.emptyHeroTitle}>{t("projectsTab.empty.title")}</Text>
-          <Text style={styles.emptyHeroBody}>{t("projectsTab.empty.body")}</Text>
-          <TouchableOpacity style={styles.emptyPrimaryCta} onPress={openCreateProject} activeOpacity={0.88}>
-            <Ionicons name="add-circle-outline" size={22} color="#fff" />
-            <Text style={styles.emptyPrimaryCtaText}>{t("projectsTab.newJob")}</Text>
-          </TouchableOpacity>
+          {showBusinessWorkerEmpty ? (
+            <>
+              <Text style={styles.emptyHeroTitle}>{t("business.projects.noAssigned.title")}</Text>
+              <Text style={styles.emptyHeroBody}>{t("business.projects.noAssigned.body")}</Text>
+            </>
+          ) : (
+            <>
+              <Text style={styles.emptyHeroTitle}>{t("projectsTab.empty.title")}</Text>
+              <Text style={styles.emptyHeroBody}>{t("projectsTab.empty.body")}</Text>
+              <TouchableOpacity style={styles.emptyPrimaryCta} onPress={openCreateProject} activeOpacity={0.88}>
+                <Ionicons name="add-circle-outline" size={22} color="#fff" />
+                <Text style={styles.emptyPrimaryCtaText}>{t("projectsTab.newJob")}</Text>
+              </TouchableOpacity>
+            </>
+          )}
           <TouchableOpacity style={styles.emptySecondaryTap} onPress={onRefresh} disabled={refreshing}>
             <Text style={styles.emptySecondaryTapText}>
               {refreshing ? t("common.refreshing") : t("common.refresh")}

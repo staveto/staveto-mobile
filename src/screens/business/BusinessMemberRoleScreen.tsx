@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useLayoutEffect, useMemo, useState } fro
 import {
   ActivityIndicator,
   Alert,
+  Modal,
   ScrollView,
   StyleSheet,
   Switch,
@@ -12,6 +13,7 @@ import {
 import { useNavigation, useRoute } from "@react-navigation/native";
 import { useI18n } from "../../i18n/I18nContext";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
+import { useOrgAccess } from "../../hooks/useOrgAccess";
 import {
   getOrgMemberByDocId,
   listMembers,
@@ -19,6 +21,13 @@ import {
   type MembershipDoc,
 } from "../../services/businessMembers";
 import type { OrgRole } from "../../services/organizations";
+import {
+  assignMemberToBusinessProject,
+  listBusinessOrgProjects,
+  listBusinessProjectsAssignedToMember,
+  unassignMemberFromBusinessProject,
+  type ProjectDoc,
+} from "../../services/projects";
 import {
   BUSINESS_PERMISSION_KEYS,
   PERMISSION_SECTIONS,
@@ -86,6 +95,7 @@ export function BusinessMemberRoleScreen() {
   const navigation = useNavigation();
   const route = useRoute();
   const { activeMembership } = useActiveOrg();
+  const { canManageTeam, isManager, permissions: actorPermissions } = useOrgAccess();
   const params = (route.params ?? {}) as Partial<RouteParams>;
   const orgId = typeof params.orgId === "string" ? params.orgId : "";
   const memberDocId = typeof params.memberDocId === "string" ? params.memberDocId : "";
@@ -96,10 +106,21 @@ export function BusinessMemberRoleScreen() {
   const [selectedRole, setSelectedRole] = useState<OrgRole | null>(null);
   const [permissions, setPermissions] = useState<BusinessPermissions | null>(null);
   const [saving, setSaving] = useState(false);
+  const [assignedProjects, setAssignedProjects] = useState<ProjectDoc[]>([]);
+  const [orgProjects, setOrgProjects] = useState<ProjectDoc[]>([]);
+  const [assignmentsLoading, setAssignmentsLoading] = useState(false);
+  const [assignBusyFor, setAssignBusyFor] = useState<string | null>(null);
+  const [showAssignPicker, setShowAssignPicker] = useState(false);
 
   const actorRole = activeMembership?.role ?? "viewer";
   const isActorOwner = actorRole === "owner";
   const isActorAdmin = actorRole === "admin";
+  const canAssignProjects =
+    canManageTeam &&
+    (isActorOwner ||
+      isActorAdmin ||
+      isManager ||
+      actorPermissions.canAssignProjectMembers);
 
   const load = useCallback(async () => {
     if (!orgId || !memberDocId) {
@@ -129,6 +150,32 @@ export function BusinessMemberRoleScreen() {
       setLoading(false);
     }
   }, [orgId, memberDocId]);
+
+  const loadAssignments = useCallback(async () => {
+    if (!orgId || !member?.userId) {
+      setAssignedProjects([]);
+      setOrgProjects([]);
+      return;
+    }
+    setAssignmentsLoading(true);
+    try {
+      const [assigned, allOrg] = await Promise.all([
+        listBusinessProjectsAssignedToMember(orgId, member.userId),
+        canAssignProjects ? listBusinessOrgProjects(orgId) : Promise.resolve([] as ProjectDoc[]),
+      ]);
+      setAssignedProjects(assigned);
+      setOrgProjects(allOrg);
+    } catch (e) {
+      console.warn("[BusinessMemberRoleScreen] loadAssignments failed", e);
+      setAssignedProjects([]);
+    } finally {
+      setAssignmentsLoading(false);
+    }
+  }, [orgId, member?.userId, canAssignProjects]);
+
+  useEffect(() => {
+    void loadAssignments();
+  }, [loadAssignments, member?.userId, member?.id]);
 
   useEffect(() => {
     void load();
@@ -209,6 +256,50 @@ export function BusinessMemberRoleScreen() {
       Alert.alert(t("common.error"), mapRoleUpdateError(t, error));
     } finally {
       setSaving(false);
+    }
+  };
+
+  const assignableProjects = useMemo(() => {
+    const assignedIds = new Set(assignedProjects.map((p) => p.id));
+    return orgProjects.filter((p) => !assignedIds.has(p.id));
+  }, [assignedProjects, orgProjects]);
+
+  const onAssignProject = async (project: ProjectDoc) => {
+    if (!orgId || !member?.userId || !canAssignProjects) return;
+    setAssignBusyFor(project.id);
+    try {
+      await assignMemberToBusinessProject({
+        orgId,
+        projectId: project.id,
+        memberUid: member.userId,
+        memberName: getMemberName(member),
+        memberRole: selectedRole ?? member.role,
+      });
+      setShowAssignPicker(false);
+      await loadAssignments();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      Alert.alert(t("common.error"), msg);
+    } finally {
+      setAssignBusyFor(null);
+    }
+  };
+
+  const onUnassignProject = async (project: ProjectDoc) => {
+    if (!orgId || !member?.userId || !canAssignProjects) return;
+    setAssignBusyFor(project.id);
+    try {
+      await unassignMemberFromBusinessProject({
+        orgId,
+        projectId: project.id,
+        memberUid: member.userId,
+      });
+      await loadAssignments();
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : String(error);
+      Alert.alert(t("common.error"), msg);
+    } finally {
+      setAssignBusyFor(null);
     }
   };
 
@@ -351,6 +442,69 @@ export function BusinessMemberRoleScreen() {
           </TouchableOpacity>
         </View>
       ) : null}
+
+      <View style={styles.assignmentsCard}>
+        <Text style={styles.assignmentsSectionTitle}>{t("business.team.assignedProjects.title")}</Text>
+        <Text style={styles.assignmentsHint}>{t("business.team.assignedProjects.hint")}</Text>
+        {!member.userId ? (
+          <Text style={styles.permissionsHint}>{t("business.team.assignedProjects.pendingMember")}</Text>
+        ) : assignmentsLoading ? (
+          <ActivityIndicator color={colors.primary} style={styles.assignmentsSpinner} />
+        ) : assignedProjects.length === 0 ? (
+          <Text style={styles.permissionsHint}>{t("business.team.assignedProjects.noProjects")}</Text>
+        ) : (
+          assignedProjects.map((project) => (
+            <View key={project.id} style={styles.assignedRow}>
+              <Text style={styles.assignedName} numberOfLines={1}>
+                {project.name}
+              </Text>
+              {canAssignProjects ? (
+                <TouchableOpacity
+                  style={styles.unassignButton}
+                  disabled={assignBusyFor === project.id}
+                  onPress={() => void onUnassignProject(project)}
+                >
+                  <Text style={styles.unassignButtonText}>
+                    {t("business.team.assignedProjects.remove")}
+                  </Text>
+                </TouchableOpacity>
+              ) : null}
+            </View>
+          ))
+        )}
+        {canAssignProjects && member.userId ? (
+          <TouchableOpacity
+            style={[styles.secondaryButton, assignableProjects.length === 0 && styles.buttonDisabled]}
+            disabled={assignableProjects.length === 0}
+            onPress={() => setShowAssignPicker(true)}
+          >
+            <Text style={styles.secondaryButtonText}>{t("business.team.assignedProjects.assign")}</Text>
+          </TouchableOpacity>
+        ) : null}
+      </View>
+
+      <Modal visible={showAssignPicker} animationType="slide" transparent onRequestClose={() => setShowAssignPicker(false)}>
+        <View style={styles.modalOverlay}>
+          <View style={styles.modalCard}>
+            <Text style={styles.modalTitle}>{t("business.team.assignedProjects.pickTitle")}</Text>
+            <ScrollView style={styles.modalList}>
+              {assignableProjects.map((project) => (
+                <TouchableOpacity
+                  key={project.id}
+                  style={styles.pickerRow}
+                  disabled={assignBusyFor === project.id}
+                  onPress={() => void onAssignProject(project)}
+                >
+                  <Text style={styles.pickerRowText}>{project.name}</Text>
+                </TouchableOpacity>
+              ))}
+            </ScrollView>
+            <TouchableOpacity style={styles.modalCloseButton} onPress={() => setShowAssignPicker(false)}>
+              <Text style={styles.modalCloseText}>{t("common.close")}</Text>
+            </TouchableOpacity>
+          </View>
+        </View>
+      </Modal>
 
       <TouchableOpacity
         style={[styles.saveButton, (!canEdit || saving || !isDirty) && styles.saveButtonDisabled]}
@@ -553,5 +707,89 @@ const styles = StyleSheet.create({
     color: "#FFFFFF",
     fontSize: 16,
     fontWeight: "800",
+  },
+  assignmentsCard: {
+    backgroundColor: "#132347",
+    borderRadius: 14,
+    padding: 14,
+    gap: 8,
+    borderWidth: 1,
+    borderColor: "rgba(148,163,184,0.35)",
+  },
+  assignmentsSectionTitle: {
+    fontSize: 16,
+    fontWeight: "800",
+    color: "#F8FAFC",
+  },
+  assignmentsHint: {
+    color: "#94A3B8",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  assignmentsSpinner: {
+    marginVertical: 8,
+  },
+  assignedRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 8,
+    paddingVertical: 6,
+  },
+  assignedName: {
+    flex: 1,
+    color: "#F8FAFC",
+    fontSize: 15,
+    fontWeight: "600",
+  },
+  unassignButton: {
+    paddingHorizontal: 10,
+    paddingVertical: 6,
+    borderRadius: 8,
+    backgroundColor: "rgba(248,113,113,0.15)",
+  },
+  unassignButtonText: {
+    color: "#FCA5A5",
+    fontSize: 12,
+    fontWeight: "700",
+  },
+  modalOverlay: {
+    flex: 1,
+    backgroundColor: "rgba(15,23,42,0.55)",
+    justifyContent: "flex-end",
+  },
+  modalCard: {
+    backgroundColor: "#FFFFFF",
+    borderTopLeftRadius: 16,
+    borderTopRightRadius: 16,
+    padding: 16,
+    maxHeight: "70%",
+    gap: 10,
+  },
+  modalTitle: {
+    fontSize: 18,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  modalList: {
+    maxHeight: 360,
+  },
+  pickerRow: {
+    paddingVertical: 12,
+    borderBottomWidth: StyleSheet.hairlineWidth,
+    borderBottomColor: "#E2E8F0",
+  },
+  pickerRowText: {
+    fontSize: 16,
+    color: "#0F172A",
+    fontWeight: "600",
+  },
+  modalCloseButton: {
+    alignItems: "center",
+    paddingVertical: 12,
+  },
+  modalCloseText: {
+    color: colors.primary,
+    fontSize: 16,
+    fontWeight: "700",
   },
 });

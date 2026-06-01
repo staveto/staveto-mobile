@@ -1,4 +1,5 @@
 import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
+import firestore from "@react-native-firebase/firestore";
 import { collection, collectionGroup, addDoc, query, where, getDocs, updateDoc, doc, deleteDoc, orderBy, getDoc, setDoc, serverTimestamp, limit } from "../lib/rnFirestore";
 import { getDocSmart, getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { withTimeout } from "../utils/withTimeout";
@@ -127,7 +128,27 @@ export type ProjectDoc = {
   serviceMaintenanceScope?: ServiceMaintenanceScope | null;
   /** User-entered friendly job reference (optional). */
   referenceNumber?: string;
+  /** Business team workspace: organization that owns this job. */
+  orgId?: string;
+  /** `team` = company project with assignment-based access. */
+  workspaceType?: string;
+  /** UIDs of org members explicitly assigned to this team project. */
+  assignedMemberIds?: string[];
 };
+
+export type AssignedMemberSnapshot = {
+  uid: string;
+  name?: string;
+  role?: string;
+};
+
+export function isBusinessTeamProject(project: Pick<ProjectDoc, "orgId" | "workspaceType">): boolean {
+  return (
+    typeof project.orgId === "string" &&
+    project.orgId.trim().length > 0 &&
+    (project.workspaceType === "team" || project.workspaceType === "business" || !project.workspaceType)
+  );
+}
 
 export type ProjectPhaseDoc = { id: string; name: string; description?: string; order: number };
 
@@ -181,6 +202,14 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
       typeof d.referenceNumber === "string" && d.referenceNumber.trim() !== ""
         ? (d.referenceNumber as string).trim()
         : undefined,
+    orgId: typeof d.orgId === "string" && d.orgId.trim() !== "" ? (d.orgId as string).trim() : undefined,
+    workspaceType:
+      typeof d.workspaceType === "string" && d.workspaceType.trim() !== ""
+        ? (d.workspaceType as string).trim()
+        : undefined,
+    assignedMemberIds: Array.isArray(d.assignedMemberIds)
+      ? (d.assignedMemberIds as unknown[]).filter((id): id is string => typeof id === "string" && id.trim() !== "")
+      : undefined,
   };
 }
 
@@ -813,4 +842,233 @@ export async function deletePhase(projectId: string, phaseId: string): Promise<v
   const ref = doc(db, paths.projectPhase(projectId, phaseId));
   await deleteDoc(ref);
   console.log(`[projects] Deleted phase ${phaseId} from project ${projectId}`);
+}
+
+const MAX_ORG_PROJECTS = 200;
+
+function parseAssignedSnapshots(raw: unknown): AssignedMemberSnapshot[] {
+  if (!Array.isArray(raw)) return [];
+  const out: AssignedMemberSnapshot[] = [];
+  for (const row of raw) {
+    if (!row || typeof row !== "object") continue;
+    const uid = typeof (row as { uid?: unknown }).uid === "string" ? (row as { uid: string }).uid.trim() : "";
+    if (!uid) continue;
+    out.push({
+      uid,
+      name:
+        typeof (row as { name?: unknown }).name === "string"
+          ? (row as { name: string }).name.trim()
+          : undefined,
+      role:
+        typeof (row as { role?: unknown }).role === "string"
+          ? (row as { role: string }).role.trim()
+          : undefined,
+    });
+  }
+  return out;
+}
+
+/**
+ * Marks an existing project as a business team job and assigns the creator.
+ */
+export async function stampBusinessTeamProject(projectId: string, orgId: string): Promise<void> {
+  const uid = auth.currentUser?.uid;
+  if (!uid) throw new Error("Musíte byť prihlásený.");
+  const normalizedOrgId = orgId.trim();
+  if (!normalizedOrgId) throw new Error("Chýba identifikátor firmy.");
+
+  const projectRef = doc(db, COLLECTION, projectId);
+  const memberRef = doc(db, paths.projectMember(projectId, uid));
+
+  await setDoc(
+    memberRef,
+    {
+      userId: uid,
+      role: "owner",
+      status: "active",
+      permissionLevel: "editor",
+      addedAt: serverTimestamp(),
+      sharedItems: {
+        tasks: true,
+        phases: true,
+        expenses: true,
+        diary: true,
+        documents: true,
+        timeTracking: true,
+      },
+    },
+    { merge: true }
+  );
+
+  await updateDoc(projectRef, {
+    orgId: normalizedOrgId,
+    workspaceType: "team",
+    assignedMemberIds: firestore.FieldValue.arrayUnion(uid),
+    updatedAt: serverTimestamp(),
+  });
+  invalidateProjectsSessionCache();
+}
+
+/** Lists all non-archived team projects for an organization (managers+). */
+export async function listBusinessOrgProjects(orgId: string): Promise<ProjectDoc[]> {
+  const normalizedOrgId = orgId.trim();
+  if (!normalizedOrgId) return [];
+
+  const q = query(
+    collection(db, COLLECTION),
+    where("orgId", "==", normalizedOrgId),
+    limit(MAX_ORG_PROJECTS)
+  );
+  const snap = await getDocsSmart(q);
+  return snap.docs
+    .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }))
+    .filter((p): p is ProjectDoc => p != null && !p.archivedAt && isBusinessTeamProject(p));
+}
+
+/** Lists team projects assigned to a member within an organization. */
+export async function listBusinessProjectsAssignedToMember(
+  orgId: string,
+  memberUid: string
+): Promise<ProjectDoc[]> {
+  const normalizedOrgId = orgId.trim();
+  const uid = memberUid.trim();
+  if (!normalizedOrgId || !uid) return [];
+
+  const q = query(
+    collection(db, COLLECTION),
+    where("assignedMemberIds", "array-contains", uid),
+    limit(MAX_ORG_PROJECTS)
+  );
+  const snap = await getDocsSmart(q);
+  return snap.docs
+    .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }))
+    .filter(
+      (p): p is ProjectDoc =>
+        p != null &&
+        !p.archivedAt &&
+        p.orgId === normalizedOrgId &&
+        isBusinessTeamProject(p)
+    );
+}
+
+export async function assignMemberToBusinessProject(input: {
+  orgId: string;
+  projectId: string;
+  memberUid: string;
+  memberName?: string;
+  memberRole?: string;
+}): Promise<void> {
+  const actorUid = auth.currentUser?.uid;
+  if (!actorUid) throw new Error("Musíte byť prihlásený.");
+
+  const orgId = input.orgId.trim();
+  const projectId = input.projectId.trim();
+  const memberUid = input.memberUid.trim();
+  if (!orgId || !projectId || !memberUid) throw new Error("Neplatné parametre priradenia.");
+
+  const projectRef = doc(db, COLLECTION, projectId);
+  const projectSnap = await getDocSmart(projectRef);
+  if (!projectSnap.exists()) throw new Error("Projekt sa nenašiel.");
+  const project = toDoc({ id: projectSnap.id, data: projectSnap.data.bind(projectSnap) });
+  if (!project || project.orgId !== orgId || !isBusinessTeamProject(project)) {
+    throw new Error("Projekt nepatrí tejto firme.");
+  }
+
+  const memberRef = doc(db, paths.projectMember(projectId, memberUid));
+  await setDoc(
+    memberRef,
+    {
+      userId: memberUid,
+      role: "member",
+      status: "active",
+      permissionLevel: "editor",
+      addedAt: serverTimestamp(),
+      name: input.memberName?.trim() || undefined,
+      sharedItems: {
+        tasks: true,
+        phases: true,
+        expenses: true,
+        diary: true,
+        documents: true,
+        timeTracking: true,
+      },
+    },
+    { merge: true }
+  );
+
+  const patch: Record<string, unknown> = {
+    assignedMemberIds: firestore.FieldValue.arrayUnion(memberUid),
+    updatedAt: serverTimestamp(),
+  };
+  if (input.memberName?.trim() || input.memberRole?.trim()) {
+    const existing = parseAssignedSnapshots(projectSnap.data()?.assignedMemberSnapshots);
+    const next = existing.filter((row) => row.uid !== memberUid);
+    next.push({
+      uid: memberUid,
+      name: input.memberName?.trim() || undefined,
+      role: input.memberRole?.trim() || undefined,
+    });
+    patch.assignedMemberSnapshots = next;
+  }
+
+  await updateDoc(projectRef, patch);
+  invalidateProjectsSessionCache();
+}
+
+export async function unassignMemberFromBusinessProject(input: {
+  orgId: string;
+  projectId: string;
+  memberUid: string;
+}): Promise<void> {
+  const actorUid = auth.currentUser?.uid;
+  if (!actorUid) throw new Error("Musíte byť prihlásený.");
+
+  const orgId = input.orgId.trim();
+  const projectId = input.projectId.trim();
+  const memberUid = input.memberUid.trim();
+  if (!orgId || !projectId || !memberUid) throw new Error("Neplatné parametre.");
+
+  const projectRef = doc(db, COLLECTION, projectId);
+  const projectSnap = await getDocSmart(projectRef);
+  if (!projectSnap.exists()) throw new Error("Projekt sa nenašiel.");
+  const raw = projectSnap.data();
+  if (raw?.orgId !== orgId) throw new Error("Projekt nepatrí tejto firme.");
+
+  const memberRef = doc(db, paths.projectMember(projectId, memberUid));
+  try {
+    await deleteDoc(memberRef);
+  } catch {
+    // Member doc may already be missing; assignment array is authoritative.
+  }
+
+  const existing = parseAssignedSnapshots(raw?.assignedMemberSnapshots);
+  const patch: Record<string, unknown> = {
+    assignedMemberIds: firestore.FieldValue.arrayRemove(memberUid),
+    updatedAt: serverTimestamp(),
+  };
+  if (existing.length > 0) {
+    patch.assignedMemberSnapshots = existing.filter((row) => row.uid !== memberUid);
+  }
+
+  await updateDoc(projectRef, patch);
+  invalidateProjectsSessionCache();
+}
+
+/** Whether the signed-in user may open a business team project. */
+export function canAccessBusinessTeamProject(
+  project: ProjectDoc,
+  options: {
+    uid: string;
+    orgRole: string | null;
+    canViewAllProjects: boolean;
+  }
+): boolean {
+  if (!isBusinessTeamProject(project)) return true;
+  const uid = options.uid;
+  if (project.ownerId === uid) return true;
+  if (options.canViewAllProjects) return true;
+  if (options.orgRole === "owner" || options.orgRole === "admin" || options.orgRole === "manager") {
+    return true;
+  }
+  return (project.assignedMemberIds ?? []).includes(uid);
 }

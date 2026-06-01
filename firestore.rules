@@ -109,20 +109,67 @@ service cloud.firestore {
       return get(/databases/$(database)/documents/projects/$(projectId)).data.orgId;
     }
 
+    function projectDoc(projectId) {
+      return get(/databases/$(database)/documents/projects/$(projectId)).data;
+    }
+
+    function isOrgLinkedProjectData(data) {
+      return data.orgId != null && data.orgId != '';
+    }
+
+    function isAssignedOnProject(projectId) {
+      let data = projectDoc(projectId);
+      return ('assignedMemberIds' in data && uid() in data.assignedMemberIds)
+        || (
+          exists(/databases/$(database)/documents/projects/$(projectId)/members/$(uid()))
+          && (
+            !("status" in get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data)
+            || get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.status == "active"
+          )
+        );
+    }
+
+    function canManageOrgProjectAssignments(projectId) {
+      let data = projectDoc(projectId);
+      if (!isOrgLinkedProjectData(data)) return false;
+      let orgId = data.orgId;
+      return data.ownerId == uid()
+        || isOrgOwner(orgId, uid())
+        || isOrgAdmin(orgId, uid())
+        || isOrgManager(orgId, uid());
+    }
+
+    function canReadOrgLinkedProject(projectId) {
+      let data = projectDoc(projectId);
+      if (!isOrgLinkedProjectData(data)) return false;
+      let orgId = data.orgId;
+      if (data.ownerId == uid()) return true;
+      if (isOrgOwner(orgId, uid()) || isOrgAdmin(orgId, uid()) || isOrgManager(orgId, uid())) return true;
+      return isAssignedOnProject(projectId);
+    }
+
+    function assignmentPatchOnly() {
+      return request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+        'assignedMemberIds',
+        'assignedMemberSnapshots',
+        'updatedAt'
+      ]);
+    }
+
     function hasProjectAccess(projectId) {
       return signedIn() && exists(/databases/$(database)/documents/projects/$(projectId))
         && (
-          get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid()
+          projectDoc(projectId).ownerId == uid()
           || isMember(projectId)
-          || (projectOrgId(projectId) != null && isOrgMember(projectOrgId(projectId), uid()))
+          || (isOrgLinkedProjectData(projectDoc(projectId)) && canReadOrgLinkedProject(projectId))
         );
     }
 
     function canManageProject(projectId) {
       return signedIn() && exists(/databases/$(database)/documents/projects/$(projectId))
         && (
-          get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid()
-          || (projectOrgId(projectId) != null && isOrgAdmin(projectOrgId(projectId), uid()))
+          projectDoc(projectId).ownerId == uid()
+          || canManageOrgProjectAssignments(projectId)
         );
     }
 
@@ -146,7 +193,6 @@ service cloud.firestore {
               || get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.status == "active"
             )
           )
-          || (projectOrgId(projectId) != null && isOrgMember(projectOrgId(projectId), uid()))
         );
     }
 
@@ -199,7 +245,8 @@ service cloud.firestore {
             && exists(/databases/$(database)/documents/projects/$(projectId)/members/$(uid()))
             && (get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.permissionLevel == 'editor'
                 || get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.permissionLevel == 'admin'))
-        || (projectOrgId(projectId) != null && isOrgMember(projectOrgId(projectId), uid()));
+        || canManageOrgProjectAssignments(projectId)
+        || (isOrgLinkedProjectData(projectDoc(projectId)) && isAssignedOnProject(projectId));
     }
 
     // Users (každý len svoj)
@@ -406,28 +453,30 @@ service cloud.firestore {
               && isOrgMember(request.resource.data.orgId, uid()))
         );
 
-      // read: owner, project member, or org member
+      // read: owner, project member, or org-linked assignment / manager
       allow read: if signedIn()
         && (resource.data.ownerId == uid()
             || isMember(projectId)
-            || (resource.data.orgId != null && isOrgMember(resource.data.orgId, uid()))
+            || (isOrgLinkedProjectData(resource.data) && canReadOrgLinkedProject(projectId))
             || !("ownerId" in resource.data));
 
-      // delete: owner or org admin
+      // delete: owner or org manager+
       allow delete: if signedIn()
         && (resource.data.ownerId == uid()
-            || (resource.data.orgId != null && isOrgAdmin(resource.data.orgId, uid())));
+            || canManageOrgProjectAssignments(projectId));
 
-      // update: owner or org admin; ownerId cannot change
+      // update: owner or org manager+; managers may patch assignments only
       allow update: if signedIn()
-        && (resource.data.ownerId == uid()
-            || (resource.data.orgId != null && isOrgAdmin(resource.data.orgId, uid())))
+        && (
+          resource.data.ownerId == uid()
+          || canManageOrgProjectAssignments(projectId)
+        )
         && (!("ownerId" in request.resource.data) || request.resource.data.ownerId == resource.data.ownerId);
 
       // members subcollection
       match /members/{memberUid} {
-        allow read: if isOwner(projectId) || isMember(projectId);
-        allow create, update, delete: if isOwner(projectId);
+        allow read: if isOwner(projectId) || isMember(projectId) || canReadOrgLinkedProject(projectId);
+        allow create, update, delete: if isOwner(projectId) || canManageOrgProjectAssignments(projectId);
       }
 
       // tasks: enforce sharedItems.tasks
@@ -467,7 +516,7 @@ service cloud.firestore {
         allow read: if signedIn()
           && (
             isOwner(projectId) || isMember(projectId)
-            || (projectOrgId(projectId) != null && isOrgMember(projectOrgId(projectId), uid()))
+            || canReadOrgLinkedProject(projectId)
           );
         allow write: if canWriteAsEditor(projectId);
       }
@@ -477,7 +526,7 @@ service cloud.firestore {
         allow read: if signedIn()
           && (
             isOwner(projectId) || isMember(projectId)
-            || (projectOrgId(projectId) != null && isOrgMember(projectOrgId(projectId), uid()))
+            || canReadOrgLinkedProject(projectId)
           );
         allow write: if canWriteAsEditor(projectId);
       }
@@ -517,7 +566,7 @@ service cloud.firestore {
           && (
             get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid()
             || isMember(projectId)
-            || (projectOrgId(projectId) != null && isOrgMember(projectOrgId(projectId), uid()))
+            || canReadOrgLinkedProject(projectId)
             || !("ownerId" in get(/databases/$(database)/documents/projects/$(projectId)).data)
           );
         allow write: if signedIn() && canWriteAsEditor(projectId);
@@ -529,7 +578,7 @@ service cloud.firestore {
           && (
             get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid()
             || isMember(projectId)
-            || (projectOrgId(projectId) != null && isOrgMember(projectOrgId(projectId), uid()))
+            || canReadOrgLinkedProject(projectId)
             || !("ownerId" in get(/databases/$(database)/documents/projects/$(projectId)).data)
           );
         allow write: if signedIn() && canWriteAsEditor(projectId);

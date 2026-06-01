@@ -83,10 +83,20 @@ const CATEGORY_KEYWORDS: Array<{ category: MaterialCategory; patterns: RegExp[] 
 ];
 
 const UNIT_ONLY_NAME =
-  /^(ks|kus|kusy|pc|pcs|stk|st|m2|m²|m3|m³|m|kg|g|l|lt|bal|pack|box|hod|h|hour|set|pair|eur|€|usd|chf|czk|pln|gbp)$/i;
+  /^(ks|kus|kusy|pc|pcs|stk|st|m2|m²|m3|m³|m|kg|g|l|lt|bal|pack|box|hod|h|hour|set|pair|eur|€|usd|chf|czk|pln|gbp|mj)$/i;
 
 const HEADER_OR_META_NAME =
-  /^(popis|description|názov|nazov|name|množstvo|mnozstvo|qty|quantity|j\.?c\.?|unit\s*price|cena|amount|suma|total|dph|vat|tax|ean|barcode|kód|kod)$/i;
+  /^(popis|description|názov|nazov|name|množstvo|mnozstvo|qty|quantity|j\.?c\.?|unit\s*price|cena|amount|suma|total|spolu|celkom|celkem|dph|vat|tax|ean|barcode|kód|kod|poznámka|poznamka|note|mj)$/i;
+
+/** Normalize OCR line text before unit/header rejection checks. */
+export function normalizeMaterialLineNameForValidation(name: string): string {
+  let t = name.normalize("NFKC").trim().toLowerCase();
+  t = t.replace(/^[\[(【「『]+|[\])】」』]+$/g, "").trim();
+  t = t.replace(/[.,:;]+$/g, "").trim();
+  t = t.replace(/\s+/g, " ");
+  t = t.replace("m²", "m2").replace("m³", "m3");
+  return t;
+}
 
 export function normalizeMaterialUnit(raw?: string): { unit: MaterialUnit; originalUnit?: string } {
   if (!raw?.trim()) return { unit: "pcs" };
@@ -138,7 +148,8 @@ export function inferMaterialCategoryFromName(name: string): MaterialCategory {
 }
 
 export function isInvalidMaterialLineName(name: string): boolean {
-  const t = name.trim();
+  const t = normalizeMaterialLineNameForValidation(name);
+  if (!t) return true;
   if (t.length < 3) return true;
   if (UNIT_ONLY_NAME.test(t)) return true;
   if (HEADER_OR_META_NAME.test(t)) return true;

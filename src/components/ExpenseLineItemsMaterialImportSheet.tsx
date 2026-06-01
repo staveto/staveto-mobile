@@ -75,6 +75,25 @@ function parseDecimal(raw: string): number | undefined {
   return Number.isFinite(n) ? n : undefined;
 }
 
+function formatMoneyDisplay(raw: string, currency: string): string {
+  const n = parseDecimal(raw);
+  const code = currency.trim().toUpperCase() || "EUR";
+  return n != null ? `${n.toFixed(2)} ${code}` : `${raw} ${code}`;
+}
+
+function buildImportRowDetailsLine(row: EditableRow, fallbackCurrency: string): string {
+  const currency = (row.currency || fallbackCurrency || "EUR").trim().toUpperCase();
+  const parts: string[] = [];
+  const qtyUnit = [row.quantity, row.unit].filter(Boolean).join(" ").trim();
+  if (qtyUnit) parts.push(qtyUnit);
+  if (row.unitPrice) {
+    const unitSuffix = row.unit.trim() || "pcs";
+    parts.push(`${formatMoneyDisplay(row.unitPrice, currency)}/${unitSuffix}`);
+  }
+  if (row.total) parts.push(formatMoneyDisplay(row.total, currency));
+  return parts.join(" · ");
+}
+
 function rowFromItem(item: ParsedDocumentLineItem, index: number, defaultSelected: boolean): EditableRow {
   return {
     key: `${index}-${(item.description ?? "item").slice(0, 24)}`,
@@ -303,11 +322,14 @@ export function ExpenseLineItemsMaterialImportSheet({
                       {row.description || "—"}
                     </Text>
                     {!row.editing ? (
-                      <Text style={styles.rowMeta}>
-                        {[row.quantity && `${row.quantity} ${row.unit}`.trim(), row.unitPrice && `@ ${row.unitPrice}`, row.total]
-                          .filter(Boolean)
-                          .join(" · ")}
-                      </Text>
+                      <>
+                        {row.category ? (
+                          <Text style={styles.rowCategory}>{t(`materialCategory.${row.category}`)}</Text>
+                        ) : null}
+                        <Text style={styles.rowMeta}>
+                          {buildImportRowDetailsLine(row, context.currency)}
+                        </Text>
+                      </>
                     ) : null}
                   </View>
                   <View style={styles.confidenceBadge}>
@@ -444,6 +466,7 @@ const styles = StyleSheet.create({
   rowHeader: { flexDirection: "row", alignItems: "flex-start", gap: spacing.sm },
   rowHeaderText: { flex: 1 },
   rowTitle: { fontSize: 15, fontWeight: "700", color: colors.text },
+  rowCategory: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   rowMeta: { fontSize: 12, color: colors.textMuted, marginTop: 2 },
   confidenceBadge: {
     backgroundColor: "rgba(224, 103, 55, 0.12)",

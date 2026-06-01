@@ -162,6 +162,10 @@ function parseLineItem(line: string, lineIndex: number, totalLines: number): Par
     originalUnit = originalUnit ?? normalized.originalUnit;
   }
 
+  description = description.trim();
+  if (!description || isInvalidMaterialLineName(description)) return null;
+  if (description.length < MIN_DESCRIPTION_LEN) return null;
+
   if (quantity == null && unitPrice != null && amountsConsistent(1, unitPrice, total)) {
     quantity = 1;
   }

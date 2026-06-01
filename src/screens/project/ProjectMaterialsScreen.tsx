@@ -14,6 +14,7 @@ import {
 import { useRoute } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
+import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../context/AuthContext";
 import { useI18n } from "../../i18n/I18nContext";
 import type { Locale } from "../../i18n/translations";
@@ -142,6 +143,7 @@ function FormField({
 export function ProjectMaterialsScreen() {
   const route = useRoute();
   const { t, locale } = useI18n();
+  const insets = useSafeAreaInsets();
   const { user } = useAuth();
   const { projectId } = route.params as RouteParams;
 
@@ -461,12 +463,19 @@ export function ProjectMaterialsScreen() {
           </Text>
         </View>
 
+        <View style={styles.infoCard}>
+          <Ionicons name="sparkles-outline" size={18} color={colors.primary} style={styles.infoCardIcon} />
+          <Text style={styles.infoCardText}>{t("projectMaterials.autoFillHint")}</Text>
+        </View>
+
         <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t("projectMaterials.recommendedTitle")}</Text>
           <Text style={styles.sectionHelper}>{t("projectMaterials.recommendedHelper")}</Text>
 
           {plannedSuggestions.length === 0 ? (
-            <Text style={styles.empty}>{t("projectMaterials.noRecommended")}</Text>
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyCardText}>{t("projectMaterials.noRecommended")}</Text>
+            </View>
           ) : (
             plannedSuggestions.map((s) => (
               <View key={s.id} style={styles.card}>
@@ -511,9 +520,9 @@ export function ProjectMaterialsScreen() {
           )}
 
           {user?.id ? (
-            <TouchableOpacity style={styles.addBtnFull} onPress={openAddSuggestion} activeOpacity={0.85}>
-              <Ionicons name="add" size={18} color="#fff" />
-              <Text style={styles.addBtnFullText}>{t("projectMaterials.addRecommended")}</Text>
+            <TouchableOpacity style={styles.addBtnOutline} onPress={openAddSuggestion} activeOpacity={0.85}>
+              <Ionicons name="add" size={16} color={colors.textOnDark} />
+              <Text style={styles.addBtnOutlineText}>{t("projectMaterials.addRecommendedManual")}</Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -523,7 +532,9 @@ export function ProjectMaterialsScreen() {
           <Text style={styles.sectionHelper}>{t("projectMaterials.usedHelper")}</Text>
 
           {materials.length === 0 ? (
-            <Text style={styles.empty}>{t("projectMaterials.noMaterialsYet")}</Text>
+            <View style={styles.emptyCard}>
+              <Text style={styles.emptyCardText}>{t("projectMaterials.noMaterialsYet")}</Text>
+            </View>
           ) : (
             materials.map((m) => (
               <View key={m.id} style={styles.card}>
@@ -559,9 +570,9 @@ export function ProjectMaterialsScreen() {
           )}
 
           {user?.id ? (
-            <TouchableOpacity style={styles.addBtnFull} onPress={openAddUsed} activeOpacity={0.85}>
-              <Ionicons name="add" size={18} color="#fff" />
-              <Text style={styles.addBtnFullText}>{t("projectMaterials.addMaterial")}</Text>
+            <TouchableOpacity style={styles.addBtnUsedManual} onPress={openAddUsed} activeOpacity={0.85}>
+              <Ionicons name="add" size={16} color={colors.primary} />
+              <Text style={styles.addBtnUsedManualText}>{t("projectMaterials.addUsedManual")}</Text>
             </TouchableOpacity>
           ) : null}
         </View>
@@ -569,12 +580,18 @@ export function ProjectMaterialsScreen() {
 
       <Modal visible={usedModalOpen} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <ScrollView contentContainerStyle={styles.modalScroll} keyboardShouldPersistTaps="handled">
-            <View style={styles.modal}>
-              <Text style={styles.modalTitle}>
-                {usedForm.id ? t("projectMaterials.editMaterial") : t("projectMaterials.addMaterial")}
-              </Text>
+          <View style={styles.modal}>
+            <Text style={styles.modalTitle}>
+              {usedForm.id ? t("projectMaterials.editMaterial") : t("projectMaterials.addUsedManual")}
+            </Text>
 
+            <ScrollView
+              style={styles.modalFormScroll}
+              contentContainerStyle={styles.modalFormScrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+              nestedScrollEnabled
+            >
               <FormField label={t("projectMaterials.materialName")}>
                 <TextInput
                   {...inputProps}
@@ -676,32 +693,38 @@ export function ProjectMaterialsScreen() {
                   onChangeText={(v) => setUsedForm((p) => ({ ...p, notes: v }))}
                 />
               </FormField>
+            </ScrollView>
 
-              <View style={styles.modalActions}>
-                <TouchableOpacity style={styles.cancelBtn} onPress={() => setUsedModalOpen(false)}>
-                  <Text style={styles.cancelText}>{t("common.cancel")}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.saveBtn} onPress={saveUsed} disabled={saving}>
-                  {saving ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.saveBtnText}>{t("projectMaterials.save")}</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
+            <View style={[styles.modalActions, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setUsedModalOpen(false)}>
+                <Text style={styles.cancelText}>{t("common.cancel")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.saveBtn} onPress={saveUsed} disabled={saving}>
+                {saving ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.saveBtnText}>{t("projectMaterials.save")}</Text>
+                )}
+              </TouchableOpacity>
             </View>
-          </ScrollView>
+          </View>
         </View>
       </Modal>
 
       <Modal visible={suggestionModalOpen} animationType="slide" transparent>
         <View style={styles.modalOverlay}>
-          <ScrollView contentContainerStyle={styles.modalScroll} keyboardShouldPersistTaps="handled">
-            <View style={styles.modal}>
-              <Text style={styles.modalTitle}>
-                {suggestionForm.id ? t("projectMaterials.editMaterial") : t("projectMaterials.addRecommended")}
-              </Text>
+          <View style={styles.modal}>
+            <Text style={styles.modalTitle}>
+              {suggestionForm.id ? t("projectMaterials.editMaterial") : t("projectMaterials.addRecommendedManual")}
+            </Text>
 
+            <ScrollView
+              style={styles.modalFormScroll}
+              contentContainerStyle={styles.modalFormScrollContent}
+              keyboardShouldPersistTaps="handled"
+              showsVerticalScrollIndicator
+              nestedScrollEnabled
+            >
               <FormField label={t("projectMaterials.materialName")}>
                 <TextInput
                   {...inputProps}
@@ -799,21 +822,21 @@ export function ProjectMaterialsScreen() {
                   onChangeText={(v) => setSuggestionForm((p) => ({ ...p, sourceNote: v }))}
                 />
               </FormField>
+            </ScrollView>
 
-              <View style={styles.modalActions}>
-                <TouchableOpacity style={styles.cancelBtn} onPress={() => setSuggestionModalOpen(false)}>
-                  <Text style={styles.cancelText}>{t("common.cancel")}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity style={styles.saveBtn} onPress={saveSuggestion} disabled={saving}>
-                  {saving ? (
-                    <ActivityIndicator color="#fff" />
-                  ) : (
-                    <Text style={styles.saveBtnText}>{t("projectMaterials.save")}</Text>
-                  )}
-                </TouchableOpacity>
-              </View>
+            <View style={[styles.modalActions, { paddingBottom: Math.max(insets.bottom, spacing.md) }]}>
+              <TouchableOpacity style={styles.cancelBtn} onPress={() => setSuggestionModalOpen(false)}>
+                <Text style={styles.cancelText}>{t("common.cancel")}</Text>
+              </TouchableOpacity>
+              <TouchableOpacity style={styles.saveBtn} onPress={saveSuggestion} disabled={saving}>
+                {saving ? (
+                  <ActivityIndicator color="#fff" />
+                ) : (
+                  <Text style={styles.saveBtnText}>{t("projectMaterials.save")}</Text>
+                )}
+              </TouchableOpacity>
             </View>
-          </ScrollView>
+          </View>
         </View>
       </Modal>
     </View>
@@ -835,6 +858,24 @@ const styles = StyleSheet.create({
   totalLabel: { fontSize: 13, color: colors.textMuted, fontWeight: "600" },
   totalValue: { fontSize: 24, fontWeight: "800", color: colors.text, marginTop: spacing.xs },
   totalMeta: { fontSize: 12, color: colors.textMuted, marginTop: spacing.xs },
+  infoCard: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+    backgroundColor: colors.formPanel,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.formPanelBorder,
+    padding: spacing.md,
+    marginBottom: spacing.lg,
+  },
+  infoCardIcon: { marginTop: 1 },
+  infoCardText: {
+    flex: 1,
+    fontSize: 13,
+    lineHeight: 18,
+    color: colors.onboardingHelperOnDark,
+  },
   section: { marginBottom: spacing.md },
   sectionSpaced: { marginTop: spacing.sm },
   sectionTitle: { fontSize: 17, fontWeight: "700", color: colors.textOnDark, marginBottom: spacing.xs },
@@ -844,24 +885,46 @@ const styles = StyleSheet.create({
     color: colors.onboardingHelperOnDark,
     marginBottom: spacing.sm,
   },
-  empty: {
-    color: colors.labelMutedOnDark,
-    fontSize: 14,
+  emptyCard: {
+    backgroundColor: colors.formPanel,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.formPanelBorder,
+    padding: spacing.md,
     marginBottom: spacing.sm,
-    fontStyle: "italic",
   },
-  addBtnFull: {
+  emptyCardText: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: colors.labelMutedOnDark,
+  },
+  addBtnOutline: {
     flexDirection: "row",
     alignItems: "center",
-    justifyContent: "center",
+    alignSelf: "flex-start",
     gap: spacing.xs,
-    backgroundColor: colors.primary,
-    paddingVertical: spacing.sm + 2,
+    paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
     borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.formPanelBorder,
     marginTop: spacing.xs,
   },
-  addBtnFullText: { color: "#fff", fontWeight: "700", fontSize: 15 },
+  addBtnOutlineText: { color: colors.textOnDark, fontWeight: "600", fontSize: 14 },
+  addBtnUsedManual: {
+    flexDirection: "row",
+    alignItems: "center",
+    alignSelf: "flex-start",
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+    borderWidth: 1,
+    borderColor: colors.primary,
+    backgroundColor: "rgba(224, 103, 55, 0.08)",
+    marginTop: spacing.xs,
+  },
+  addBtnUsedManualText: { color: colors.primary, fontWeight: "600", fontSize: 14 },
   card: {
     backgroundColor: colors.formPanel,
     borderRadius: radius,
@@ -906,16 +969,19 @@ const styles = StyleSheet.create({
   cardActionPrimaryText: { color: "#fff", fontWeight: "700", fontSize: 13 },
   iconBtn: { padding: 6 },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
-  modalScroll: { flexGrow: 1, justifyContent: "flex-end" },
   modal: {
     backgroundColor: colors.formPanel,
     borderTopLeftRadius: radius + 4,
     borderTopRightRadius: radius + 4,
-    padding: spacing.lg,
+    paddingHorizontal: spacing.lg,
+    paddingTop: spacing.lg,
     maxHeight: "92%",
+    width: "100%",
     borderWidth: 1,
     borderColor: colors.formPanelBorder,
   },
+  modalFormScroll: { flexGrow: 0, flexShrink: 1 },
+  modalFormScrollContent: { paddingBottom: spacing.xs },
   modalTitle: { fontSize: 18, fontWeight: "700", color: colors.text, marginBottom: spacing.sm },
   field: { marginBottom: spacing.xs },
   label: {

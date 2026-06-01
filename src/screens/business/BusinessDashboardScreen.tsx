@@ -13,6 +13,7 @@ import {
 import { Ionicons } from "@expo/vector-icons";
 import { useNavigation } from "@react-navigation/native";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
+import { useOrgAccess } from "../../hooks/useOrgAccess";
 import { useI18n } from "../../i18n/I18nContext";
 import { getAuth } from "../../firebase";
 import { getBusinessOrder, type BusinessOrderDoc } from "../../services/organizations";
@@ -73,6 +74,7 @@ type BillingBannerVariant = "pending" | "trialing" | "active";
 
 export function BusinessDashboardScreen() {
   const { activeOrganization, activeMembership } = useActiveOrg();
+  const orgAccess = useOrgAccess();
   const { t } = useI18n();
   const navigation = useNavigation();
   const nav = navigation as unknown as { navigate: (name: string, params?: object) => void };
@@ -210,11 +212,10 @@ export function BusinessDashboardScreen() {
   const trialEndsLabel = formatDate(activeOrganization?.trialEndsAt);
   const amountLabel =
     amountGross !== null ? t("business.dashboard.amountLabel", { amount: String(amountGross) }) : null;
-  const canManageTeam =
-    activeMembership?.role === "owner" ||
-    activeMembership?.role === "admin" ||
-    activeMembership?.role === "manager";
-  const canChangePlan = activeMembership?.role === "owner" || activeMembership?.role === "admin";
+  const canManageTeam = orgAccess.canManageTeam;
+  const canChangePlan =
+    orgAccess.canManageBilling &&
+    (activeMembership?.role === "owner" || activeMembership?.role === "admin");
   const orgId = activeOrganization?.id ?? null;
   const orderId = activeOrder?.id ?? activeOrganization?.activeBusinessOrderId ?? null;
   const hasActiveBusinessOrderId = Boolean(orderId);
@@ -528,13 +529,15 @@ export function BusinessDashboardScreen() {
       </View>
 
       <View style={styles.actionsRow}>
-        <ActionCard
-          icon="people-outline"
-          title={t("business.dashboard.modules.team")}
-          body={t("business.dashboard.actionTeamBody")}
-          openLabel={t("business.dashboard.modules.open")}
-          onPress={() => nav.navigate("BusinessTeamManagement")}
-        />
+        {orgAccess.canManageTeam || orgAccess.canViewBusinessDashboard ? (
+          <ActionCard
+            icon="people-outline"
+            title={t("business.dashboard.modules.team")}
+            body={t("business.dashboard.actionTeamBody")}
+            openLabel={t("business.dashboard.modules.open")}
+            onPress={() => nav.navigate("BusinessTeamManagement")}
+          />
+        ) : null}
         <ActionCard
           icon="construct-outline"
           title={t("business.dashboard.modules.projects")}
@@ -556,20 +559,24 @@ export function BusinessDashboardScreen() {
           openLabel={t("business.dashboard.modules.open")}
           onPress={() => nav.navigate("BusinessChatList")}
         />
-        <ActionCard
-          icon="people-circle-outline"
-          title={t("business.dashboard.modules.contacts")}
-          body={t("business.dashboard.actionContactsBody")}
-          openLabel={t("business.dashboard.modules.openContacts")}
-          onPress={() => nav.navigate("BusinessContactsList")}
-        />
-        <ActionCard
-          icon="cube-outline"
-          title={t("business.dashboard.modules.materials")}
-          body={t("business.dashboard.actionMaterialsBody")}
-          openLabel={t("business.dashboard.modules.open")}
-          onPress={() => nav.navigate("BusinessMaterialsOverview")}
-        />
+        {orgAccess.canViewContacts ? (
+          <ActionCard
+            icon="people-circle-outline"
+            title={t("business.dashboard.modules.contacts")}
+            body={t("business.dashboard.actionContactsBody")}
+            openLabel={t("business.dashboard.modules.openContacts")}
+            onPress={() => nav.navigate("BusinessContactsList")}
+          />
+        ) : null}
+        {orgAccess.canViewBusinessMaterials ? (
+          <ActionCard
+            icon="cube-outline"
+            title={t("business.dashboard.modules.materials")}
+            body={t("business.dashboard.actionMaterialsBody")}
+            openLabel={t("business.dashboard.modules.open")}
+            onPress={() => nav.navigate("BusinessMaterialsOverview")}
+          />
+        ) : null}
       </View>
 
       <Modal

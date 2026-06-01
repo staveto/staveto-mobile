@@ -4,6 +4,7 @@ import {
   Alert,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TouchableOpacity,
   View,
@@ -18,6 +19,15 @@ import {
   type MembershipDoc,
 } from "../../services/businessMembers";
 import type { OrgRole } from "../../services/organizations";
+import {
+  BUSINESS_PERMISSION_KEYS,
+  PERMISSION_SECTIONS,
+  getEffectivePermissions,
+  getRolePreset,
+  resetPermissionsToRolePreset,
+  type BusinessPermissionKey,
+  type BusinessPermissions,
+} from "../../lib/businessRolePermissions";
 import { colors } from "../../theme";
 
 const ALL_ROLES: OrgRole[] = ["owner", "admin", "manager", "worker", "viewer"];
@@ -54,6 +64,9 @@ function mapRoleUpdateError(t: (k: string) => string, error: unknown): string {
   if (code === "failed-precondition" && msg.includes("last active owner")) {
     return t("business.team.roleManagement.lastOwnerCannotBeChanged");
   }
+  if (code === "failed-precondition" && msg.includes("owner permissions")) {
+    return t("business.team.roleManagement.ownerPermissionsLocked");
+  }
   if (code === "permission-denied") {
     if (msg.includes("only an owner can assign") || msg.includes("owner role")) {
       return t("business.team.roleManagement.onlyOwnerCanAssignOwner");
@@ -62,6 +75,10 @@ function mapRoleUpdateError(t: (k: string) => string, error: unknown): string {
   }
   if (error instanceof Error && error.message) return error.message;
   return t("common.error");
+}
+
+function permissionsEqual(a: BusinessPermissions, b: BusinessPermissions): boolean {
+  return BUSINESS_PERMISSION_KEYS.every((key) => a[key] === b[key]);
 }
 
 export function BusinessMemberRoleScreen() {
@@ -77,6 +94,7 @@ export function BusinessMemberRoleScreen() {
   const [member, setMember] = useState<MembershipDoc | null>(null);
   const [activeOwnerCount, setActiveOwnerCount] = useState(0);
   const [selectedRole, setSelectedRole] = useState<OrgRole | null>(null);
+  const [permissions, setPermissions] = useState<BusinessPermissions | null>(null);
   const [saving, setSaving] = useState(false);
 
   const actorRole = activeMembership?.role ?? "viewer";
@@ -100,7 +118,10 @@ export function BusinessMemberRoleScreen() {
         (row) => row.role === "owner" && row.status.toLowerCase() === "active"
       ).length;
       setActiveOwnerCount(owners);
-      if (m) setSelectedRole(m.role);
+      if (m) {
+        setSelectedRole(m.role);
+        setPermissions(getEffectivePermissions(m.role, m.permissions));
+      }
     } catch (e) {
       console.warn("[BusinessMemberRoleScreen] load failed", e);
       setMember(null);
@@ -134,15 +155,52 @@ export function BusinessMemberRoleScreen() {
   }, [member, targetRole, targetStatus, activeOwnerCount]);
 
   const canEdit = !readOnly && !soleActiveOwnerLocked && (isActorOwner || isActorAdmin);
+  const permissionsLocked = selectedRole === "owner";
+
+  const rolePreset = useMemo(
+    () => (selectedRole ? getRolePreset(selectedRole) : null),
+    [selectedRole]
+  );
+
+  const isDirty = useMemo(() => {
+    if (!member || selectedRole == null || !permissions) return false;
+    if (selectedRole !== member.role) return true;
+    const baseline = getEffectivePermissions(member.role, member.permissions);
+    return !permissionsEqual(permissions, baseline);
+  }, [member, permissions, selectedRole]);
+
+  const onSelectRole = (role: OrgRole) => {
+    setSelectedRole(role);
+    setPermissions(resetPermissionsToRolePreset(role));
+  };
+
+  const onTogglePermission = (key: BusinessPermissionKey, value: boolean) => {
+    if (!permissions || permissionsLocked || !canEdit) return;
+    setPermissions({ ...permissions, [key]: value });
+  };
+
+  const onResetDefaults = () => {
+    if (!selectedRole || !canEdit) return;
+    setPermissions(resetPermissionsToRolePreset(selectedRole));
+  };
 
   const onSave = async () => {
-    if (!orgId || !memberDocId || !member || selectedRole == null || !canEdit) return;
-    if (selectedRole === member.role) {
+    if (!orgId || !memberDocId || !member || selectedRole == null || !permissions || !canEdit) return;
+    if (!isDirty) {
+      navigation.goBack();
       return;
     }
     setSaving(true);
     try {
-      await updateBusinessMemberRole({ orgId, memberUid: memberDocId, role: selectedRole });
+      const payload: Parameters<typeof updateBusinessMemberRole>[0] = {
+        orgId,
+        memberUid: memberDocId,
+        role: selectedRole,
+      };
+      if (selectedRole !== "owner") {
+        payload.permissions = { ...permissions };
+      }
+      await updateBusinessMemberRole(payload);
       await load();
       Alert.alert("", t("business.team.roleManagement.saved"), [
         { text: t("common.ok"), onPress: () => navigation.goBack() },
@@ -170,7 +228,7 @@ export function BusinessMemberRoleScreen() {
     );
   }
 
-  if (!member) {
+  if (!member || selectedRole == null || !permissions) {
     return (
       <View style={styles.centered}>
         <Text style={styles.muted}>{t("common.error")}</Text>
@@ -180,6 +238,10 @@ export function BusinessMemberRoleScreen() {
 
   const name = getMemberName(member);
   const badgeText = memberStatusBadgeLabel(t, member.status);
+  const showCustomHint =
+    selectedRole !== "owner" &&
+    rolePreset != null &&
+    !permissionsEqual(permissions, rolePreset);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
@@ -214,7 +276,7 @@ export function BusinessMemberRoleScreen() {
             style={[styles.roleRow, selected && styles.roleRowSelected, disabled && styles.roleRowDisabled]}
             disabled={disabled}
             onPress={() => {
-              if (!disabled) setSelectedRole(role);
+              if (!disabled) onSelectRole(role);
             }}
           >
             <View style={styles.roleRowHeader}>
@@ -234,12 +296,70 @@ export function BusinessMemberRoleScreen() {
         );
       })}
 
+      {selectedRole ? (
+        <View style={styles.permissionsBlock}>
+          <Text style={styles.permissionsTitle}>
+            {t("business.team.roleManagement.permissionsTitle")}
+          </Text>
+          {permissionsLocked ? (
+            <Text style={styles.permissionsHint}>
+              {t("business.team.roleManagement.ownerPermissionsLocked")}
+            </Text>
+          ) : showCustomHint ? (
+            <Text style={styles.permissionsHint}>
+              {t("business.team.roleManagement.customizedHint")}
+            </Text>
+          ) : null}
+
+          {PERMISSION_SECTIONS.map((section) => (
+            <View key={section.id} style={styles.permissionSection}>
+              <Text style={styles.permissionSectionTitle}>
+                {t(`business.permissions.section.${section.id}`)}
+              </Text>
+              {section.keys.map((key) => {
+                const toggleDisabled = !canEdit || permissionsLocked;
+                return (
+                  <View key={key} style={styles.permissionRow}>
+                    <View style={styles.permissionTextCol}>
+                      <Text style={styles.permissionLabel}>
+                        {t(`business.permissions.${key}.label`)}
+                      </Text>
+                      <Text style={styles.permissionDesc}>
+                        {t(`business.permissions.${key}.description`)}
+                      </Text>
+                    </View>
+                    <Switch
+                      value={permissions[key]}
+                      onValueChange={(value) => onTogglePermission(key, value)}
+                      disabled={toggleDisabled}
+                      trackColor={{ false: "#CBD5E1", true: colors.primary }}
+                    />
+                  </View>
+                );
+              })}
+            </View>
+          ))}
+
+          <TouchableOpacity
+            style={[styles.secondaryButton, (!canEdit || permissionsLocked) && styles.buttonDisabled]}
+            disabled={!canEdit || permissionsLocked}
+            onPress={onResetDefaults}
+          >
+            <Text style={styles.secondaryButtonText}>
+              {t("business.team.roleManagement.resetDefaults")}
+            </Text>
+          </TouchableOpacity>
+        </View>
+      ) : null}
+
       <TouchableOpacity
-        style={[styles.saveButton, (!canEdit || saving) && styles.saveButtonDisabled]}
-        disabled={!canEdit || saving}
+        style={[styles.saveButton, (!canEdit || saving || !isDirty) && styles.saveButtonDisabled]}
+        disabled={!canEdit || saving || !isDirty}
         onPress={() => void onSave()}
       >
-        <Text style={styles.saveButtonText}>{t("business.team.roleManagement.save")}</Text>
+        <Text style={styles.saveButtonText}>
+          {t("business.team.roleManagement.saveRoleAndPermissions")}
+        </Text>
       </TouchableOpacity>
     </ScrollView>
   );
@@ -355,6 +475,69 @@ const styles = StyleSheet.create({
   },
   textDisabled: {
     color: "#94A3B8",
+  },
+  permissionsBlock: {
+    gap: 10,
+    marginTop: 4,
+  },
+  permissionsTitle: {
+    color: "#FFFFFF",
+    fontSize: 16,
+    fontWeight: "800",
+  },
+  permissionsHint: {
+    color: "#CBD5E1",
+    fontSize: 13,
+    lineHeight: 18,
+  },
+  permissionSection: {
+    backgroundColor: "#FFFFFF",
+    borderRadius: 14,
+    padding: 12,
+    gap: 8,
+  },
+  permissionSectionTitle: {
+    fontSize: 14,
+    fontWeight: "800",
+    color: "#0F172A",
+    marginBottom: 4,
+  },
+  permissionRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 10,
+    paddingVertical: 6,
+    borderTopWidth: 1,
+    borderTopColor: "#E2E8F0",
+  },
+  permissionTextCol: {
+    flex: 1,
+    minWidth: 0,
+  },
+  permissionLabel: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  permissionDesc: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "#64748B",
+    lineHeight: 16,
+  },
+  secondaryButton: {
+    backgroundColor: "#E2E8F0",
+    borderRadius: 12,
+    paddingVertical: 12,
+    alignItems: "center",
+  },
+  secondaryButtonText: {
+    color: "#0F172A",
+    fontSize: 14,
+    fontWeight: "700",
+  },
+  buttonDisabled: {
+    opacity: 0.45,
   },
   saveButton: {
     marginTop: 8,

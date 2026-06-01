@@ -1,5 +1,9 @@
 import { useMemo } from "react";
 import { useActiveOrg } from "./useActiveOrg";
+import {
+  getEffectivePermissions,
+  type BusinessPermissions,
+} from "../lib/businessRolePermissions";
 
 function toMillis(raw: unknown): number | null {
   if (!raw) return null;
@@ -36,6 +40,11 @@ export function useOrgAccess() {
     const isViewer = role === "viewer";
     const isActiveMember = status === "active";
 
+    const permissions: BusinessPermissions = getEffectivePermissions(
+      role ?? "viewer",
+      activeMembership?.permissions
+    );
+
     const trialEndsAtMs = toMillis(activeOrganization?.trialEndsAt);
     const trialActive =
       orgStatus === "trialing" ||
@@ -59,8 +68,9 @@ export function useOrgAccess() {
         ? pendingCanAccess
         : false;
 
-    const canViewBusinessDashboard =
-      !!activeBusinessOrgId && isActiveMember && statusAllowsDashboard;
+    const orgGateOpen = !!activeBusinessOrgId && isActiveMember && statusAllowsDashboard;
+
+    const canViewBusinessDashboard = orgGateOpen && (isOwner || permissions.canViewBusinessDashboard);
 
     const canAccessBusiness =
       !!activeBusinessOrgId &&
@@ -68,14 +78,32 @@ export function useOrgAccess() {
       orgStatus === "active" &&
       businessEnabled;
 
-    /** Team inbox/chat — same org access as Business dashboard (incl. trial / pending payment). */
-    const canAccessBusinessChat =
-      !!activeBusinessOrgId && isActiveMember && statusAllowsDashboard;
+    const canAccessBusinessChat = orgGateOpen && (isOwner || permissions.canViewBusinessDashboard);
 
-    const canViewContacts = canViewBusinessDashboard;
+    const canViewContacts =
+      orgGateOpen && (isOwner || isAdmin || permissions.canManageContacts || permissions.canViewBusinessDashboard);
+
     const canManageContacts =
-      canViewContacts && (isOwner || isAdmin || isManager);
-    const canViewBusinessMaterials = canViewBusinessDashboard;
+      orgGateOpen && (isOwner || isAdmin || permissions.canManageContacts);
+
+    const canViewBusinessMaterials =
+      orgGateOpen &&
+      (isOwner ||
+        isAdmin ||
+        permissions.canViewMaterialPrices ||
+        permissions.canAddMaterial ||
+        permissions.canViewBusinessKpis);
+
+    const canManageTeam = orgGateOpen && (isOwner || permissions.canManageTeam);
+
+    const canManageBilling = orgGateOpen && (isOwner || permissions.canManageBilling);
+
+    const canCreateProject = isOwner || isAdmin || permissions.canCreateProject;
+
+    const canViewAllProjects = isOwner || isAdmin || permissions.canViewAllProjects;
+
+    const canViewAssignedProjects =
+      isOwner || isAdmin || permissions.canViewAssignedProjects || permissions.canViewAllProjects;
 
     let dashboardBlockReason = "dashboard_allowed";
     if (!activeBusinessOrgId) {
@@ -96,11 +124,14 @@ export function useOrgAccess() {
       dashboardBlockReason = "org_past_due";
     } else if (!statusAllowsDashboard) {
       dashboardBlockReason = `org_status_blocked:${orgStatus ?? "unknown"}`;
+    } else if (!isOwner && !permissions.canViewBusinessDashboard) {
+      dashboardBlockReason = "permissions_dashboard_denied";
     }
 
     return {
       role,
       status,
+      permissions,
       isOwner,
       isAdmin,
       isManager,
@@ -121,6 +152,18 @@ export function useOrgAccess() {
       canViewContacts,
       canManageContacts,
       canViewBusinessMaterials,
+      canManageTeam,
+      canManageBilling,
+      canCreateProject,
+      canViewAllProjects,
+      canViewAssignedProjects,
+      canAddDailyReport: isOwner || permissions.canAddDailyReport,
+      canAddPhotos: isOwner || permissions.canAddPhotos,
+      canAddMaterial: isOwner || permissions.canAddMaterial,
+      canViewMaterialPrices: isOwner || permissions.canViewMaterialPrices,
+      canAddExpense: isOwner || permissions.canAddExpense,
+      canViewProjectCosts: isOwner || permissions.canViewProjectCosts,
+      canViewBusinessKpis: isOwner || permissions.canViewBusinessKpis,
       dashboardBlockReason,
     };
   }, [activeBusinessOrgId, activeMembership, activeOrganization]);

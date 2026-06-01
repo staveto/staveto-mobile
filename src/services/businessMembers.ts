@@ -25,6 +25,7 @@ import { db, getAuth, getCallable } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { getMembership, parseMembershipDoc } from "./organizations";
 import type { MembershipDoc, OrgRole } from "./organizations";
+import type { BusinessPermissions } from "../lib/businessRolePermissions";
 
 export type { MembershipDoc } from "./organizations";
 
@@ -305,6 +306,8 @@ export type UpdateBusinessMemberRoleInput = {
   orgId: string;
   memberUid: string;
   role: OrgRole;
+  /** Full permission set to persist; omit to leave permissions unchanged. */
+  permissions?: Partial<BusinessPermissions> | null;
 };
 
 export type UpdateBusinessMemberRoleResult = {

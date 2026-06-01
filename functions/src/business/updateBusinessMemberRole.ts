@@ -7,10 +7,52 @@ if (!admin.apps.length) {
 
 type OrgRole = "owner" | "admin" | "manager" | "worker" | "viewer";
 
+type BusinessPermissionKey =
+  | "canViewBusinessDashboard"
+  | "canViewAllProjects"
+  | "canViewAssignedProjects"
+  | "canCreateProject"
+  | "canEditProject"
+  | "canAssignProjectMembers"
+  | "canAddDailyReport"
+  | "canEditOwnDailyReport"
+  | "canApproveDailyReports"
+  | "canAddPhotos"
+  | "canAddMaterial"
+  | "canViewMaterialPrices"
+  | "canAddExpense"
+  | "canViewProjectCosts"
+  | "canManageContacts"
+  | "canManageTeam"
+  | "canViewBusinessKpis"
+  | "canManageBilling";
+
+const PERMISSION_KEYS: BusinessPermissionKey[] = [
+  "canViewBusinessDashboard",
+  "canViewAllProjects",
+  "canViewAssignedProjects",
+  "canCreateProject",
+  "canEditProject",
+  "canAssignProjectMembers",
+  "canAddDailyReport",
+  "canEditOwnDailyReport",
+  "canApproveDailyReports",
+  "canAddPhotos",
+  "canAddMaterial",
+  "canViewMaterialPrices",
+  "canAddExpense",
+  "canViewProjectCosts",
+  "canManageContacts",
+  "canManageTeam",
+  "canViewBusinessKpis",
+  "canManageBilling",
+];
+
 type UpdateBusinessMemberRoleInput = {
   orgId?: unknown;
   memberUid?: unknown;
   role?: unknown;
+  permissions?: unknown;
 };
 
 type UpdateBusinessMemberRoleResult = {
@@ -32,6 +74,26 @@ function normalizeRole(raw: unknown): OrgRole {
     throw new HttpsError("invalid-argument", "role must be one of: owner, admin, manager, worker, viewer.");
   }
   return v as OrgRole;
+}
+
+function parsePermissions(raw: unknown): Record<string, boolean> | null {
+  if (raw === undefined || raw === null) return null;
+  if (typeof raw !== "object") {
+    throw new HttpsError("invalid-argument", "permissions must be an object.");
+  }
+  const src = raw as Record<string, unknown>;
+  const out: Record<string, boolean> = {};
+  for (const key of PERMISSION_KEYS) {
+    if (src[key] === undefined) continue;
+    if (typeof src[key] !== "boolean") {
+      throw new HttpsError("invalid-argument", `permissions.${key} must be a boolean.`);
+    }
+    out[key] = src[key] as boolean;
+  }
+  if (Object.keys(out).length === 0) {
+    throw new HttpsError("invalid-argument", "permissions object is empty.");
+  }
+  return out;
 }
 
 function requireAuth(
@@ -67,6 +129,7 @@ export const updateBusinessMemberRole = onCall(
     const orgId = asString(raw.orgId);
     const memberUid = asString(raw.memberUid);
     const newRole = normalizeRole(raw.role);
+    const parsedPermissions = parsePermissions(raw.permissions);
 
     if (!orgId || !memberUid) {
       throw new HttpsError("invalid-argument", "orgId and memberUid are required.");
@@ -119,48 +182,68 @@ export const updateBusinessMemberRole = onCall(
         throw new HttpsError("failed-precondition", "Target member has an invalid role.");
       }
 
-      if (oldRole === newRole) {
+      const roleChanged = oldRole !== newRole;
+
+      if (roleChanged) {
+        if ((oldRole === "owner" || newRole === "owner") && actorRole !== "owner") {
+          throw new HttpsError("permission-denied", "Only an owner can assign or change the owner role.");
+        }
+
+        let activeOwnerCount = 0;
+        for (const d of allMembersSnap.docs) {
+          const m = (d.data() ?? {}) as Record<string, unknown>;
+          if (memberRole(m) === "owner" && memberStatus(m) === "active") {
+            activeOwnerCount += 1;
+          }
+        }
+
+        if (oldRole === "owner" && newRole !== "owner" && targetStatus === "active") {
+          if (activeOwnerCount < 2) {
+            throw new HttpsError(
+              "failed-precondition",
+              "Cannot change the last active owner to a non-owner role."
+            );
+          }
+        }
+      }
+
+      const patch: Record<string, unknown> = {
+        updatedAt: now,
+      };
+
+      if (roleChanged) {
+        patch.role = newRole;
+        patch.roleUpdatedAt = now;
+        patch.roleUpdatedByUid = actor.uid;
+      }
+
+      if (parsedPermissions) {
+        if (newRole === "owner") {
+          throw new HttpsError(
+            "failed-precondition",
+            "Owner permissions cannot be customized."
+          );
+        }
+        patch.permissions = parsedPermissions;
+        patch.permissionsUpdatedAt = now;
+        patch.permissionsUpdatedByUid = actor.uid;
+      }
+
+      if (!roleChanged && !parsedPermissions) {
         return;
       }
 
-      // Only membership owner may assign or demote owner role (strict).
-      if ((oldRole === "owner" || newRole === "owner") && actorRole !== "owner") {
-        throw new HttpsError("permission-denied", "Only an owner can assign or change the owner role.");
-      }
-
-      let activeOwnerCount = 0;
-      for (const d of allMembersSnap.docs) {
-        const m = (d.data() ?? {}) as Record<string, unknown>;
-        if (memberRole(m) === "owner" && memberStatus(m) === "active") {
-          activeOwnerCount += 1;
-        }
-      }
-
-      // Last active owner cannot be demoted or reassigned away from owner.
-      if (oldRole === "owner" && newRole !== "owner" && targetStatus === "active") {
-        if (activeOwnerCount < 2) {
-          throw new HttpsError(
-            "failed-precondition",
-            "Cannot change the last active owner to a non-owner role."
-          );
-        }
-      }
-
-      tx.update(targetMemberRef, {
-        role: newRole,
-        updatedAt: now,
-        roleUpdatedAt: now,
-        roleUpdatedByUid: actor.uid,
-      });
+      tx.update(targetMemberRef, patch);
 
       tx.set(auditRef, {
-        action: "update_business_member_role",
+        action: roleChanged ? "update_business_member_role" : "update_business_member_permissions",
         orgId,
         actorUid: actor.uid,
         actorEmail: actor.email,
         targetUid: memberUid,
         oldRole,
-        newRole,
+        newRole: roleChanged ? newRole : oldRole,
+        permissionsUpdated: parsedPermissions != null,
         createdAt: now,
         source: "update_business_member_role_callable",
       });

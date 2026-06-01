@@ -22,6 +22,7 @@
 import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
 import { collection, collectionGroup, doc, query, where } from "../lib/rnFirestore";
 import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
+import { parseCustomPermissions, type BusinessPermissions } from "../lib/businessRolePermissions";
 import { db, getAuth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 
@@ -144,6 +145,8 @@ export type MembershipDoc = {
   addedAt?: FirebaseFirestoreTypes.Timestamp | string;
   /** Hourly rate in EUR — used by the (later) labour-cost report. */
   hourlyRateEur?: number;
+  /** Optional permission overrides; missing keys fall back to role preset. */
+  permissions?: Partial<BusinessPermissions>;
 };
 
 export type BusinessOrderDoc = {
@@ -357,6 +360,7 @@ export function parseMembershipDoc(
       typeof data.organizationName === "string" && data.organizationName.trim().length > 0
         ? data.organizationName.trim()
         : undefined,
+    permissions: parseCustomPermissions(data.permissions),
   };
 }
 

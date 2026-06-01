@@ -82,6 +82,7 @@ import {
   type ExpenseMaterialImportContext,
 } from "../components/ExpenseLineItemsMaterialImportSheet";
 import { DocumentScanOverlay } from "../components/DocumentScanOverlay";
+import { autoCropDocumentImage } from "../utils/documentAutoCrop";
 import type { ParsedDocumentLineItem } from "../lib/parsedDocumentTypes";
 import { calculateRouteDistanceKm } from "../services/mapsDistance";
 import type { Locale } from "../i18n/translations";
@@ -445,6 +446,7 @@ export function ProjectOverviewScreen() {
   const [attachmentThumbnails, setAttachmentThumbnails] = useState<Map<string, string>>(new Map());
   const [ocrLoading, setOcrLoading] = useState(false);
   const [ocrScannerImageUri, setOcrScannerImageUri] = useState<string | null>(null);
+  const [ocrAutoCropApplied, setOcrAutoCropApplied] = useState(false);
   const expenseModalScrollRef = useRef<ScrollView | null>(null);
   const ocrRequestIdRef = useRef(0);
   const [ocrPendingReview, setOcrPendingReview] = useState<{
@@ -2476,7 +2478,14 @@ export function ProjectOverviewScreen() {
     }
   };
 
-  const handlePickedExpenseAttachment = async (picked: { uri: string; fileName: string; mimeType: string; kind: 'image' | 'pdf' | 'document' }) => {
+  const handlePickedExpenseAttachment = async (picked: {
+    uri: string;
+    fileName: string;
+    mimeType: string;
+    kind: "image" | "pdf" | "document";
+    width?: number;
+    height?: number;
+  }) => {
     await cleanupPreuploadedExpenseAttachment(picked);
     setExpenseAttachment(picked);
     setExpenseOcrStatus(null);
@@ -2508,18 +2517,44 @@ export function ProjectOverviewScreen() {
       return;
     }
     try {
+      let uploadUri = picked.uri;
+      let uploadFileName = picked.fileName;
+      let uploadMimeType = picked.mimeType;
+      setOcrAutoCropApplied(false);
+
       if (picked.kind === "image") {
-        setOcrScannerImageUri(picked.uri);
+        const autoCrop = await autoCropDocumentImage({
+          uri: picked.uri,
+          width: picked.width,
+          height: picked.height,
+        });
+        uploadUri = autoCrop.uri;
+        setOcrAutoCropApplied(autoCrop.didCrop);
+        if (autoCrop.didCrop) {
+          uploadFileName = picked.fileName.replace(/\.(png|webp|heic|heif)$/i, ".jpg");
+          if (!/\.jpe?g$/i.test(uploadFileName)) {
+            uploadFileName = `${uploadFileName.replace(/\.[^.]+$/, "")}.jpg`;
+          }
+          uploadMimeType = "image/jpeg";
+          setExpenseAttachment({
+            ...picked,
+            uri: uploadUri,
+            fileName: uploadFileName,
+            mimeType: uploadMimeType,
+          });
+        }
+        setOcrScannerImageUri(uploadUri);
       }
+
       setOcrLoading(true);
       setUploadingExpenseAttachment(true);
       const attachment = await attachmentsService.uploadAttachment(projectId, {
         expenseId: null,
         taskId: null,
         phaseId: expensePhaseId,
-        localUri: picked.uri,
-        fileName: picked.fileName,
-        mimeType: picked.mimeType,
+        localUri: uploadUri,
+        fileName: uploadFileName,
+        mimeType: uploadMimeType,
         kind: picked.kind === "pdf" ? "pdf" : "image",
       });
       const uploadedFilePath = attachment.storagePath?.trim();
@@ -2530,19 +2565,19 @@ export function ProjectOverviewScreen() {
       setExpensePreuploadedAttachment({
         attachmentId: attachment.id,
         storagePath: uploadedFilePath,
-        mimeType: picked.mimeType,
+        mimeType: uploadMimeType,
         kind: picked.kind,
-        fileName: picked.fileName,
-        localUri: picked.uri,
+        fileName: uploadFileName,
+        localUri: uploadUri,
         isLinkedToExpense: false,
       });
       setUploadingExpenseAttachment(false);
       const result = await processInvoiceAttachment({
         filePath: uploadedFilePath,
-        mimeType: picked.mimeType,
+        mimeType: uploadMimeType,
         attachmentId: attachment.id,
         projectId,
-        localPdfUri: picked.kind === "pdf" ? picked.uri : undefined,
+        localPdfUri: picked.kind === "pdf" ? uploadUri : undefined,
       });
       // #region agent log
       fetch(`${Platform.OS === "android" ? "http://10.0.2.2" : "http://127.0.0.1"}:7281/ingest/2418b79b-8c5b-4006-a07d-878605a09a96`, {
@@ -2586,6 +2621,7 @@ export function ProjectOverviewScreen() {
       setUploadingExpenseAttachment(false);
       setOcrLoading(false);
       setOcrScannerImageUri(null);
+      setOcrAutoCropApplied(false);
     }
   };
 
@@ -2650,6 +2686,8 @@ export function ProjectOverviewScreen() {
           fileName: asset.fileName || `faktura_${Date.now()}.jpg`,
           mimeType: asset.mimeType || 'image/jpeg',
           kind: 'image',
+          width: asset.width,
+          height: asset.height,
         });
       }
     } catch (error: any) {
@@ -2681,6 +2719,8 @@ export function ProjectOverviewScreen() {
           fileName: asset.fileName || `faktura_${Date.now()}.jpg`,
           mimeType: asset.mimeType || 'image/jpeg',
           kind: 'image',
+          width: asset.width,
+          height: asset.height,
         });
       }
     } catch (error: any) {
@@ -2845,6 +2885,7 @@ export function ProjectOverviewScreen() {
     ocrRequestIdRef.current = 0;
     setOcrLoading(false);
     setOcrScannerImageUri(null);
+    setOcrAutoCropApplied(false);
     const pending = ocrPendingReview;
     setOcrPendingReview(null);
     if (pending) {
@@ -6521,7 +6562,9 @@ export function ProjectOverviewScreen() {
           visible={ocrLoading}
           imageUri={ocrScannerImageUri}
           title={t("scanner.scanningDocument")}
-          subtitle={t("scanner.readingInvoiceData")}
+          subtitle={
+            ocrAutoCropApplied ? t("scanner.autoCropped") : t("scanner.readingInvoiceData")
+          }
           cancelLabel={t("expense.proceedManually")}
           onCancel={handleOcrCancel}
           durationMs={1500}

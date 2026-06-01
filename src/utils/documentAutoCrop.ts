@@ -21,14 +21,40 @@ type AutoCropInput = {
   height?: number;
 };
 
-const MIN_CONFIDENCE = 0.6;
+/** Allow light finishing trims after native crop; full trims need slightly higher score. */
+const MIN_CONFIDENCE = 0.58;
 const MIN_EDGE_PX = 400;
 const MIN_CROP_DIMENSION = 200;
+const MAX_INSET = 0.15;
 
 function logDebug(payload: Record<string, unknown>) {
   if (__DEV__) {
     console.log("[DocumentAutoCropDebug]", payload);
   }
+}
+
+function cropMetrics(
+  width: number,
+  height: number,
+  cropRect: DocumentCropRect | null
+): {
+  aspectRatioBefore: number;
+  aspectRatioAfter: number | null;
+  marginTrimPercentX: number | null;
+  marginTrimPercentY: number | null;
+} {
+  const aspectRatioBefore = Number((width / height).toFixed(3));
+  if (!cropRect) {
+    return { aspectRatioBefore, aspectRatioAfter: null, marginTrimPercentX: null, marginTrimPercentY: null };
+  }
+  const marginTrimPercentX = Number(((1 - cropRect.width / width) * 50).toFixed(1));
+  const marginTrimPercentY = Number(((1 - cropRect.height / height) * 50).toFixed(1));
+  return {
+    aspectRatioBefore,
+    aspectRatioAfter: Number((cropRect.width / cropRect.height).toFixed(3)),
+    marginTrimPercentX,
+    marginTrimPercentY,
+  };
 }
 
 async function resolveDimensions(
@@ -49,6 +75,10 @@ async function resolveDimensions(
   }
 }
 
+function clampInset(value: number): number {
+  return Math.min(Math.max(value, 0), MAX_INSET);
+}
+
 /**
  * Conservative margin-trim heuristic for receipt/invoice photos.
  * Does not analyze pixels — uses aspect ratio signals only.
@@ -63,39 +93,43 @@ function estimateDocumentCrop(
 
   const ratio = width / height;
 
-  // Likely already manually cropped to document bounds.
-  if (ratio >= 0.68 && ratio <= 1.05) {
-    return { cropRect: null, confidence: 0.35, reason: "aspect_already_document_like" };
-  }
-
   let insetX = 0;
   let insetY = 0;
   let confidence = 0;
   let reason = "no_clear_margin_signal";
 
   if (ratio < 0.62) {
-    insetX = 0.1;
-    insetY = 0.08;
-    confidence = 0.72;
+    insetX = 0.14;
+    insetY = 0.1;
+    confidence = 0.74;
     reason = "tall_frame_margin_trim";
   } else if (ratio < 0.68) {
-    insetX = 0.08;
-    insetY = 0.06;
-    confidence = 0.65;
+    insetX = 0.12;
+    insetY = 0.08;
+    confidence = 0.67;
     reason = "portrait_margin_trim";
-  } else if (ratio > 1.35) {
+  } else if (ratio <= 1.05) {
+    // Common after native crop — still trim visible table/background margins.
     insetX = 0.08;
-    insetY = 0.1;
-    confidence = 0.7;
+    insetY = 0.08;
+    confidence = 0.63;
+    reason = "document_like_finishing_trim";
+  } else if (ratio > 1.35) {
+    insetX = 0.1;
+    insetY = 0.12;
+    confidence = 0.72;
     reason = "landscape_margin_trim";
   } else if (ratio > 1.05) {
-    insetX = 0.06;
-    insetY = 0.08;
-    confidence = 0.62;
+    insetX = 0.08;
+    insetY = 0.1;
+    confidence = 0.64;
     reason = "wide_frame_margin_trim";
   } else {
     return { cropRect: null, confidence: 0.4, reason: "no_clear_margin_signal" };
   }
+
+  insetX = clampInset(insetX);
+  insetY = clampInset(insetY);
 
   const originX = Math.round(width * insetX);
   const originY = Math.round(height * insetY);
@@ -142,17 +176,18 @@ export async function autoCropDocumentImage(input: AutoCropInput): Promise<Docum
 
     const { width, height } = dims;
     const estimate = estimateDocumentCrop(width, height);
-
-    logDebug({
-      didCrop: false,
-      confidence: estimate.confidence,
-      reason: estimate.reason,
-      originalWidth: width,
-      originalHeight: height,
-      cropRect: estimate.cropRect ?? null,
-    });
+    const metrics = cropMetrics(width, height, estimate.cropRect);
 
     if (!estimate.cropRect || estimate.confidence < MIN_CONFIDENCE) {
+      logDebug({
+        didCrop: false,
+        confidence: estimate.confidence,
+        reason: estimate.reason,
+        originalWidth: width,
+        originalHeight: height,
+        cropRect: estimate.cropRect ?? null,
+        ...metrics,
+      });
       return noCrop(input.uri, estimate.reason, estimate.confidence);
     }
 
@@ -163,6 +198,15 @@ export async function autoCropDocumentImage(input: AutoCropInput): Promise<Docum
           "[DocumentAutoCropDebug] expo-image-manipulator unavailable — using original image"
         );
       }
+      logDebug({
+        didCrop: false,
+        confidence: estimate.confidence,
+        reason: "manipulator_unavailable",
+        originalWidth: width,
+        originalHeight: height,
+        cropRect: estimate.cropRect,
+        ...metrics,
+      });
       return noCrop(input.uri, "manipulator_unavailable", estimate.confidence);
     }
 
@@ -187,6 +231,7 @@ export async function autoCropDocumentImage(input: AutoCropInput): Promise<Docum
       originalWidth: width,
       originalHeight: height,
       cropRect: result.cropRect,
+      ...metrics,
     });
 
     return result;

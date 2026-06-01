@@ -16,6 +16,7 @@ import { Ionicons } from "@expo/vector-icons";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useAuth } from "../../context/AuthContext";
 import { useI18n } from "../../i18n/I18nContext";
+import type { Locale } from "../../i18n/translations";
 import { colors, radius, spacing } from "../../theme";
 import type { MaterialUnit } from "../../lib/types";
 import {
@@ -76,8 +77,26 @@ const EMPTY_SUGGESTION: SuggestionFormState = {
   sourceNote: "",
 };
 
+const LOCALE_TAGS: Record<Locale, string> = {
+  en: "en-GB",
+  de: "de-DE",
+  sk: "sk-SK",
+  cs: "cs-CZ",
+  es: "es-ES",
+  it: "it-IT",
+  pl: "pl-PL",
+};
+
 function formatMoney(amount: number, currency: string): string {
   return `${amount.toFixed(2)} ${currency}`;
+}
+
+function formatMaterialDate(date: Date, locale: Locale): string {
+  return date.toLocaleDateString(LOCALE_TAGS[locale] ?? "en-GB", {
+    day: "numeric",
+    month: "numeric",
+    year: "numeric",
+  });
 }
 
 function unitLabel(t: (k: string) => string, unit: MaterialUnit): string {
@@ -86,9 +105,24 @@ function unitLabel(t: (k: string) => string, unit: MaterialUnit): string {
   return v === key ? unit : v;
 }
 
+function FormField({
+  label,
+  children,
+}: {
+  label: string;
+  children: React.ReactNode;
+}) {
+  return (
+    <View style={styles.field}>
+      <Text style={styles.label}>{label}</Text>
+      {children}
+    </View>
+  );
+}
+
 export function ProjectMaterialsScreen() {
   const route = useRoute();
-  const { t } = useI18n();
+  const { t, locale } = useI18n();
   const { user } = useAuth();
   const { projectId } = route.params as RouteParams;
 
@@ -101,6 +135,11 @@ export function ProjectMaterialsScreen() {
   const [suggestionForm, setSuggestionForm] = useState<SuggestionFormState>(EMPTY_SUGGESTION);
   const [saving, setSaving] = useState(false);
   const [showDatePicker, setShowDatePicker] = useState(false);
+
+  const inputProps = {
+    placeholderTextColor: colors.inputPlaceholderOnLight,
+    style: styles.input,
+  };
 
   const plannedSuggestions = useMemo(
     () => suggestions.filter((s) => s.status === "planned"),
@@ -315,6 +354,28 @@ export function ProjectMaterialsScreen() {
     ]);
   };
 
+  const renderUnitPicker = (
+    selected: MaterialUnit,
+    onSelect: (u: MaterialUnit) => void
+  ) => (
+    <View style={styles.unitRow}>
+      {MATERIAL_UNITS.map((u) => {
+        const active = selected === u;
+        return (
+          <TouchableOpacity
+            key={u}
+            style={[styles.unitChip, active && styles.unitChipActive]}
+            onPress={() => onSelect(u)}
+          >
+            <Text style={[styles.unitChipText, active && styles.unitChipTextActive]}>
+              {unitLabel(t, u)}
+            </Text>
+          </TouchableOpacity>
+        );
+      })}
+    </View>
+  );
+
   if (loading) {
     return (
       <View style={styles.centered}>
@@ -325,7 +386,7 @@ export function ProjectMaterialsScreen() {
 
   return (
     <View style={styles.container}>
-      <ScrollView contentContainerStyle={styles.scrollContent}>
+      <ScrollView contentContainerStyle={styles.scrollContent} showsVerticalScrollIndicator={false}>
         <View style={styles.totalCard}>
           <Text style={styles.totalLabel}>{t("projectMaterials.materialTotal")}</Text>
           <Text style={styles.totalValue}>{formatMoney(totals.totalPrice, totals.currency)}</Text>
@@ -335,83 +396,110 @@ export function ProjectMaterialsScreen() {
           </Text>
         </View>
 
-        <View style={styles.sectionHeader}>
+        <View style={styles.section}>
           <Text style={styles.sectionTitle}>{t("projectMaterials.recommendedTitle")}</Text>
-          {user?.id ? (
-            <TouchableOpacity style={styles.addBtn} onPress={openAddSuggestion}>
-              <Ionicons name="add" size={16} color="#fff" />
-              <Text style={styles.addBtnText}>{t("projectMaterials.addRecommended")}</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
+          <Text style={styles.sectionHelper}>{t("projectMaterials.recommendedHelper")}</Text>
 
-        {plannedSuggestions.length === 0 ? (
-          <Text style={styles.empty}>{t("projectMaterials.noRecommended")}</Text>
-        ) : (
-          plannedSuggestions.map((s) => (
-            <View key={s.id} style={styles.card}>
-              <Text style={styles.cardTitle}>{s.name}</Text>
-              {s.suggestedQuantity != null && s.unit ? (
-                <Text style={styles.cardMeta}>
-                  {s.suggestedQuantity} {unitLabel(t, s.unit)}
-                </Text>
-              ) : null}
-              {s.confidence ? (
-                <Text style={styles.badge}>
-                  {t("projectMaterials.confidence")}: {t(`projectMaterials.confidence.${s.confidence}`)}
-                </Text>
-              ) : null}
-              {s.sourceNote ? <Text style={styles.cardSub}>{s.sourceNote}</Text> : null}
-              <View style={styles.cardActions}>
-                <TouchableOpacity onPress={() => openAcceptSuggestion(s)} style={styles.actionBtn}>
-                  <Text style={styles.actionAccept}>{t("projectMaterials.accept")}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => openEditSuggestion(s)} style={styles.actionBtn}>
-                  <Text style={styles.actionLink}>{t("projectMaterials.editMaterial")}</Text>
-                </TouchableOpacity>
-                <TouchableOpacity onPress={() => onRejectSuggestion(s)} style={styles.actionBtn}>
-                  <Text style={styles.actionReject}>{t("projectMaterials.reject")}</Text>
-                </TouchableOpacity>
-              </View>
-            </View>
-          ))
-        )}
-
-        <View style={[styles.sectionHeader, { marginTop: spacing.lg }]}>
-          <Text style={styles.sectionTitle}>{t("projectMaterials.usedTitle")}</Text>
-          {user?.id ? (
-            <TouchableOpacity style={styles.addBtn} onPress={openAddUsed}>
-              <Ionicons name="add" size={16} color="#fff" />
-              <Text style={styles.addBtnText}>{t("projectMaterials.addMaterial")}</Text>
-            </TouchableOpacity>
-          ) : null}
-        </View>
-
-        {materials.length === 0 ? (
-          <Text style={styles.empty}>{t("projectMaterials.noMaterialsYet")}</Text>
-        ) : (
-          materials.map((m) => (
-            <TouchableOpacity key={m.id} style={styles.card} onPress={() => openEditUsed(m)} activeOpacity={0.85}>
-              <View style={styles.cardRow}>
-                <Text style={styles.cardTitle}>{m.name}</Text>
-                {m.totalPrice != null ? (
-                  <Text style={styles.cardPrice}>{formatMoney(m.totalPrice, m.currency)}</Text>
+          {plannedSuggestions.length === 0 ? (
+            <Text style={styles.empty}>{t("projectMaterials.noRecommended")}</Text>
+          ) : (
+            plannedSuggestions.map((s) => (
+              <View key={s.id} style={styles.card}>
+                <View style={styles.cardTopRow}>
+                  <Text style={styles.cardTitle}>{s.name}</Text>
+                  {s.confidence ? (
+                    <View style={styles.confidenceBadge}>
+                      <Text style={styles.confidenceBadgeText}>
+                        {t(`projectMaterials.confidence.${s.confidence}`)}
+                      </Text>
+                    </View>
+                  ) : null}
+                </View>
+                {s.suggestedQuantity != null && s.unit ? (
+                  <Text style={styles.cardMetaStrong}>
+                    {s.suggestedQuantity} {unitLabel(t, s.unit)}
+                  </Text>
                 ) : null}
+                {s.sourceNote ? (
+                  <Text style={styles.cardSub} numberOfLines={2}>
+                    {s.sourceNote}
+                  </Text>
+                ) : null}
+                {s.description ? (
+                  <Text style={styles.cardSub} numberOfLines={2}>
+                    {s.description}
+                  </Text>
+                ) : null}
+                <View style={styles.cardActionsRow}>
+                  <TouchableOpacity style={styles.cardActionPrimary} onPress={() => openAcceptSuggestion(s)}>
+                    <Text style={styles.cardActionPrimaryText}>{t("projectMaterials.accept")}</Text>
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.iconBtn} onPress={() => openEditSuggestion(s)} hitSlop={8}>
+                    <Ionicons name="create-outline" size={20} color={colors.text} />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.iconBtn} onPress={() => onRejectSuggestion(s)} hitSlop={8}>
+                    <Ionicons name="close-circle-outline" size={20} color={colors.error} />
+                  </TouchableOpacity>
+                </View>
               </View>
-              <Text style={styles.cardMeta}>
-                {m.quantity} {unitLabel(t, m.unit)}
-                {m.supplierName ? ` · ${m.supplierName}` : ""}
-              </Text>
-              <TouchableOpacity
-                onPress={() => confirmDeleteUsed(m)}
-                hitSlop={8}
-                style={styles.deleteLink}
-              >
-                <Text style={styles.actionReject}>{t("projectMaterials.delete")}</Text>
-              </TouchableOpacity>
+            ))
+          )}
+
+          {user?.id ? (
+            <TouchableOpacity style={styles.addBtnFull} onPress={openAddSuggestion} activeOpacity={0.85}>
+              <Ionicons name="add" size={18} color="#fff" />
+              <Text style={styles.addBtnFullText}>{t("projectMaterials.addRecommended")}</Text>
             </TouchableOpacity>
-          ))
-        )}
+          ) : null}
+        </View>
+
+        <View style={[styles.section, styles.sectionSpaced]}>
+          <Text style={styles.sectionTitle}>{t("projectMaterials.usedTitle")}</Text>
+          <Text style={styles.sectionHelper}>{t("projectMaterials.usedHelper")}</Text>
+
+          {materials.length === 0 ? (
+            <Text style={styles.empty}>{t("projectMaterials.noMaterialsYet")}</Text>
+          ) : (
+            materials.map((m) => (
+              <View key={m.id} style={styles.card}>
+                <View style={styles.cardTopRow}>
+                  <Text style={styles.cardTitle}>{m.name}</Text>
+                  {m.totalPrice != null ? (
+                    <Text style={styles.cardPrice}>{formatMoney(m.totalPrice, m.currency)}</Text>
+                  ) : null}
+                </View>
+                <Text style={styles.cardMetaStrong}>
+                  {m.quantity} {unitLabel(t, m.unit)}
+                </Text>
+                {m.unitPrice != null ? (
+                  <Text style={styles.cardSub}>
+                    {t("projectMaterials.unitPrice")}: {formatMoney(m.unitPrice, m.currency)} /{" "}
+                    {unitLabel(t, m.unit)}
+                  </Text>
+                ) : null}
+                {m.supplierName ? <Text style={styles.cardSub}>{m.supplierName}</Text> : null}
+                <Text style={styles.cardSub}>
+                  {t("projectMaterials.dateUsed")}: {formatMaterialDate(new Date(m.usedAt), locale)}
+                </Text>
+                <View style={styles.cardActionsRow}>
+                  <TouchableOpacity style={styles.iconBtn} onPress={() => openEditUsed(m)} hitSlop={8}>
+                    <Ionicons name="create-outline" size={20} color={colors.text} />
+                  </TouchableOpacity>
+                  <TouchableOpacity style={styles.iconBtn} onPress={() => confirmDeleteUsed(m)} hitSlop={8}>
+                    <Ionicons name="trash-outline" size={20} color={colors.error} />
+                  </TouchableOpacity>
+                </View>
+              </View>
+            ))
+          )}
+
+          {user?.id ? (
+            <TouchableOpacity style={styles.addBtnFull} onPress={openAddUsed} activeOpacity={0.85}>
+              <Ionicons name="add" size={18} color="#fff" />
+              <Text style={styles.addBtnFullText}>{t("projectMaterials.addMaterial")}</Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
       </ScrollView>
 
       <Modal visible={usedModalOpen} animationType="slide" transparent>
@@ -421,75 +509,94 @@ export function ProjectMaterialsScreen() {
               <Text style={styles.modalTitle}>
                 {usedForm.id ? t("projectMaterials.editMaterial") : t("projectMaterials.addMaterial")}
               </Text>
-              <Text style={styles.label}>{t("projectMaterials.materialName")}</Text>
-              <TextInput
-                style={styles.input}
-                value={usedForm.name}
-                onChangeText={(v) => setUsedForm((p) => ({ ...p, name: v }))}
-              />
-              <Text style={styles.label}>{t("projectMaterials.quantity")}</Text>
-              <TextInput
-                style={styles.input}
-                value={usedForm.quantity}
-                keyboardType="decimal-pad"
-                onChangeText={(v) => setUsedForm((p) => recalcTotal(v, p.unitPrice, p))}
-              />
-              <Text style={styles.label}>{t("projectMaterials.unit")}</Text>
-              <View style={styles.unitRow}>
-                {MATERIAL_UNITS.map((u) => (
-                  <TouchableOpacity
-                    key={u}
-                    style={[styles.unitChip, usedForm.unit === u && styles.unitChipActive]}
-                    onPress={() => setUsedForm((p) => ({ ...p, unit: u }))}
-                  >
-                    <Text style={[styles.unitChipText, usedForm.unit === u && styles.unitChipTextActive]}>
-                      {unitLabel(t, u)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.label}>{t("projectMaterials.unitPrice")}</Text>
-              <TextInput
-                style={styles.input}
-                value={usedForm.unitPrice}
-                keyboardType="decimal-pad"
-                onChangeText={(v) => setUsedForm((p) => recalcTotal(p.quantity, v, p))}
-              />
-              <Text style={styles.label}>{t("projectMaterials.totalPrice")}</Text>
-              <TextInput
-                style={styles.input}
-                value={usedForm.totalPrice}
-                keyboardType="decimal-pad"
-                onChangeText={(v) => setUsedForm((p) => ({ ...p, totalPrice: v }))}
-              />
-              <Text style={styles.label}>{t("projectMaterials.supplier")}</Text>
-              <TextInput
-                style={styles.input}
-                value={usedForm.supplierName}
-                onChangeText={(v) => setUsedForm((p) => ({ ...p, supplierName: v }))}
-              />
-              <Text style={styles.label}>{t("projectMaterials.dateUsed")}</Text>
-              <TouchableOpacity style={styles.input} onPress={() => setShowDatePicker(true)}>
-                <Text>{usedForm.usedAt.toLocaleDateString()}</Text>
-              </TouchableOpacity>
-              {showDatePicker ? (
-                <DateTimePicker
-                  value={usedForm.usedAt}
-                  mode="date"
-                  display={Platform.OS === "ios" ? "spinner" : "default"}
-                  onChange={(_, date) => {
-                    setShowDatePicker(Platform.OS === "ios");
-                    if (date) setUsedForm((p) => ({ ...p, usedAt: date }));
-                  }}
+
+              <FormField label={t("projectMaterials.materialName")}>
+                <TextInput
+                  {...inputProps}
+                  value={usedForm.name}
+                  placeholder={t("projectMaterials.materialName")}
+                  onChangeText={(v) => setUsedForm((p) => ({ ...p, name: v }))}
                 />
-              ) : null}
-              <Text style={styles.label}>{t("projectMaterials.notes")}</Text>
-              <TextInput
-                style={[styles.input, styles.inputMultiline]}
-                value={usedForm.notes}
-                multiline
-                onChangeText={(v) => setUsedForm((p) => ({ ...p, notes: v }))}
-              />
+              </FormField>
+
+              <FormField label={t("projectMaterials.quantity")}>
+                <TextInput
+                  {...inputProps}
+                  value={usedForm.quantity}
+                  placeholder="0"
+                  keyboardType="decimal-pad"
+                  onChangeText={(v) => setUsedForm((p) => recalcTotal(v, p.unitPrice, p))}
+                />
+              </FormField>
+
+              <FormField label={t("projectMaterials.unit")}>
+                {renderUnitPicker(usedForm.unit, (u) => setUsedForm((p) => ({ ...p, unit: u })))}
+              </FormField>
+
+              <FormField label={t("projectMaterials.unitPrice")}>
+                <TextInput
+                  {...inputProps}
+                  value={usedForm.unitPrice}
+                  placeholder="0.00"
+                  keyboardType="decimal-pad"
+                  onChangeText={(v) => setUsedForm((p) => recalcTotal(p.quantity, v, p))}
+                />
+              </FormField>
+
+              <FormField label={t("projectMaterials.totalPrice")}>
+                <TextInput
+                  {...inputProps}
+                  value={usedForm.totalPrice}
+                  placeholder="0.00"
+                  keyboardType="decimal-pad"
+                  onChangeText={(v) => setUsedForm((p) => ({ ...p, totalPrice: v }))}
+                />
+              </FormField>
+
+              <FormField label={t("projectMaterials.supplier")}>
+                <TextInput
+                  {...inputProps}
+                  value={usedForm.supplierName}
+                  placeholder={t("projectMaterials.supplier")}
+                  onChangeText={(v) => setUsedForm((p) => ({ ...p, supplierName: v }))}
+                />
+              </FormField>
+
+              <FormField label={t("projectMaterials.dateUsed")}>
+                <TouchableOpacity
+                  style={[styles.input, styles.dateInput]}
+                  onPress={() => setShowDatePicker(true)}
+                  activeOpacity={0.85}
+                >
+                  <Text style={styles.dateInputText}>
+                    {formatMaterialDate(usedForm.usedAt, locale)}
+                  </Text>
+                  <Ionicons name="calendar-outline" size={18} color={colors.textMuted} />
+                </TouchableOpacity>
+                {showDatePicker ? (
+                  <DateTimePicker
+                    value={usedForm.usedAt}
+                    mode="date"
+                    display={Platform.OS === "ios" ? "spinner" : "default"}
+                    onChange={(_, date) => {
+                      if (Platform.OS !== "ios") setShowDatePicker(false);
+                      if (date) setUsedForm((p) => ({ ...p, usedAt: date }));
+                    }}
+                  />
+                ) : null}
+              </FormField>
+
+              <FormField label={t("projectMaterials.notes")}>
+                <TextInput
+                  {...inputProps}
+                  style={[styles.input, styles.inputMultiline]}
+                  value={usedForm.notes}
+                  placeholder={t("projectMaterials.notes")}
+                  multiline
+                  onChangeText={(v) => setUsedForm((p) => ({ ...p, notes: v }))}
+                />
+              </FormField>
+
               <View style={styles.modalActions}>
                 <TouchableOpacity style={styles.cancelBtn} onPress={() => setUsedModalOpen(false)}>
                   <Text style={styles.cancelText}>{t("common.cancel")}</Text>
@@ -514,48 +621,52 @@ export function ProjectMaterialsScreen() {
               <Text style={styles.modalTitle}>
                 {suggestionForm.id ? t("projectMaterials.editMaterial") : t("projectMaterials.addRecommended")}
               </Text>
-              <Text style={styles.label}>{t("projectMaterials.materialName")}</Text>
-              <TextInput
-                style={styles.input}
-                value={suggestionForm.name}
-                onChangeText={(v) => setSuggestionForm((p) => ({ ...p, name: v }))}
-              />
-              <Text style={styles.label}>{t("projectMaterials.quantity")}</Text>
-              <TextInput
-                style={styles.input}
-                value={suggestionForm.suggestedQuantity}
-                keyboardType="decimal-pad"
-                onChangeText={(v) => setSuggestionForm((p) => ({ ...p, suggestedQuantity: v }))}
-              />
-              <Text style={styles.label}>{t("projectMaterials.unit")}</Text>
-              <View style={styles.unitRow}>
-                {MATERIAL_UNITS.map((u) => (
-                  <TouchableOpacity
-                    key={u}
-                    style={[styles.unitChip, suggestionForm.unit === u && styles.unitChipActive]}
-                    onPress={() => setSuggestionForm((p) => ({ ...p, unit: u }))}
-                  >
-                    <Text
-                      style={[styles.unitChipText, suggestionForm.unit === u && styles.unitChipTextActive]}
-                    >
-                      {unitLabel(t, u)}
-                    </Text>
-                  </TouchableOpacity>
-                ))}
-              </View>
-              <Text style={styles.label}>{t("projectMaterials.notes")}</Text>
-              <TextInput
-                style={[styles.input, styles.inputMultiline]}
-                value={suggestionForm.description}
-                multiline
-                onChangeText={(v) => setSuggestionForm((p) => ({ ...p, description: v }))}
-              />
-              <Text style={styles.label}>{t("projectMaterials.sourceDocument")}</Text>
-              <TextInput
-                style={styles.input}
-                value={suggestionForm.sourceNote}
-                onChangeText={(v) => setSuggestionForm((p) => ({ ...p, sourceNote: v }))}
-              />
+
+              <FormField label={t("projectMaterials.materialName")}>
+                <TextInput
+                  {...inputProps}
+                  value={suggestionForm.name}
+                  placeholder={t("projectMaterials.materialName")}
+                  onChangeText={(v) => setSuggestionForm((p) => ({ ...p, name: v }))}
+                />
+              </FormField>
+
+              <FormField label={t("projectMaterials.quantity")}>
+                <TextInput
+                  {...inputProps}
+                  value={suggestionForm.suggestedQuantity}
+                  placeholder="0"
+                  keyboardType="decimal-pad"
+                  onChangeText={(v) => setSuggestionForm((p) => ({ ...p, suggestedQuantity: v }))}
+                />
+              </FormField>
+
+              <FormField label={t("projectMaterials.unit")}>
+                {renderUnitPicker(suggestionForm.unit, (u) =>
+                  setSuggestionForm((p) => ({ ...p, unit: u }))
+                )}
+              </FormField>
+
+              <FormField label={t("projectMaterials.notes")}>
+                <TextInput
+                  {...inputProps}
+                  style={[styles.input, styles.inputMultiline]}
+                  value={suggestionForm.description}
+                  placeholder={t("projectMaterials.notes")}
+                  multiline
+                  onChangeText={(v) => setSuggestionForm((p) => ({ ...p, description: v }))}
+                />
+              </FormField>
+
+              <FormField label={t("projectMaterials.sourceDocument")}>
+                <TextInput
+                  {...inputProps}
+                  value={suggestionForm.sourceNote}
+                  placeholder={t("projectMaterials.sourceDocument")}
+                  onChangeText={(v) => setSuggestionForm((p) => ({ ...p, sourceNote: v }))}
+                />
+              </FormField>
+
               <View style={styles.modalActions}>
                 <TouchableOpacity style={styles.cancelBtn} onPress={() => setSuggestionModalOpen(false)}>
                   <Text style={styles.cancelText}>{t("common.cancel")}</Text>
@@ -581,96 +692,155 @@ const styles = StyleSheet.create({
   scrollContent: { padding: spacing.lg, paddingBottom: spacing.xl * 2 },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   totalCard: {
-    backgroundColor: colors.card,
+    backgroundColor: colors.formPanel,
     borderRadius: radius,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     padding: spacing.md,
     marginBottom: spacing.lg,
   },
   totalLabel: { fontSize: 13, color: colors.textMuted, fontWeight: "600" },
   totalValue: { fontSize: 24, fontWeight: "800", color: colors.text, marginTop: spacing.xs },
   totalMeta: { fontSize: 12, color: colors.textMuted, marginTop: spacing.xs },
-  sectionHeader: {
-    flexDirection: "row",
-    alignItems: "center",
-    justifyContent: "space-between",
+  section: { marginBottom: spacing.md },
+  sectionSpaced: { marginTop: spacing.sm },
+  sectionTitle: { fontSize: 17, fontWeight: "700", color: colors.textOnDark, marginBottom: spacing.xs },
+  sectionHelper: {
+    fontSize: 13,
+    lineHeight: 19,
+    color: colors.onboardingHelperOnDark,
     marginBottom: spacing.sm,
   },
-  sectionTitle: { fontSize: 17, fontWeight: "700", color: colors.text, flex: 1 },
-  addBtn: {
+  empty: {
+    color: colors.labelMutedOnDark,
+    fontSize: 14,
+    marginBottom: spacing.sm,
+    fontStyle: "italic",
+  },
+  addBtnFull: {
     flexDirection: "row",
     alignItems: "center",
-    gap: 4,
+    justifyContent: "center",
+    gap: spacing.xs,
     backgroundColor: colors.primary,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
+    paddingVertical: spacing.sm + 2,
+    paddingHorizontal: spacing.md,
     borderRadius: radius,
+    marginTop: spacing.xs,
   },
-  addBtnText: { color: "#fff", fontWeight: "600", fontSize: 12 },
-  empty: { color: colors.textMuted, marginBottom: spacing.md },
+  addBtnFullText: { color: "#fff", fontWeight: "700", fontSize: 15 },
   card: {
-    backgroundColor: colors.card,
+    backgroundColor: colors.formPanel,
     borderRadius: radius,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     padding: spacing.md,
     marginBottom: spacing.sm,
   },
-  cardRow: { flexDirection: "row", justifyContent: "space-between", alignItems: "flex-start" },
-  cardTitle: { fontSize: 16, fontWeight: "600", color: colors.text, flex: 1 },
-  cardPrice: { fontSize: 15, fontWeight: "700", color: colors.primary },
-  cardMeta: { fontSize: 13, color: colors.textMuted, marginTop: 4 },
-  cardSub: { fontSize: 12, color: colors.textMuted, marginTop: 4 },
-  badge: { fontSize: 11, color: colors.primary, marginTop: 4, fontWeight: "600" },
-  cardActions: { flexDirection: "row", flexWrap: "wrap", gap: spacing.sm, marginTop: spacing.sm },
-  actionBtn: { paddingVertical: 4 },
-  actionAccept: { color: colors.primary, fontWeight: "700", fontSize: 13 },
-  actionLink: { color: colors.text, fontWeight: "600", fontSize: 13 },
-  actionReject: { color: "#c0392b", fontWeight: "600", fontSize: 13 },
-  deleteLink: { marginTop: spacing.sm, alignSelf: "flex-start" },
+  cardTopRow: {
+    flexDirection: "row",
+    justifyContent: "space-between",
+    alignItems: "flex-start",
+    gap: spacing.sm,
+  },
+  cardTitle: { fontSize: 16, fontWeight: "700", color: colors.text, flex: 1 },
+  cardPrice: { fontSize: 16, fontWeight: "800", color: colors.primary },
+  cardMetaStrong: { fontSize: 14, fontWeight: "600", color: colors.text, marginTop: 4 },
+  cardSub: { fontSize: 13, color: colors.textMuted, marginTop: 4, lineHeight: 18 },
+  confidenceBadge: {
+    backgroundColor: "rgba(224, 103, 55, 0.12)",
+    borderRadius: 999,
+    paddingHorizontal: 8,
+    paddingVertical: 3,
+  },
+  confidenceBadgeText: { fontSize: 11, fontWeight: "700", color: colors.primary },
+  cardActionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.sm,
+    paddingTop: spacing.sm,
+    borderTopWidth: StyleSheet.hairlineWidth,
+    borderTopColor: colors.formPanelBorder,
+  },
+  cardActionPrimary: {
+    flex: 1,
+    backgroundColor: colors.primary,
+    borderRadius: radius - 4,
+    paddingVertical: 8,
+    alignItems: "center",
+  },
+  cardActionPrimaryText: { color: "#fff", fontWeight: "700", fontSize: 13 },
+  iconBtn: { padding: 6 },
   modalOverlay: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)", justifyContent: "flex-end" },
   modalScroll: { flexGrow: 1, justifyContent: "flex-end" },
   modal: {
-    backgroundColor: colors.card,
+    backgroundColor: colors.formPanel,
     borderTopLeftRadius: radius + 4,
     borderTopRightRadius: radius + 4,
     padding: spacing.lg,
     maxHeight: "92%",
+    borderWidth: 1,
+    borderColor: colors.formPanelBorder,
   },
-  modalTitle: { fontSize: 18, fontWeight: "700", color: colors.text, marginBottom: spacing.md },
-  label: { fontSize: 12, fontWeight: "600", color: colors.textMuted, marginBottom: 4, marginTop: spacing.sm },
+  modalTitle: { fontSize: 18, fontWeight: "700", color: colors.text, marginBottom: spacing.sm },
+  field: { marginBottom: spacing.xs },
+  label: {
+    fontSize: 13,
+    fontWeight: "600",
+    color: colors.text,
+    marginBottom: 6,
+    marginTop: spacing.xs,
+  },
   input: {
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     borderRadius: radius,
-    paddingHorizontal: spacing.sm,
-    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: 12,
+    fontSize: 15,
     color: colors.text,
-    backgroundColor: colors.background,
+    backgroundColor: "#FFFFFF",
+    minHeight: 48,
   },
-  inputMultiline: { minHeight: 72, textAlignVertical: "top" },
+  inputMultiline: { minHeight: 88, textAlignVertical: "top", paddingTop: 12 },
+  dateInput: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  dateInputText: { fontSize: 15, color: colors.text, fontWeight: "500" },
   unitRow: { flexDirection: "row", flexWrap: "wrap", gap: spacing.xs },
   unitChip: {
     paddingHorizontal: spacing.sm,
-    paddingVertical: 6,
-    borderRadius: radius,
+    paddingVertical: 8,
+    borderRadius: radius - 4,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
+    backgroundColor: "#FFFFFF",
   },
   unitChipActive: { backgroundColor: colors.primary, borderColor: colors.primary },
-  unitChipText: { fontSize: 12, color: colors.text },
-  unitChipTextActive: { color: "#fff", fontWeight: "600" },
-  modalActions: { flexDirection: "row", justifyContent: "flex-end", gap: spacing.sm, marginTop: spacing.lg },
+  unitChipText: { fontSize: 12, color: colors.text, fontWeight: "500" },
+  unitChipTextActive: { color: "#fff", fontWeight: "700" },
+  modalActions: {
+    flexDirection: "row",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+    paddingTop: spacing.sm,
+  },
   cancelBtn: { padding: spacing.sm },
-  cancelText: { color: colors.textMuted },
+  cancelText: { color: colors.textMuted, fontWeight: "600" },
   saveBtn: {
     backgroundColor: colors.primary,
     paddingHorizontal: spacing.lg,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.sm + 2,
     borderRadius: radius,
-    minWidth: 100,
+    minWidth: 120,
     alignItems: "center",
+    justifyContent: "center",
+    minHeight: 44,
   },
-  saveBtnText: { color: "#fff", fontWeight: "700" },
+  saveBtnText: { color: "#fff", fontWeight: "700", fontSize: 15 },
 });

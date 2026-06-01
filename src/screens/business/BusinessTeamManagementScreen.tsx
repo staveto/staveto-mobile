@@ -211,6 +211,7 @@ export function BusinessTeamManagementScreen() {
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
       <Text style={styles.pageTitle}>{t("business.dashboard.teamCardManage")}</Text>
+      <Text style={styles.pageSubtitle}>{t("business.team.manageHint")}</Text>
       {loading ? <ActivityIndicator color={colors.primary} /> : null}
 
       <View style={styles.summaryCard}>
@@ -269,6 +270,12 @@ const styles = StyleSheet.create({
     fontWeight: "800",
     color: "#FFFFFF",
     marginBottom: 2,
+  },
+  pageSubtitle: {
+    fontSize: 14,
+    fontWeight: "500",
+    color: "#94A3B8",
+    marginBottom: 8,
   },
   summaryCard: {
     backgroundColor: "#132347",

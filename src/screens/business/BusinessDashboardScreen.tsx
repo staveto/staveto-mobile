@@ -640,6 +640,8 @@ export function BusinessDashboardScreen() {
               })}
             </View>
 
+            <Text style={styles.inviteHint}>{t("business.invites.permissionsLaterHint")}</Text>
+
             <Text style={styles.fieldLabel}>{t("business.invites.emailOptional")}</Text>
             <TextInput
               style={styles.input}

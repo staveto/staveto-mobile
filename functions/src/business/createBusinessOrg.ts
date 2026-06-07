@@ -1,5 +1,9 @@
 import * as admin from "firebase-admin";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
+import {
+  handleWebOnboardingCreateOrg,
+  isWebOnboardingPayload,
+} from "./webOnboardingOrg";
 
 type CreateBusinessOrgInput = {
   companyName?: unknown;
@@ -225,9 +229,15 @@ export const createBusinessOrg = onCall(
     memory: "256MiB",
     invoker: "public",
   },
-  async (request): Promise<CreateBusinessOrgResult> => {
+  async (request): Promise<CreateBusinessOrgResult | Record<string, unknown>> => {
     const actor = requireAuth(request);
-    const input = normalizeInput((request.data ?? {}) as CreateBusinessOrgInput);
+    const raw = (request.data ?? {}) as Record<string, unknown>;
+
+    if (isWebOnboardingPayload(raw)) {
+      return handleWebOnboardingCreateOrg(actor.uid, actor.email, raw);
+    }
+
+    const input = normalizeInput(raw as CreateBusinessOrgInput);
     const db = admin.firestore();
 
     const now = admin.firestore.FieldValue.serverTimestamp();

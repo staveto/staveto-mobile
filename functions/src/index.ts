@@ -970,6 +970,9 @@ export { redeemPromoCode } from "./promo"; // disabled – no-op, throws PROMO_D
 export { getBillingStatus, checkEntitlement } from "./billing";
 export { adminActivateBusinessOrg } from "./business/adminActivateBusinessOrg";
 export { createBusinessOrg } from "./business/createBusinessOrg";
+export { updateBusinessOrgProfile } from "./business/updateBusinessOrgProfile";
+export { backfillBusinessOrgCompatibility } from "./business/backfillBusinessOrgCompatibility";
+export { listMyBusinessOrganizations } from "./business/listMyBusinessOrganizations";
 export { createBusinessCheckoutSession } from "./business/createBusinessCheckoutSession";
 export { updateBusinessOrderPlan } from "./business/updateBusinessOrderPlan";
 export { createBusinessInviteCode } from "./business/createBusinessInviteCode";

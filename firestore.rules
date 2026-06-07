@@ -131,21 +131,25 @@ service cloud.firestore {
 
     function canManageOrgProjectAssignments(projectId) {
       let data = projectDoc(projectId);
-      if (!isOrgLinkedProjectData(data)) return false;
-      let orgId = data.orgId;
-      return data.ownerId == uid()
-        || isOrgOwner(orgId, uid())
-        || isOrgAdmin(orgId, uid())
-        || isOrgManager(orgId, uid());
+      return isOrgLinkedProjectData(data)
+        && (
+          data.ownerId == uid()
+          || isOrgOwner(data.orgId, uid())
+          || isOrgAdmin(data.orgId, uid())
+          || isOrgManager(data.orgId, uid())
+        );
     }
 
     function canReadOrgLinkedProject(projectId) {
       let data = projectDoc(projectId);
-      if (!isOrgLinkedProjectData(data)) return false;
-      let orgId = data.orgId;
-      if (data.ownerId == uid()) return true;
-      if (isOrgOwner(orgId, uid()) || isOrgAdmin(orgId, uid()) || isOrgManager(orgId, uid())) return true;
-      return isAssignedOnProject(projectId);
+      return isOrgLinkedProjectData(data)
+        && (
+          data.ownerId == uid()
+          || isOrgOwner(data.orgId, uid())
+          || isOrgAdmin(data.orgId, uid())
+          || isOrgManager(data.orgId, uid())
+          || isAssignedOnProject(projectId)
+        );
     }
 
     function assignmentPatchOnly() {
@@ -310,13 +314,31 @@ service cloud.firestore {
       // Organizations are created only via callable (admin SDK bypasses rules).
       allow create: if false;
 
-      // Client owner/admin can edit only safe profile fields.
+      // Client owner/admin can edit only safe profile fields (canonical root + nested profile mirror).
       // Server-only fields are updated exclusively by Cloud Functions (admin SDK).
       allow update: if signedIn()
         && (isOrgAdmin(orgId, uid()) || isOrgOwner(orgId, uid()))
         && request.resource.data.ownerUid == resource.data.ownerUid
+        && request.resource.data.get('billingOwnerUid', null) == resource.data.get('billingOwnerUid', null)
+        && request.resource.data.get('createdByUid', null) == resource.data.get('createdByUid', null)
+        && request.resource.data.get('status', null) == resource.data.get('status', null)
+        && request.resource.data.get('billingStatus', null) == resource.data.get('billingStatus', null)
+        && request.resource.data.get('businessEnabled', null) == resource.data.get('businessEnabled', null)
+        && request.resource.data.get('seatsLimit', null) == resource.data.get('seatsLimit', null)
+        && request.resource.data.get('seatsUsed', null) == resource.data.get('seatsUsed', null)
+        && request.resource.data.get('trialStartedAt', null) == resource.data.get('trialStartedAt', null)
+        && request.resource.data.get('trialEndsAt', null) == resource.data.get('trialEndsAt', null)
+        && request.resource.data.get('activeBusinessOrderId', null) == resource.data.get('activeBusinessOrderId', null)
         && request.resource.data.diff(resource.data).affectedKeys().hasOnly([
+          'legalName',
           'name',
+          'billingEmail',
+          'billingAddress',
+          'companyIdentifiers',
+          'contactName',
+          'phone',
+          'countryCode',
+          'country',
           'profile',
           'updatedAt'
         ]);

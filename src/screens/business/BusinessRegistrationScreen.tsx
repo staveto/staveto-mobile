@@ -15,7 +15,21 @@ import { getAuth } from "../../firebase";
 import { useBusinessContext } from "../../hooks/useBusinessContext";
 import { useI18n } from "../../i18n/I18nContext";
 import { createBusinessOrg } from "../../services/businessRegistration";
-import { findPreferredBusinessOrgForUser, type OrganizationDoc } from "../../services/organizations";
+import {
+  findPreferredBusinessOrgForUser,
+  isUsableBusinessOrg,
+  updateOrganizationCompanyProfile,
+} from "../../services/organizations";
+import {
+  readOrgBillingEmail,
+  readOrgCountryCode,
+  readOrgLegalName,
+  readOrgPhone,
+  readOrgContactName,
+  readOrgRegistrationNumber,
+  readOrgBillingAddress,
+} from "../../lib/companyProfileCompletion";
+import { useOrgAccess } from "../../hooks/useOrgAccess";
 import { colors, radius, spacing } from "../../theme";
 
 type FormState = {
@@ -69,9 +83,10 @@ const BUSINESS_PLANS: Array<{
 type RegistrationRouteParams = {
   planCode?: PlanCode;
   billingPeriod?: BillingPeriod;
+  mode?: "completeProfile";
 };
 
-type SupportedCountryCode = "SK" | "CZ" | "AT" | "DE" | "PL" | "GB" | "US" | "OTHER";
+type SupportedCountryCode = "SK" | "CZ" | "AT" | "CH" | "DE" | "PL" | "GB" | "US" | "OTHER";
 
 const INITIAL_FORM: FormState = {
   companyName: "",
@@ -102,6 +117,7 @@ const COUNTRY_OPTIONS: Array<{ code: SupportedCountryCode; labelKey: string }> =
   { code: "SK", labelKey: "business.registration.country.sk" },
   { code: "CZ", labelKey: "business.registration.country.cz" },
   { code: "AT", labelKey: "business.registration.country.at" },
+  { code: "CH", labelKey: "business.registration.country.ch" },
   { code: "DE", labelKey: "business.registration.country.de" },
   { code: "PL", labelKey: "business.registration.country.pl" },
   { code: "GB", labelKey: "business.registration.country.gb" },
@@ -138,6 +154,13 @@ const COUNTRY_LABELS: Record<
     taxIdLabelKey: "business.registration.countryLabels.at.taxId",
     vatIdLabelKey: "business.registration.countryLabels.at.vatId",
     zipLabelKey: "business.registration.countryLabels.at.zip",
+    registrationRequired: false,
+  },
+  CH: {
+    registrationLabelKey: "business.registration.countryLabels.ch.registration",
+    taxIdLabelKey: "business.registration.countryLabels.ch.taxId",
+    vatIdLabelKey: "business.registration.countryLabels.ch.vatId",
+    zipLabelKey: "business.registration.countryLabels.ch.zip",
     registrationRequired: false,
   },
   DE: {
@@ -187,39 +210,20 @@ function getErrorDetails(error: unknown): { code: string; message: string; stack
   return { code, message, stack };
 }
 
-function toMillis(raw: unknown): number | null {
-  if (!raw) return null;
-  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-  if (typeof raw === "string") {
-    const parsed = new Date(raw).getTime();
-    return Number.isFinite(parsed) ? parsed : null;
-  }
-  if (typeof raw === "object" && raw !== null) {
-    const maybeTimestamp = raw as { toDate?: () => Date };
-    if (typeof maybeTimestamp.toDate === "function") {
-      const parsed = maybeTimestamp.toDate().getTime();
-      return Number.isFinite(parsed) ? parsed : null;
-    }
-  }
-  return null;
-}
-
-function isUsableBusinessOrg(org: OrganizationDoc | null): boolean {
-  if (!org || !org.businessEnabled) return false;
-  if (org.status === "active" || org.status === "trialing") return true;
-  if (org.status === "pending_payment") {
-    const trialEndsAtMs = toMillis(org.trialEndsAt);
-    return trialEndsAtMs !== null && trialEndsAtMs > Date.now();
-  }
-  return false;
-}
-
 export function BusinessRegistrationScreen() {
   const navigation = useNavigation();
   const route = useRoute();
-  const { activeBusinessOrgId, activeOrganization, setActiveBusinessOrgId } = useBusinessContext();
+  const {
+    activeBusinessOrgId,
+    activeOrganization,
+    activeMembership,
+    setActiveBusinessOrgId,
+    refreshActiveBusinessOrg,
+  } = useBusinessContext();
+  const { isOwner, isAdmin } = useOrgAccess();
   const { t } = useI18n();
   const routeParams = ((route as { params?: RegistrationRouteParams }).params ?? {}) as RegistrationRouteParams;
+  const isCompleteProfileMode = routeParams.mode === "completeProfile";
   const selectedPlanCode = routeParams.planCode;
   const selectedBillingPeriod = routeParams.billingPeriod;
   const [form, setForm] = useState<FormState>(INITIAL_FORM);
@@ -258,6 +262,7 @@ export function BusinessRegistrationScreen() {
     : null;
 
   React.useEffect(() => {
+    if (isCompleteProfileMode) return;
     if (!selectedBusinessPlan || (selectedBillingPeriod !== "monthly" && selectedBillingPeriod !== "yearly")) {
       Alert.alert(
         t("business.registration.alert.planMissingTitle"),
@@ -265,12 +270,76 @@ export function BusinessRegistrationScreen() {
       );
       (navigation as { navigate: (name: string) => void }).navigate("BusinessPlanSelection");
     }
-  }, [navigation, selectedBillingPeriod, selectedBusinessPlan, t]);
+  }, [isCompleteProfileMode, navigation, selectedBillingPeriod, selectedBusinessPlan, t]);
 
-  const validate = (): ValidationResult => {
-    if (!selectedBusinessPlan || (selectedBillingPeriod !== "monthly" && selectedBillingPeriod !== "yearly")) {
-      return { ok: false, field: "planCode", message: t("business.registration.alert.planMissingBody") };
-    }
+  React.useEffect(() => {
+    if (isCompleteProfileMode) return;
+    let cancelled = false;
+    (async () => {
+      const authUser = getAuth()?.currentUser ?? null;
+      if (!authUser?.uid) return;
+
+      if (
+        activeBusinessOrgId &&
+        isUsableBusinessOrg(activeOrganization, {
+          userId: authUser.uid,
+          membership: activeMembership,
+        })
+      ) {
+        (navigation as { navigate: (name: string) => void }).navigate("BusinessDashboard");
+        return;
+      }
+
+      const preferred = await findPreferredBusinessOrgForUser(authUser.uid);
+      if (cancelled || !preferred) return;
+      if (
+        !isUsableBusinessOrg(preferred.org, {
+          userId: authUser.uid,
+          membership: preferred.membership,
+        })
+      ) {
+        return;
+      }
+      setActiveBusinessOrgId(preferred.org.id);
+      (navigation as { navigate: (name: string) => void }).navigate("BusinessDashboard");
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [
+    activeBusinessOrgId,
+    activeMembership,
+    activeOrganization,
+    isCompleteProfileMode,
+    navigation,
+    setActiveBusinessOrgId,
+  ]);
+
+  React.useEffect(() => {
+    if (!isCompleteProfileMode || !activeOrganization) return;
+    const address = readOrgBillingAddress(activeOrganization);
+    const profile = activeOrganization.profile;
+    setForm({
+      companyName: activeOrganization.name || readOrgLegalName(activeOrganization),
+      legalName: readOrgLegalName(activeOrganization),
+      countryCode: readOrgCountryCode(activeOrganization) || "SK",
+      registrationNumber: readOrgRegistrationNumber(activeOrganization),
+      taxId: activeOrganization.companyIdentifiers?.taxId ?? profile?.dic ?? "",
+      vatId:
+        activeOrganization.companyIdentifiers?.vatId ??
+        activeOrganization.companyIdentifiers?.vatNumber ??
+        profile?.icDph ??
+        "",
+      billingEmail: readOrgBillingEmail(activeOrganization),
+      billingAddressLine1: address?.line1 ?? address?.street ?? profile?.addressText ?? "",
+      billingAddressCity: address?.city ?? "",
+      billingAddressZip: address?.zip ?? "",
+      contactName: readOrgContactName(activeOrganization),
+      phone: readOrgPhone(activeOrganization),
+    });
+  }, [activeOrganization, isCompleteProfileMode]);
+
+  const validateProfile = (): ValidationResult => {
     if (!form.companyName.trim()) {
       return { ok: false, field: "companyName", message: t("business.registration.validation.companyNameRequired") };
     }
@@ -306,11 +375,94 @@ export function BusinessRegistrationScreen() {
     return { ok: true };
   };
 
+  const validate = (): ValidationResult => {
+    if (isCompleteProfileMode) {
+      return validateProfile();
+    }
+    if (!selectedBusinessPlan || (selectedBillingPeriod !== "monthly" && selectedBillingPeriod !== "yearly")) {
+      return { ok: false, field: "planCode", message: t("business.registration.alert.planMissingBody") };
+    }
+    return validateProfile();
+  };
+
   const onSubmit = async () => {
     console.log("[BusinessRegistration] submit pressed");
     setFormError(null);
 
-    if (activeBusinessOrgId && isUsableBusinessOrg(activeOrganization)) {
+    const authUser = getAuth()?.currentUser ?? null;
+    if (!authUser?.uid) {
+      console.warn("[BusinessRegistration] no auth user before submit");
+      const authError = t("business.registration.alert.notSignedInBody");
+      setFormError(authError);
+      Alert.alert(t("business.registration.alert.notSignedInTitle"), authError);
+      return;
+    }
+
+    if (isCompleteProfileMode) {
+      if (!activeBusinessOrgId) {
+        Alert.alert(t("common.error"), t("business.registration.alert.notSignedInBody"));
+        return;
+      }
+      if (!isOwner && !isAdmin) {
+        Alert.alert(t("common.error"), t("business.registration.alert.profileReadOnlyBody"));
+        return;
+      }
+      const validation = validateProfile();
+      if (!validation.ok) {
+        setFormError(validation.message);
+        Alert.alert(t("business.registration.alert.invalidDataTitle"), t("business.registration.alert.invalidDataBody"));
+        return;
+      }
+      setSubmitting(true);
+      try {
+        await updateOrganizationCompanyProfile(activeBusinessOrgId, {
+          name: form.companyName.trim(),
+          legalName: form.legalName.trim(),
+          billingEmail: form.billingEmail.trim(),
+          countryCode: normalizedCountry,
+          billingAddress: {
+            line1: form.billingAddressLine1.trim(),
+            city: form.billingAddressCity.trim(),
+            zip: form.billingAddressZip.trim(),
+          },
+          companyIdentifiers: {
+            registrationNumber: form.registrationNumber.trim() || null,
+            taxId: form.taxId.trim() || null,
+            vatId: form.vatId.trim() || null,
+          },
+          contactName: form.contactName.trim() || null,
+          phone: form.phone.trim() || null,
+        });
+        await refreshActiveBusinessOrg();
+        Alert.alert(
+          t("business.registration.alert.profileSavedTitle"),
+          t("business.registration.alert.profileSavedBody")
+        );
+        (navigation as { navigate: (name: string) => void }).navigate("BusinessDashboard");
+      } catch (error) {
+        const details = getErrorDetails(error);
+        console.warn("[BusinessRegistration] updateOrganizationCompanyProfile error", details);
+        setFormError(t("business.registration.alert.submitFailedBody"));
+        Alert.alert(
+          t("business.registration.alert.submitFailedTitle"),
+          t("business.registration.alert.submitFailedBodyWithCode", {
+            code: details.code,
+            message: details.message || t("business.registration.alert.tryAgain"),
+          })
+        );
+      } finally {
+        setSubmitting(false);
+      }
+      return;
+    }
+
+    if (
+      activeBusinessOrgId &&
+      isUsableBusinessOrg(activeOrganization, {
+        userId: authUser.uid,
+        membership: activeMembership,
+      })
+    ) {
       Alert.alert(
         t("business.registration.alert.existingOrgTitle"),
         t("business.registration.alert.existingOrgBody")
@@ -331,17 +483,14 @@ export function BusinessRegistrationScreen() {
     }
     console.log("[BusinessRegistration] validation passed");
 
-    const authUser = getAuth()?.currentUser ?? null;
-    if (!authUser?.uid) {
-      console.warn("[BusinessRegistration] no auth user before callable");
-      const authError = t("business.registration.alert.notSignedInBody");
-      setFormError(authError);
-      Alert.alert(t("business.registration.alert.notSignedInTitle"), authError);
-      return;
-    }
-
     const preferredOrg = await findPreferredBusinessOrgForUser(authUser.uid);
-    if (preferredOrg?.org?.id && isUsableBusinessOrg(preferredOrg.org)) {
+    if (
+      preferredOrg?.org?.id &&
+      isUsableBusinessOrg(preferredOrg.org, {
+        userId: authUser.uid,
+        membership: preferredOrg.membership,
+      })
+    ) {
       setActiveBusinessOrgId(preferredOrg.org.id);
       Alert.alert(
         t("business.registration.alert.existingOrgTitle"),
@@ -413,8 +562,20 @@ export function BusinessRegistrationScreen() {
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content}>
-      <Text style={styles.title}>{t("business.registration.title")}</Text>
-      <Text style={styles.subtitle}>{t("business.registration.subtitle")}</Text>
+      <Text style={styles.title}>
+        {t(
+          isCompleteProfileMode
+            ? "business.registration.completeProfileTitle"
+            : "business.registration.title"
+        )}
+      </Text>
+      <Text style={styles.subtitle}>
+        {t(
+          isCompleteProfileMode
+            ? "business.registration.completeProfileSubtitle"
+            : "business.registration.subtitle"
+        )}
+      </Text>
 
       {formError ? <Text style={styles.errorText}>{formError}</Text> : null}
 
@@ -534,38 +695,47 @@ export function BusinessRegistrationScreen() {
         placeholderTextColor={colors.inputPlaceholderOnLight}
       />
 
-      <View style={styles.summaryCard}>
-        <Text style={styles.summaryTitle}>{t("business.registration.summary.title")}</Text>
-        <Text style={styles.summaryLine}>
-          {t("business.registration.summary.plan")}:{" "}
-          {selectedBusinessPlan ? t(selectedBusinessPlan.titleKey) : "—"}
-        </Text>
-        <Text style={styles.summaryLine}>
-          {t("business.registration.summary.seats")}: {selectedBusinessPlan ? String(selectedBusinessPlan.seatsIncluded) : "—"}
-        </Text>
-        <Text style={styles.summaryLine}>
-          {t("business.registration.summary.period")}:{" "}
-          {t(
-            selectedBillingPeriod === "yearly"
-              ? "business.planSelection.billingYearly"
-              : "business.planSelection.billingMonthly"
-          )}
-        </Text>
-        <Text style={styles.summaryLine}>
-          {t("business.registration.summary.price")}:{" "}
-          {selectedPrice !== null
-            ? selectedBillingPeriod === "yearly"
-              ? t("business.planSelection.yearlyPrice", { price: String(selectedPrice) })
-              : t("business.planSelection.monthlyPrice", { price: String(selectedPrice) })
-            : "—"}
-        </Text>
-      </View>
+      {!isCompleteProfileMode ? (
+        <View style={styles.summaryCard}>
+          <Text style={styles.summaryTitle}>{t("business.registration.summary.title")}</Text>
+          <Text style={styles.summaryLine}>
+            {t("business.registration.summary.plan")}:{" "}
+            {selectedBusinessPlan ? t(selectedBusinessPlan.titleKey) : "—"}
+          </Text>
+          <Text style={styles.summaryLine}>
+            {t("business.registration.summary.seats")}:{" "}
+            {selectedBusinessPlan ? String(selectedBusinessPlan.seatsIncluded) : "—"}
+          </Text>
+          <Text style={styles.summaryLine}>
+            {t("business.registration.summary.period")}:{" "}
+            {t(
+              selectedBillingPeriod === "yearly"
+                ? "business.planSelection.billingYearly"
+                : "business.planSelection.billingMonthly"
+            )}
+          </Text>
+          <Text style={styles.summaryLine}>
+            {t("business.registration.summary.price")}:{" "}
+            {selectedPrice !== null
+              ? selectedBillingPeriod === "yearly"
+                ? t("business.planSelection.yearlyPrice", { price: String(selectedPrice) })
+                : t("business.planSelection.monthlyPrice", { price: String(selectedPrice) })
+              : "—"}
+          </Text>
+        </View>
+      ) : null}
 
       <TouchableOpacity style={styles.submitButton} onPress={onSubmit} disabled={submitting}>
         {submitting ? (
           <ActivityIndicator size="small" color="#fff" />
         ) : (
-          <Text style={styles.submitButtonText}>{t("business.registration.submitCta")}</Text>
+          <Text style={styles.submitButtonText}>
+            {t(
+              isCompleteProfileMode
+                ? "business.registration.saveProfileCta"
+                : "business.registration.submitCta"
+            )}
+          </Text>
         )}
       </TouchableOpacity>
 
@@ -573,23 +743,25 @@ export function BusinessRegistrationScreen() {
         <View style={styles.modalBackdrop}>
           <View style={styles.modalCard}>
             <Text style={styles.modalTitle}>{t("business.registration.countryPicker.title")}</Text>
-            {COUNTRY_OPTIONS.map((option) => {
-              const selected = option.code === normalizedCountry;
-              return (
-                <TouchableOpacity
-                  key={option.code}
-                  style={[styles.countryOption, selected && styles.countryOptionSelected]}
-                  onPress={() => {
-                    setField("countryCode", option.code);
-                    setCountryModalVisible(false);
-                  }}
-                >
-                  <Text style={[styles.countryOptionText, selected && styles.countryOptionTextSelected]}>
-                    {t(option.labelKey)} ({option.code})
-                  </Text>
-                </TouchableOpacity>
-              );
-            })}
+            <ScrollView style={styles.countryOptionsScroll} keyboardShouldPersistTaps="handled">
+              {COUNTRY_OPTIONS.map((option) => {
+                const selected = option.code === normalizedCountry;
+                return (
+                  <TouchableOpacity
+                    key={option.code}
+                    style={[styles.countryOption, selected && styles.countryOptionSelected]}
+                    onPress={() => {
+                      setField("countryCode", option.code);
+                      setCountryModalVisible(false);
+                    }}
+                  >
+                    <Text style={[styles.countryOptionText, selected && styles.countryOptionTextSelected]}>
+                      {t(option.labelKey)} ({option.code})
+                    </Text>
+                  </TouchableOpacity>
+                );
+              })}
+            </ScrollView>
             <TouchableOpacity style={styles.modalCancelButton} onPress={() => setCountryModalVisible(false)}>
               <Text style={styles.modalCancelText}>{t("business.registration.countryPicker.cancel")}</Text>
             </TouchableOpacity>
@@ -716,6 +888,9 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     fontSize: 16,
     marginBottom: spacing.sm,
+  },
+  countryOptionsScroll: {
+    maxHeight: 360,
   },
   countryOption: {
     paddingHorizontal: spacing.md,

@@ -642,16 +642,57 @@ export async function sendPasswordResetEmail(email: string): Promise<void> {
   await fbAuth.sendPasswordResetEmail(trimEmail);
 }
 
+export type AuthErrorContext = "email" | "google" | "apple" | "generic";
+
+const EMAIL_PASSWORD_INVALID_MESSAGE = "Neplatný email alebo heslo.";
+
+function readFirebaseProjectIdForLogs(): string {
+  try {
+    const app = require("@react-native-firebase/app").getApp();
+    return (app?.options as { projectId?: string } | undefined)?.projectId ?? "(unknown)";
+  } catch {
+    return "(unavailable)";
+  }
+}
+
+/** Dev-only: log auth failure with Firebase project id (helps catch web vs mobile project mismatch). */
+export function logAuthSignInFailure(method: AuthErrorContext, error: unknown): void {
+  if (!__DEV__) return;
+  const code = getAuthErrorCodeFromUnknown(error);
+  const message = error instanceof Error ? error.message : String(error ?? "");
+  console.warn("[auth] sign-in failed", {
+    method,
+    code: code || "(none)",
+    message,
+    firebaseProjectId: readFirebaseProjectIdForLogs(),
+  });
+}
+
 /** Maps Firebase auth/ error codes to user-friendly messages. */
-export function getAuthErrorMessage(code: string): string {
+export function getAuthErrorMessage(code: string, context: AuthErrorContext = "generic"): string {
+  if (
+    context === "email" &&
+    (code === "auth/invalid-credential" ||
+      code === "auth/wrong-password" ||
+      code === "auth/user-not-found")
+  ) {
+    return EMAIL_PASSWORD_INVALID_MESSAGE;
+  }
+
+  if (context === "google" && code === "auth/invalid-credential") {
+    return (
+      "Google prihlásenie zlyhalo. Skontrolujte EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID a SHA-1 v Firebase Console."
+    );
+  }
+
   const m: Record<string, string> = {
     "auth/invalid-email": "Neplatný email.",
     "auth/user-disabled": "Účet je deaktivovaný.",
-    "auth/user-not-found": "Účet neexistuje.",
-    "auth/wrong-password": "Nesprávne heslo.",
+    "auth/user-not-found": EMAIL_PASSWORD_INVALID_MESSAGE,
+    "auth/wrong-password": EMAIL_PASSWORD_INVALID_MESSAGE,
     "auth/email-already-in-use": "Email je už registrovaný.",
     "auth/weak-password": "Heslo musí mať aspoň 6 znakov.",
-    "auth/invalid-credential": "Neplatné prihlasovacie údaje. Skontrolujte Web Client ID vo Firebase.",
+    "auth/invalid-credential": EMAIL_PASSWORD_INVALID_MESSAGE,
     "auth/account-exists-with-different-credential": "Účet s týmto emailom už existuje. Prihláste sa heslom.",
     "auth/credential-already-in-use": "Tieto prihlasovacie údaje sú už použité.",
     "auth/operation-not-allowed": "Google alebo Apple prihlásenie nie je povolené. Skontrolujte Firebase Console.",

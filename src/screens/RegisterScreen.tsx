@@ -67,7 +67,7 @@ export function RegisterScreen() {
       await register(email.trim(), password, displayName.trim() || undefined);
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code;
-      setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("register.failed")));
+      setError(code ? getAuthErrorMessage(code, "email") : (e instanceof Error ? e.message : t("register.failed")));
     } finally {
       setSubmitting(false);
     }
@@ -81,7 +81,7 @@ export function RegisterScreen() {
     } catch (e: unknown) {
       const code = getAuthErrorCodeFromUnknown(e);
       if (code === "auth/cancelled") return;
-      setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("register.failed")));
+      setError(code ? getAuthErrorMessage(code, "google") : (e instanceof Error ? e.message : t("register.failed")));
     } finally {
       setSubmitting(false);
     }
@@ -119,7 +119,7 @@ export function RegisterScreen() {
       if (currentUser) {
         return;
       }
-      const msg = code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("register.failed"));
+      const msg = code ? getAuthErrorMessage(code, "apple") : (e instanceof Error ? e.message : t("register.failed"));
       setError(msg);
       Alert.alert(
         t("common.error"),
@@ -266,7 +266,7 @@ export function RegisterScreen() {
                       setLinkPassword("");
                     } catch (err: unknown) {
                       const code = (err as { code?: string })?.code;
-                      setError(code ? getAuthErrorMessage(code) : (err instanceof Error ? err.message : t("register.failed")));
+                      setError(code ? getAuthErrorMessage(code, "email") : (err instanceof Error ? err.message : t("register.failed")));
                     } finally {
                       setLinkSubmitting(false);
                     }

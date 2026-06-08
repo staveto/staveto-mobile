@@ -66,7 +66,7 @@ export function LoginScreen() {
       await login(email.trim(), password);
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code;
-      setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("login.failed")));
+      setError(code ? getAuthErrorMessage(code, "email") : (e instanceof Error ? e.message : t("login.failed")));
     } finally {
       setSubmitting(false);
     }
@@ -93,7 +93,7 @@ export function LoginScreen() {
       Alert.alert(t("login.forgotSuccessTitle"), t("login.forgotSuccessMessage"));
     } catch (e: unknown) {
       const code = (e as { code?: string })?.code;
-      setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("login.failed")));
+      setError(code ? getAuthErrorMessage(code, "email") : (e instanceof Error ? e.message : t("login.failed")));
     } finally {
       setForgotSubmitting(false);
     }
@@ -107,7 +107,7 @@ export function LoginScreen() {
     } catch (e: unknown) {
       const code = getAuthErrorCodeFromUnknown(e);
       if (code === "auth/cancelled") return;
-      setError(code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("login.failed")));
+      setError(code ? getAuthErrorMessage(code, "google") : (e instanceof Error ? e.message : t("login.failed")));
     } finally {
       setSubmitting(false);
     }
@@ -145,7 +145,7 @@ export function LoginScreen() {
       if (currentUser) {
         return;
       }
-      const msg = code ? getAuthErrorMessage(code) : (e instanceof Error ? e.message : t("login.failed"));
+      const msg = code ? getAuthErrorMessage(code, "apple") : (e instanceof Error ? e.message : t("login.failed"));
       setError(msg);
       Alert.alert(
         t("common.error"),
@@ -328,7 +328,7 @@ export function LoginScreen() {
                       setLinkPassword("");
                     } catch (err: unknown) {
                       const code = (err as { code?: string })?.code;
-                      setError(code ? getAuthErrorMessage(code) : (err instanceof Error ? err.message : t("login.failed")));
+                      setError(code ? getAuthErrorMessage(code, "email") : (err instanceof Error ? err.message : t("login.failed")));
                     } finally {
                       setLinkSubmitting(false);
                     }

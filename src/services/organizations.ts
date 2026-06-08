@@ -20,7 +20,15 @@
  */
 
 import type { FirebaseFirestoreTypes } from "@react-native-firebase/firestore";
-import { collection, collectionGroup, doc, query, where } from "../lib/rnFirestore";
+import {
+  collection,
+  collectionGroup,
+  doc,
+  query,
+  serverTimestamp,
+  updateDoc,
+  where,
+} from "../lib/rnFirestore";
 import { getDocSmart, getDocsSmart } from "./firestoreSmartRead";
 import { parseCustomPermissions, type BusinessPermissions } from "../lib/businessRolePermissions";
 import { db, getAuth } from "../firebase";
@@ -75,7 +83,29 @@ export type OrganizationDoc = {
   id: string;
   /** Display name of the organization (editable by owner/admin). */
   name: string;
+  /** Canonical legal name (web + mobile root field). */
+  legalName?: string;
   billingEmail?: string;
+  countryCode?: string;
+  country?: string;
+  contactName?: string | null;
+  phone?: string | null;
+  billingAddress?: {
+    line1?: string;
+    line2?: string;
+    city?: string;
+    zip?: string;
+    street?: string;
+  };
+  companyIdentifiers?: {
+    registrationNumber?: string | null;
+    taxId?: string | null;
+    vatId?: string | null;
+    vatNumber?: string | null;
+  };
+  source?: string;
+  onboardingSource?: string;
+  billingOwnerUid?: string;
   /** Auth uid of the user who created the org. Immutable. */
   ownerUid: string;
   /** Licence lifecycle — SERVER-ONLY. */
@@ -187,6 +217,25 @@ export type PreferredBusinessOrg = {
   membership: MembershipDoc;
 };
 
+export type CompanyProfileUpdatePayload = {
+  name?: string;
+  legalName?: string;
+  billingEmail?: string;
+  countryCode?: string;
+  billingAddress?: {
+    line1?: string;
+    city?: string;
+    zip?: string;
+  };
+  companyIdentifiers?: {
+    registrationNumber?: string | null;
+    taxId?: string | null;
+    vatId?: string | null;
+  };
+  contactName?: string | null;
+  phone?: string | null;
+};
+
 // ─────────────────────────────────────────────────────────────────────────────
 // Parsers (exported so businessMembers.ts can reuse without duplication)
 // ─────────────────────────────────────────────────────────────────────────────
@@ -270,13 +319,85 @@ export function parseOrganizationDoc(
       }
     : undefined;
 
-  const seatsLimitRaw = data.seatsLimit;
+  const seatsLimitRaw = data.seatsLimit ?? data.seatLimit;
   const seatsUsedRaw = data.seatsUsed;
+
+  const billingAddressRaw = data.billingAddress;
+  const billingAddress =
+    billingAddressRaw && typeof billingAddressRaw === "object"
+      ? {
+          line1:
+            typeof (billingAddressRaw as Record<string, unknown>).line1 === "string"
+              ? ((billingAddressRaw as Record<string, unknown>).line1 as string)
+              : undefined,
+          line2:
+            typeof (billingAddressRaw as Record<string, unknown>).line2 === "string"
+              ? ((billingAddressRaw as Record<string, unknown>).line2 as string)
+              : undefined,
+          city:
+            typeof (billingAddressRaw as Record<string, unknown>).city === "string"
+              ? ((billingAddressRaw as Record<string, unknown>).city as string)
+              : undefined,
+          zip:
+            typeof (billingAddressRaw as Record<string, unknown>).zip === "string"
+              ? ((billingAddressRaw as Record<string, unknown>).zip as string)
+              : undefined,
+          street:
+            typeof (billingAddressRaw as Record<string, unknown>).street === "string"
+              ? ((billingAddressRaw as Record<string, unknown>).street as string)
+              : undefined,
+        }
+      : undefined;
+
+  const companyIdentifiersRaw = data.companyIdentifiers;
+  const companyIdentifiers =
+    companyIdentifiersRaw && typeof companyIdentifiersRaw === "object"
+      ? {
+          registrationNumber:
+            typeof (companyIdentifiersRaw as Record<string, unknown>).registrationNumber === "string"
+              ? ((companyIdentifiersRaw as Record<string, unknown>).registrationNumber as string)
+              : (companyIdentifiersRaw as Record<string, unknown>).registrationNumber === null
+                ? null
+                : undefined,
+          taxId:
+            typeof (companyIdentifiersRaw as Record<string, unknown>).taxId === "string"
+              ? ((companyIdentifiersRaw as Record<string, unknown>).taxId as string)
+              : (companyIdentifiersRaw as Record<string, unknown>).taxId === null
+                ? null
+                : undefined,
+          vatId:
+            typeof (companyIdentifiersRaw as Record<string, unknown>).vatId === "string"
+              ? ((companyIdentifiersRaw as Record<string, unknown>).vatId as string)
+              : (companyIdentifiersRaw as Record<string, unknown>).vatId === null
+                ? null
+                : undefined,
+          vatNumber:
+            typeof (companyIdentifiersRaw as Record<string, unknown>).vatNumber === "string"
+              ? ((companyIdentifiersRaw as Record<string, unknown>).vatNumber as string)
+              : undefined,
+        }
+      : undefined;
 
   return {
     id,
     name: typeof data.name === "string" ? data.name : "",
+    legalName: typeof data.legalName === "string" ? data.legalName : undefined,
     billingEmail: typeof data.billingEmail === "string" ? data.billingEmail : undefined,
+    countryCode: typeof data.countryCode === "string" ? data.countryCode : undefined,
+    country: typeof data.country === "string" ? data.country : undefined,
+    contactName:
+      typeof data.contactName === "string"
+        ? data.contactName
+        : data.contactName === null
+          ? null
+          : undefined,
+    phone:
+      typeof data.phone === "string" ? data.phone : data.phone === null ? null : undefined,
+    billingAddress,
+    companyIdentifiers,
+    source: typeof data.source === "string" ? data.source : undefined,
+    onboardingSource: typeof data.onboardingSource === "string" ? data.onboardingSource : undefined,
+    billingOwnerUid: typeof data.billingOwnerUid === "string" ? data.billingOwnerUid : undefined,
     ownerUid: typeof data.ownerUid === "string" ? data.ownerUid : "",
     status: parseOrgStatus(data.status),
     businessEnabled: data.businessEnabled === true,
@@ -398,7 +519,83 @@ function toMillis(raw: unknown): number | null {
   return null;
 }
 
-function getOrgPriorityScore(org: OrganizationDoc): number {
+export function isTrialActive(org: OrganizationDoc): boolean {
+  const ms = toMillis(org.trialEndsAt);
+  return ms !== null && ms > Date.now();
+}
+
+export function isWebOnboardedOrg(org: OrganizationDoc): boolean {
+  return org.source === "web_onboarding" || org.onboardingSource === "web";
+}
+
+export function synthesizeOwnerMembership(org: OrganizationDoc, userId: string): MembershipDoc {
+  return {
+    id: userId,
+    orgId: org.id,
+    userId,
+    role: "owner",
+    status: "active",
+    organizationName: org.name,
+  };
+}
+
+/**
+ * Whether the org can be used as the active business workspace.
+ * Missing billing/profile fields do not invalidate the org.
+ */
+export function isUsableBusinessOrg(
+  org: OrganizationDoc | null,
+  options?: { userId?: string; membership?: MembershipDoc | null }
+): boolean {
+  if (!org || !org.ownerUid) return false;
+
+  const userId = options?.userId;
+  const membership = options?.membership ?? null;
+  const isOwner = !!userId && org.ownerUid === userId;
+  const isActiveMember = membership?.status === "active";
+  if (!isActiveMember && !isOwner) return false;
+
+  const trialActive = isTrialActive(org) || org.status === "trialing";
+  const webCreated = isWebOnboardedOrg(org);
+
+  if (org.status === "suspended" || org.status === "cancelled") {
+    return false;
+  }
+  if (org.status === "past_due") {
+    return isOwner || webCreated;
+  }
+  if (org.status === "active") {
+    return org.businessEnabled === true || trialActive || isOwner || webCreated;
+  }
+  if (org.status === "trialing") {
+    return org.businessEnabled === true || trialActive || isOwner || webCreated;
+  }
+  if (org.status === "pending_payment") {
+    return (
+      org.businessEnabled === true ||
+      trialActive ||
+      isOwner ||
+      webCreated ||
+      (typeof org.activeBusinessOrderId === "string" && org.activeBusinessOrderId.trim().length > 0)
+    );
+  }
+  return isOwner && (webCreated || trialActive);
+}
+
+export function isRecoverableBusinessOrg(
+  org: OrganizationDoc | null,
+  options?: { userId?: string; membership?: MembershipDoc | null }
+): boolean {
+  if (!org || !options?.userId) return false;
+  const isOwner = org.ownerUid === options.userId;
+  const hasMembership =
+    options.membership?.status === "active" || (isOwner && !!org.ownerUid);
+  if (!hasMembership) return false;
+  if (isUsableBusinessOrg(org, options)) return true;
+  return isOwner && (isWebOnboardedOrg(org) || isTrialActive(org));
+}
+
+function getOrgPriorityScore(org: OrganizationDoc, userId?: string): number {
   if (org.status === "active") return 300;
   if (org.status === "trialing") return 200;
   if (org.status === "pending_payment") {
@@ -411,6 +608,12 @@ function getOrgPriorityScore(org: OrganizationDoc): number {
     if (typeof org.activeBusinessOrderId === "string" && org.activeBusinessOrderId.trim().length > 0) {
       return 90;
     }
+    if (userId && org.ownerUid === userId && isWebOnboardedOrg(org)) {
+      return 85;
+    }
+  }
+  if (userId && org.ownerUid === userId && isWebOnboardedOrg(org)) {
+    return 80;
   }
   return -1;
 }
@@ -663,26 +866,143 @@ export async function listMyMemberships(userId: string): Promise<MembershipDoc[]
   }
 }
 
+export async function readUserActiveBusinessOrgIdHint(userId: string): Promise<string | null> {
+  if (!userId) return null;
+  const currentUid = requireSignedInUid();
+  if (currentUid !== userId) return null;
+  try {
+    const ref = doc(db, paths.userDoc(userId));
+    const snap = await getDocSmart(ref);
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    if (!data || typeof data !== "object") return null;
+    const hint = typeof data.activeBusinessOrgId === "string" ? data.activeBusinessOrgId.trim() : "";
+    return hint.length > 0 ? hint : null;
+  } catch (error) {
+    if (isPermissionDenied(error)) {
+      if (__DEV__) {
+        console.warn("[organizations] readUserActiveBusinessOrgIdHint: permission denied");
+      }
+      return null;
+    }
+    console.error("[organizations] readUserActiveBusinessOrgIdHint error:", error);
+    throw error;
+  }
+}
+
+export async function listOrganizationsOwnedByUser(userId: string): Promise<OrganizationDoc[]> {
+  if (!userId) return [];
+  const currentUid = requireSignedInUid();
+  if (currentUid !== userId) return [];
+  try {
+    const q = query(collection(db, "organizations"), where("ownerUid", "==", userId));
+    const snap = await getDocsSmart(q);
+    const out: OrganizationDoc[] = [];
+    for (const d of snap.docs) {
+      const data = d.data();
+      if (!data || typeof data !== "object") continue;
+      out.push(parseOrganizationDoc(d.id, data as Record<string, unknown>));
+    }
+    if (__DEV__) {
+      console.log(`[organizations] listOrganizationsOwnedByUser: ${out.length} orgs for ${userId}`);
+    }
+    return out;
+  } catch (error) {
+    if (isPermissionDenied(error)) {
+      if (__DEV__) {
+        console.warn("[organizations] listOrganizationsOwnedByUser: permission denied");
+      }
+      return [];
+    }
+    console.error("[organizations] listOrganizationsOwnedByUser error:", error);
+    throw error;
+  }
+}
+
+export async function updateOrganizationCompanyProfile(
+  orgId: string,
+  payload: CompanyProfileUpdatePayload
+): Promise<void> {
+  if (!orgId) throw new Error("Chýba ID organizácie.");
+  requireSignedInUid();
+  const update: Record<string, unknown> = {
+    updatedAt: serverTimestamp(),
+  };
+  if (typeof payload.name === "string") update.name = payload.name.trim();
+  if (typeof payload.legalName === "string") update.legalName = payload.legalName.trim();
+  if (typeof payload.billingEmail === "string") update.billingEmail = payload.billingEmail.trim();
+  if (typeof payload.countryCode === "string") {
+    const cc = payload.countryCode.trim().toUpperCase();
+    update.countryCode = cc;
+    update.country = cc;
+  }
+  if (payload.billingAddress) {
+    update.billingAddress = {
+      line1: payload.billingAddress.line1?.trim() ?? "",
+      city: payload.billingAddress.city?.trim() ?? "",
+      zip: payload.billingAddress.zip?.trim() ?? "",
+    };
+  }
+  if (payload.companyIdentifiers) {
+    update.companyIdentifiers = {
+      registrationNumber: payload.companyIdentifiers.registrationNumber ?? null,
+      taxId: payload.companyIdentifiers.taxId ?? null,
+      vatId: payload.companyIdentifiers.vatId ?? null,
+    };
+  }
+  if (payload.contactName !== undefined) {
+    update.contactName = payload.contactName?.trim() || null;
+  }
+  if (payload.phone !== undefined) {
+    update.phone = payload.phone?.trim() || null;
+  }
+
+  const ref = doc(db, paths.organization(orgId));
+  await updateDoc(ref, update);
+}
+
 export async function findPreferredBusinessOrgForUser(
   userId: string
 ): Promise<PreferredBusinessOrg | null> {
   if (!userId) return null;
 
-  const orderOrgBoost = await fetchBillingOwnerOrderOrgSurfaceBoostsByOrgId(userId);
-
-  const memberships = await listMyMemberships(userId);
-  const activeMemberships = memberships.filter((membership) => membership.status === "active");
-  if (activeMemberships.length === 0 && orderOrgBoost.size === 0) return null;
+  const [orderOrgBoost, memberships, ownedOrgs, profileOrgHint] = await Promise.all([
+    fetchBillingOwnerOrderOrgSurfaceBoostsByOrgId(userId),
+    listMyMemberships(userId),
+    listOrganizationsOwnedByUser(userId),
+    readUserActiveBusinessOrgIdHint(userId),
+  ]);
 
   type Cand = { org: OrganizationDoc; membership: MembershipDoc; score: number; freshness: number };
   const candByOrg = new Map<string, Cand>();
+  const membershipByOrgId = new Map<string, MembershipDoc>();
+  for (const membership of memberships) {
+    membershipByOrgId.set(membership.orgId, membership);
+  }
 
-  const consider = (org: OrganizationDoc | null, membership: MembershipDoc | null) => {
-    if (!org || !membership || membership.status !== "active") return;
-    const base = getOrgPriorityScore(org);
+  const resolveMembership = async (
+    org: OrganizationDoc
+  ): Promise<MembershipDoc | null> => {
+    const cached = membershipByOrgId.get(org.id);
+    if (cached?.status === "active") return cached;
+    const resolved = await resolveMembershipForUser(org.id, userId);
+    if (resolved?.status === "active") return resolved;
+    if (org.ownerUid === userId) return synthesizeOwnerMembership(org, userId);
+    return resolved;
+  };
+
+  const consider = async (org: OrganizationDoc | null, membership: MembershipDoc | null) => {
+    if (!org || !membership) return;
+    const activeOrOwner =
+      membership.status === "active" || (org.ownerUid === userId && membership.role === "owner");
+    if (!activeOrOwner) return;
+    if (!isUsableBusinessOrg(org, { userId, membership })) return;
+
+    const base = getOrgPriorityScore(org, userId);
     const boost = orderOrgBoost.get(org.id) ?? -1;
     const score = Math.max(base, boost);
     if (score < 0) return;
+
     const freshness = toMillis(org.updatedAt) ?? toMillis(org.createdAt) ?? 0;
     const prev = candByOrg.get(org.id);
     if (!prev || score > prev.score || (score === prev.score && freshness > prev.freshness)) {
@@ -690,21 +1010,27 @@ export async function findPreferredBusinessOrgForUser(
     }
   };
 
-  const orgRows = await Promise.all(
-    activeMemberships.map(async (membership) => {
-      const org = await getOrganization(membership.orgId);
-      return { membership, org };
-    })
-  );
-  for (const row of orgRows) {
-    consider(row.org, row.membership);
+  if (profileOrgHint) {
+    const org = await getOrganization(profileOrgHint);
+    const membership = org ? await resolveMembership(org) : null;
+    await consider(org, membership);
+  }
+
+  for (const membership of memberships.filter((row) => row.status === "active")) {
+    const org = await getOrganization(membership.orgId);
+    await consider(org, membership);
+  }
+
+  for (const org of ownedOrgs) {
+    const membership = await resolveMembership(org);
+    await consider(org, membership);
   }
 
   for (const orgId of orderOrgBoost.keys()) {
     if (candByOrg.has(orgId)) continue;
-    const membership = await getMembership(orgId, userId);
     const org = await getOrganization(orgId);
-    consider(org, membership);
+    const membership = org ? await resolveMembership(org) : null;
+    await consider(org, membership);
   }
 
   let best: Cand | null = null;

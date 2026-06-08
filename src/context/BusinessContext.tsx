@@ -11,8 +11,6 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useAuth } from "./AuthContext";
 import {
   findPreferredBusinessOrgForUser,
-  getOrganization,
-  resolveMembershipForUser,
   type MembershipDoc,
   type OrganizationDoc,
 } from "../services/organizations";
@@ -91,31 +89,6 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     });
   }, []);
 
-  const resolveAndSetPreferredOrg = useCallback(
-    async (userIdForLookup: string): Promise<boolean> => {
-      const preferred = await findPreferredBusinessOrgForUser(userIdForLookup);
-      if (!preferred) {
-        setActiveBusinessOrgIdState(null);
-        setActiveOrganization(null);
-        setActiveMembership(null);
-        await persistActiveBusinessOrgId(null);
-        return false;
-      }
-      setActiveBusinessOrgIdState(preferred.org.id);
-      setActiveOrganization(preferred.org);
-      setActiveMembership(preferred.membership);
-      saveCachedBusinessOrgSummary({
-        id: preferred.org.id,
-        name: preferred.org.name,
-        status: preferred.org.status,
-        businessEnabled: preferred.org.businessEnabled,
-      }).catch(() => {});
-      await persistActiveBusinessOrgId(preferred.org.id);
-      return true;
-    },
-    []
-  );
-
   const refreshActiveBusinessOrg = useCallback(async () => {
     if (!storageHydrated || authLoading) {
       setLoading(true);
@@ -129,79 +102,58 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       return;
     }
 
-    if (!activeBusinessOrgId) {
-      setLoading(true);
-      try {
-        await resolveAndSetPreferredOrg(user.id);
-      } catch (e) {
-        const message = e instanceof Error ? e.message : String(e);
-        setError(`BusinessContext resolve preferred org failed: ${message}`);
-      } finally {
-        setLoading(false);
-      }
-      return;
-    }
-
     setLoading(true);
     setError(null);
     const runId = ++refreshRunRef.current;
-    const expectedOrgId = activeBusinessOrgId;
-    const expectedUserId = user?.id ?? null;
-    const storedOrgId = expectedOrgId;
+    const expectedUserId = user.id;
+
     try {
-      const [organization, membership] = await Promise.all([
-        getOrganization(expectedOrgId),
-        resolveMembershipForUser(expectedOrgId, expectedUserId ?? ""),
-      ]);
+      const preferred = await findPreferredBusinessOrgForUser(expectedUserId);
 
       if (runId !== refreshRunRef.current) {
         return;
       }
 
-      if (!organization || !membership) {
+      if (!preferred) {
         if (__DEV__) {
           console.log("[BusinessContextDebug]", {
-            storedOrgId,
-            resolvedOrgId: organization?.id ?? null,
-            membershipStatus: membership?.status ?? null,
-            membershipUserId: membership?.userId ?? null,
-            fallback: "resolveAndSetPreferredOrg",
+            userId: expectedUserId,
+            storedOrgId: activeBusinessOrgId,
+            selectedOrgId: null,
+            fallbackApplied: true,
           });
         }
-        const fellBack = await resolveAndSetPreferredOrg(expectedUserId ?? "");
-        if (__DEV__) {
-          console.log("[BusinessContextDebug]", {
-            storedOrgId,
-            selectedOrgId: fellBack ? "preferred" : null,
-            fallbackApplied: fellBack,
-          });
-        }
+        setActiveBusinessOrgIdState(null);
+        setActiveOrganization(null);
+        setActiveMembership(null);
+        await persistActiveBusinessOrgId(null);
         setLoading(false);
         return;
       }
 
       if (__DEV__) {
         console.log("[BusinessContextDebug]", {
-          storedOrgId,
-          resolvedOrgId: organization.id,
-          membershipId: membership.id,
-          membershipUserId: membership.userId,
-          membershipStatus: membership.status,
-          orgStatus: organization.status,
-          businessEnabled: organization.businessEnabled,
-          activeBusinessOrderId: organization.activeBusinessOrderId ?? null,
-          selectedOrgId: organization.id,
+          userId: expectedUserId,
+          storedOrgId: activeBusinessOrgId,
+          resolvedOrgId: preferred.org.id,
+          membershipStatus: preferred.membership.status,
+          orgStatus: preferred.org.status,
+          businessEnabled: preferred.org.businessEnabled,
+          source: preferred.org.source ?? null,
+          selectedOrgId: preferred.org.id,
         });
       }
 
-      setActiveOrganization(organization);
-      setActiveMembership(membership);
+      setActiveBusinessOrgIdState(preferred.org.id);
+      setActiveOrganization(preferred.org);
+      setActiveMembership(preferred.membership);
       saveCachedBusinessOrgSummary({
-        id: organization.id,
-        name: organization.name,
-        status: organization.status,
-        businessEnabled: organization.businessEnabled,
+        id: preferred.org.id,
+        name: preferred.org.name,
+        status: preferred.org.status,
+        businessEnabled: preferred.org.businessEnabled,
       }).catch(() => {});
+      await persistActiveBusinessOrgId(preferred.org.id);
       setLoading(false);
     } catch (e) {
       if (runId !== refreshRunRef.current) {
@@ -209,8 +161,9 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       }
       const message = e instanceof Error ? e.message : String(e);
       const network = await fetchNetworkSnapshot();
-      if (!network.isOnline) {
-        const cached = await loadCachedBusinessOrgSummary(expectedOrgId);
+      const fallbackOrgId = activeBusinessOrgId;
+      if (!network.isOnline && fallbackOrgId) {
+        const cached = await loadCachedBusinessOrgSummary(fallbackOrgId);
         if (cached) {
           setActiveOrganization({
             id: cached.id,
@@ -226,7 +179,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       setError(`BusinessContext refresh failed: ${message}`);
       setLoading(false);
     }
-  }, [activeBusinessOrgId, authLoading, resolveAndSetPreferredOrg, storageHydrated, user?.id]);
+  }, [activeBusinessOrgId, authLoading, storageHydrated, user?.id]);
 
   useEffect(() => {
     refreshActiveBusinessOrg().catch(() => {

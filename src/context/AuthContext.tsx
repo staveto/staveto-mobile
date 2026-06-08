@@ -5,7 +5,7 @@ import { getDocSmart } from "../services/firestoreSmartRead";
 import { loadCachedUserSummary, saveCachedUserSummary } from "../services/appStateCache";
 import { getAuth, db, getCallable } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
-import { configureGoogleSignInAtStartup, disconnectGoogleSignInSession } from "../services/auth";
+import { configureGoogleSignInAtStartup, disconnectGoogleSignInSession, logAuthSignInFailure } from "../services/auth";
 import { configurePurchases } from "../services/billing";
 import { getExtraEnv } from "../lib/env";
 import { IOS_SKIP_GOOGLE_SIGNIN } from "../lib/iosDiagnostic";
@@ -240,13 +240,20 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   const login = async (email: string, password: string) => {
     const fbAuth = getAuth();
     if (!fbAuth) throw new Error("FIREBASE_DISABLED");
-    await fbAuth.signInWithEmailAndPassword(email, password);
+    const trimEmail = email.trim().toLowerCase();
+    try {
+      await fbAuth.signInWithEmailAndPassword(trimEmail, password);
+    } catch (e) {
+      logAuthSignInFailure("email", e);
+      throw e;
+    }
   };
 
   const register = async (email: string, password: string, displayName?: string) => {
     const fbAuth = getAuth();
     if (!fbAuth) throw new Error("FIREBASE_DISABLED");
-    const cred = await fbAuth.createUserWithEmailAndPassword(email, password);
+    const trimEmail = email.trim().toLowerCase();
+    const cred = await fbAuth.createUserWithEmailAndPassword(trimEmail, password);
     if (displayName?.trim()) {
       await cred.user.updateProfile({ displayName: displayName.trim() });
     }

@@ -26,6 +26,16 @@ import {
   type CreateBusinessInviteCodeResult,
 } from "../../services/businessInvites";
 import { colors } from "../../theme";
+import {
+  formatOrgBillingAddress,
+  getCompanyProfileCompletion,
+  readOrgBillingEmail,
+  readOrgContactName,
+  readOrgCountryCode,
+  readOrgLegalName,
+  readOrgPhone,
+  readOrgRegistrationNumber,
+} from "../../lib/companyProfileCompletion";
 
 function toMillis(raw: unknown): number | null {
   if (!raw) return null;
@@ -194,10 +204,74 @@ export function BusinessDashboardScreen() {
   const usedSeats = activeOrganization?.seatsUsed ?? activeMembers.length;
   const freeSeats = Math.max(seatsLimit - usedSeats, 0);
   const previewMembers = memberCandidates.slice(0, 5);
-  const companyName =
-    activeOrganization?.name ||
-    (activeOrganization as { companyName?: string } | null)?.companyName ||
-    t("business.dashboard.companyFallback");
+  const companyName = useMemo(() => {
+    if (!activeOrganization) return t("business.dashboard.companyFallback");
+    const legacyName = (activeOrganization as { companyName?: string }).companyName;
+    return (
+      readOrgLegalName(activeOrganization) ||
+      activeOrganization.name ||
+      (typeof legacyName === "string" ? legacyName : "") ||
+      t("business.dashboard.companyFallback")
+    );
+  }, [activeOrganization, t]);
+  const profileCompletion = useMemo(
+    () => getCompanyProfileCompletion(activeOrganization),
+    [activeOrganization]
+  );
+  const canEditCompanyProfile = orgAccess.isOwner || orgAccess.isAdmin;
+  const notProvidedLabel = t("business.dashboard.companyProfile.notProvided");
+  const companyProfileRows = useMemo(() => {
+    if (!activeOrganization) return [];
+    const valueOrMissing = (value: string) => (value.trim().length > 0 ? value.trim() : notProvidedLabel);
+    return [
+      {
+        key: "legalName",
+        label: t("business.dashboard.companyProfile.legalName"),
+        value: valueOrMissing(readOrgLegalName(activeOrganization)),
+        missing: !readOrgLegalName(activeOrganization),
+      },
+      {
+        key: "billingEmail",
+        label: t("business.dashboard.companyProfile.billingEmail"),
+        value: valueOrMissing(readOrgBillingEmail(activeOrganization)),
+        missing: !readOrgBillingEmail(activeOrganization),
+      },
+      {
+        key: "countryCode",
+        label: t("business.dashboard.companyProfile.country"),
+        value: valueOrMissing(readOrgCountryCode(activeOrganization)),
+        missing: !readOrgCountryCode(activeOrganization),
+      },
+      {
+        key: "billingAddress",
+        label: t("business.dashboard.companyProfile.address"),
+        value: valueOrMissing(formatOrgBillingAddress(activeOrganization)),
+        missing: !formatOrgBillingAddress(activeOrganization),
+      },
+      {
+        key: "registrationNumber",
+        label: t("business.dashboard.companyProfile.registrationNumber"),
+        value: valueOrMissing(readOrgRegistrationNumber(activeOrganization)),
+        missing: !readOrgRegistrationNumber(activeOrganization),
+      },
+      {
+        key: "contactName",
+        label: t("business.dashboard.companyProfile.contactName"),
+        value: valueOrMissing(readOrgContactName(activeOrganization)),
+        missing: !readOrgContactName(activeOrganization),
+      },
+      {
+        key: "phone",
+        label: t("business.dashboard.companyProfile.phone"),
+        value: valueOrMissing(readOrgPhone(activeOrganization)),
+        missing: !readOrgPhone(activeOrganization),
+      },
+    ];
+  }, [activeOrganization, notProvidedLabel, t]);
+
+  const openCompanyProfileEditor = () => {
+    nav.navigate("BusinessRegistration", { mode: "completeProfile" });
+  };
   const statusBadgeLabel = isPendingPayment
     ? t("business.dashboard.status.paymentDue")
     : isTrialing
@@ -386,7 +460,18 @@ export function BusinessDashboardScreen() {
       label: t("business.dashboard.detailsPaymentReference"),
       value: activeOrder?.paymentReference ?? null,
     },
-    { label: t("business.dashboard.detailsBillingEmail"), value: activeOrganization?.billingEmail ?? null },
+    {
+      label: t("business.dashboard.detailsBillingEmail"),
+      value: activeOrganization ? readOrgBillingEmail(activeOrganization) || null : null,
+    },
+    {
+      label: t("business.dashboard.companyProfile.address"),
+      value: activeOrganization ? formatOrgBillingAddress(activeOrganization) || null : null,
+    },
+    {
+      label: t("business.dashboard.companyProfile.registrationNumber"),
+      value: activeOrganization ? readOrgRegistrationNumber(activeOrganization) || null : null,
+    },
     { label: t("business.dashboard.detailsAmount"), value: amountGross !== null ? amountLabel : null },
     { label: t("business.dashboard.detailsTrialEnds"), value: trialEndsLabel },
   ];
@@ -471,6 +556,48 @@ export function BusinessDashboardScreen() {
         <View style={[styles.statusBadge, statusBadgeStyle]}>
           <Text style={styles.statusBadgeText}>{statusBadgeLabel}</Text>
         </View>
+      </View>
+
+      <View
+        style={[
+          styles.companyProfileCard,
+          !profileCompletion.isComplete ? styles.companyProfileCardIncomplete : null,
+        ]}
+      >
+        <View style={styles.companyProfileHeader}>
+          <Text style={styles.companyProfileTitle}>{t("business.dashboard.companyProfile.title")}</Text>
+          {canEditCompanyProfile ? (
+            <TouchableOpacity style={styles.companyProfileEditLink} onPress={openCompanyProfileEditor}>
+              <Text style={styles.companyProfileEditLinkText}>
+                {profileCompletion.isComplete
+                  ? t("business.dashboard.companyProfile.editCta")
+                  : t("business.profileCompletion.cta")}
+              </Text>
+            </TouchableOpacity>
+          ) : null}
+        </View>
+        {!profileCompletion.isComplete ? (
+          <Text style={styles.companyProfileHint}>{t("business.profileCompletion.body")}</Text>
+        ) : null}
+        <View style={styles.companyProfileRows}>
+          {companyProfileRows.map((row) => (
+            <View key={row.key} style={styles.companyProfileRow}>
+              <Text style={styles.companyProfileLabel}>{row.label}</Text>
+              <Text style={[styles.companyProfileValue, row.missing ? styles.companyProfileMissing : null]}>
+                {row.value}
+              </Text>
+            </View>
+          ))}
+        </View>
+        {canEditCompanyProfile ? (
+          <TouchableOpacity style={styles.profileCompletionButton} onPress={openCompanyProfileEditor}>
+            <Text style={styles.profileCompletionButtonText}>
+              {profileCompletion.isComplete
+                ? t("business.dashboard.companyProfile.editCta")
+                : t("business.profileCompletion.cta")}
+            </Text>
+          </TouchableOpacity>
+        ) : null}
       </View>
 
       {renderBillingBanner()}
@@ -900,6 +1027,99 @@ const styles = StyleSheet.create({
   bannerActions: {
     marginTop: 10,
     gap: 8,
+  },
+  profileCompletionCard: {
+    borderRadius: 14,
+    backgroundColor: "#FFF7ED",
+    borderColor: "#FDBA74",
+    borderWidth: 1,
+    padding: 14,
+    marginBottom: 12,
+  },
+  companyProfileCard: {
+    borderRadius: 14,
+    backgroundColor: "#FFFFFF",
+    borderColor: "#E2E8F0",
+    borderWidth: 1,
+    padding: 14,
+    marginBottom: 12,
+  },
+  companyProfileCardIncomplete: {
+    backgroundColor: "#FFF7ED",
+    borderColor: "#FDBA74",
+  },
+  companyProfileHeader: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 12,
+    marginBottom: 8,
+  },
+  companyProfileTitle: {
+    flex: 1,
+    fontSize: 17,
+    fontWeight: "800",
+    color: "#0F172A",
+  },
+  companyProfileEditLink: {
+    paddingVertical: 2,
+  },
+  companyProfileEditLinkText: {
+    fontSize: 13,
+    fontWeight: "700",
+    color: colors.primary,
+  },
+  companyProfileHint: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: "#7C2D12",
+    marginBottom: 10,
+  },
+  companyProfileRows: {
+    gap: 10,
+    marginBottom: 12,
+  },
+  companyProfileRow: {
+    gap: 2,
+  },
+  companyProfileLabel: {
+    fontSize: 12,
+    fontWeight: "600",
+    color: "#64748B",
+    textTransform: "uppercase",
+  },
+  companyProfileValue: {
+    fontSize: 15,
+    lineHeight: 21,
+    color: "#0F172A",
+  },
+  companyProfileMissing: {
+    color: "#94A3B8",
+    fontStyle: "italic",
+  },
+  profileCompletionTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#9A3412",
+    marginBottom: 6,
+  },
+  profileCompletionBody: {
+    fontSize: 14,
+    lineHeight: 20,
+    color: "#7C2D12",
+    marginBottom: 10,
+  },
+  profileCompletionButton: {
+    alignSelf: "flex-start",
+    backgroundColor: colors.primary,
+    borderRadius: 10,
+    paddingHorizontal: 14,
+    paddingVertical: 10,
+  },
+  profileCompletionButtonText: {
+    color: "#FFFFFF",
+    fontSize: 14,
+    fontWeight: "700",
   },
   cardTitle: {
     fontSize: 18,

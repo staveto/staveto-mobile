@@ -19,6 +19,8 @@ export function BusinessGate({ children }: BusinessGateProps) {
     orgStatus,
     canAccessBusiness,
     canViewBusinessDashboard,
+    isWorker,
+    isViewer,
     pendingCanAccess,
     trialActive,
     hasActiveBusinessOrder,
@@ -32,15 +34,9 @@ export function BusinessGate({ children }: BusinessGateProps) {
     if (orgStatus === "suspended") return "suspended";
     if (orgStatus === "cancelled") return "unavailable";
     if (orgStatus === "pending_payment" && !canViewBusinessDashboard) return "pending_payment";
-    if (canViewBusinessDashboard || canAccessBusiness) return "dashboard";
+    if (canViewBusinessDashboard) return "dashboard";
     return "unavailable";
-  }, [
-    loading,
-    activeBusinessOrgId,
-    orgStatus,
-    canViewBusinessDashboard,
-    canAccessBusiness,
-  ]);
+  }, [loading, activeBusinessOrgId, orgStatus, canViewBusinessDashboard]);
 
   useEffect(() => {
     console.log("[BusinessGateDebug]", {
@@ -61,6 +57,8 @@ export function BusinessGate({ children }: BusinessGateProps) {
       pendingCanAccess,
       canAccessBusiness,
       canViewBusinessDashboard,
+      isWorker,
+      isViewer,
       dashboardBlockReason,
       finalDecision,
     });
@@ -74,6 +72,8 @@ export function BusinessGate({ children }: BusinessGateProps) {
     pendingCanAccess,
     canAccessBusiness,
     canViewBusinessDashboard,
+    isWorker,
+    isViewer,
     dashboardBlockReason,
     finalDecision,
   ]);
@@ -88,7 +88,7 @@ export function BusinessGate({ children }: BusinessGateProps) {
   }
 
   if (!activeBusinessOrgId) {
-    return <BusinessUnavailableScreen />;
+    return <BusinessUnavailableScreen reason={dashboardBlockReason} />;
   }
 
   if (orgStatus === "suspended") {
@@ -96,10 +96,13 @@ export function BusinessGate({ children }: BusinessGateProps) {
   }
 
   if (orgStatus === "cancelled") {
-    return <BusinessUnavailableScreen />;
+    return <BusinessUnavailableScreen reason={dashboardBlockReason} />;
   }
 
   if (orgStatus === "pending_payment" && !canViewBusinessDashboard) {
+    if (isWorker || isViewer) {
+      return <BusinessUnavailableScreen reason="employee_use_projects" />;
+    }
     return (
       <PendingPaymentScreen
         debugReason={dashboardBlockReason}
@@ -110,11 +113,11 @@ export function BusinessGate({ children }: BusinessGateProps) {
     );
   }
 
-  if (canViewBusinessDashboard || canAccessBusiness) {
+  if (canViewBusinessDashboard) {
     return <>{children}</>;
   }
 
-  return <BusinessUnavailableScreen />;
+  return <BusinessUnavailableScreen reason={dashboardBlockReason} />;
 }
 
 const styles = StyleSheet.create({

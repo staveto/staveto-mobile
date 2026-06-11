@@ -19,6 +19,7 @@ import { showToast } from "../helpers/toast";
 import { colors, radius, spacing } from "../theme";
 import * as invitesService from "../services/invites";
 import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
+import { useUnreadCountContext } from "../context/UnreadCountContext";
 import type { PendingInvite } from "../services/invites";
 
 function sharedItemsSummary(shared: Record<string, boolean> | undefined, t: (k: string) => string): string {
@@ -37,6 +38,7 @@ export function ProjectInvitesScreen() {
   const { user } = useAuth();
   const navigation = useNavigation();
   const baseCapabilities = useCapabilities();
+  const { refresh: refreshUnreadCount } = useUnreadCountContext();
   const [invites, setInvites] = useState<PendingInvite[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -128,6 +130,7 @@ export function ProjectInvitesScreen() {
         const result = await invitesService.acceptProjectInvite(invite.projectId);
         if (result.ok) {
           setInvites((prev) => prev.filter((i) => i.projectId !== invite.projectId));
+          void refreshUnreadCount();
           showToast(t("projectInvites.acceptSuccess") || "Pozvánka prijatá");
           if (result.projectId && !result.already) {
             (navigation as { navigate: (name: string, params?: object) => void }).navigate(
@@ -150,7 +153,7 @@ export function ProjectInvitesScreen() {
         setActionProjectId(null);
       }
     },
-    [navigation, shouldGateInviteTeamAction, t]
+    [navigation, refreshUnreadCount, shouldGateInviteTeamAction, t]
   );
 
   const handleDecline = useCallback(
@@ -176,6 +179,7 @@ export function ProjectInvitesScreen() {
               try {
                 await invitesService.declineProjectInvite(invite.projectId);
                 setInvites((prev) => prev.filter((i) => i.projectId !== invite.projectId));
+                void refreshUnreadCount();
                 showToast(t("projectInvites.declineSuccess") || "Pozvánka odmietnutá");
               } catch (error: unknown) {
                 console.error("[ProjectInvitesScreen] Decline failed:", error);
@@ -188,7 +192,7 @@ export function ProjectInvitesScreen() {
         ]
       );
     },
-    [navigation, shouldGateInviteTeamAction, t]
+    [navigation, refreshUnreadCount, shouldGateInviteTeamAction, t]
   );
 
   const renderItem = useCallback(
@@ -253,7 +257,7 @@ export function ProjectInvitesScreen() {
         </Text>
         <TouchableOpacity style={styles.refreshBtn} onPress={onRefresh}>
           <Ionicons name="refresh" size={20} color={colors.primary} />
-          <Text style={styles.refreshBtnText}>Obnoviť</Text>
+          <Text style={styles.refreshBtnText}>{t("common.refresh")}</Text>
         </TouchableOpacity>
       </View>
     );

@@ -4455,6 +4455,7 @@ export const translations: Record<Locale, Record<string, string>> = {
     "common.warning": "Warnung",
     "common.unknown": "Unbekannt",
     "common.cancel": "Abbrechen",
+    "common.refresh": "Aktualisieren",
     "common.continue": "Weiter",
     "common.save": "Speichern",
     "common.add": "Hinzufügen",

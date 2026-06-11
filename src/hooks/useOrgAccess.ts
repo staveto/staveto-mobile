@@ -61,10 +61,7 @@ export function useOrgAccess() {
     const canViewBusinessDashboard = orgGateOpen && (isOwner || permissions.canViewBusinessDashboard);
 
     const canAccessBusiness =
-      !!activeBusinessOrgId &&
-      isActiveMember &&
-      orgStatus === "active" &&
-      businessEnabled;
+      !!activeBusinessOrgId && isActiveMember && orgGateOpen;
 
     const canAccessBusinessChat = orgGateOpen && (isOwner || permissions.canViewBusinessDashboard);
 

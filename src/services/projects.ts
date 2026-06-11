@@ -983,6 +983,7 @@ export async function assignMemberToBusinessProject(input: {
       status: "active",
       permissionLevel: "editor",
       addedAt: serverTimestamp(),
+      addedBy: actorUid,
       name: input.memberName?.trim() || undefined,
       sharedItems: {
         tasks: true,

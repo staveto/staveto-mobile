@@ -321,10 +321,10 @@ export function DrawerContent(props: DrawerContentComponentProps) {
       canViewBusinessDashboard ||
       canAccessBusiness);
 
-  // Signed-in users always see Business in the drawer (solo onboarding included).
-  // Workspace access stays behind BusinessGate; without an org, BusinessEntry
-  // opens BusinessLandingScreen (register company / choose plan).
-  const showBusinessMenu = !!user?.id;
+  // Business admin surface: owners/managers without org yet (onboarding), or dashboard role.
+  // Workers/viewers use Projekte for assigned stavby — they do not need this menu item.
+  const showBusinessMenu =
+    !!user?.id && (!activeBusinessOrgId || canViewBusinessDashboard);
 
   useEffect(() => {
     if (!__DEV__) return;

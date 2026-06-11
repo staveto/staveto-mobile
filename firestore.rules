@@ -13,12 +13,17 @@ service cloud.firestore {
         && exists(/databases/$(database)/documents/organizations/$(orgId))
         && get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == u;
     }
+    function orgMemberStatusOk(orgId, u) {
+      let member = get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data;
+      return !('status' in member)
+        || member.status in ['active', 'pending'];
+    }
     function isOrgMember(orgId, u) {
       return orgId != null && orgId != ''
         && (
           (
             exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(u))
-            && get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.status == 'active'
+            && orgMemberStatusOk(orgId, u)
           )
           || isOrgOwner(orgId, u)
         );
@@ -30,7 +35,7 @@ service cloud.firestore {
       return isOrgMember(orgId, u)
         && (
           isOrgOwner(orgId, u)
-          || get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role == 'admin'
+          || get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['admin', 'owner']
         );
     }
     function isOrgChatWriter(orgId, u) {
@@ -44,7 +49,10 @@ service cloud.firestore {
       return isOrgMember(orgId, u)
         && (
           isOrgOwner(orgId, u)
-          || get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['admin', 'manager']
+          || (
+            exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(u))
+            && get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['admin', 'manager', 'owner']
+          )
         );
     }
     function contactIsActive() {
@@ -105,16 +113,23 @@ service cloud.firestore {
         && get(/databases/$(database)/documents/projects/$(projectId)).data.ownerId == uid();
     }
 
-    function projectOrgId(projectId) {
-      return get(/databases/$(database)/documents/projects/$(projectId)).data.orgId;
-    }
-
     function projectDoc(projectId) {
       return get(/databases/$(database)/documents/projects/$(projectId)).data;
     }
 
+    // Team projects may store org link on orgId and/or legacy workspaceId (web + mobile).
+    function projectLinkedOrgId(data) {
+      return data.orgId != null && data.orgId != ''
+        ? data.orgId
+        : (data.workspaceId != null && data.workspaceId != '' ? data.workspaceId : null);
+    }
+
+    function projectOrgId(projectId) {
+      return projectLinkedOrgId(projectDoc(projectId));
+    }
+
     function isOrgLinkedProjectData(data) {
-      return data.orgId != null && data.orgId != '';
+      return projectLinkedOrgId(data) != null;
     }
 
     function isAssignedOnProject(projectId) {
@@ -131,24 +146,25 @@ service cloud.firestore {
 
     function canManageOrgProjectAssignments(projectId) {
       let data = projectDoc(projectId);
-      return isOrgLinkedProjectData(data)
+      let linked = projectLinkedOrgId(data);
+      return linked != null
         && (
           data.ownerId == uid()
-          || isOrgOwner(data.orgId, uid())
-          || isOrgAdmin(data.orgId, uid())
-          || isOrgManager(data.orgId, uid())
+          || isOrgOwner(linked, uid())
+          || isOrgAdmin(linked, uid())
+          || isOrgManager(linked, uid())
         );
     }
 
     function canReadOrgLinkedProject(projectId) {
       let data = projectDoc(projectId);
-      return isOrgLinkedProjectData(data)
+      let linked = projectLinkedOrgId(data);
+      return linked != null
         && (
           data.ownerId == uid()
-          || isOrgOwner(data.orgId, uid())
-          || isOrgAdmin(data.orgId, uid())
-          || isOrgManager(data.orgId, uid())
           || isAssignedOnProject(projectId)
+          || isOrgOwner(linked, uid())
+          || isOrgManager(linked, uid())
         );
     }
 
@@ -299,6 +315,24 @@ service cloud.firestore {
         allow write: if false;
       }
 
+      // In-app notifications (web office PROJECT_ASSIGNED etc.)
+      match /notifications/{notificationId} {
+        allow read: if signedIn() && uid() == userId;
+        allow create: if signedIn()
+          && (
+            uid() == userId
+            || (
+              request.resource.data.assignedBy == uid()
+              && request.resource.data.orgId != null
+              && isOrgManager(request.resource.data.orgId, uid())
+            )
+          );
+        allow update: if signedIn()
+          && uid() == userId
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+        allow delete: if signedIn() && uid() == userId;
+      }
+
       // all other user subcollections: self-only read/write (projectRefs, limits, usage excluded)
       match /{subcol}/{docId} {
         allow read, write: if signedIn() && uid() == userId && subcol != 'projectRefs' && subcol != 'limits' && subcol != 'usage';
@@ -351,7 +385,7 @@ service cloud.firestore {
           && (isOrgAdmin(orgId, uid())
               || (memberId == uid()
                   && get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == uid()
-                  && request.resource.data.role == 'admin'
+                  && request.resource.data.role in ['admin', 'owner']
                   && request.resource.data.status == 'active'));
         allow read: if signedIn() && (
           uid() == memberId
@@ -475,12 +509,13 @@ service cloud.firestore {
               && isOrgMember(request.resource.data.orgId, uid()))
         );
 
-      // read: owner, project member, or org-linked assignment / manager
+      // read: owner, project member, or org-linked team job (owner/manager/assigned)
       allow read: if signedIn()
-        && (resource.data.ownerId == uid()
-            || isMember(projectId)
-            || (isOrgLinkedProjectData(resource.data) && canReadOrgLinkedProject(projectId))
-            || !("ownerId" in resource.data));
+        && (
+          resource.data.ownerId == uid()
+          || isMember(projectId)
+          || canReadOrgLinkedProject(projectId)
+        );
 
       // delete: owner or org manager+
       allow delete: if signedIn()
@@ -606,6 +641,59 @@ service cloud.firestore {
         allow write: if signedIn() && canWriteAsEditor(projectId);
       }
 
+    }
+
+    // Quotes / estimates (personal: ownerId; team: orgId or legacy workspaceId)
+    function quoteLinkedOrgId(data) {
+      return data.orgId != null && data.orgId != ''
+        ? data.orgId
+        : (data.workspaceId != null && data.workspaceId != '' ? data.workspaceId : null);
+    }
+
+    function canReadQuote(data) {
+      let linked = quoteLinkedOrgId(data);
+      return data.ownerId == uid()
+        || (linked != null && isOrgMember(linked, uid()));
+    }
+
+    function canManageQuote(data) {
+      let linked = quoteLinkedOrgId(data);
+      return data.ownerId == uid()
+        || (linked != null && isOrgManager(linked, uid()));
+    }
+
+    match /quotes/{quoteId} {
+      allow read: if signedIn() && canReadQuote(resource.data);
+      allow create: if signedIn()
+        && (
+          request.resource.data.ownerId == uid()
+          || (
+            quoteLinkedOrgId(request.resource.data) != null
+            && isOrgMember(quoteLinkedOrgId(request.resource.data), uid())
+          )
+        );
+      allow update: if signedIn()
+        && canManageQuote(resource.data)
+        && (!("ownerId" in request.resource.data)
+            || request.resource.data.ownerId == resource.data.ownerId);
+      allow delete: if signedIn() && canManageQuote(resource.data);
+    }
+
+    match /estimates/{estimateId} {
+      allow read: if signedIn() && canReadQuote(resource.data);
+      allow create: if signedIn()
+        && (
+          request.resource.data.ownerId == uid()
+          || (
+            quoteLinkedOrgId(request.resource.data) != null
+            && isOrgMember(quoteLinkedOrgId(request.resource.data), uid())
+          )
+        );
+      allow update: if signedIn()
+        && canManageQuote(resource.data)
+        && (!("ownerId" in request.resource.data)
+            || request.resource.data.ownerId == resource.data.ownerId);
+      allow delete: if signedIn() && canManageQuote(resource.data);
     }
 
     // Absences (vacation, sick leave, doctor visits, personal/unpaid leave).

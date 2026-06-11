@@ -1040,6 +1040,90 @@ export async function findPreferredBusinessOrgForUser(
     }
   }
 
-  if (!best) return null;
+  if (!best) {
+    return findPreferredBusinessOrgViaCallable(userId);
+  }
   return { org: best.org, membership: best.membership };
+}
+
+type ListedBusinessOrganizationCallable = {
+  orgId: string;
+  orgName: string;
+  role: string;
+  membershipStatus: string;
+  orgStatus: string;
+  businessEnabled: boolean;
+  ownerUid: string;
+  source?: string | null;
+  onboardingSource?: string | null;
+  trialEndsAt?: unknown;
+  activeBusinessOrderId?: string | null;
+};
+
+function orgDocFromListedRow(row: ListedBusinessOrganizationCallable): OrganizationDoc {
+  return {
+    id: row.orgId,
+    name: row.orgName,
+    ownerUid: row.ownerUid,
+    status: parseOrgStatus(row.orgStatus),
+    businessEnabled: row.businessEnabled,
+    seatsLimit: 0,
+    seatsUsed: 0,
+    source: row.source ?? undefined,
+    onboardingSource: row.onboardingSource ?? undefined,
+    trialEndsAt: row.trialEndsAt as OrganizationDoc["trialEndsAt"],
+    activeBusinessOrderId: row.activeBusinessOrderId ?? null,
+  };
+}
+
+function membershipFromListedRow(row: ListedBusinessOrganizationCallable, userId: string): MembershipDoc {
+  return {
+    id: userId,
+    orgId: row.orgId,
+    userId,
+    role: parseOrgRole(row.role),
+    status: parseMembershipStatus(row.membershipStatus),
+    organizationName: row.orgName,
+  };
+}
+
+/** Server-side org discovery when client Firestore reads fail (rules / doc-id mismatch). */
+async function findPreferredBusinessOrgViaCallable(userId: string): Promise<PreferredBusinessOrg | null> {
+  const { getCallable } = await import("../firebase");
+  try {
+    const callable = getCallable("listMyBusinessOrganizations");
+    const res = await callable({});
+    const organizations = (res?.data as { organizations?: ListedBusinessOrganizationCallable[] })
+      ?.organizations;
+    if (!Array.isArray(organizations) || organizations.length === 0) return null;
+
+    for (const row of organizations) {
+      if (!row?.orgId) continue;
+      const membershipStatus = String(row.membershipStatus ?? "active").toLowerCase();
+      if (membershipStatus === "removed" || membershipStatus === "invited") continue;
+
+      const membership = membershipFromListedRow(row, userId);
+      const orgFromClient = await getOrganization(row.orgId);
+      const org = orgFromClient ?? orgDocFromListedRow(row);
+      if (!isUsableBusinessOrg(org, { userId, membership })) continue;
+      if (membership.status !== "active" && org.ownerUid !== userId) continue;
+      return { org, membership };
+    }
+
+    const pending = organizations.find(
+      (row) => row?.orgId && String(row.membershipStatus ?? "").toLowerCase() === "pending"
+    );
+    if (pending) {
+      return {
+        org: orgDocFromListedRow(pending),
+        membership: membershipFromListedRow(pending, userId),
+      };
+    }
+    return null;
+  } catch (e) {
+    if (__DEV__) {
+      console.warn("[organizations] listMyBusinessOrganizations fallback failed:", e);
+    }
+    return null;
+  }
 }

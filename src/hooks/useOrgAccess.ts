@@ -63,7 +63,8 @@ export function useOrgAccess() {
     const canAccessBusiness =
       !!activeBusinessOrgId && isActiveMember && orgGateOpen;
 
-    const canAccessBusinessChat = orgGateOpen && (isOwner || permissions.canViewBusinessDashboard);
+    /** Team chat: all active org members (workers included). Viewers may read; write is gated in chat UI + Firestore. */
+    const canAccessBusinessChat = canAccessBusiness;
 
     const canViewContacts =
       orgGateOpen && (isOwner || isAdmin || permissions.canManageContacts || permissions.canViewBusinessDashboard);
@@ -83,7 +84,10 @@ export function useOrgAccess() {
 
     const canManageBilling = orgGateOpen && (isOwner || permissions.canManageBilling);
 
-    const canCreateProject = isOwner || isAdmin || permissions.canCreateProject;
+    /** B2C solo users may create projects; active business members need role permission. */
+    const canCreateProject = !orgGateOpen
+      ? true
+      : isOwner || isAdmin || isManager || permissions.canCreateProject;
 
     const canViewAllProjects = isOwner || isAdmin || isManager || permissions.canViewAllProjects;
 

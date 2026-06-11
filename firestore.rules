@@ -18,6 +18,23 @@ service cloud.firestore {
       return !('status' in member)
         || member.status in ['active', 'pending'];
     }
+    function orgMemberDocStatusOk(memberData) {
+      return !('status' in memberData)
+        || memberData.status in ['active', 'pending'];
+    }
+    function authEmailLower() {
+      return request.auth.token.email != null
+        ? request.auth.token.email.lower()
+        : '';
+    }
+    /** Legacy org members may live under email doc id instead of auth uid. */
+    function isOrgMemberViaAuthEmailDoc(orgId) {
+      let email = authEmailLower();
+      return email.size() > 0
+        && exists(/databases/$(database)/documents/organizations/$(orgId)/members/$(email))
+        && get(/databases/$(database)/documents/organizations/$(orgId)/members/$(email)).data.get('userId', uid()) == uid()
+        && orgMemberDocStatusOk(get(/databases/$(database)/documents/organizations/$(orgId)/members/$(email)).data);
+    }
     function isOrgMember(orgId, u) {
       return orgId != null && orgId != ''
         && (
@@ -26,6 +43,7 @@ service cloud.firestore {
             && orgMemberStatusOk(orgId, u)
           )
           || isOrgOwner(orgId, u)
+          || (u == uid() && isOrgMemberViaAuthEmailDoc(orgId))
         );
     }
     function isOrgMemberActive(orgId) {
@@ -44,6 +62,36 @@ service cloud.firestore {
           isOrgOwner(orgId, u)
           || get(/databases/$(database)/documents/organizations/$(orgId)/members/$(u)).data.role in ['owner', 'admin', 'manager', 'worker']
         );
+    }
+    function isDirectChatParticipant(chatData) {
+      return chatData.type == 'direct'
+        && chatData.participantUids is list
+        && uid() in chatData.participantUids;
+    }
+    function canReadOrgChat(chatData) {
+      return chatData.type == 'general' || isDirectChatParticipant(chatData);
+    }
+    function isOrgMemberUid(orgId, memberUid) {
+      return isOrgMember(orgId, memberUid);
+    }
+    function readerActiveBusinessOrgId() {
+      return get(/databases/$(database)/documents/users/$(uid())).data.get('activeBusinessOrgId', '');
+    }
+    /** Org members may read the company owner's user-scoped equipment namespace. */
+    function canReadOrgSharedUserEquipment(equipmentOwnerUid) {
+      let orgId = readerActiveBusinessOrgId();
+      return orgId is string
+        && orgId.size() > 0
+        && isOrgMemberActive(orgId)
+        && get(/databases/$(database)/documents/organizations/$(orgId)).data.ownerUid == equipmentOwnerUid;
+    }
+    function directChatCreateValid(orgId) {
+      return request.resource.data.type == 'direct'
+        && request.resource.data.participantUids is list
+        && request.resource.data.participantUids.size() == 2
+        && uid() in request.resource.data.participantUids
+        && isOrgMemberUid(orgId, request.resource.data.participantUids[0])
+        && isOrgMemberUid(orgId, request.resource.data.participantUids[1]);
     }
     function isOrgManager(orgId, u) {
       return isOrgMember(orgId, u)
@@ -132,16 +180,23 @@ service cloud.firestore {
       return projectLinkedOrgId(data) != null;
     }
 
-    function isAssignedOnProject(projectId) {
+    function assignedMemberIdsIncludesSelf(projectId) {
       let data = projectDoc(projectId);
-      return ('assignedMemberIds' in data && uid() in data.assignedMemberIds)
-        || (
-          exists(/databases/$(database)/documents/projects/$(projectId)/members/$(uid()))
-          && (
-            !("status" in get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data)
-            || get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.status == "active"
-          )
+      return 'assignedMemberIds' in data && uid() in data.assignedMemberIds;
+    }
+
+    function projectMembershipDocActive(projectId) {
+      let memberPath = /databases/$(database)/documents/projects/$(projectId)/members/$(uid());
+      return exists(memberPath)
+        && (
+          !("status" in get(memberPath).data)
+          || get(memberPath).data.status == "active"
         );
+    }
+
+    function isAssignedOnProject(projectId) {
+      return assignedMemberIdsIncludesSelf(projectId)
+        || projectMembershipDocActive(projectId);
     }
 
     function canManageOrgProjectAssignments(projectId) {
@@ -204,15 +259,10 @@ service cloud.firestore {
 
     function isMember(projectId) {
       return signedIn()
+        && exists(/databases/$(database)/documents/projects/$(projectId))
         && (
           hasProjectRef(projectId)
-          || (
-            exists(/databases/$(database)/documents/projects/$(projectId)/members/$(uid()))
-            && (
-              !("status" in get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data)
-              || get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.status == "active"
-            )
-          )
+          || isAssignedOnProject(projectId)
         );
     }
 
@@ -235,20 +285,49 @@ service cloud.firestore {
     function access(projectId) {
       return get(/databases/$(database)/documents/projects/$(projectId)/membersByUid/$(uid())).data;
     }
+    function projectMemberSharedItemAllowed(projectId, item) {
+      return projectMembershipDocActive(projectId)
+        && (
+          !("sharedItems" in get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data)
+          || !(get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.sharedItems is map)
+          || !(item in get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.sharedItems)
+          || get(/databases/$(database)/documents/projects/$(projectId)/members/$(uid())).data.sharedItems[item] == true
+        );
+    }
     function canReadTasks(projectId) {
-      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.tasks == true) || (isMember(projectId) && !hasAccessDoc(projectId));
+      return isOwner(projectId)
+        || assignedMemberIdsIncludesSelf(projectId)
+        || (hasAccessDoc(projectId) && access(projectId).sharedItems.tasks == true)
+        || (isMember(projectId) && !hasAccessDoc(projectId))
+        || projectMemberSharedItemAllowed(projectId, 'tasks');
     }
     function canReadPhases(projectId) {
-      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.phases == true) || (isMember(projectId) && !hasAccessDoc(projectId));
+      return isOwner(projectId)
+        || assignedMemberIdsIncludesSelf(projectId)
+        || (hasAccessDoc(projectId) && access(projectId).sharedItems.phases == true)
+        || (isMember(projectId) && !hasAccessDoc(projectId))
+        || projectMemberSharedItemAllowed(projectId, 'phases');
     }
     function canReadExpenses(projectId) {
-      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.expenses == true) || (isMember(projectId) && !hasAccessDoc(projectId));
+      return isOwner(projectId)
+        || assignedMemberIdsIncludesSelf(projectId)
+        || (hasAccessDoc(projectId) && access(projectId).sharedItems.expenses == true)
+        || (isMember(projectId) && !hasAccessDoc(projectId))
+        || projectMemberSharedItemAllowed(projectId, 'expenses');
     }
     function canReadDiary(projectId) {
-      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.diary == true) || (isMember(projectId) && !hasAccessDoc(projectId));
+      return isOwner(projectId)
+        || assignedMemberIdsIncludesSelf(projectId)
+        || (hasAccessDoc(projectId) && access(projectId).sharedItems.diary == true)
+        || (isMember(projectId) && !hasAccessDoc(projectId))
+        || projectMemberSharedItemAllowed(projectId, 'diary');
     }
     function canReadDocuments(projectId) {
-      return isOwner(projectId) || (hasAccessDoc(projectId) && access(projectId).sharedItems.documents == true) || (isMember(projectId) && !hasAccessDoc(projectId));
+      return isOwner(projectId)
+        || assignedMemberIdsIncludesSelf(projectId)
+        || (hasAccessDoc(projectId) && access(projectId).sharedItems.documents == true)
+        || (isMember(projectId) && !hasAccessDoc(projectId))
+        || projectMemberSharedItemAllowed(projectId, 'documents');
     }
     /** Align with app `canViewProjectTime`: members may read team time when timeTracking is not turned off. */
     function timeTrackingReadAllowed(projectId) {
@@ -333,12 +412,30 @@ service cloud.firestore {
         allow delete: if signedIn() && uid() == userId;
       }
 
-      // all other user subcollections: self-only read/write (projectRefs, limits, usage excluded)
+      // User-owned equipment — self or active business org owner's fleet (workers read company tools).
+      match /equipment/{equipmentId} {
+        allow read: if signedIn() && (uid() == userId || canReadOrgSharedUserEquipment(userId));
+        allow write: if signedIn() && uid() == userId;
+        match /serviceRules/{ruleId} {
+          allow read: if signedIn() && (uid() == userId || canReadOrgSharedUserEquipment(userId));
+          allow write: if signedIn() && uid() == userId;
+        }
+        match /serviceTasks/{taskId} {
+          allow read: if signedIn() && (uid() == userId || canReadOrgSharedUserEquipment(userId));
+          allow write: if signedIn() && uid() == userId;
+        }
+      }
+
+      // all other user subcollections: self-only read/write (explicit subcols excluded above)
       match /{subcol}/{docId} {
-        allow read, write: if signedIn() && uid() == userId && subcol != 'projectRefs' && subcol != 'limits' && subcol != 'usage';
+        allow read, write: if signedIn() && uid() == userId
+          && subcol != 'projectRefs' && subcol != 'limits' && subcol != 'usage'
+          && subcol != 'notifications' && subcol != 'projectInvites' && subcol != 'equipment';
       }
       match /{subcol}/{docId}/{rest=**} {
-        allow read, write: if signedIn() && uid() == userId && subcol != 'projectRefs' && subcol != 'limits' && subcol != 'usage';
+        allow read, write: if signedIn() && uid() == userId
+          && subcol != 'projectRefs' && subcol != 'limits' && subcol != 'usage'
+          && subcol != 'notifications' && subcol != 'projectInvites' && subcol != 'equipment';
       }
     }
 
@@ -409,15 +506,20 @@ service cloud.firestore {
         allow delete: if false;
       }
 
-      // B2B Team chat (MVP)
+      // B2B Team chat (general + direct DMs; aligned with web BusinessMessagingDrawer)
       match /chats/{chatId} {
-        allow read: if signedIn() && isOrgMemberActive(orgId);
+        allow read: if signedIn() && isOrgMemberActive(orgId)
+          && (resource == null || canReadOrgChat(resource.data));
         allow create: if signedIn()
           && isOrgMemberActive(orgId)
           && request.resource.data.orgId == orgId
-          && request.resource.data.type in ['general'];
+          && (
+            (request.resource.data.type == 'general' && chatId == 'general')
+            || (directChatCreateValid(orgId) && chatId.matches('direct_.*'))
+          );
         allow update: if signedIn()
           && isOrgChatWriter(orgId, uid())
+          && canReadOrgChat(resource.data)
           && request.resource.data.orgId == resource.data.orgId
           && request.resource.data.type == resource.data.type
           && request.resource.data.createdAt == resource.data.createdAt
@@ -431,9 +533,12 @@ service cloud.firestore {
         allow delete: if false;
 
         match /messages/{messageId} {
-          allow read: if signedIn() && isOrgMemberActive(orgId);
+          allow read: if signedIn()
+            && isOrgMemberActive(orgId)
+            && canReadOrgChat(get(/databases/$(database)/documents/organizations/$(orgId)/chats/$(chatId)).data);
           allow create: if signedIn()
             && isOrgChatWriter(orgId, uid())
+            && canReadOrgChat(get(/databases/$(database)/documents/organizations/$(orgId)/chats/$(chatId)).data)
             && request.resource.data.orgId == orgId
             && request.resource.data.chatId == chatId
             && request.resource.data.senderUid == uid()
@@ -443,9 +548,12 @@ service cloud.firestore {
         }
 
         match /reads/{readUid} {
-          allow read: if signedIn() && isOrgMemberActive(orgId);
+          allow read: if signedIn()
+            && isOrgMemberActive(orgId)
+            && canReadOrgChat(get(/databases/$(database)/documents/organizations/$(orgId)/chats/$(chatId)).data);
           allow create, update: if signedIn()
             && isOrgMemberActive(orgId)
+            && canReadOrgChat(get(/databases/$(database)/documents/organizations/$(orgId)/chats/$(chatId)).data)
             && readUid == uid()
             && request.resource.data.uid == uid();
           allow delete: if false;
@@ -500,19 +608,22 @@ service cloud.firestore {
     // Projects (personal: ownerId; team: orgId)
     match /projects/{projectId} {
 
-      // create: personal (ownerId==uid) or team (org member)
+      // create: personal (ownerId==uid) or team (org manager+ only — workers cannot create company jobs)
       allow create: if signedIn()
         && (
-          (request.resource.data.ownerId == uid())
+          (request.resource.data.ownerId == uid()
+            && (!('orgId' in request.resource.data) || request.resource.data.orgId == null)
+            && request.resource.data.workspaceType != 'team')
           || (request.resource.data.workspaceType == 'team'
               && request.resource.data.orgId != null
-              && isOrgMember(request.resource.data.orgId, uid()))
+              && isOrgManager(request.resource.data.orgId, uid()))
         );
 
-      // read: owner, project member, or org-linked team job (owner/manager/assigned)
+      // read: owner, assignedMemberIds, project member, or org-linked team job
       allow read: if signedIn()
         && (
           resource.data.ownerId == uid()
+          || ('assignedMemberIds' in resource.data && uid() in resource.data.assignedMemberIds)
           || isMember(projectId)
           || canReadOrgLinkedProject(projectId)
         );
@@ -532,7 +643,11 @@ service cloud.firestore {
 
       // members subcollection
       match /members/{memberUid} {
-        allow read: if isOwner(projectId) || isMember(projectId) || canReadOrgLinkedProject(projectId);
+        // Self-read breaks circular get() in isAssignedOnProject / projectMembershipDocActive
+        allow read: if isOwner(projectId)
+          || memberUid == uid()
+          || isMember(projectId)
+          || canReadOrgLinkedProject(projectId);
         allow create, update, delete: if isOwner(projectId) || canManageOrgProjectAssignments(projectId);
       }
 
@@ -758,6 +873,12 @@ service cloud.firestore {
       allow update, delete: if signedIn() && resource.data.userId == uid();
     }
 
+    // collectionGroup("members") — self membership discovery (org + project); no email-wide scans
+    match /{path=**}/members/{memberId} {
+      allow read: if signedIn()
+        && (memberId == uid() || resource.data.userId == uid());
+    }
+
     // Notifications (inbox)
     match /notifications/{notificationId} {
       // Allow read when doc doesn't exist (getDoc for upsert check) or when user owns it
@@ -765,7 +886,15 @@ service cloud.firestore {
         !exists(/databases/$(database)/documents/notifications/$(notificationId))
         || request.auth.uid == resource.data.userId
       );
-      allow create: if signedIn() && request.auth.uid == request.resource.data.userId;
+      allow create: if signedIn() && (
+        request.auth.uid == request.resource.data.userId
+        || (
+          request.resource.data.fromUserId == uid()
+          && request.resource.data.projectId != null
+          && request.resource.data.orgId != null
+          && isOrgManager(request.resource.data.orgId, uid())
+        )
+      );
       // User can update their own notification (e.g. refresh task-due data); cannot change userId
       allow update: if signedIn()
         && request.auth.uid == resource.data.userId

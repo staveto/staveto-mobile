@@ -64,7 +64,9 @@ export function EquipmentDetailScreen() {
   const insets = useSafeAreaInsets();
   const { user, orgId } = useAuth();
   const uid = user?.id ?? "";
-  const { equipmentId } = route.params;
+  const { equipmentId, equipmentOwnerUid } = route.params;
+  const equipmentUid = equipmentOwnerUid?.trim() || uid;
+  const canEditEquipment = equipmentUid === uid;
 
   const [row, setRow] = useState<UserEquipmentDoc | null>(null);
   const [loading, setLoading] = useState(true);
@@ -77,11 +79,11 @@ export function EquipmentDetailScreen() {
   const [refreshing, setRefreshing] = useState(false);
 
   const load = useCallback(async (isRefresh = false) => {
-    if (!uid || !equipmentId) return;
+    if (!equipmentUid || !equipmentId) return;
     if (isRefresh) setRefreshing(true);
     else setLoading(true);
     try {
-      const doc = await userEquipmentService.getUserEquipment(uid, equipmentId);
+      const doc = await userEquipmentService.getUserEquipment(equipmentUid, equipmentId);
       setRow(doc);
       const listOwner = orgId ?? uid;
       if (doc?.assignedProjectId && listOwner) {
@@ -92,8 +94,8 @@ export function EquipmentDetailScreen() {
         setProjectName(null);
       }
       const [rulesList, tasksList] = await Promise.all([
-        userServiceRulesService.listUserEquipmentServiceRules(uid, equipmentId),
-        userEquipmentServiceTasks.listUserEquipmentServiceTasks(uid, equipmentId, { status: "OPEN" }),
+        userServiceRulesService.listUserEquipmentServiceRules(equipmentUid, equipmentId),
+        userEquipmentServiceTasks.listUserEquipmentServiceTasks(equipmentUid, equipmentId, { status: "OPEN" }),
       ]);
       setRules(rulesList);
       setOpenTasks(tasksList);
@@ -105,7 +107,7 @@ export function EquipmentDetailScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [uid, equipmentId, orgId]);
+  }, [equipmentId, equipmentUid, orgId, uid]);
 
   useFocusEffect(
     useCallback(() => {
@@ -116,7 +118,7 @@ export function EquipmentDetailScreen() {
   useEffect(() => {
     navigation.setOptions({
       headerRight: () =>
-        row ? (
+        row && canEditEquipment ? (
           <TouchableOpacity
             onPress={() => navigation.navigate("EquipmentForm", { equipmentId: row.id })}
             style={{ marginRight: spacing.sm }}
@@ -126,9 +128,10 @@ export function EquipmentDetailScreen() {
           </TouchableOpacity>
         ) : null,
     });
-  }, [navigation, row, t]);
+  }, [navigation, row, t, canEditEquipment]);
 
   const openAssign = async () => {
+    if (!canEditEquipment) return;
     const listOwner = orgId ?? uid;
     if (!listOwner) {
       Alert.alert(t("common.error"), t("equipmentTab.assignNoOrg"));
@@ -147,9 +150,9 @@ export function EquipmentDetailScreen() {
   };
 
   const onPickProject = async (projectId: string | null) => {
-    if (!uid) return;
+    if (!canEditEquipment || !equipmentUid) return;
     try {
-      await userEquipmentService.setUserEquipmentProjectAssignment(uid, equipmentId, projectId);
+      await userEquipmentService.setUserEquipmentProjectAssignment(equipmentUid, equipmentId, projectId);
       setAssignOpen(false);
       await load();
     } catch (e: unknown) {
@@ -171,8 +174,13 @@ export function EquipmentDetailScreen() {
       {
         text: t("common.yes"),
         onPress: async () => {
+          if (!canEditEquipment) return;
           try {
-            await userEquipmentServiceTasks.completeUserEquipmentServiceTask(uid, equipmentId, task.id);
+            await userEquipmentServiceTasks.completeUserEquipmentServiceTask(
+              equipmentUid,
+              equipmentId,
+              task.id
+            );
             await load(true);
           } catch (e: unknown) {
             const msg = e instanceof Error ? e.message : String(e);
@@ -241,6 +249,7 @@ export function EquipmentDetailScreen() {
             <Ionicons name="chevron-forward" size={18} color={colors.primary} />
           </TouchableOpacity>
         ) : null}
+        {canEditEquipment ? (
         <View style={styles.rowActions}>
           <TouchableOpacity style={styles.secondaryBtn} onPress={openAssign}>
             <Text style={styles.secondaryBtnText}>{t("equipmentTab.assignProject")}</Text>
@@ -251,14 +260,16 @@ export function EquipmentDetailScreen() {
             </TouchableOpacity>
           ) : null}
         </View>
+        ) : null}
       </View>
 
+      {canEditEquipment ? (
       <TouchableOpacity
         style={styles.servicePlanCta}
         onPress={() =>
           navigation.navigate("EquipmentServiceRuleForm", {
             serviceScope: "user",
-            userId: uid,
+            userId: equipmentUid,
             equipmentId,
             equipmentName: row.name,
           })
@@ -267,6 +278,7 @@ export function EquipmentDetailScreen() {
         <Ionicons name="add-circle" size={24} color={colors.primary} />
         <Text style={styles.servicePlanCtaText}>{t("equipment.addServicePlanCta")}</Text>
       </TouchableOpacity>
+      ) : null}
 
       <View style={styles.section}>
         <Text style={styles.sectionTitle}>{t("equipment.servicePlans")}</Text>
@@ -278,14 +290,16 @@ export function EquipmentDetailScreen() {
               key={r.id}
               style={styles.ruleRow}
               onPress={() =>
-                navigation.navigate("EquipmentServiceRuleForm", {
-                  serviceScope: "user",
-                  userId: uid,
-                  equipmentId,
-                  equipmentName: row.name,
-                  ruleId: r.id,
-                  rule: r,
-                })
+                canEditEquipment
+                  ? navigation.navigate("EquipmentServiceRuleForm", {
+                      serviceScope: "user",
+                      userId: equipmentUid,
+                      equipmentId,
+                      equipmentName: row.name,
+                      ruleId: r.id,
+                      rule: r,
+                    })
+                  : undefined
               }
             >
               <View style={{ flex: 1 }}>
@@ -323,9 +337,11 @@ export function EquipmentDetailScreen() {
                 <Text style={styles.taskTitle}>{task.title}</Text>
                 {task.dueDate ? <Text style={styles.taskDue}>{task.dueDate}</Text> : null}
               </View>
+              {canEditEquipment ? (
               <TouchableOpacity style={styles.completeBtn} onPress={() => onCompleteTask(task)}>
                 <Text style={styles.completeBtnText}>{t("equipment.completeService")}</Text>
               </TouchableOpacity>
+              ) : null}
             </View>
           ))
         )}

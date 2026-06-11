@@ -26,6 +26,7 @@ export type NotificationType =
   | "PROJECT_ACTIVITY"
   | "PROJECT_CREATED"
   | "PROJECT_INVITED"
+  | "PROJECT_ASSIGNED"
   | "PROBLEM_ASSIGNED"
   | "EXPENSE_ADDED"
   | "DIARY_ADDED"
@@ -33,7 +34,8 @@ export type NotificationType =
   | "MEMBER_LEFT"
   | "MEMBER_REMOVED"
   | "SYNC_ISSUE"
-  | "TIME_TRACKING_STOPPED";
+  | "TIME_TRACKING_STOPPED"
+  | "BUSINESS_CHAT_MESSAGE";
 
 export type NotificationSeverity = "info" | "warning" | "error";
 
@@ -70,6 +72,9 @@ export type NotificationDoc = {
   actorName?: string | null;
   /** @deprecated Inferred from type. Kept for NotificationRow compat. */
   entityType?: "task" | "project" | "expense" | "document" | "problem";
+  orgId?: string | null;
+  chatId?: string | null;
+  chatTitle?: string | null;
   meta?: Record<string, unknown>;
   /** Deduplication key for TASK_ASSIGNED anti-spam (e.g. TASK_ASSIGNED_projectId_taskId_assigneeId) */
   dedupeKey?: string | null;
@@ -88,6 +93,9 @@ const PENDING_READ_KEY = "@staveto:pending_notification_reads";
 const READ_RECEIPTS_KEY = "@staveto:notification_read_receipts_v1";
 const READ_RECEIPTS_MAX = 400;
 
+/** Prefix for notifications stored in users/{uid}/notifications (web office). */
+export const OFFICE_USER_NOTIFICATION_ID_PREFIX = "office:";
+
 const NOTIF_READ_DEBUG = (typeof __DEV__ !== "undefined" && __DEV__) || getExtraEnv("EXPO_PUBLIC_NOTIF_READ_DEBUG") === "1";
 
 function notifReadLog(message: string, data?: Record<string, unknown>) {
@@ -104,6 +112,7 @@ const KNOWN_NOTIFICATION_TYPES: readonly NotificationType[] = [
   "PROJECT_ACTIVITY",
   "PROJECT_CREATED",
   "PROJECT_INVITED",
+  "PROJECT_ASSIGNED",
   "PROBLEM_ASSIGNED",
   "EXPENSE_ADDED",
   "DIARY_ADDED",
@@ -112,6 +121,7 @@ const KNOWN_NOTIFICATION_TYPES: readonly NotificationType[] = [
   "MEMBER_REMOVED",
   "SYNC_ISSUE",
   "TIME_TRACKING_STOPPED",
+  "BUSINESS_CHAT_MESSAGE",
 ] as const;
 
 /** Firestore `type` may be missing or wrong shape — never call string methods on non-strings. */
@@ -363,11 +373,144 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): No
     title: message ?? null,
     actorName: fromUserName ?? null,
     entityType,
+    orgId: typeof d.orgId === "string" ? d.orgId : (meta?.orgId as string | undefined) ?? null,
+    chatId: typeof d.chatId === "string" ? d.chatId : (meta?.chatId as string | undefined) ?? null,
+    chatTitle:
+      typeof d.chatTitle === "string"
+        ? d.chatTitle
+        : (meta?.chatTitle as string | undefined) ?? null,
     meta,
     dedupeKey: (d.dedupeKey as string) ?? null,
     createdAtClient: convertTimelikeToIso(d.createdAtClient) ?? null,
     updatedAt: convertTimelikeToIso(d.updatedAt) ?? null,
   };
+}
+
+async function listOfficeUserNotifications(userId: string, limitCount: number): Promise<NotificationDoc[]> {
+  const mapOfficeDocs = (
+    docs: Array<{ id: string; data: () => Record<string, unknown> }>
+  ): NotificationDoc[] =>
+    docs
+      .map((d) => {
+        try {
+          const raw = normalizeDocData(d.data());
+          const typeRaw = raw.type;
+          let type: NotificationType = "PROJECT_ACTIVITY";
+          if (typeRaw === "PROJECT_ASSIGNED") type = "PROJECT_ASSIGNED";
+          else if (typeRaw === "PROJECT_INVITED") type = "PROJECT_INVITED";
+          else if (typeof typeRaw === "string" && (KNOWN_NOTIFICATION_TYPES as readonly string[]).includes(typeRaw)) {
+            type = typeRaw as NotificationType;
+          }
+
+          const createdAt = convertTimelikeToIso(raw.createdAt) ?? "";
+          const isRead = raw.read === true;
+          const assignedBy =
+            typeof raw.assignedBy === "string"
+              ? raw.assignedBy
+              : typeof raw.invitedByUid === "string"
+                ? raw.invitedByUid
+                : undefined;
+          const assignedByName =
+            typeof raw.assignedByName === "string"
+              ? raw.assignedByName
+              : typeof raw.invitedByName === "string"
+                ? raw.invitedByName
+                : undefined;
+
+          const fromUserId =
+            typeof raw.fromUserId === "string"
+              ? raw.fromUserId
+              : assignedBy ?? null;
+          const fromUserNameResolved =
+            typeof raw.fromUserName === "string"
+              ? raw.fromUserName
+              : assignedByName ?? null;
+
+          return {
+            id: `${OFFICE_USER_NOTIFICATION_ID_PREFIX}${d.id}`,
+            userId,
+            type,
+            createdAt,
+            createdAtSource: createdAt ? "createdAt" : "missing",
+            readAt: isRead
+              ? (convertTimelikeToIso(raw.updatedAt) ?? createdAt) || new Date().toISOString()
+              : null,
+            projectId: typeof raw.projectId === "string" ? raw.projectId : null,
+            projectName: typeof raw.projectName === "string" ? raw.projectName : null,
+            taskId: typeof raw.taskId === "string" ? raw.taskId : null,
+            taskTitle: typeof raw.taskName === "string" ? raw.taskName : null,
+            problemId: null,
+            dueDate: null,
+            expenseId: null,
+            amount: null,
+            currency: "EUR",
+            severity: "info" as NotificationSeverity,
+            message: typeof raw.message === "string" ? raw.message : undefined,
+            fromUserId,
+            fromUserName: fromUserNameResolved,
+            title: null,
+            actorName: fromUserNameResolved,
+            entityType: type === "BUSINESS_CHAT_MESSAGE" ? undefined : ("project" as const),
+            orgId: typeof raw.orgId === "string" ? raw.orgId : null,
+            chatId: typeof raw.chatId === "string" ? raw.chatId : null,
+            chatTitle: typeof raw.chatTitle === "string" ? raw.chatTitle : null,
+            meta:
+              typeof raw.orgId === "string" || typeof raw.chatId === "string"
+                ? {
+                    orgId: raw.orgId,
+                    chatId: raw.chatId,
+                    chatType: raw.chatType,
+                    chatTitle: raw.chatTitle,
+                  }
+                : undefined,
+            dedupeKey: null,
+            createdAtClient: null,
+            updatedAt: convertTimelikeToIso(raw.updatedAt) ?? null,
+          } satisfies NotificationDoc;
+        } catch (e) {
+          if (__DEV__) console.warn("[notifications] skip bad office doc", d?.id, e);
+          return null;
+        }
+      })
+      .filter((n): n is NotificationDoc => n != null);
+
+  try {
+    const q = query(
+      collection(db, "users", userId, "notifications"),
+      orderBy("createdAt", "desc"),
+      limit(limitCount)
+    );
+    const snap = await getDocs(q);
+    return mapOfficeDocs(snap.docs);
+  } catch (error) {
+    const code = (error as { code?: string })?.code ?? "";
+    const msg = (error as { message?: string })?.message ?? "";
+    const isPermDenied =
+      code === "permission-denied" ||
+      code === "firestore/permission-denied" ||
+      msg.includes("permission-denied");
+    if (__DEV__) {
+      console.warn("[notifications] listOfficeUserNotifications ordered query failed:", error);
+    }
+    if (!isPermDenied) return [];
+
+    try {
+      const snap = await getDocs(collection(db, "users", userId, "notifications"));
+      const rows = mapOfficeDocs(snap.docs);
+      return rows
+        .sort((a, b) => {
+          const aMs = a.createdAt ? Date.parse(a.createdAt) : 0;
+          const bMs = b.createdAt ? Date.parse(b.createdAt) : 0;
+          return bMs - aMs;
+        })
+        .slice(0, limitCount);
+    } catch (fallbackError) {
+      if (__DEV__) {
+        console.warn("[notifications] listOfficeUserNotifications fallback failed:", fallbackError);
+      }
+      return [];
+    }
+  }
 }
 
 function inferEntityType(
@@ -547,15 +690,19 @@ export async function listNotifications(
 
   await flushPendingReads(userId);
 
+  const limitCount = opts?.limitCount ?? USER_NOTIFICATION_QUERY_LIMIT;
   const c = collection(db, "notifications");
   const q = query(
     c,
     where("userId", "==", userId),
     orderBy("createdAt", "desc"),
-    limit(opts?.limitCount ?? USER_NOTIFICATION_QUERY_LIMIT)
+    limit(limitCount)
   );
-  const snap = await getDocs(q);
-  const remote = snap.docs
+  const [snap, officeRows] = await Promise.all([
+    getDocs(q),
+    listOfficeUserNotifications(userId, limitCount),
+  ]);
+  const rootRemote = snap.docs
     .map((d) => {
       try {
         return toDoc({ id: d.id, data: () => d.data() as Record<string, unknown> });
@@ -565,6 +712,14 @@ export async function listNotifications(
       }
     })
     .filter((n): n is NotificationDoc => n != null);
+
+  const remote = [...rootRemote, ...officeRows]
+    .sort((a, b) => {
+      const aMs = a.createdAt ? Date.parse(a.createdAt) : 0;
+      const bMs = b.createdAt ? Date.parse(b.createdAt) : 0;
+      return bMs - aMs;
+    })
+    .slice(0, limitCount);
 
   if (NOTIF_READ_DEBUG) {
     const remoteUnread = remote.filter((n) => !hasMeaningfulReadAt(n.readAt)).map((n) => n.id);
@@ -811,6 +966,20 @@ export async function markNotificationAsRead(notification: NotificationDoc): Pro
   }
 
   const readAtBefore = notification.readAt ?? null;
+
+  if (notification.id.startsWith(OFFICE_USER_NOTIFICATION_ID_PREFIX)) {
+    const officeId = notification.id.slice(OFFICE_USER_NOTIFICATION_ID_PREFIX.length);
+    const officeRef = doc(db, "users", currentUser.uid, "notifications", officeId);
+    notifReadLog("markNotificationAsRead office user subcollection", { id: notification.id, officeId });
+    try {
+      await updateDoc(officeRef, { read: true });
+      return true;
+    } catch (e) {
+      if (receiptRecorded) return true;
+      throw e;
+    }
+  }
+
   const ref = doc(db, "notifications", notification.id);
   notifReadLog("markNotificationAsRead start", { id: notification.id, readAtBefore });
 

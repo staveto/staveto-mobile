@@ -20,13 +20,14 @@ import { useI18n } from "../../i18n/I18nContext";
 import { useActiveOrg } from "../../hooks/useActiveOrg";
 import { getAuth } from "../../firebase";
 import {
-  ensureGeneralChat,
+  healOrgAccessForChat,
   listenChatMessages,
   markChatRead,
   sendImageMessage,
   sendTextMessage,
   type BusinessChatMessageDoc,
 } from "../../services/businessChat";
+import { formatMessageTime } from "../../lib/businessChatUtils";
 import { useOrgAccess } from "../../hooks/useOrgAccess";
 
 type ChatRouteParams = {
@@ -34,29 +35,6 @@ type ChatRouteParams = {
   chatId?: string;
   title?: string;
 };
-
-function toMillis(raw: unknown): number {
-  if (!raw) return 0;
-  if (typeof raw === "number" && Number.isFinite(raw)) return raw;
-  if (typeof raw === "string") {
-    const parsed = new Date(raw).getTime();
-    return Number.isFinite(parsed) ? parsed : 0;
-  }
-  if (typeof raw === "object" && raw !== null) {
-    const maybe = raw as { toDate?: () => Date };
-    if (typeof maybe.toDate === "function") {
-      const parsed = maybe.toDate().getTime();
-      return Number.isFinite(parsed) ? parsed : 0;
-    }
-  }
-  return 0;
-}
-
-function formatMessageTime(raw: unknown): string {
-  const ms = toMillis(raw);
-  if (!ms) return "";
-  return new Date(ms).toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" });
-}
 
 export function BusinessChatRoomScreen() {
   const route = useRoute();
@@ -97,9 +75,14 @@ export function BusinessChatRoomScreen() {
     }
     setLoading(true);
     setError(null);
-    ensureGeneralChat(orgId)
-      .then(() => {
+    void healOrgAccessForChat(orgId)
+      .then((accessOk) => {
         if (cancelled) return;
+        if (!accessOk) {
+          setError(t("business.chat.permissionDeniedFriendly"));
+          setLoading(false);
+          return;
+        }
         return listenChatMessages(
           orgId,
           chatId,

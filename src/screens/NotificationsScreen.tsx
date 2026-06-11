@@ -90,6 +90,7 @@ export function NotificationsScreen() {
     }
 
     try {
+      await invitesService.syncMyProjectAssignmentNotifications();
       const [list, invites] = await Promise.all([
         notificationsService.listNotifications(notificationUserId, {
           limitCount: notificationsService.USER_NOTIFICATION_QUERY_LIMIT,
@@ -230,6 +231,15 @@ export function NotificationsScreen() {
     return d;
   };
 
+  const isProjectAssignmentNotification = (n: NotificationDoc): boolean => {
+    if (n.type === "PROJECT_ASSIGNED") return true;
+    if (n.type !== "MEMBER_JOINED") return false;
+    const msg = (n.message ?? "").toLowerCase();
+    if (/pridan|priraden|zugewiesen|assigned|added to|boli ste|bol vám/.test(msg)) return true;
+    if (n.fromUserName && n.fromUserId && n.userId && n.fromUserId !== n.userId) return false;
+    return !n.fromUserName;
+  };
+
   const formatRelativeTime = (createdAt: any): string => {
     if (createdAt == null || createdAt === "") return "\u2014";
     const date = toDateSafe(createdAt);
@@ -242,12 +252,12 @@ export function NotificationsScreen() {
     const diffDays = Math.floor(diffMs / (1000 * 60 * 60 * 24));
 
     if (diffMinutes < 1) return t("notifications.justNow");
-    if (diffMinutes < 60) return `${diffMinutes} min`;
-    if (diffHours < 24) return `${diffHours} h`;
+    if (diffMinutes < 60) return t("notifications.relativeMinutes", { count: String(diffMinutes) });
+    if (diffHours < 24) return t("notifications.relativeHours", { count: String(diffHours) });
     if (diffDays === 1) return t("notifications.yesterday");
-    if (diffDays < 7) return `${diffDays} d`;
-    if (diffDays < 30) return `${Math.floor(diffDays / 7)} t`;
-    return `${Math.floor(diffDays / 30)} m`;
+    if (diffDays < 7) return t("notifications.relativeDays", { count: String(diffDays) });
+    if (diffDays < 30) return t("notifications.relativeWeeks", { count: String(Math.floor(diffDays / 7)) });
+    return t("notifications.relativeMonths", { count: String(Math.floor(diffDays / 30)) });
   };
 
   const getNotificationIcon = (type: NotificationType): React.ComponentProps<typeof Ionicons>["name"] => {
@@ -269,6 +279,7 @@ export function NotificationsScreen() {
         return "folder-outline";
       case "MEMBER_JOINED":
       case "PROJECT_INVITED":
+      case "PROJECT_ASSIGNED":
         return "person-add-outline";
       case "MEMBER_LEFT":
       case "MEMBER_REMOVED":
@@ -277,6 +288,8 @@ export function NotificationsScreen() {
         return "cloud-offline-outline";
       case "TIME_TRACKING_STOPPED":
         return "time-outline";
+      case "BUSINESS_CHAT_MESSAGE":
+        return "chatbubble-outline";
       default:
         return "notifications-outline";
     }
@@ -301,7 +314,11 @@ export function NotificationsScreen() {
       case "PROJECT_ACTIVITY":
         return t("notifications.projectChange");
       case "MEMBER_JOINED":
-        return t("notifications.memberJoined");
+        return isProjectAssignmentNotification(n)
+          ? t("notifications.projectAssigned")
+          : t("notifications.memberJoined");
+      case "PROJECT_ASSIGNED":
+        return t("notifications.projectAssigned");
       case "PROJECT_INVITED":
         return t("notifications.type.projectInvited");
       case "MEMBER_LEFT":
@@ -312,17 +329,56 @@ export function NotificationsScreen() {
         return t("notifications.syncError");
       case "TIME_TRACKING_STOPPED":
         return t("notifications.timeTrackingStopped");
+      case "BUSINESS_CHAT_MESSAGE":
+        return t("notifications.businessChatMessage");
       default:
         return t("notifications.default");
     }
   };
 
+  const isUsableProjectName = (name?: string | null): name is string => {
+    const trimmed = name?.trim();
+    if (!trimmed) return false;
+    const lower = trimmed.toLowerCase();
+    return lower !== "projekt" && lower !== "project";
+  };
+
   const getNotificationSubtitle = (n: NotificationDoc): string => {
+    if (n.type === "PROJECT_ASSIGNED" || isProjectAssignmentNotification(n)) {
+      if (isUsableProjectName(n.projectName)) {
+        return t("notifications.projectAssignedBody", { projectName: n.projectName });
+      }
+      return t("notifications.projectAssignedBodyGeneric");
+    }
+    if (n.type === "PROJECT_INVITED") {
+      if (n.projectName) {
+        return t("notifications.projectInvitedBody", { projectName: n.projectName });
+      }
+      return t("notifications.projectInvitedBodyGeneric");
+    }
+    if (n.type === "MEMBER_JOINED" && n.fromUserName && n.projectName) {
+      return t("notifications.memberJoinedBody", {
+        actorName: n.fromUserName,
+        projectName: n.projectName,
+      });
+    }
+
+    if (n.type === "BUSINESS_CHAT_MESSAGE") {
+      if (n.fromUserName && n.message?.trim()) {
+        return `${n.fromUserName}: ${n.message.trim()}`;
+      }
+      if (n.message?.trim()) return n.message.trim();
+      if (n.fromUserName) {
+        return t("notifications.businessChatMessageBody", { name: n.fromUserName });
+      }
+      return t("notifications.businessChatMessageBodyGeneric");
+    }
+
     const parts: string[] = [];
-    if (n.projectName) parts.push(`${t("notifications.projectLabel")}: ${n.projectName}`);
+    if (n.projectName) parts.push(n.projectName);
     if (n.taskTitle) parts.push(n.taskTitle);
     if (n.amount != null) parts.push(`${n.amount} ${n.currency || "EUR"}`);
-    if (n.message) parts.push(n.message);
+    if (n.message?.trim()) parts.push(n.message.trim());
     return parts.join(" • ") || t("notifications.noDescription");
   };
 
@@ -453,6 +509,7 @@ export function NotificationsScreen() {
       } else if (
         (notification.type === "PROJECT_ACTIVITY" ||
           notification.type === "PROJECT_CREATED" ||
+          notification.type === "PROJECT_ASSIGNED" ||
           notification.type === "MEMBER_JOINED" ||
           notification.type === "MEMBER_LEFT" ||
           notification.type === "MEMBER_REMOVED" ||
@@ -463,7 +520,39 @@ export function NotificationsScreen() {
         const parentNav = navigation.getParent();
         const po = projectOverviewParams();
         if (parentNav && po) {
+          if (
+            notification.type === "PROJECT_ASSIGNED" ||
+            isProjectAssignmentNotification(notification)
+          ) {
+            const { healProjectAccessForCurrentUser } = await import("../services/projects");
+            await healProjectAccessForCurrentUser(notification.projectId!);
+            void markAsRead(notification);
+          }
           (parentNav as any).navigate("ProjectOverview", po);
+        }
+      } else if (notification.type === "BUSINESS_CHAT_MESSAGE") {
+        const orgId =
+          notification.orgId ??
+          (typeof notification.meta?.orgId === "string" ? notification.meta.orgId : null);
+        const chatId =
+          notification.chatId ??
+          (typeof notification.meta?.chatId === "string" ? notification.meta.chatId : null);
+        const title =
+          notification.chatTitle?.trim() ||
+          notification.fromUserName?.trim() ||
+          t("business.chat.directTitle");
+        if (orgId && chatId) {
+          const parentNav = navigation.getParent();
+          if (parentNav) {
+            (parentNav as { navigate: (name: string, params?: object) => void }).navigate(
+              "BusinessStack",
+              {
+                screen: "BusinessChatRoom",
+                params: { orgId, chatId, title },
+              }
+            );
+          }
+          void markAsRead(notification);
         }
       } else if (notification.type === "SYNC_ISSUE") {
         /**
@@ -474,7 +563,7 @@ export function NotificationsScreen() {
       }
       notifRowLog("handleNavigateToNotification done", { id: notification.id });
     },
-    [navigation, t]
+    [navigation, t, markAsRead]
   );
 
   /** Tap: navigation only (read/unread via swipe). */
@@ -641,7 +730,7 @@ export function NotificationsScreen() {
                       {t("notifications.type.projectInvited")}
                     </Text>
                     <Text style={styles.cardSubtitle} numberOfLines={2}>
-                      {t("notifications.projectLabel")}: {item.invite.projectName}
+                      {t("notifications.projectInvitedBody", { projectName: item.invite.projectName })}
                     </Text>
                   </View>
                   <View style={styles.rightContainer}>
@@ -765,7 +854,7 @@ const styles = StyleSheet.create({
   notificationCardUnread: {
     borderColor: colors.primary,
     borderWidth: 2,
-    backgroundColor: colors.primary + "15",
+    backgroundColor: "#FFF8F5",
   },
   /** Single full-width row inside the card touchable (entire card is one touch target). */
   cardRowInner: {
@@ -799,7 +888,7 @@ const styles = StyleSheet.create({
   },
   cardSubtitle: {
     fontSize: 14,
-    color: colors.textMuted,
+    color: "#3D4F5F",
     lineHeight: 20,
   },
   rightContainer: {

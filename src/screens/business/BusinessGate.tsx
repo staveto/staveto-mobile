@@ -120,6 +120,39 @@ export function BusinessGate({ children }: BusinessGateProps) {
   return <BusinessUnavailableScreen reason={dashboardBlockReason} />;
 }
 
+/** Lighter gate for team chat — active org members (incl. workers), not full Business dashboard. */
+export function BusinessMemberGate({ children }: BusinessGateProps) {
+  const { activeBusinessOrgId, loading } = useActiveOrg();
+  const { orgStatus, canAccessBusiness, dashboardBlockReason } = useOrgAccess();
+
+  if (loading) {
+    return (
+      <View style={styles.loadingContainer}>
+        <ActivityIndicator size="large" color={colors.primary} />
+        <Text style={styles.loadingText}>Načítavam firemný chat…</Text>
+      </View>
+    );
+  }
+
+  if (!activeBusinessOrgId) {
+    return <BusinessUnavailableScreen reason={dashboardBlockReason} />;
+  }
+
+  if (orgStatus === "suspended") {
+    return <SuspendedBusinessScreen />;
+  }
+
+  if (orgStatus === "cancelled") {
+    return <BusinessUnavailableScreen reason={dashboardBlockReason} />;
+  }
+
+  if (!canAccessBusiness) {
+    return <BusinessUnavailableScreen reason={dashboardBlockReason} />;
+  }
+
+  return <>{children}</>;
+}
+
 const styles = StyleSheet.create({
   loadingContainer: {
     flex: 1,

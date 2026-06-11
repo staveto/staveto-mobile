@@ -34,7 +34,7 @@ import * as dashboardService from "../services/dashboard";
 import type { TodaysWorkTask } from "../services/dashboard";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectCoverService from "../services/projectCover";
-import { listMyProjects, type ProjectDoc } from "../services/projects";
+import { enrichProjectsWithBusinessAssignments, listMyProjects, type ProjectDoc } from "../services/projects";
 import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
 import { db, getCallable } from "../firebase";
@@ -370,7 +370,13 @@ export function HomeScreen() {
   const { t } = useI18n();
   const { user, orgId } = useAuth();
   const { activeBusinessOrgId, activeOrganization, activeMembership } = useActiveOrg();
-  const { canAccessBusiness, canAccessBusinessChat } = useOrgAccess();
+  const {
+    canAccessBusiness,
+    canAccessBusinessChat,
+    canViewAllProjects,
+    restrictsToAssignedProjectsOnly,
+    canCreateProject,
+  } = useOrgAccess();
   const { isOnline } = useOnlineStatus();
   const [dashboardData, setDashboardData] = useState<DashboardViewModel | null>(null);
   const [liveRows, setLiveRows] = useState<LiveProjectRow[]>([]);
@@ -836,7 +842,7 @@ export function HomeScreen() {
       }
       const shown = await hasShownFirstProjectPrompt();
       if (cancelled) return;
-      if (!shown) {
+      if (!shown && canCreateProject) {
         setShowFirstProjectModal(true);
         await markFirstProjectPromptShown();
       }
@@ -844,7 +850,7 @@ export function HomeScreen() {
     return () => {
       cancelled = true;
     };
-  }, [loading, dashboardData]);
+  }, [canCreateProject, loading, dashboardData]);
 
   const loadDashboard = useCallback(async (isRefresh = false) => {
     const loadId = ++homeLoadSeqRef.current;
@@ -902,7 +908,13 @@ export function HomeScreen() {
           HOME_LOAD_TIMEOUT_MS,
           "listMyProjects"
         );
-        projectsPhase = rawProjects.filter(isProjectShownOnProjectsJobsTab);
+        const mergedProjects = await enrichProjectsWithBusinessAssignments(rawProjects, {
+          activeBusinessOrgId,
+          authUid: authUid ?? undefined,
+          canViewAllProjects,
+          restrictsToAssignedProjectsOnly,
+        });
+        projectsPhase = mergedProjects.filter(isProjectShownOnProjectsJobsTab);
         homeLoadDebug(loadId, authUid, "end projects", {
           projectCount: projectsPhase.length,
           ms: Date.now() - projectsStart,
@@ -930,7 +942,13 @@ export function HomeScreen() {
       const aggregateStart = Date.now();
       const [dashboardSettled, monthlySettled, equipmentSettled] = await Promise.allSettled([
         homeLoadTimeout(
-          dashboardService.loadDashboardData(orgId, { forceServerRead: isRefresh }),
+          dashboardService.loadDashboardData(orgId, {
+            forceServerRead: isRefresh,
+            activeBusinessOrgId,
+            authUid: authUid ?? undefined,
+            canViewAllProjects,
+            restrictsToAssignedProjectsOnly,
+          }),
           HOME_LOAD_TIMEOUT_MS,
           "loadDashboardData"
         ),
@@ -1043,7 +1061,13 @@ export function HomeScreen() {
         homeLoadDebug(loadId, authUid, "finally stale — skip setLoading");
       }
     }
-  }, [orgId, user?.id]);
+  }, [
+    orgId,
+    user?.id,
+    activeBusinessOrgId,
+    canViewAllProjects,
+    restrictsToAssignedProjectsOnly,
+  ]);
 
   // Last-opened project must be a real job workspace (legacy equipment hubs are excluded from dashboard).
   useEffect(() => {
@@ -1106,6 +1130,14 @@ export function HomeScreen() {
       setLiveLoading(false);
     }
   }, [dashboardData?.projects, formatLastActivity, getLiveStatus, user?.id]);
+
+  const quickTimeProjects = useMemo(() => {
+    const active = (dashboardData?.projects ?? []).filter((p) => !p.archivedAt);
+    const allowed = dashboardData?.timeTrackingProjectIds;
+    if (!allowed?.length) return active;
+    const filtered = active.filter((p) => allowed.includes(p.id));
+    return filtered.length > 0 ? filtered : active;
+  }, [dashboardData?.projects, dashboardData?.timeTrackingProjectIds]);
 
   const onRefresh = useCallback(() => {
     loadDashboard(true);
@@ -1956,24 +1988,42 @@ export function HomeScreen() {
             ) : null}
             {!isHomeEmptyByConfig && orgId && data.projects.length === 0 && showTodayPriorities ? (
               <View style={[styles.proPaperCard, { marginBottom: spacing.md }]}>
-                <Text style={styles.proCardSectionTitle}>{t("home.pro.startTitle")}</Text>
-                <Text style={styles.proCardBody}>{t("home.pro.startBody")}</Text>
-                <TouchableOpacity
-                  style={styles.proCardPrimaryCta}
-                  onPress={() => {
-                    try {
-                      goToProjects({ openNew: true });
-                    } catch (e) {
-                      if (__DEV__) console.warn("[HomeScreen] goToProjects failed:", e);
-                      goToProjects();
-                    }
-                  }}
-                  activeOpacity={0.88}
-                  accessibilityRole="button"
-                >
-                  <Text style={styles.proCardPrimaryCtaText}>{t("firstProjectPrompt.createButton")}</Text>
-                  <Ionicons name="arrow-forward" size={18} color="#fff" style={{ marginLeft: spacing.sm }} />
-                </TouchableOpacity>
+                {canAccessBusiness && restrictsToAssignedProjectsOnly && !canCreateProject ? (
+                  <>
+                    <Text style={styles.proCardSectionTitle}>{t("business.projects.noAssigned.title")}</Text>
+                    <Text style={styles.proCardBody}>{t("business.projects.noAssigned.body")}</Text>
+                    <TouchableOpacity
+                      style={styles.proCardPrimaryCta}
+                      onPress={() => goToProjects()}
+                      activeOpacity={0.88}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.proCardPrimaryCtaText}>{t("home.seeAllProjects")}</Text>
+                      <Ionicons name="arrow-forward" size={18} color="#fff" style={{ marginLeft: spacing.sm }} />
+                    </TouchableOpacity>
+                  </>
+                ) : canCreateProject ? (
+                  <>
+                    <Text style={styles.proCardSectionTitle}>{t("home.pro.startTitle")}</Text>
+                    <Text style={styles.proCardBody}>{t("home.pro.startBody")}</Text>
+                    <TouchableOpacity
+                      style={styles.proCardPrimaryCta}
+                      onPress={() => {
+                        try {
+                          goToProjects({ openNew: true });
+                        } catch (e) {
+                          if (__DEV__) console.warn("[HomeScreen] goToProjects failed:", e);
+                          goToProjects();
+                        }
+                      }}
+                      activeOpacity={0.88}
+                      accessibilityRole="button"
+                    >
+                      <Text style={styles.proCardPrimaryCtaText}>{t("firstProjectPrompt.createButton")}</Text>
+                      <Ionicons name="arrow-forward" size={18} color="#fff" style={{ marginLeft: spacing.sm }} />
+                    </TouchableOpacity>
+                  </>
+                ) : null}
               </View>
             ) : null}
             {isHomeEmptyByConfig ? (
@@ -1983,26 +2033,38 @@ export function HomeScreen() {
               </View>
             ) : null}
             {!isHomeEmptyByConfig && data.projects.length === 0 && (!orgId || !showTodayPriorities) ? (
-              <TouchableOpacity
-                style={styles.firstProjectCtaCard}
-                onPress={() => {
-                  try {
-                    goToProjects({ openNew: true });
-                  } catch (e) {
-                    if (__DEV__) console.warn("[HomeScreen] goToProjects failed, falling back to Projects tab:", e);
-                    goToProjects();
-                  }
-                }}
-                activeOpacity={0.9}
-              >
-                <Ionicons name="folder-open-outline" size={32} color={colors.primary} style={{ marginBottom: spacing.sm }} />
-                <Text style={styles.firstProjectCtaTitle}>{t("firstProjectPrompt.title")}</Text>
-                <Text style={styles.firstProjectCtaBody}>{t("firstProjectPrompt.body")}</Text>
-                <View style={styles.firstProjectCtaButton}>
-                  <Text style={styles.firstProjectCtaButtonText}>{t("firstProjectPrompt.createButton")}</Text>
-                  <Ionicons name="arrow-forward" size={18} color="#fff" />
+              canAccessBusiness && restrictsToAssignedProjectsOnly && !canCreateProject ? (
+                <View style={styles.firstProjectCtaCard}>
+                  <Ionicons name="folder-open-outline" size={32} color={colors.primary} style={{ marginBottom: spacing.sm }} />
+                  <Text style={styles.firstProjectCtaTitle}>{t("business.projects.noAssigned.title")}</Text>
+                  <Text style={styles.firstProjectCtaBody}>{t("business.projects.noAssigned.body")}</Text>
+                  <TouchableOpacity style={styles.firstProjectCtaButton} onPress={() => goToProjects()} activeOpacity={0.9}>
+                    <Text style={styles.firstProjectCtaButtonText}>{t("home.seeAllProjects")}</Text>
+                    <Ionicons name="arrow-forward" size={18} color="#fff" />
+                  </TouchableOpacity>
                 </View>
-              </TouchableOpacity>
+              ) : canCreateProject ? (
+                <TouchableOpacity
+                  style={styles.firstProjectCtaCard}
+                  onPress={() => {
+                    try {
+                      goToProjects({ openNew: true });
+                    } catch (e) {
+                      if (__DEV__) console.warn("[HomeScreen] goToProjects failed, falling back to Projects tab:", e);
+                      goToProjects();
+                    }
+                  }}
+                  activeOpacity={0.9}
+                >
+                  <Ionicons name="folder-open-outline" size={32} color={colors.primary} style={{ marginBottom: spacing.sm }} />
+                  <Text style={styles.firstProjectCtaTitle}>{t("firstProjectPrompt.title")}</Text>
+                  <Text style={styles.firstProjectCtaBody}>{t("firstProjectPrompt.body")}</Text>
+                  <View style={styles.firstProjectCtaButton}>
+                    <Text style={styles.firstProjectCtaButtonText}>{t("firstProjectPrompt.createButton")}</Text>
+                    <Ionicons name="arrow-forward" size={18} color="#fff" />
+                  </View>
+                </TouchableOpacity>
+              ) : null
             ) : null}
             {!isHomeEmptyByConfig && orgId && data.projects.length > 0 && showTodayPriorities ? (
               <View style={styles.cmpOverviewCard} accessibilityRole="summary">
@@ -2383,7 +2445,7 @@ export function HomeScreen() {
               </TouchableOpacity>
             </View>
             <ScrollView style={styles.projectList}>
-              {(!dashboardData?.projects || dashboardData.projects.length === 0) && (
+              {canCreateProject && (!dashboardData?.projects || dashboardData.projects.length === 0) && (
                 <TouchableOpacity
                   style={styles.projectItem}
                   onPress={() => {
@@ -2898,13 +2960,7 @@ export function HomeScreen() {
       />
       <QuickTimeModal
         sheetRef={quickTimeSheetRef}
-        projects={
-          dashboardData?.timeTrackingProjectIds != null
-            ? (dashboardData.projects ?? []).filter((p) =>
-                dashboardData.timeTrackingProjectIds!.includes(p.id)
-              )
-            : (dashboardData?.projects ?? [])
-        }
+        projects={quickTimeProjects}
         activeTimer={activeTimer}
         onRefreshActiveTimer={refreshActiveTimer}
         onTimerStarted={(name, timer) => {

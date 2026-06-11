@@ -26,6 +26,7 @@ import {
   doc,
   query,
   serverTimestamp,
+  setDoc,
   updateDoc,
   where,
 } from "../lib/rnFirestore";
@@ -888,6 +889,25 @@ export async function readUserActiveBusinessOrgIdHint(userId: string): Promise<s
     console.error("[organizations] readUserActiveBusinessOrgIdHint error:", error);
     throw error;
   }
+}
+
+/** Mirrors BusinessContext org selection for Firestore rules (equipment sharing). */
+export async function persistUserActiveBusinessOrgIdHint(
+  userId: string,
+  orgId: string | null
+): Promise<void> {
+  if (!userId) return;
+  const currentUid = requireSignedInUid();
+  if (currentUid !== userId) return;
+  const ref = doc(db, paths.userDoc(userId));
+  await setDoc(
+    ref,
+    {
+      activeBusinessOrgId: orgId?.trim() ? orgId.trim() : null,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
 }
 
 export async function listOrganizationsOwnedByUser(userId: string): Promise<OrganizationDoc[]> {

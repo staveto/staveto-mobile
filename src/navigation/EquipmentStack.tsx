@@ -10,7 +10,7 @@ import { colors } from "../theme";
 
 export type EquipmentStackParamList = {
   EquipmentMain: undefined;
-  EquipmentDetail: { equipmentId: string };
+  EquipmentDetail: { equipmentId: string; equipmentOwnerUid?: string };
   EquipmentForm: { equipmentId?: string };
   EquipmentServiceRuleForm: {
     serviceScope: "user";

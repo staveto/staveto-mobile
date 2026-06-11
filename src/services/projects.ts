@@ -4,7 +4,7 @@ import { collection, collectionGroup, addDoc, query, where, getDocs, updateDoc, 
 import { getDocSmart, getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { withTimeout } from "../utils/withTimeout";
 import { loadCachedProjectList, saveCachedProjectList } from "./appStateCache";
-import { db, auth } from "../firebase";
+import { db, auth, getCallable } from "../firebase";
 import { getApp } from "@react-native-firebase/app";
 import { paths } from "../lib/firestorePaths";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
@@ -333,6 +333,42 @@ export async function listProjectPhases(
   }
 }
 
+/** Heal members/{uid}, assignedMemberIds, and projectRefs when legacy assignment docs exist. */
+export async function healProjectAccessForCurrentUser(projectId: string): Promise<void> {
+  const normalized = projectId.trim();
+  if (!normalized) return;
+  try {
+    const heal = getCallable<
+      { projectId: string },
+      { ok: boolean; healed?: boolean; assignedPatched?: boolean }
+    >("ensureMyProjectMemberIndex");
+    await heal({ projectId: normalized });
+    return;
+  } catch {
+    /* New callable may be unavailable — fall back to deployed sync. */
+  }
+  try {
+    const sync = getCallable<
+      { projectId: string; healOnly: boolean },
+      { createdCount?: number; projectCount?: number; healed?: boolean }
+    >("syncMyProjectAssignmentNotifications");
+    await sync({ projectId: normalized, healOnly: true });
+  } catch {
+    /* Best effort — rules may already allow read after heal. */
+  }
+}
+
+function isPermissionDeniedError(error: unknown): boolean {
+  const code = (error as { code?: string })?.code ?? "";
+  const message = (error as { message?: string })?.message ?? "";
+  return (
+    code === "permission-denied" ||
+    message.includes("permission-denied") ||
+    message.includes("PERMISSION_DENIED") ||
+    message.toLowerCase().includes("insufficient permissions")
+  );
+}
+
 export async function getProject(projectId: string): Promise<ProjectDoc | null> {
   console.log(`[projects] getProject: fetching project ${projectId}`);
   
@@ -348,7 +384,7 @@ export async function getProject(projectId: string): Promise<ProjectDoc | null> 
   
   try {
     const docRef = doc(db, COLLECTION, projectId);
-    const docSnap = await getDocSmart(docRef);
+    let docSnap = await getDocSmart(docRef);
     
     if (!docSnap.exists()) {
       console.warn(`[projects] getProject: project ${projectId} does not exist`);
@@ -375,17 +411,23 @@ export async function getProject(projectId: string): Promise<ProjectDoc | null> 
     const project = toDoc({ id: docSnap.id, data: docSnap.data.bind(docSnap) });
     return project ?? null;
   } catch (error: any) {
-    console.error(`[projects] getProject error:`, error);
-    const errorCode = error.code || '';
-    const errorMessage = error.message || 'Unknown error';
-    
-    if (errorCode === 'permission-denied') {
-      console.error(`[projects] getProject: PERMISSION DENIED for project ${projectId}`);
-      console.error(`[projects] getProject: auth.currentUser.uid = "${currentUserUid}"`);
-      console.error(`[projects] getProject: Firestore rule: resource.data.ownerId == uid()`);
-      throw new Error(`Nemáte oprávnenie zobraziť projekt ${projectId}. Skontrolujte Firestore rules.`);
+    if (isPermissionDeniedError(error)) {
+      await healProjectAccessForCurrentUser(projectId);
+      try {
+        const docRef = doc(db, COLLECTION, projectId);
+        const retrySnap = await getDocSmart(docRef, { forceServer: true });
+        if (!retrySnap.exists()) return null;
+        const project = toDoc({ id: retrySnap.id, data: retrySnap.data.bind(retrySnap) });
+        return project ?? null;
+      } catch (retryError) {
+        console.error(`[projects] getProject retry error:`, retryError);
+        throw new Error(
+          `Nemáte oprávnenie zobraziť tento projekt. Požiadajte manažéra o opätovné priradenie.`
+        );
+      }
     }
-    
+
+    console.error(`[projects] getProject error:`, error);
     throw error;
   }
 }
@@ -925,6 +967,71 @@ export async function listBusinessOrgProjects(orgId: string): Promise<ProjectDoc
     .filter((p): p is ProjectDoc => p != null && !p.archivedAt && isBusinessTeamProject(p));
 }
 
+export type BusinessProjectsMergeContext = {
+  activeBusinessOrgId?: string | null;
+  authUid?: string | null;
+  canViewAllProjects?: boolean;
+  restrictsToAssignedProjectsOnly?: boolean;
+};
+
+/**
+ * Merges org team projects into a personal project list (Home, dashboard, Projects tab).
+ * Workers only see projects they own or are listed on assignedMemberIds.
+ */
+export async function enrichProjectsWithBusinessAssignments(
+  list: ProjectDoc[],
+  ctx: BusinessProjectsMergeContext
+): Promise<ProjectDoc[]> {
+  const orgId = ctx.activeBusinessOrgId?.trim() ?? "";
+  const authUid = ctx.authUid?.trim() ?? "";
+  if (!orgId || !authUid) return list;
+
+  let merged = [...list];
+  const known = new Set(merged.map((p) => p.id));
+
+  if (ctx.canViewAllProjects) {
+    const orgProjects = await listBusinessOrgProjects(orgId);
+    for (const row of orgProjects) {
+      if (!known.has(row.id)) {
+        merged.push(row);
+        known.add(row.id);
+      }
+    }
+  } else if (ctx.restrictsToAssignedProjectsOnly) {
+    const assigned = await listBusinessProjectsAssignedToMember(orgId, authUid);
+    for (const row of assigned) {
+      if (!known.has(row.id)) {
+        row.isSharedToMe = true;
+        merged.push(row);
+        known.add(row.id);
+      }
+    }
+  }
+
+  return merged.filter((project) => {
+    if (!isBusinessTeamProject(project)) return true;
+    if (project.orgId !== orgId) return true;
+    if (ctx.canViewAllProjects) return true;
+    return project.ownerId === authUid || (project.assignedMemberIds ?? []).includes(authUid);
+  });
+}
+
+/** All non-archived projects where the signed-in user is on assignedMemberIds (any org). */
+export async function listProjectsAssignedToCurrentUser(): Promise<ProjectDoc[]> {
+  const uid = auth.currentUser?.uid?.trim() ?? "";
+  if (!uid) return [];
+
+  const q = query(
+    collection(db, COLLECTION),
+    where("assignedMemberIds", "array-contains", uid),
+    limit(MAX_ORG_PROJECTS)
+  );
+  const snap = await getDocsSmart(q);
+  return snap.docs
+    .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }))
+    .filter((p): p is ProjectDoc => p != null && !p.archivedAt);
+}
+
 /** Lists team projects assigned to a member within an organization. */
 export async function listBusinessProjectsAssignedToMember(
   orgId: string,
@@ -981,6 +1088,7 @@ export async function assignMemberToBusinessProject(input: {
       userId: memberUid,
       role: "member",
       status: "active",
+      pendingAcknowledgment: true,
       permissionLevel: "editor",
       addedAt: serverTimestamp(),
       addedBy: actorUid,

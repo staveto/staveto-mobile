@@ -135,6 +135,35 @@ export async function listUserEquipment(
   return rows;
 }
 
+/** Personal equipment plus company fleet (org owner's namespace) for active business members. */
+export async function listVisibleUserEquipment(
+  uid: string,
+  opts?: { status?: UserEquipmentStatus | "all"; orgOwnerUid?: string | null }
+): Promise<UserEquipmentDoc[]> {
+  const normalizedUid = uid.trim();
+  if (!normalizedUid) return [];
+
+  const own = await listUserEquipment(normalizedUid, { status: opts?.status });
+  const orgOwner = opts?.orgOwnerUid?.trim() ?? "";
+  if (!orgOwner || orgOwner === normalizedUid) {
+    return own;
+  }
+
+  try {
+    const companyRows = await listUserEquipment(orgOwner, { status: opts?.status });
+    const byKey = new Map<string, UserEquipmentDoc>();
+    for (const row of companyRows) {
+      byKey.set(`org:${row.id}`, { ...row, ownerId: orgOwner });
+    }
+    for (const row of own) {
+      byKey.set(`self:${row.id}`, row);
+    }
+    return [...byKey.values()].sort((a, b) => (b.updatedAt ?? "").localeCompare(a.updatedAt ?? ""));
+  } catch {
+    return own;
+  }
+}
+
 export async function getUserEquipment(uid: string, equipmentId: string): Promise<UserEquipmentDoc | null> {
   const ref = doc(db, paths.userEquipmentItem(uid, equipmentId));
   const snap = await getDoc(ref);

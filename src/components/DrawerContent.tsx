@@ -295,7 +295,8 @@ export function DrawerContent(props: DrawerContentComponentProps) {
 
   const { count: unreadCount } = useUnreadCount();
   const { activeBusinessOrgId, activeOrganization, activeMembership } = useActiveOrg();
-  const { canViewBusinessDashboard, canAccessBusiness, pendingCanAccess } = useOrgAccess();
+  const { canViewBusinessDashboard, canAccessBusiness, canAccessBusinessChat, pendingCanAccess } =
+    useOrgAccess();
   const displayName = user?.name ?? user?.firstName ?? user?.email ?? "—";
   const initials = displayName !== "—" ? displayName.slice(0, 2).toUpperCase() : "?";
   const isProTier = planTier === "PRO";
@@ -360,20 +361,35 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     { id: "expenses", icon: "cash-outline", labelKey: "home.expenses", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Home", params: { screen: "ExpensesKpiScreen" } }); } },
     { id: "absences", icon: "umbrella-outline", labelKey: "absence.drawerLabel", action: () => { closeDrawer(); navigation.navigate("AbsenceHome"); } },
     { id: "notifications", icon: "notifications-outline", labelKey: "tabs.notifications", action: () => { closeDrawer(); navigation.navigate("Main", { screen: "Notifications" }); } },
-    {
-      id: "messages",
-      icon: "chatbubbles-outline",
-      labelKey: "nav.messages",
+  ];
+  if (canAccessBusiness) {
+    mainNavItems.push({
+      id: "projectInvites",
+      icon: "mail-open-outline",
+      labelKey: "projectInvites.title",
       action: () => {
         closeDrawer();
-        showTeamFeatureSoftGate({
-          onRegisterCompany: () => {
-            navigation.navigate("BusinessStack");
-          },
-        });
+        navigation.navigate("ProjectInvites");
       },
+    });
+  }
+  mainNavItems.push({
+    id: "messages",
+    icon: "chatbubbles-outline",
+    labelKey: "nav.messages",
+    action: () => {
+      closeDrawer();
+      if (canAccessBusinessChat && activeBusinessOrgId) {
+        navigation.navigate("BusinessStack", { screen: "BusinessChatList" });
+        return;
+      }
+      showTeamFeatureSoftGate({
+        onRegisterCompany: () => {
+          navigation.navigate("BusinessStack");
+        },
+      });
     },
-  ];
+  });
   if (showBusinessMenu) {
     mainNavItems.push({
       id: "business",

@@ -92,6 +92,29 @@ export async function claimProjectInvites(): Promise<ClaimInvitesResult> {
   }
 }
 
+export async function syncMyProjectAssignmentNotifications(): Promise<{
+  createdCount: number;
+  projectCount: number;
+}> {
+  const empty = { createdCount: 0, projectCount: 0 };
+  try {
+    const data = await ensureAuthAndCall(
+      "syncMyProjectAssignmentNotifications",
+      {},
+      (d) => (d ?? {}) as { createdCount?: number; projectCount?: number }
+    );
+    return {
+      createdCount: typeof data.createdCount === "number" ? data.createdCount : 0,
+      projectCount: typeof data.projectCount === "number" ? data.projectCount : 0,
+    };
+  } catch (error) {
+    if (__DEV__) {
+      console.warn("[invites] syncMyProjectAssignmentNotifications failed:", error);
+    }
+    return empty;
+  }
+}
+
 export async function listPendingInvites(): Promise<PendingInvite[]> {
   try {
     const data = await ensureAuthAndCall(

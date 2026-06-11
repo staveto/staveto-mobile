@@ -28,9 +28,8 @@ import { useOrgAccess } from "../hooks/useOrgAccess";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
 import {
+  enrichProjectsWithBusinessAssignments,
   isBusinessTeamProject,
-  listBusinessOrgProjects,
-  listBusinessProjectsAssignedToMember,
   stampBusinessTeamProject,
 } from "../services/projects";
 import * as projectMembersService from "../services/projectMembers";
@@ -132,7 +131,7 @@ export function ProjectsScreen() {
   const { t, locale } = useI18n();
   const { orgId, user } = useAuth();
   const { activeBusinessOrgId } = useActiveOrg();
-  const { canViewAllProjects, restrictsToAssignedProjectsOnly } = useOrgAccess();
+  const { canViewAllProjects, restrictsToAssignedProjectsOnly, canCreateProject } = useOrgAccess();
   const authUid = user?.id ?? orgId ?? "";
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
@@ -239,12 +238,13 @@ export function ProjectsScreen() {
   }, []);
 
   const openCreateProject = useCallback(() => {
+    if (!canCreateProject) return;
     void readStoredPrimaryUsageMode().then((m) => {
       setCreateInternalHints({ primaryUsageMode: m });
     });
     setCreateFlowKey((k) => k + 1);
     setShowNew(true);
-  }, []);
+  }, [canCreateProject]);
 
   const load = useCallback(async (isRefresh = false) => {
     // Guard: orgId must be defined and not empty
@@ -279,30 +279,13 @@ export function ProjectsScreen() {
       let list = await projectsService.listAllMyProjects(orgId, { forceServerRead: isRefresh });
 
       if (activeBusinessOrgId && authUid) {
-        if (canViewAllProjects) {
-          const orgProjects = await listBusinessOrgProjects(activeBusinessOrgId);
-          const known = new Set(list.map((p) => p.id));
-          for (const row of orgProjects) {
-            if (!known.has(row.id)) list.push(row);
-          }
-        } else if (restrictsToAssignedProjectsOnly) {
-          const assigned = await listBusinessProjectsAssignedToMember(activeBusinessOrgId, authUid);
-          const known = new Set(list.map((p) => p.id));
-          for (const row of assigned) {
-            if (!known.has(row.id)) {
-              row.isSharedToMe = true;
-              list.push(row);
-            }
-          }
-        }
+        list = await enrichProjectsWithBusinessAssignments(list, {
+          activeBusinessOrgId,
+          authUid,
+          canViewAllProjects,
+          restrictsToAssignedProjectsOnly,
+        });
       }
-
-      list = list.filter((project) => {
-        if (!isBusinessTeamProject(project)) return true;
-        if (!activeBusinessOrgId || project.orgId !== activeBusinessOrgId) return true;
-        if (canViewAllProjects) return true;
-        return project.ownerId === authUid || (project.assignedMemberIds ?? []).includes(authUid);
-      });
 
       console.log('[ProjectsScreen] Loaded', list.length, 'projects');
       setProjects(list);
@@ -365,15 +348,17 @@ export function ProjectsScreen() {
     useCallback(() => {
       load(false);
       if ((route.params as { openNew?: boolean })?.openNew) {
-        void readStoredPrimaryUsageMode().then((m) => {
-          setCreateInternalHints({ primaryUsageMode: m });
-        });
-        setCreateFlowKey((k) => k + 1);
-        setShowNew(true);
-        setError(null);
         (navigation as { setParams?: (params: Record<string, unknown>) => void }).setParams?.({ openNew: false });
+        if (canCreateProject) {
+          void readStoredPrimaryUsageMode().then((m) => {
+            setCreateInternalHints({ primaryUsageMode: m });
+          });
+          setCreateFlowKey((k) => k + 1);
+          setShowNew(true);
+          setError(null);
+        }
       }
-    }, [load, navigation, route.params])
+    }, [canCreateProject, load, navigation, route.params])
   );
 
   const closeNewModal = () => {
@@ -702,10 +687,12 @@ export function ProjectsScreen() {
             <>
               <Text style={styles.emptyHeroTitle}>{t("projectsTab.empty.title")}</Text>
               <Text style={styles.emptyHeroBody}>{t("projectsTab.empty.body")}</Text>
-              <TouchableOpacity style={styles.emptyPrimaryCta} onPress={openCreateProject} activeOpacity={0.88}>
-                <Ionicons name="add-circle-outline" size={22} color="#fff" />
-                <Text style={styles.emptyPrimaryCtaText}>{t("projectsTab.newJob")}</Text>
-              </TouchableOpacity>
+              {canCreateProject ? (
+                <TouchableOpacity style={styles.emptyPrimaryCta} onPress={openCreateProject} activeOpacity={0.88}>
+                  <Ionicons name="add-circle-outline" size={22} color="#fff" />
+                  <Text style={styles.emptyPrimaryCtaText}>{t("projectsTab.newJob")}</Text>
+                </TouchableOpacity>
+              ) : null}
             </>
           )}
           <TouchableOpacity style={styles.emptySecondaryTap} onPress={onRefresh} disabled={refreshing}>
@@ -721,10 +708,12 @@ export function ProjectsScreen() {
             <Text style={styles.pageTitle} accessibilityRole="header">
               {t("projectsTab.title")}
             </Text>
-            <TouchableOpacity style={styles.headerPrimaryCta} onPress={openCreateProject} activeOpacity={0.88}>
-              <Ionicons name="add" size={22} color="#fff" />
-              <Text style={styles.headerPrimaryCtaText}>{t("projectsTab.newJob")}</Text>
-            </TouchableOpacity>
+            {canCreateProject ? (
+              <TouchableOpacity style={styles.headerPrimaryCta} onPress={openCreateProject} activeOpacity={0.88}>
+                <Ionicons name="add" size={22} color="#fff" />
+                <Text style={styles.headerPrimaryCtaText}>{t("projectsTab.newJob")}</Text>
+              </TouchableOpacity>
+            ) : null}
           </View>
           <View style={styles.typeFilterWrapper}>
             <ScrollView

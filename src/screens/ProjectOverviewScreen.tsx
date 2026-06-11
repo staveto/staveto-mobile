@@ -47,7 +47,7 @@ import { useProjectAccess, fetchProjectAccess } from "../hooks/useProjectAccess"
 import type { SmartReadOptions } from "../services/firestoreSmartRead";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
-import { canAccessBusinessTeamProject, isBusinessTeamProject } from "../services/projects";
+import { canAccessBusinessTeamProject, healProjectAccessForCurrentUser, isBusinessTeamProject } from "../services/projects";
 import { auth } from "../firebase";
 import { updatePhase, deletePhase, createPhase } from "../services/projects";
 import * as tasksService from "../services/tasks";
@@ -810,6 +810,9 @@ export function ProjectOverviewScreen() {
       const isAiGeneratedPlan = project?.templateId === "ai-generated";
       
       const resolvedOwnerId = project?.ownerId ?? projectOwnerId ?? null;
+      if (project && resolvedOwnerId && resolvedOwnerId !== currentUserUid) {
+        await healProjectAccessForCurrentUser(projectId);
+      }
       const liveAccess = await fetchProjectAccess(projectId, currentUserUid, resolvedOwnerId);
 
       const isProjectOwner = !!(resolvedOwnerId && resolvedOwnerId === currentUserUid);
@@ -1422,6 +1425,12 @@ export function ProjectOverviewScreen() {
       });
     }
   }, [paramExpandPhaseId, phasesForUi]);
+
+  useEffect(() => {
+    if (phases.length > 0 || tasks.length > 0) {
+      setPhasesSectionExpanded(true);
+    }
+  }, [phases.length, tasks.length]);
 
   useEffect(() => {
     if (!paramOpenExpenseId || !projectId) return;
@@ -4192,9 +4201,12 @@ export function ProjectOverviewScreen() {
   const showPhaseGroupedTasks =
     isBuildLikeStorageType(projectType) ||
     templateId === "ai-generated" ||
-    (isTradeOrMaintenance && hasPhaseLinksOnTasks);
+    (isTradeOrMaintenance && (hasPhaseLinksOnTasks || phases.length > 0));
   const tradeFlatNoPhaseUi =
-    isTradeOrMaintenance && templateId !== "ai-generated" && !hasPhaseLinksOnTasks;
+    isTradeOrMaintenance &&
+    templateId !== "ai-generated" &&
+    !hasPhaseLinksOnTasks &&
+    phases.length === 0;
   /** AI template but nothing phase-shaped — fall back to flat list (tasks truly have no phaseId). */
   const aiPlanFallbackFlat =
     templateId === "ai-generated" &&
@@ -4202,6 +4214,8 @@ export function ProjectOverviewScreen() {
     tasks.length > 0 &&
     !hasPhaseLinksOnTasks;
   const renderTradeLikeFlatRows = tradeFlatNoPhaseUi || aiPlanFallbackFlat;
+  const hasWorkPlanContent =
+    phases.length > 0 || tasks.length > 0 || hasPhaseLinksOnTasks || templateId === "ai-generated";
 
   const tasksByPhase = new Map<string, TaskDoc[]>();
   const phaseOrder: string[] = [];
@@ -4511,6 +4525,7 @@ export function ProjectOverviewScreen() {
           && !loading
           && !emptyHeroDismissed
           && tasks.length === 0
+          && phases.length === 0
           && expenses.length === 0
           && diaryEntries.length === 0
           && projectDocuments.length === 0
@@ -4605,7 +4620,7 @@ export function ProjectOverviewScreen() {
         {/* Table: Task Name | Assignee - only show if user can read tasks or phases */}
         {/* For TRADE/MAINTENANCE: only show table if there are tasks */}
         {/* For BUILD/MANAGEMENT: always show table */}
-        {!access.loading && (access.canReadTasks || access.canReadPhases) && (!isTradeOrMaintenance || tasks.length > 0) && (
+        {!access.loading && (access.canReadTasks || access.canReadPhases || hasWorkPlanContent) && (
           <View style={styles.tableContainer}>
             <ScrollView 
               style={styles.tableScroll} 

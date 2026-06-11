@@ -1,7 +1,7 @@
 import React from "react";
 import { ActivityIndicator, View, StyleSheet } from "react-native";
 import { createNativeStackNavigator } from "@react-navigation/native-stack";
-import { BusinessGate } from "../screens/business/BusinessGate";
+import { BusinessGate, BusinessMemberGate } from "../screens/business/BusinessGate";
 import { BusinessDashboardScreen } from "../screens/business/BusinessDashboardScreen";
 import { BusinessLandingScreen } from "../screens/business/BusinessLandingScreen";
 import { BusinessPlanSelectionScreen } from "../screens/business/BusinessPlanSelectionScreen";
@@ -11,6 +11,7 @@ import { BusinessTeamManagementScreen } from "../screens/business/BusinessTeamMa
 import { BusinessMemberRoleScreen } from "../screens/business/BusinessMemberRoleScreen";
 import { BusinessChatListScreen } from "../screens/business/BusinessChatListScreen";
 import { BusinessChatRoomScreen } from "../screens/business/BusinessChatRoomScreen";
+import { BusinessChatComposeScreen } from "../screens/business/BusinessChatComposeScreen";
 import { BusinessContactsListScreen } from "../screens/business/BusinessContactsListScreen";
 import { BusinessContactDetailScreen } from "../screens/business/BusinessContactDetailScreen";
 import { BusinessContactEditScreen } from "../screens/business/BusinessContactEditScreen";
@@ -30,17 +31,25 @@ function BusinessDashboardWithGate() {
 
 function BusinessChatListWithGate() {
   return (
-    <BusinessGate>
+    <BusinessMemberGate>
       <BusinessChatListScreen />
-    </BusinessGate>
+    </BusinessMemberGate>
   );
 }
 
 function BusinessChatRoomWithGate() {
   return (
-    <BusinessGate>
+    <BusinessMemberGate>
       <BusinessChatRoomScreen />
-    </BusinessGate>
+    </BusinessMemberGate>
+  );
+}
+
+function BusinessChatComposeWithGate() {
+  return (
+    <BusinessMemberGate>
+      <BusinessChatComposeScreen />
+    </BusinessMemberGate>
   );
 }
 
@@ -146,6 +155,11 @@ export function BusinessStack() {
         name="BusinessChatRoom"
         component={BusinessChatRoomWithGate}
         options={{ title: "Chat" }}
+      />
+      <Stack.Screen
+        name="BusinessChatCompose"
+        component={BusinessChatComposeWithGate}
+        options={{ title: "Nová správa" }}
       />
       <Stack.Screen
         name="BusinessContactsList"

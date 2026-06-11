@@ -49,7 +49,15 @@ const EMPTY_DASHBOARD: DashboardViewModel = {
   timeTrackingProjectIds: [],
 };
 
-export async function loadDashboardData(ownerId: string, options?: { forceServerRead?: boolean }): Promise<DashboardViewModel> {
+export type LoadDashboardOptions = {
+  forceServerRead?: boolean;
+  activeBusinessOrgId?: string | null;
+  authUid?: string | null;
+  canViewAllProjects?: boolean;
+  restrictsToAssignedProjectsOnly?: boolean;
+};
+
+export async function loadDashboardData(ownerId: string, options?: LoadDashboardOptions): Promise<DashboardViewModel> {
   if (!ownerId) {
     throw new Error('Musíte byť prihlásený na načítanie dashboard dát.');
   }
@@ -62,10 +70,16 @@ export async function loadDashboardData(ownerId: string, options?: { forceServer
   }
 }
 
-async function loadDashboardDataInternal(ownerId: string, options?: { forceServerRead?: boolean }): Promise<DashboardViewModel> {
+async function loadDashboardDataInternal(ownerId: string, options?: LoadDashboardOptions): Promise<DashboardViewModel> {
   // Load projects, then keep only job workspaces (same rule as Projects tab — hide legacy MAINTENANCE equipment hubs).
   const allFetched = await projectsService.listMyProjects(ownerId, { forceServerRead: options?.forceServerRead });
-  const projects = allFetched.filter(isProjectShownOnProjectsJobsTab);
+  const enriched = await projectsService.enrichProjectsWithBusinessAssignments(allFetched, {
+    activeBusinessOrgId: options?.activeBusinessOrgId,
+    authUid: options?.authUid ?? ownerId,
+    canViewAllProjects: options?.canViewAllProjects,
+    restrictsToAssignedProjectsOnly: options?.restrictsToAssignedProjectsOnly,
+  });
+  const projects = enriched.filter(isProjectShownOnProjectsJobsTab);
 
   // Load all tasks from all projects in parallel (skip projects without valid id)
   const allTasksPromises = projects
@@ -121,12 +135,13 @@ async function loadDashboardDataInternal(ownerId: string, options?: { forceServe
   let timeTrackingProjectIds: string[] = [];
   try {
     // Determine which projects the user can see expenses for and which can log time
+    const authUid = options?.authUid ?? ownerId;
     const accessPromises = projects.map(async (project) => {
-      const isOwner = project.ownerId === ownerId;
+      const isOwner = project.ownerId === authUid;
       if (isOwner) {
         return { projectId: project.id, canReadExpenses: true, canWriteTime: true };
       }
-      const access = await fetchProjectAccess(project.id, ownerId, project.ownerId);
+      const access = await fetchProjectAccess(project.id, authUid, project.ownerId);
       return {
         projectId: project.id,
         canReadExpenses: access.canReadExpenses,

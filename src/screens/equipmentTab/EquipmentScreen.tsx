@@ -15,6 +15,7 @@ import type { NativeStackNavigationProp } from "@react-navigation/native-stack";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { useAuth } from "../../context/AuthContext";
+import { useActiveOrg } from "../../hooks/useActiveOrg";
 import { useI18n } from "../../i18n/I18nContext";
 import { colors, radius, spacing } from "../../theme";
 import * as userEquipmentService from "../../services/userEquipment";
@@ -73,7 +74,9 @@ export function EquipmentScreen() {
   const navigation = useNavigation<Nav>();
   const insets = useSafeAreaInsets();
   const { user } = useAuth();
+  const { activeBusinessOrgId, activeOrganization } = useActiveOrg();
   const uid = user?.id ?? "";
+  const orgOwnerUid = activeOrganization?.ownerUid?.trim() || null;
 
   const [items, setItems] = useState<UserEquipmentDoc[]>([]);
   const [loading, setLoading] = useState(true);
@@ -88,8 +91,9 @@ export function EquipmentScreen() {
       return;
     }
     try {
-      const list = await userEquipmentService.listUserEquipment(uid, {
+      const list = await userEquipmentService.listVisibleUserEquipment(uid, {
         status: filter === "all" ? "all" : filter,
+        orgOwnerUid: activeBusinessOrgId ? orgOwnerUid : null,
       });
       setItems(list);
     } catch {
@@ -98,7 +102,7 @@ export function EquipmentScreen() {
       setLoading(false);
       setRefreshing(false);
     }
-  }, [uid, filter]);
+  }, [activeBusinessOrgId, filter, orgOwnerUid, uid]);
 
   const runMigrationInBackground = useCallback(
     async (opts: { force: boolean }) => {
@@ -173,7 +177,12 @@ export function EquipmentScreen() {
       <TouchableOpacity
         style={styles.card}
         activeOpacity={0.88}
-        onPress={() => navigation.navigate("EquipmentDetail", { equipmentId: item.id })}
+        onPress={() =>
+          navigation.navigate("EquipmentDetail", {
+            equipmentId: item.id,
+            equipmentOwnerUid: item.ownerId,
+          })
+        }
       >
         <View style={styles.cardTop}>
           <Text style={styles.cardName} numberOfLines={1}>

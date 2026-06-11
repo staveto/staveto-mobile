@@ -14,6 +14,7 @@ import {
   type MembershipDoc,
   type OrganizationDoc,
 } from "../services/organizations";
+import { persistUserActiveBusinessOrgIdHint } from "../services/organizations";
 import {
   loadCachedBusinessOrgSummary,
   saveCachedBusinessOrgSummary,
@@ -39,6 +40,15 @@ async function persistActiveBusinessOrgId(orgId: string | null): Promise<void> {
     await AsyncStorage.setItem(ACTIVE_BUSINESS_ORG_STORAGE_KEY, orgId);
   } else {
     await AsyncStorage.removeItem(ACTIVE_BUSINESS_ORG_STORAGE_KEY);
+  }
+}
+
+async function mirrorActiveBusinessOrgIdToUserDoc(userId: string, orgId: string | null): Promise<void> {
+  if (!userId) return;
+  try {
+    await persistUserActiveBusinessOrgIdHint(userId, orgId);
+  } catch {
+    /* Rules sync is best-effort — equipment still loads when org is in memory. */
   }
 }
 
@@ -87,7 +97,10 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       const message = e instanceof Error ? e.message : String(e);
       setError(`BusinessContext storage write failed: ${message}`);
     });
-  }, []);
+    if (user?.id) {
+      void mirrorActiveBusinessOrgIdToUserDoc(user.id, orgId);
+    }
+  }, [user?.id]);
 
   const refreshActiveBusinessOrg = useCallback(async () => {
     if (!storageHydrated || authLoading) {
@@ -127,6 +140,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
         setActiveOrganization(null);
         setActiveMembership(null);
         await persistActiveBusinessOrgId(null);
+        await mirrorActiveBusinessOrgIdToUserDoc(expectedUserId, null);
         setLoading(false);
         return;
       }
@@ -154,6 +168,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
         businessEnabled: preferred.org.businessEnabled,
       }).catch(() => {});
       await persistActiveBusinessOrgId(preferred.org.id);
+      await mirrorActiveBusinessOrgIdToUserDoc(expectedUserId, preferred.org.id);
       setLoading(false);
     } catch (e) {
       if (runId !== refreshRunRef.current) {

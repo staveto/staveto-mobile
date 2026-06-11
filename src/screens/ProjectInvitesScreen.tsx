@@ -61,6 +61,7 @@ export function ProjectInvitesScreen() {
       setLoading(true);
     }
     try {
+      await invitesService.syncMyProjectAssignmentNotifications().catch(() => undefined);
       const list = await invitesService.listPendingInvites();
       setInvites(list);
     } catch (error: unknown) {
@@ -100,7 +101,6 @@ export function ProjectInvitesScreen() {
           ? invite.projectWorkspaceType.trim().toLowerCase()
           : "";
       if (!workspaceType) {
-        // Unknown workspace should stay backward-compatible (legacy shared invites).
         return false;
       }
       if (workspaceType === "business") {
@@ -109,7 +109,6 @@ export function ProjectInvitesScreen() {
       if (workspaceType === "personal") {
         return true;
       }
-      // Explicit legacy must not be hard-locked in this phase.
       return false;
     },
     [baseCapabilities.capabilities.canUseTeamFeatures]
@@ -132,7 +131,7 @@ export function ProjectInvitesScreen() {
           setInvites((prev) => prev.filter((i) => i.projectId !== invite.projectId));
           void refreshUnreadCount();
           showToast(t("projectInvites.acceptSuccess") || "Pozvánka prijatá");
-          if (result.projectId && !result.already) {
+          if (result.projectId) {
             (navigation as { navigate: (name: string, params?: object) => void }).navigate(
               "ProjectOverview",
               { projectId: result.projectId, projectName: invite.projectName }
@@ -170,7 +169,9 @@ export function ProjectInvitesScreen() {
               if (shouldGateInviteTeamAction(invite)) {
                 showTeamFeatureSoftGate({
                   onRegisterCompany: () => {
-                    (navigation as { navigate: (name: string, params?: object) => void }).navigate("BusinessStack");
+                    (navigation as { navigate: (name: string, params?: object) => void }).navigate(
+                      "BusinessStack"
+                    );
                   },
                 });
                 return;
@@ -205,9 +206,7 @@ export function ProjectInvitesScreen() {
           <View style={styles.cardHeader}>
             <Text style={styles.projectName}>{item.projectName}</Text>
           </View>
-          {summary ? (
-            <Text style={styles.sharedSummary}>{summary}</Text>
-          ) : null}
+          {summary ? <Text style={styles.sharedSummary}>{summary}</Text> : null}
           <View style={styles.actions}>
             <TouchableOpacity
               style={[styles.acceptBtn, isBusy && styles.btnDisabled]}
@@ -268,6 +267,12 @@ export function ProjectInvitesScreen() {
       data={invites}
       keyExtractor={(item) => `${item.projectId}-${item.memberId}`}
       renderItem={renderItem}
+      ListHeaderComponent={
+        <View style={styles.pendingSection}>
+          <Text style={styles.sectionTitle}>{t("projectInvites.pendingSection")}</Text>
+          <Text style={styles.sectionHint}>{t("projectInvites.pendingHint")}</Text>
+        </View>
+      }
       contentContainerStyle={styles.list}
       refreshControl={
         <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
@@ -290,6 +295,21 @@ const styles = StyleSheet.create({
   list: {
     padding: spacing.lg,
     paddingBottom: spacing.lg * 3,
+  },
+  pendingSection: {
+    marginBottom: spacing.md,
+  },
+  sectionTitle: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: colors.text,
+    marginBottom: spacing.xs,
+  },
+  sectionHint: {
+    fontSize: 13,
+    color: colors.textMuted,
+    marginBottom: spacing.sm,
+    lineHeight: 18,
   },
   card: {
     backgroundColor: colors.card,

@@ -50,6 +50,7 @@ export function AppTabs() {
         component={NotificationsScreen}
         options={{
           title: t("tabs.notifications") || "Notifikácie",
+          headerShown: false,
           tabBarBadge: unreadCount > 0 ? unreadCount : undefined,
         }}
       />

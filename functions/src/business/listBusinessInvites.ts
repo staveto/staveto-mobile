@@ -3,6 +3,7 @@ import { HttpsError, onCall } from "firebase-functions/v2/https";
 import {
   canReconstructInviteCode,
   stableJoinCodeForOrgAndRole,
+  decryptInviteCode,
   type OrgRole,
 } from "./inviteCodeUtils";
 
@@ -114,6 +115,14 @@ export const listBusinessInvites = onCall(
       if (canReconstructInviteCode(type, inviteId, role)) {
         code = stableJoinCodeForOrgAndRole(orgId, role);
         deepLink = `staveto://business/join?code=${encodeURIComponent(code)}`;
+      } else {
+        const codeEnc = asString(data.codeEnc);
+        if (codeEnc) {
+          code = decryptInviteCode(codeEnc);
+          if (code) {
+            deepLink = `staveto://business/join?code=${encodeURIComponent(code)}`;
+          }
+        }
       }
 
       const usedCount =

@@ -2,7 +2,7 @@
   "functions": {
     "source": "functions",
     "runtime": "nodejs20",
-    "predeploy": ["npm --prefix \"$RESOURCE_DIR\" run build"]
+    "predeploy": ["functions/scripts/build.cmd"]
   },
   "firestore": {
     "rules": "mobile/firestore.rules",

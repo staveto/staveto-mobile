@@ -66,7 +66,7 @@ function buildEnabledModulesForCompanyType(companyType: string): EnabledModulesD
     team: true,
     documents: true,
     billing: true,
-    planning: false,
+    planning: true,
     vehicles: false,
     equipment: false,
     expenses: false,
@@ -81,20 +81,21 @@ function buildEnabledModulesForCompanyType(companyType: string): EnabledModulesD
 
   switch (type) {
     case "hvac":
-      enable("equipment", "vehicles");
+      enable("planning", "equipment", "vehicles");
       break;
     case "construction":
       enable("planning", "vehicles");
       break;
     case "electrical":
     case "plumbing":
-      enable("equipment");
+      enable("planning", "equipment");
       if (type === "plumbing") enable("vehicles");
       break;
     case "roofing":
-      enable("equipment", "vehicles");
+      enable("planning", "equipment", "vehicles");
       break;
     default:
+      enable("planning");
       break;
   }
 

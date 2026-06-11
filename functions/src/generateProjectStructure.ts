@@ -177,6 +177,13 @@ export const generateProjectStructure = onCall(
         };
         contextParts.push(`Work type: ${wtMap[workType] ?? workType}`);
       }
+    } else if (engineType === "MAINTENANCE") {
+      contextParts.push("Project type: Maintenance / recurring service context when relevant.");
+    } else {
+      /** Unified clients omit BUILD/TRADE — infer internally from brief only. */
+      contextParts.push(
+        "No explicit project-classification hint was sent; infer construction vs trade/service vs maintenance-only from the brief and details alone."
+      );
     }
 
     const contextStr = contextParts.length > 0
@@ -235,12 +242,36 @@ export const generateProjectStructure = onCall(
       throw new HttpsError("internal", "AI service unavailable.");
     }
 
+    const rawBodyText = await response.text();
+    let result: {
+      error?: { message?: string; status?: string };
+      promptFeedback?: { blockReason?: string; safetyRatings?: unknown };
+      candidates?: Array<{
+        content?: { parts?: Array<{ text?: string }> };
+        finishReason?: string;
+      }>;
+    };
+    try {
+      result = JSON.parse(rawBodyText) as typeof result;
+    } catch (parseErr) {
+      log("[generateProjectStructure] provider_response_invalid", {
+        reasonCode: "invalid_provider_json",
+        status: response.status,
+        preview: rawBodyText.slice(0, 400),
+      });
+      throw new HttpsError(
+        "failed-precondition",
+        "AI gateway returned an unreadable response. Try again."
+      );
+    }
+
     if (!response.ok) {
-      const errText = await response.text();
-      log("[generateProjectStructure] Gemini API error", {
+      log("[generateProjectStructure] Gemini API http_error", {
+        reasonCode: "provider_http_error",
         status: response.status,
         model: GEMINI_MODEL,
-        bodyPreview: errText.slice(0, 800),
+        googleError: result.error,
+        bodyPreview: rawBodyText.slice(0, 800),
       });
       if (response.status === 429) {
         throw new HttpsError(
@@ -248,40 +279,92 @@ export const generateProjectStructure = onCall(
           "AI is temporarily overloaded. Try again in a moment or create manually."
         );
       }
+      if (response.status === 401 || response.status === 403) {
+        throw new HttpsError(
+          "failed-precondition",
+          "Gemini API rejected the request (auth). Verify GOOGLE_GENERATIVE_AI_API_KEY secret is deployed and Generative Language API is enabled for the GCP project."
+        );
+      }
       if (response.status === 404 || response.status === 400) {
         throw new HttpsError(
           "failed-precondition",
-          "AI model or API configuration is outdated. Contact support."
+          "AI model or API configuration is outdated or invalid. Check GEMINI_MODEL and API key (Gemini API)."
         );
       }
-      throw new HttpsError("internal", "AI generation failed. Try again or create manually.");
+      if (response.status === 502 || response.status === 503) {
+        throw new HttpsError(
+          "resource-exhausted",
+          "AI provider is temporarily unavailable. Try again shortly."
+        );
+      }
+      throw new HttpsError(
+        "failed-precondition",
+        "AI generation failed at the provider. Try again or create manually."
+      );
     }
 
-    const result = (await response.json()) as {
-      candidates?: Array<{
-        content?: { parts?: Array<{ text?: string }> };
-      }>;
-    };
+    if (result.error) {
+      log("[generateProjectStructure] provider_response_invalid", {
+        reasonCode: "provider_error_field",
+        error: result.error,
+      });
+      throw new HttpsError(
+        "failed-precondition",
+        "AI request could not be completed. Try again or shorten your description."
+      );
+    }
+
+    const blockReason = result.promptFeedback?.blockReason;
+    if (blockReason) {
+      log("[generateProjectStructure] prompt_blocked", {
+        reasonCode: "prompt_blocked",
+        blockReason,
+      });
+      throw new HttpsError(
+        "failed-precondition",
+        "AI could not use this description. Try simpler wording without sensitive content."
+      );
+    }
 
     const text =
       result.candidates?.[0]?.content?.parts?.[0]?.text ?? "";
-    if (!text) {
-      throw new HttpsError("internal", "AI returned empty response.");
+    if (!text.trim()) {
+      log("[generateProjectStructure] provider_empty_output", {
+        reasonCode: "provider_empty_output",
+        finishReason: result.candidates?.[0]?.finishReason,
+      });
+      throw new HttpsError(
+        "failed-precondition",
+        "AI returned no plan. Try again or create manually."
+      );
     }
 
     let plan: object;
     try {
       plan = extractJsonFromResponse(text) as object;
     } catch (e) {
-      log("[generateProjectStructure] JSON parse error", text.slice(0, 200), e);
-      throw new HttpsError("internal", "Invalid AI response. Try again or create manually.");
+      log("[generateProjectStructure] parsing_failed", {
+        reasonCode: "parsing_failed",
+        preview: text.slice(0, 240),
+        error: String(e),
+      });
+      throw new HttpsError(
+        "failed-precondition",
+        "AI returned unreadable JSON. Try again or shorten attachments."
+      );
     }
 
     const validationErrors = validateAiProjectPlan(plan);
     if (validationErrors) {
-      const msg = validationErrors.map((e) => `${e.path}: ${e.message}`).join("; ");
-      log("[generateProjectStructure] validation failed", { msg });
-      throw new HttpsError("internal", "AI returned invalid structure. Try again or create manually.");
+      const msg = validationErrors.map((x) => `${x.path}: ${x.message}`).join("; ");
+      log("[generateProjectStructure] validation_failed", {
+        reasonCode: "invalid_prompt_payload",
+        msg,
+      });
+      throw new HttpsError(
+        "failed-precondition",
+        "AI produced an incomplete plan. Tap Try again or create manually."
+      );
     }
 
     const planForClient = sanitizeAiProjectPlanFromModel(plan) as object;

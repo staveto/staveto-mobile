@@ -1,4 +1,4 @@
-import { createHash, createHmac, randomBytes } from "crypto";
+import { createHash, createHmac, createCipheriv, createDecipheriv, randomBytes } from "crypto";
 
 export type OrgRole = "owner" | "admin" | "manager" | "worker" | "viewer";
 
@@ -77,4 +77,35 @@ export function canReconstructInviteCode(
     return inviteId === primaryCompanyInviteDocId(role);
   }
   return false;
+}
+
+function encryptionKey(): Buffer {
+  return createHash("sha256").update(`${joinHmacSecret()}|invite-code-enc|v1`).digest();
+}
+
+/** Owner/admin-only retrieval — stored on invite doc at create time. */
+export function encryptInviteCode(code: string): string {
+  const key = encryptionKey();
+  const iv = randomBytes(12);
+  const cipher = createCipheriv("aes-256-gcm", key, iv);
+  const encrypted = Buffer.concat([cipher.update(code, "utf8"), cipher.final()]);
+  const tag = cipher.getAuthTag();
+  return Buffer.concat([iv, tag, encrypted]).toString("base64url");
+}
+
+export function decryptInviteCode(payload: string): string | null {
+  try {
+    const raw = Buffer.from(payload, "base64url");
+    if (raw.length < 29) return null;
+    const iv = raw.subarray(0, 12);
+    const tag = raw.subarray(12, 28);
+    const encrypted = raw.subarray(28);
+    const key = encryptionKey();
+    const decipher = createDecipheriv("aes-256-gcm", key, iv);
+    decipher.setAuthTag(tag);
+    const decrypted = Buffer.concat([decipher.update(encrypted), decipher.final()]);
+    return decrypted.toString("utf8");
+  } catch {
+    return null;
+  }
 }

@@ -12,13 +12,15 @@ import { logger } from "firebase-functions";
 import { HttpsError, onCall } from "firebase-functions/v2/https";
 import vision from "@google-cloud/vision";
 import { isPlaceholderOrMockOcrText } from "./ocrPlaceholderGuards";
+import { parseInvoiceText } from "./invoiceLegacyParse";
+import { mergeExpenseEnhancement } from "./invoiceExpenseEnhancement";
 
 if (!admin.apps.length) {
   admin.initializeApp();
 }
 
 /** Bump when extraction logic changes — compare with client `extractionLog.fnImplVersion`. */
-const FN_IMPL_VERSION = "extractInvoiceDataFromStorage-async-pdf-v3-success-guard";
+const FN_IMPL_VERSION = "extractInvoiceDataFromStorage-async-pdf-v4-expense-enhancement";
 
 function isPlainObject(value: unknown): value is Record<string, unknown> {
   return value !== null && typeof value === "object" && !Array.isArray(value);
@@ -213,11 +215,12 @@ function buildFailureResponse(input: {
   };
 }
 
-function buildSuccessResponse(input: {
+async function buildSuccessResponse(input: {
   rawText: string;
   source: "pdf-text" | "cloud-docai";
   confidence: number;
   log: ExtractionLog;
+  mimeType: string;
 }) {
   /**
    * Last line of defense: this repo never intentionally emits STUB bodies; if `rawText`
@@ -242,16 +245,27 @@ function buildSuccessResponse(input: {
       },
     });
   }
+
+  const baseParsed = parseInvoiceText(input.rawText);
+  const docSource =
+    input.source === "pdf-text" ? ("pdf-text" as const) : ("cloud-docai" as const);
+  const { parsed, expenseExtraction } = await mergeExpenseEnhancement({
+    rawText: input.rawText,
+    baseParsed,
+    hints: { mimeType: input.mimeType, documentSource: docSource },
+  });
+
   return {
     success: true as const,
     ok: true as const,
     source: input.source,
     rawText: input.rawText,
     confidence: input.confidence,
-    parsed: null as null,
-    vendorName: null as null,
-    invoiceNumber: null as null,
-    total: null as null,
+    parsed,
+    vendorName: parsed.supplierName,
+    invoiceNumber: parsed.invoiceNumber,
+    total: parsed.totalAmount,
+    expenseExtraction,
     extractionLog: input.log,
   };
 }
@@ -466,7 +480,7 @@ export const extractInvoiceDataFromStorage = onCall(
           previewHead: log.previewHead.slice(0, 320),
         });
 
-        return buildSuccessResponse({ rawText, source, confidence, log });
+        return await buildSuccessResponse({ rawText, source, confidence, log, mimeType });
       }
 
       if (m.startsWith("image/")) {
@@ -514,7 +528,7 @@ export const extractInvoiceDataFromStorage = onCall(
           attachmentId,
           previewHead: log.previewHead.slice(0, 320),
         });
-        return buildSuccessResponse({ rawText, source: "cloud-docai", confidence, log });
+        return await buildSuccessResponse({ rawText, source: "cloud-docai", confidence, log, mimeType });
       }
 
       logger.warn("Unsupported mime for extractInvoiceDataFromStorage", { mimeType });

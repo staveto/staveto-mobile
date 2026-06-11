@@ -6,6 +6,14 @@ type ListedOrganization = {
   orgId: string;
   orgName: string;
   role: string;
+  membershipStatus: string;
+  orgStatus: string;
+  businessEnabled: boolean;
+  ownerUid: string;
+  source?: string | null;
+  onboardingSource?: string | null;
+  trialEndsAt?: unknown;
+  activeBusinessOrderId?: string | null;
 };
 
 function parseOrgIdFromMemberPath(path: string): string | null {
@@ -16,15 +24,33 @@ function parseOrgIdFromMemberPath(path: string): string | null {
   return null;
 }
 
-function resolveRole(
+function normalizeListedRole(raw: unknown, org: FirebaseFirestore.DocumentData, uid: string): string {
+  if (org.ownerUid === uid) return "owner";
+  const role = String(raw ?? "member").toLowerCase();
+  if (role === "member") return "worker";
+  return role;
+}
+
+function buildListedOrg(
+  orgId: string,
   org: FirebaseFirestore.DocumentData,
   member: FirebaseFirestore.DocumentData | null,
   uid: string
-): string {
-  if (org.ownerUid === uid) return "owner";
-  const raw = String(member?.role ?? "member").toLowerCase();
-  if (raw === "member") return "worker";
-  return raw;
+): ListedOrganization {
+  return {
+    orgId,
+    orgName: typeof org.name === "string" ? org.name.trim() || "Firma" : "Firma",
+    role: normalizeListedRole(member?.role, org, uid),
+    membershipStatus: String(member?.status ?? "active").toLowerCase(),
+    orgStatus: String(org.status ?? "active").toLowerCase(),
+    businessEnabled: org.businessEnabled === true,
+    ownerUid: typeof org.ownerUid === "string" ? org.ownerUid : "",
+    source: typeof org.source === "string" ? org.source : null,
+    onboardingSource: typeof org.onboardingSource === "string" ? org.onboardingSource : null,
+    trialEndsAt: org.trialEndsAt ?? null,
+    activeBusinessOrderId:
+      typeof org.activeBusinessOrderId === "string" ? org.activeBusinessOrderId : null,
+  };
 }
 
 async function runMemberQuery(
@@ -66,11 +92,7 @@ export const listMyBusinessOrganizations = onCall(
     const ownedSnap = await db.collection("organizations").where("ownerUid", "==", uid).get();
     for (const orgDoc of ownedSnap.docs) {
       const org = orgDoc.data();
-      byOrgId.set(orgDoc.id, {
-        orgId: orgDoc.id,
-        orgName: typeof org.name === "string" ? org.name.trim() || "Firma" : "Firma",
-        role: "owner",
-      });
+      byOrgId.set(orgDoc.id, buildListedOrg(orgDoc.id, org, null, uid));
     }
 
     const memberQueries: Promise<FirebaseFirestore.QuerySnapshot>[] = [
@@ -99,11 +121,7 @@ export const listMyBusinessOrganizations = onCall(
         if (!orgSnap.exists) continue;
         const org = orgSnap.data() ?? {};
 
-        byOrgId.set(orgId, {
-          orgId,
-          orgName: typeof org.name === "string" ? org.name.trim() || "Firma" : "Firma",
-          role: resolveRole(org, member, uid),
-        });
+        byOrgId.set(orgId, buildListedOrg(orgId, org, member, uid));
       }
     }
 

@@ -21,6 +21,8 @@ type CreateRequest = {
   addressText?: string;
   countryCode?: string;
   city?: string;
+  /** Friendly human reference (not Firestore doc id). */
+  projectNumber?: string;
 };
 
 function generateId(): string {
@@ -51,6 +53,8 @@ export const createProjectFromAiPlan = onCall(
     const countryCode =
       typeof data.countryCode === "string" ? data.countryCode.trim() || null : null;
     const city = typeof data.city === "string" ? data.city.trim() || null : null;
+    const projectNumberRaw =
+      typeof data.projectNumber === "string" ? data.projectNumber.trim().slice(0, 120) : "";
 
     const validationErrors = validateAiProjectPlan(planInput);
     if (validationErrors) {
@@ -89,6 +93,7 @@ export const createProjectFromAiPlan = onCall(
     if (addressText) projectData.addressText = addressText;
     if (countryCode) projectData.countryCode = countryCode;
     if (city) projectData.city = city;
+    if (projectNumberRaw) projectData.referenceNumber = projectNumberRaw;
 
     const batch = db.batch();
 
@@ -137,10 +142,13 @@ export const createProjectFromAiPlan = onCall(
 
       phase.tasks.forEach((task) => {
         const taskId = generateId();
+        const phaseNameTrimmed = phase.name?.trim() || "";
         batch.set(db.doc(`projects/${projectId}/tasks/${taskId}`), {
           projectId,
           ownerId: uid,
           phaseId,
+          /** Denormalized for mobile grouping if phaseId fails older clients/rules. */
+          phaseTitle: phaseNameTrimmed || null,
           order: taskOrder++,
           title: task.title?.trim() || "",
           description: task.description?.trim() || null,

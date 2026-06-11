@@ -6,6 +6,7 @@ import {
   normalizeInviteAssignableRole,
   stableJoinCodeForOrgAndRole,
   primaryCompanyInviteDocId,
+  encryptInviteCode,
 } from "./inviteCodeUtils";
 
 if (!admin.apps.length) {
@@ -180,6 +181,7 @@ export const createBusinessInviteCode = onCall(
         orgId,
         codeHash: expectedHash,
         codePrefix: inviteCode.slice(0, 4),
+        codeEnc: encryptInviteCode(inviteCode),
         createdByUid: actor.uid,
         createdByEmail: actor.email,
         createdAt: inviteSnap.exists ? (existing?.createdAt as unknown) ?? now : now,

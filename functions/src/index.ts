@@ -1,9 +1,13 @@
 import * as admin from "firebase-admin";
 import { onCall, HttpsError } from "firebase-functions/v2/https";
-import { onDocumentCreated } from "firebase-functions/v2/firestore";
+import { onDocumentWritten } from "firebase-functions/v2/firestore";
 import { beforeUserCreated } from "firebase-functions/v2/identity";
 import { log } from "firebase-functions/logger";
-import { getUserTokens, findUidByEmailLower, sendPushToUser } from "./push";
+import { getUserTokens, sendPushToUser } from "./push";
+import {
+  notifyProjectMemberAdded,
+  notifyProjectMemberInvited,
+} from "./projectMemberNotifications";
 import * as crypto from "crypto";
 import vision from "@google-cloud/vision";
 import type { ParsedInvoice } from "./invoiceLegacyParse";
@@ -162,14 +166,24 @@ export const claimProjectInvites = onCall(
 
       const currentUserId = typeof data.userId === "string" ? data.userId.trim() : "";
       const status = typeof data.status === "string" ? data.status.toLowerCase() : "";
-      const isInvitedOrUnclaimed = status === "invited" || !currentUserId;
-      const isAlreadyActiveForUser = currentUserId === uid && status === "active";
-      if (!isInvitedOrUnclaimed && !isAlreadyActiveForUser) continue;
 
       const projectId = memberDoc.ref.parent?.parent?.id;
       if (!projectId) continue;
 
-      if (isInvitedOrUnclaimed) {
+      /** Explicit accept flow (ProjectInvitesScreen / acceptProjectInvite) — never auto-activate on login. */
+      if (status === "invited") {
+        if (!projectIds.includes(projectId)) {
+          projectIds.push(projectId);
+        }
+        continue;
+      }
+      if (status === "declined") continue;
+
+      const isUnclaimedLegacy = !currentUserId;
+      const isAlreadyActiveForUser = currentUserId === uid && status === "active";
+      if (!isUnclaimedLegacy && !isAlreadyActiveForUser) continue;
+
+      if (isUnclaimedLegacy) {
         batch.update(memberDoc.ref, {
           userId: uid,
           status: "active",
@@ -973,6 +987,8 @@ export { createBusinessOrg } from "./business/createBusinessOrg";
 export { updateBusinessOrgProfile } from "./business/updateBusinessOrgProfile";
 export { backfillBusinessOrgCompatibility } from "./business/backfillBusinessOrgCompatibility";
 export { listMyBusinessOrganizations } from "./business/listMyBusinessOrganizations";
+export { listOrgMemberProfiles } from "./business/listOrgMemberProfiles";
+export { listTeamWorkspaceProjects } from "./business/listTeamWorkspaceProjects";
 export { createBusinessCheckoutSession } from "./business/createBusinessCheckoutSession";
 export { updateBusinessOrderPlan } from "./business/updateBusinessOrderPlan";
 export { createBusinessInviteCode } from "./business/createBusinessInviteCode";
@@ -981,53 +997,59 @@ export { approveBusinessMember } from "./business/approveBusinessMember";
 export { updateBusinessMemberRole } from "./business/updateBusinessMemberRole";
 export { revokeBusinessInvite } from "./business/revokeBusinessInvite";
 export { listBusinessInvites } from "./business/listBusinessInvites";
+export { getBusinessInviteDisplay } from "./business/getBusinessInviteDisplay";
 export { acceptLegacyInviteToken } from "./business/acceptLegacyInviteToken";
 
-/** Send in-app notification + FCM push when a project member invite is created (status invited, emailLower set). */
-export const onMemberInviteCreated = onDocumentCreated(
+/** In-app + push when a project member is invited or assigned (create or update). */
+export const onProjectMemberNotified = onDocumentWritten(
   {
     document: "projects/{projectId}/members/{memberId}",
     region: "europe-west1",
   },
   async (event) => {
-    const snap = event.data;
-    if (!snap?.exists) return;
-    const data = snap.data();
+    const after = event.data?.after;
+    if (!after?.exists) return;
+    const data = after.data() as Record<string, unknown>;
     const status = data?.status;
-    const emailLower = (data?.emailLower ?? data?.email ?? "").trim().toLowerCase();
-    if (status !== "invited" || !emailLower) return;
-
-    const projectId = event.params?.projectId;
+    const projectId = event.params?.projectId as string;
     if (!projectId) return;
 
-    const invitedByUid = (data?.invitedBy as string) ?? null;
-    const uid = (data?.userId as string) ?? (await findUidByEmailLower(emailLower));
-    if (!uid) {
-      log("[onMemberInviteCreated] No user found for email, skipping notification and push", emailLower);
+    const before = event.data?.before;
+    const beforeData =
+      before?.exists && typeof before.data === "function"
+        ? (before.data() as Record<string, unknown>)
+        : null;
+
+    if (status === "invited") {
+      if (beforeData?.status === "invited") return;
+      const emailLower = (data.emailLower ?? data.email ?? "").toString().trim().toLowerCase();
+      if (!emailLower) return;
+      await notifyProjectMemberInvited({
+        projectId,
+        emailLower,
+        invitedByUid: (data.invitedBy as string) ?? null,
+        memberData: data,
+      });
       return;
     }
 
-    const db = admin.firestore();
-    const projectSnap = await db.doc(`projects/${projectId}`).get();
-    const projectName = (projectSnap.data()?.name as string) ?? "Projekt";
+    if (status === "active") {
+      const memberUid =
+        (typeof data.userId === "string" && data.userId.trim()) ||
+        (event.params?.memberId as string) ||
+        "";
+      if (!memberUid) return;
 
-    await db.collection("notifications").add({
-      userId: uid,
-      type: "PROJECT_INVITED",
-      createdAt: admin.firestore.FieldValue.serverTimestamp(),
-      readAt: null,
-      projectId,
-      projectName,
-      fromUserId: invitedByUid,
-      severity: "info",
-      message: `${projectName} – čaká na prijatie`,
-    });
-    log("[onMemberInviteCreated] In-app notification created for", uid, "project", projectId);
+      const prevUid =
+        typeof beforeData?.userId === "string" ? beforeData.userId.trim() : "";
+      const prevStatus = beforeData?.status;
+      if (prevStatus === "active" && prevUid === memberUid) return;
 
-    await sendPushToUser(uid, "Pozvánka do projektu", `${projectName} – čaká na prijatie`, {
-      type: "PROJECT_INVITE",
-      projectId,
-    });
-    log("[onMemberInviteCreated] Push sent to", uid, "for project", projectId);
+      await notifyProjectMemberAdded({
+        projectId,
+        memberUid,
+        memberData: data,
+      });
+    }
   }
 );

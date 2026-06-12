@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useRef, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import {
   Alert,
   Linking,
@@ -36,6 +36,11 @@ import {
   readOrgPhone,
   readOrgRegistrationNumber,
 } from "../../lib/companyProfileCompletion";
+import {
+  formatOrgLiveTimerElapsed,
+  subscribeOrgLiveTimers,
+  type OrgLiveTimerRow,
+} from "../../services/orgLiveTimer";
 
 function toMillis(raw: unknown): number | null {
   if (!raw) return null;
@@ -98,6 +103,8 @@ export function BusinessDashboardScreen() {
   const [inviteBusy, setInviteBusy] = useState(false);
   const [inviteResult, setInviteResult] = useState<CreateBusinessInviteCodeResult | null>(null);
   const [showBusinessInfo, setShowBusinessInfo] = useState(false);
+  const [liveTimers, setLiveTimers] = useState<OrgLiveTimerRow[]>([]);
+  const [liveTimerTick, setLiveTimerTick] = useState(0);
   const authUser = getAuth()?.currentUser ?? null;
 
   useEffect(() => {
@@ -147,6 +154,37 @@ export function BusinessDashboardScreen() {
       cancelled = true;
     };
   }, [activeOrganization?.id]);
+
+  useEffect(() => {
+    const orgId = activeOrganization?.id;
+    if (!orgId || !orgAccess.canViewBusinessDashboard) {
+      setLiveTimers([]);
+      return;
+    }
+    return subscribeOrgLiveTimers(orgId, setLiveTimers);
+  }, [activeOrganization?.id, orgAccess.canViewBusinessDashboard]);
+
+  useEffect(() => {
+    if (liveTimers.length === 0) return;
+    const interval = setInterval(() => setLiveTimerTick((n) => n + 1), 1000);
+    return () => clearInterval(interval);
+  }, [liveTimers.length]);
+
+  const liveTimerMemberName = useCallback(
+    (uid: string) => {
+      const member = orgMembers.find((m) => m.userId === uid || m.id === uid);
+      if (member) {
+        return getMemberDisplay(member, {
+          currentUserUid: authUser?.uid,
+          currentUserDisplayName: authUser?.displayName ?? undefined,
+          currentUserEmail: authUser?.email ?? undefined,
+          activeMembershipEmail: (activeMembership as { emailLower?: string } | null)?.emailLower,
+        });
+      }
+      return uid.slice(0, 8);
+    },
+    [orgMembers, authUser, activeMembership]
+  );
 
   const planLabel = useMemo(() => {
     const planCode = activeOrganization?.planCode ?? activeOrder?.planCode ?? activeOrder?.priceSnapshot?.planCode;
@@ -601,6 +639,47 @@ export function BusinessDashboardScreen() {
       </View>
 
       {renderBillingBanner()}
+
+      {orgAccess.canViewBusinessDashboard && liveTimers.length > 0 ? (
+        <View style={styles.card}>
+          <Text style={styles.cardTitle}>{t("business.dashboard.liveCrewTitle")}</Text>
+          <Text style={styles.cardBody}>{t("business.dashboard.liveCrewSubtitle")}</Text>
+          <View style={styles.liveCrewList}>
+            {liveTimers.map((row) => {
+              void liveTimerTick;
+              const elapsed = formatOrgLiveTimerElapsed(row);
+              const name = liveTimerMemberName(row.uid);
+              const statusLabel =
+                row.status === "paused"
+                  ? t("business.dashboard.liveCrewPaused")
+                  : t("business.dashboard.liveCrewWorking");
+              return (
+                <View key={row.uid} style={styles.liveCrewRow}>
+                  <View style={styles.liveCrewMeta}>
+                    <Text style={styles.liveCrewName} numberOfLines={1}>
+                      {name}
+                    </Text>
+                    <Text style={styles.liveCrewProject} numberOfLines={2}>
+                      {row.projectNameSnapshot ?? "—"}
+                    </Text>
+                  </View>
+                  <View style={styles.liveCrewRight}>
+                    <Text
+                      style={[
+                        styles.liveCrewElapsed,
+                        row.status === "paused" ? styles.liveCrewElapsedPaused : null,
+                      ]}
+                    >
+                      {elapsed}
+                    </Text>
+                    <Text style={styles.liveCrewStatus}>{statusLabel}</Text>
+                  </View>
+                </View>
+              );
+            })}
+          </View>
+        </View>
+      ) : null}
 
       <View style={styles.card}>
         <Text style={styles.cardTitle}>{t("business.dashboard.teamCardTitle")}</Text>
@@ -1145,6 +1224,54 @@ const styles = StyleSheet.create({
   emptyText: {
     marginTop: 6,
     fontSize: 13,
+    color: "#64748B",
+  },
+  liveCrewList: {
+    marginTop: 10,
+    gap: 10,
+  },
+  liveCrewRow: {
+    flexDirection: "row",
+    alignItems: "flex-start",
+    justifyContent: "space-between",
+    gap: 10,
+    borderWidth: 1,
+    borderColor: "#E2E8F0",
+    borderRadius: 12,
+    padding: 10,
+    backgroundColor: "#F8FAFC",
+  },
+  liveCrewMeta: {
+    flex: 1,
+    minWidth: 0,
+  },
+  liveCrewName: {
+    fontSize: 14,
+    fontWeight: "700",
+    color: "#0F172A",
+  },
+  liveCrewProject: {
+    marginTop: 2,
+    fontSize: 12,
+    color: "#64748B",
+    lineHeight: 16,
+  },
+  liveCrewRight: {
+    alignItems: "flex-end",
+    gap: 2,
+  },
+  liveCrewElapsed: {
+    fontSize: 15,
+    fontWeight: "800",
+    color: "#16A34A",
+    fontVariant: ["tabular-nums"],
+  },
+  liveCrewElapsedPaused: {
+    color: "#D97706",
+  },
+  liveCrewStatus: {
+    fontSize: 11,
+    fontWeight: "600",
     color: "#64748B",
   },
   membersList: {

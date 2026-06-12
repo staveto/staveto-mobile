@@ -1,89 +1,25 @@
-import { 
-  doc, 
-  updateDoc, 
+import {
+  doc,
+  updateDoc,
   serverTimestamp,
-  getDoc 
 } from '../lib/rnFirestore';
 import { db } from '../firebase';
 import { paths } from '../lib/firestorePaths';
-import type { TaskStatus, ProjectTask } from '../lib/types';
+import type { TaskStatus } from '../lib/types';
+import { updateTaskStatus as updateTaskStatusCore } from './tasks';
 import { auth } from '../firebase';
-import { getStatusLabel } from '../helpers/taskStatusMapping';
-import { createNotification } from './notifications';
-import { runServiceAutoNextOnDone } from './serviceAutoNext';
-import { logTaskComplete } from './analytics';
 
 /**
- * Update task status with proper doneAt handling
- * Rules:
- * - DONE sets doneAt
- * - If status changes from DONE to OPEN, doneAt = null
+ * Update task status with proper doneAt handling (delegates to services/tasks).
  */
 export async function updateTaskStatus(
   projectId: string,
   taskId: string,
-  newStatus: TaskStatus
+  newStatus: TaskStatus,
+  ownerId?: string
 ): Promise<void> {
-  const taskRef = doc(db, paths.projectTask(projectId, taskId));
-  
-  // Get current task to check previous status
-  const taskSnap = await getDoc(taskRef);
-  if (!taskSnap.exists()) {
-    throw new Error(`Task ${taskId} not found`);
-  }
-  
-  const currentTask = taskSnap.data() as ProjectTask;
-  const currentStatus = currentTask.status;
-  const taskTitle = currentTask.title ?? "";
-  
-  const updateData: any = {
-    status: newStatus,
-    updatedAt: serverTimestamp(), // Use serverTimestamp()
-  };
-  
-  // Handle doneAt based on status transition
-  if (newStatus === 'DONE') {
-    updateData.doneAt = serverTimestamp();
-    logTaskComplete("app");
-  } else if (currentStatus === 'DONE') {
-    // Reverting from DONE to another status
-    updateData.doneAt = null;
-  }
-  
-  await updateDoc(taskRef, updateData);
-
-  // MAINTENANCE v2: auto-next when service task marked DONE
-  if (newStatus === 'DONE' && (currentTask as { serviceRuleId?: string }).serviceRuleId) {
-    try {
-      await runServiceAutoNextOnDone({
-        projectId,
-        task: { id: taskId, serviceRuleId: (currentTask as { serviceRuleId?: string }).serviceRuleId } as any,
-      });
-    } catch (error) {
-      console.warn('[taskService] runServiceAutoNextOnDone failed:', error);
-    }
-  }
-
-  const currentUser = auth.currentUser;
-  if (currentUser?.uid) {
-    const label = getStatusLabel(newStatus);
-    const titleText = taskTitle ? `Úloha "${taskTitle}"` : "Úloha";
-    try {
-      await createNotification({
-        userId: currentUser.uid,
-        projectId,
-        entityType: "task",
-        entityId: taskId,
-        eventType: "status_changed",
-        title: "Zmena stavu úlohy",
-        message: `${titleText} bola označená ako ${label}.`,
-        actorId: currentUser.uid,
-        actorName: currentUser.displayName ?? currentUser.email ?? undefined,
-      });
-    } catch (error) {
-      console.warn("[taskService] Failed to create notification:", error);
-    }
-  }
+  const uid = ownerId ?? auth.currentUser?.uid ?? "";
+  await updateTaskStatusCore(uid, projectId, taskId, newStatus);
 }
 
 /**
@@ -96,9 +32,9 @@ export async function assignTask(
   assigneeName?: string | null
 ): Promise<void> {
   const taskRef = doc(db, paths.projectTask(projectId, taskId));
-  
+
   await updateDoc(taskRef, {
-    assigneeId: userId, // Use assigneeId (consistent with types)
+    assigneeId: userId,
     assigneeName: assigneeName || null,
     updatedAt: serverTimestamp(),
   });
@@ -113,7 +49,7 @@ export async function assignTaskToTrade(
   trade: string | null
 ): Promise<void> {
   const taskRef = doc(db, paths.projectTask(projectId, taskId));
-  
+
   await updateDoc(taskRef, {
     assignedTrade: trade,
     updatedAt: serverTimestamp(),
@@ -131,9 +67,9 @@ export async function assignTaskToUserAndTrade(
   assigneeName?: string | null
 ): Promise<void> {
   const taskRef = doc(db, paths.projectTask(projectId, taskId));
-  
+
   await updateDoc(taskRef, {
-    assigneeId: userId, // Use assigneeId (consistent with types)
+    assigneeId: userId,
     assigneeName: assigneeName || null,
     assignedTrade: trade,
     updatedAt: serverTimestamp(),

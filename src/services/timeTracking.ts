@@ -22,9 +22,15 @@ import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
 import { plainFirestoreDocData, safeFirestoreDocData } from "../lib/safeFirestoreDocData";
 import { getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
-import { getCurrentPositionSafe, requestLocationPermission, type GpsPoint } from "../lib/location";
+import {
+  getCurrentPositionSafe,
+  getTimerCheckpointGps,
+  requestLocationPermission,
+  type GpsPoint,
+} from "../lib/location";
 import { cancelLegacyReminderIds, clearRunningTimerNotification, replaceRunningTimerNotification } from "./timerReminders";
-import { fetchProjectAccess } from "../hooks/useProjectAccess";
+import { resolveCanWriteTimeForProject } from "../hooks/useProjectAccess";
+import { resolveProjectOrgId, syncOrgLiveTimer } from "./orgLiveTimer";
 import { createTimeTrackingStoppedNotification } from "./notifications";
 import { postDebugIngest } from "../lib/debugIngest";
 
@@ -64,6 +70,10 @@ export type TimerStatus = "running" | "paused";
 export type TimerPause = {
   startedAt: string;
   endedAt?: string;
+  /** Work-location snapshot when entering pause (end of work segment). */
+  gpsAtPause?: GpsPoint | null;
+  /** Work-location snapshot when leaving pause (start of next work segment). */
+  gpsAtResume?: GpsPoint | null;
 };
 
 export type ActiveTimer = {
@@ -231,11 +241,29 @@ function coerceTimeEntryFlags(raw: unknown): TimeEntryDoc["flags"] | undefined {
   return Object.keys(out).length > 0 ? out : undefined;
 }
 
-async function ensureCanWriteTime(projectId: string, uid: string, projectOwnerIdHint?: string | null): Promise<void> {
-  const access = await fetchProjectAccess(projectId, uid, projectOwnerIdHint ?? undefined);
-  if (access.canWriteTime) return;
-  /** Offline / empty cache: UI only lists projects the user may access; owner may write time without member doc in cache. */
-  if (projectOwnerIdHint && projectOwnerIdHint === uid) return;
+async function ensureCanWriteTime(
+  projectId: string,
+  uid: string,
+  projectOwnerIdHint?: string | null,
+  opts?: { assignedToMe?: boolean }
+): Promise<void> {
+  const checkAccess = (forceServer?: boolean) =>
+    resolveCanWriteTimeForProject(projectId, uid, projectOwnerIdHint ?? undefined, {
+      forceServer: forceServer === true,
+    });
+
+  if (await checkAccess()) return;
+  if (opts?.assignedToMe) return;
+
+  try {
+    const { healProjectAccessForCurrentUser } = await import("./projects");
+    await healProjectAccessForCurrentUser(projectId);
+  } catch {
+    /* heal is best-effort */
+  }
+
+  if (await checkAccess(true)) return;
+
   throw new Error("Nemáte oprávnenie zapisovať hodiny do tohto projektu.");
 }
 
@@ -243,6 +271,19 @@ export type GetActiveTimerReadOpts = {
   /** Use after writes when local cache can briefly miss `activeTimer`. */
   source?: "default" | "server";
 };
+
+function coerceGpsPoint(raw: unknown): GpsPoint | null | undefined {
+  if (raw == null) return null;
+  if (typeof raw !== "object" || Array.isArray(raw)) return undefined;
+  const m = raw as Record<string, unknown>;
+  const lat = typeof m.lat === "number" ? m.lat : undefined;
+  const lng = typeof m.lng === "number" ? m.lng : undefined;
+  if (lat === undefined || lng === undefined) return undefined;
+  const accuracyM = typeof m.accuracyM === "number" ? m.accuracyM : 0;
+  const timestamp = typeof m.timestamp === "string" ? m.timestamp : new Date().toISOString();
+  const source = m.source === "network" ? "network" : "gps";
+  return { lat, lng, accuracyM, timestamp, source };
+}
 
 /** Parse persisted pauses array; tolerates legacy timers without the field. */
 function coerceTimerPauses(raw: unknown): TimerPause[] {
@@ -255,9 +296,30 @@ function coerceTimerPauses(raw: unknown): TimerPause[] {
     if (!startedAt) continue;
     const endedAtIso = toIso(map.endedAt);
     const endedAt = endedAtIso ?? (typeof map.endedAt === "string" && map.endedAt ? map.endedAt : undefined);
-    out.push(endedAt ? { startedAt, endedAt } : { startedAt });
+    const gpsAtPause = coerceGpsPoint(map.gpsAtPause);
+    const gpsAtResume = coerceGpsPoint(map.gpsAtResume);
+    out.push({
+      startedAt,
+      ...(endedAt ? { endedAt } : {}),
+      ...(gpsAtPause !== undefined ? { gpsAtPause } : {}),
+      ...(gpsAtResume !== undefined ? { gpsAtResume } : {}),
+    });
   }
   return out;
+}
+
+/** Latest work-location checkpoint for live sync — not continuous tracking. */
+export function resolveLatestWorkGps(timer: ActiveTimer): GpsPoint | null {
+  const normalized = normalizeActiveTimer(timer);
+  const pauses = normalized.pauses ?? [];
+  const lastPause = pauses.at(-1);
+  if (normalized.status === "paused" && lastPause?.gpsAtPause) {
+    return lastPause.gpsAtPause;
+  }
+  if (lastPause?.gpsAtResume) {
+    return lastPause.gpsAtResume;
+  }
+  return timer.gpsStart ?? null;
 }
 
 function coerceTimerStatus(raw: unknown): TimerStatus | undefined {
@@ -282,7 +344,7 @@ async function readActiveTimerFromUserDoc(uid: string, opts?: GetActiveTimerRead
   const runningSinceIso = toIso(atMap.runningSince) ?? (typeof atMap.runningSince === "string" ? atMap.runningSince : null);
   const accumulatedRaw = atMap.accumulatedMs;
   const accumulatedMs = typeof accumulatedRaw === "number" && Number.isFinite(accumulatedRaw) ? accumulatedRaw : undefined;
-  return {
+  return normalizeActiveTimer({
     projectId: (atMap.projectId as string) ?? "",
     projectNameSnapshot: (atMap.projectNameSnapshot as string) ?? (atMap.projectName as string) ?? "",
     startedAt,
@@ -298,7 +360,7 @@ async function readActiveTimerFromUserDoc(uid: string, opts?: GetActiveTimerRead
     runningSince: runningSinceIso ?? null,
     accumulatedMs,
     pauses: coerceTimerPauses(atMap.pauses),
-  };
+  });
 }
 
 /**
@@ -308,19 +370,58 @@ async function readActiveTimerFromUserDoc(uid: string, opts?: GetActiveTimerRead
  * Always returns >= 0. Safe for legacy timers without status / accumulated fields.
  */
 export function calculateActiveTimerWorkMs(activeTimer: ActiveTimer, nowIso?: string): number {
-  const total = typeof activeTimer.accumulatedMs === "number" && Number.isFinite(activeTimer.accumulatedMs)
-    ? activeTimer.accumulatedMs
+  const normalized = normalizeActiveTimer(activeTimer);
+  const total = typeof normalized.accumulatedMs === "number" && Number.isFinite(normalized.accumulatedMs)
+    ? normalized.accumulatedMs
     : 0;
-  if (activeTimer.status === "paused") {
+  if (normalized.status === "paused") {
     return Math.max(0, total);
   }
   const nowMs = nowIso ? new Date(nowIso).getTime() : Date.now();
-  const sinceIso = activeTimer.runningSince ?? activeTimer.startedAt;
+  const sinceIso = normalized.runningSince ?? normalized.startedAt;
   const sinceMs = sinceIso ? new Date(sinceIso).getTime() : NaN;
   if (!Number.isFinite(sinceMs) || !Number.isFinite(nowMs)) {
     return Math.max(0, total);
   }
   return Math.max(0, total + (nowMs - sinceMs));
+}
+
+/** ISO start of the current open pause window, if any. */
+export function getOpenPauseStartedAt(activeTimer: ActiveTimer): string | null {
+  const normalized = normalizeActiveTimer(activeTimer);
+  if (normalized.status !== "paused") return null;
+  const last = (normalized.pauses ?? []).at(-1);
+  if (last && !last.endedAt) return last.startedAt;
+  return null;
+}
+
+/** Elapsed ms in the current pause window (0 when running or no open pause). */
+export function calculateActiveTimerPauseMs(activeTimer: ActiveTimer, nowIso?: string): number {
+  const startedAt = getOpenPauseStartedAt(activeTimer);
+  if (!startedAt) return 0;
+  const startMs = new Date(startedAt).getTime();
+  const nowMs = nowIso ? new Date(nowIso).getTime() : Date.now();
+  if (!Number.isFinite(startMs) || !Number.isFinite(nowMs)) return 0;
+  return Math.max(0, nowMs - startMs);
+}
+
+/** Infer paused/running from persisted fields so legacy rows stay consistent. */
+export function normalizeActiveTimer(activeTimer: ActiveTimer): ActiveTimer {
+  const pauses = activeTimer.pauses ?? [];
+  const lastPause = pauses.at(-1);
+  const hasOpenPause = Boolean(lastPause && !lastPause.endedAt);
+  if (activeTimer.status === "paused" || hasOpenPause) {
+    return {
+      ...activeTimer,
+      status: "paused",
+      runningSince: null,
+      pauses,
+    };
+  }
+  if (!activeTimer.status) {
+    return { ...activeTimer, status: "running" };
+  }
+  return activeTimer;
 }
 
 /**
@@ -374,7 +475,26 @@ export type StartTimerOpts = {
   taskTitleSnapshot?: string | null;
   /** `project.ownerId` from UI — enables offline start when Firestore project/member reads miss cache. */
   projectOwnerId?: string | null;
+  /** UI already listed this project for the signed-in worker (assigned / shared). */
+  assignedToMe?: boolean;
+  /** Business team job org — publishes live timer for managers. */
+  orgId?: string | null;
 };
+
+async function publishOrgLiveTimer(
+  projectId: string,
+  timer: ActiveTimer | null,
+  orgIdHint?: string | null
+): Promise<void> {
+  const orgId = orgIdHint?.trim() || (await resolveProjectOrgId(projectId));
+  await syncOrgLiveTimer(orgId, timer);
+}
+
+/** Re-publish an already-running timer (e.g. after app reload) so managers can see it. */
+export async function syncOrgLiveTimerFromActive(timer: ActiveTimer | null): Promise<void> {
+  if (!timer) return;
+  await publishOrgLiveTimer(timer.projectId, timer);
+}
 
 export async function startTimer(projectId: string, projectName: string, opts?: StartTimerOpts): Promise<ActiveTimer> {
   const uid = auth.currentUser?.uid;
@@ -383,7 +503,9 @@ export async function startTimer(projectId: string, projectName: string, opts?: 
   if (!pid) throw new Error("Chýba ID projektu.");
   const existing = await getActiveTimer();
   if (existing) throw new Error("Časovač už beží. Najprv ho zastavte.");
-  await ensureCanWriteTime(pid, uid, opts?.projectOwnerId ?? null);
+  await ensureCanWriteTime(pid, uid, opts?.projectOwnerId ?? null, {
+    assignedToMe: opts?.assignedToMe === true,
+  });
 
   await requestLocationPermission();
   const gpsStart = await getCurrentPositionSafe();
@@ -439,6 +561,8 @@ export async function startTimer(projectId: string, projectName: string, opts?: 
     console.warn("[timeTracking] replaceRunningTimerNotification (offline OK):", err);
   }
 
+  await publishOrgLiveTimer(pid, activeTimerPayload, opts?.orgId ?? null);
+
   return activeTimerPayload;
 }
 
@@ -453,6 +577,10 @@ export async function pauseTimer(): Promise<ActiveTimer | null> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Musíte byť prihlásený.");
   const userRef = doc(db, paths.userDoc(uid));
+
+  await requestLocationPermission();
+  const gpsAtPause = await withTimeout(getTimerCheckpointGps(), 8000, null);
+  /** Capture after GPS so work segment and pause window share the same instant. */
   const nowIso = new Date().toISOString();
 
   const result = await runTransaction<ActiveTimer | null>(async (transaction) => {
@@ -476,7 +604,10 @@ export async function pauseTimer(): Promise<ActiveTimer | null> {
     const segmentMs = Number.isFinite(sinceMs) ? Math.max(0, new Date(nowIso).getTime() - sinceMs) : 0;
     const newAccumulated = Math.max(0, prevAccumulated + segmentMs);
     const prevPauses = coerceTimerPauses(atMap.pauses);
-    const nextPauses: TimerPause[] = [...prevPauses, { startedAt: nowIso }];
+    const nextPauses: TimerPause[] = [
+      ...prevPauses,
+      { startedAt: nowIso, gpsAtPause: gpsAtPause ?? null },
+    ];
 
     const next: Record<string, unknown> = {
       ...atMap,
@@ -507,12 +638,15 @@ export async function pauseTimer(): Promise<ActiveTimer | null> {
   });
 
   if (result) {
+    const normalized = normalizeActiveTimer(result);
     /** Don't show "running" tray entry while paused. Resume re-creates it. */
     try {
       await clearRunningTimerNotification();
     } catch (err) {
       console.warn("[timeTracking] pauseTimer clearRunningTimerNotification:", err);
     }
+    await publishOrgLiveTimer(normalized.projectId, normalized);
+    return normalized;
   }
 
   return result;
@@ -528,6 +662,9 @@ export async function resumeTimer(): Promise<ActiveTimer | null> {
   const uid = auth.currentUser?.uid;
   if (!uid) throw new Error("Musíte byť prihlásený.");
   const userRef = doc(db, paths.userDoc(uid));
+
+  await requestLocationPermission();
+  const gpsAtResume = await withTimeout(getTimerCheckpointGps(), 8000, null);
   const nowIso = new Date().toISOString();
 
   const result = await runTransaction<ActiveTimer | null>(async (transaction) => {
@@ -545,7 +682,9 @@ export async function resumeTimer(): Promise<ActiveTimer | null> {
 
     const prevPauses = coerceTimerPauses(atMap.pauses);
     const nextPauses: TimerPause[] = prevPauses.map((p, idx) =>
-      idx === prevPauses.length - 1 && !p.endedAt ? { ...p, endedAt: nowIso } : p
+      idx === prevPauses.length - 1 && !p.endedAt
+        ? { ...p, endedAt: nowIso, gpsAtResume: gpsAtResume ?? null }
+        : p
     );
     /** Defensive: if no open pause was found, append a closed zero-length one so audit trail isn't lost. */
     if (
@@ -587,15 +726,18 @@ export async function resumeTimer(): Promise<ActiveTimer | null> {
   });
 
   if (result) {
+    const normalized = normalizeActiveTimer(result);
     try {
       await replaceRunningTimerNotification({
         title: "Timer running",
-        projectName: result.projectNameSnapshot,
-        startedAtIso: result.runningSince ?? result.startedAt,
+        projectName: normalized.projectNameSnapshot,
+        startedAtIso: normalized.runningSince ?? normalized.startedAt,
       });
     } catch (err) {
       console.warn("[timeTracking] resumeTimer replaceRunningTimerNotification (offline OK):", err);
     }
+    await publishOrgLiveTimer(normalized.projectId, normalized);
+    return normalized;
   }
 
   return result;
@@ -639,13 +781,17 @@ export async function stopTimer(note?: string, opts?: StopTimerOpts): Promise<Ti
   );
 
   const flags: { reminded?: boolean; autoStopped?: boolean; lowAccuracy?: boolean } = {};
-  if (active.gpsStart && active.gpsStart.accuracyM > 50) {
+  const gpsCheckpoints: (GpsPoint | null | undefined)[] = [
+    active.gpsStart,
+    ...(active.pauses ?? []).flatMap((p) => [p.gpsAtPause, p.gpsAtResume]),
+  ];
+  if (gpsCheckpoints.some((p) => p && p.accuracyM > 50)) {
     flags.lowAccuracy = true;
   }
 
   await requestLocationPermission();
-  /** Emulator / weak GPS can hang on High accuracy — do not block stop forever. */
-  const gpsEnd = await withTimeout(getCurrentPositionSafe(), 8000, null);
+  /** One-shot checkpoint at stop; timeout so emulator / weak GPS never blocks forever. */
+  const gpsEnd = await withTimeout(getTimerCheckpointGps(), 8000, null);
   if (gpsEnd && gpsEnd.accuracyM > 50) {
     flags.lowAccuracy = true;
   }
@@ -704,6 +850,8 @@ export async function stopTimer(note?: string, opts?: StopTimerOpts): Promise<Ti
     console.warn("[timeTracking] Failed to create stopped notification:", err);
   }
 
+  await publishOrgLiveTimer(entryPid, null);
+
   return {
     id: entryId,
     ...entryData,
@@ -718,6 +866,7 @@ export type AddManualEntryParams = {
   taskId?: string | null;
   taskTitleSnapshot?: string | null;
   projectOwnerId?: string | null;
+  assignedToMe?: boolean;
 };
 
 /**
@@ -735,7 +884,9 @@ export async function addManualEntry(
   if (!uid) throw new Error("Musíte byť prihlásený.");
   const pid = projectId.trim();
   if (!pid) throw new Error("Chýba ID projektu.");
-  await ensureCanWriteTime(pid, uid, opts?.projectOwnerId ?? null);
+  await ensureCanWriteTime(pid, uid, opts?.projectOwnerId ?? null, {
+    assignedToMe: opts?.assignedToMe === true,
+  });
 
   const userName = auth.currentUser?.displayName ?? auth.currentUser?.email ?? "User";
   const startedAt = ymdLocalStartToIso(dateYmd) ?? `${dateYmd}T00:00:00.000Z`;

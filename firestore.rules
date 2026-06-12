@@ -103,6 +103,19 @@ service cloud.firestore {
           )
         );
     }
+    /** Resolves role from uid-keyed or legacy email-keyed member docs. */
+    function orgMemberRoleForUser(orgId, u) {
+      let uidMemberPath = /databases/$(database)/documents/organizations/$(orgId)/members/$(u);
+      return exists(uidMemberPath)
+        ? get(uidMemberPath).data.role
+        : (u == uid() && isOrgMemberViaAuthEmailDoc(orgId)
+          ? get(/databases/$(database)/documents/organizations/$(orgId)/members/$(authEmailLower())).data.role
+          : null);
+    }
+    function isOrgManagerExtended(orgId, u) {
+      return isOrgOwner(orgId, u)
+        || orgMemberRoleForUser(orgId, u) in ['admin', 'manager', 'owner'];
+    }
     function contactIsActive() {
       return !('archivedAt' in resource.data) || resource.data.archivedAt == null;
     }
@@ -182,7 +195,18 @@ service cloud.firestore {
 
     function assignedMemberIdsIncludesSelf(projectId) {
       let data = projectDoc(projectId);
-      return 'assignedMemberIds' in data && uid() in data.assignedMemberIds;
+      return ('assignedMemberIds' in data && uid() in data.assignedMemberIds)
+        || ('assignedUserIds' in data && uid() in data.assignedUserIds);
+    }
+
+    function projectMemberEditorCrew(projectId) {
+      let memberPath = /databases/$(database)/documents/projects/$(projectId)/members/$(uid());
+      return projectMembershipDocActive(projectId)
+        && exists(memberPath)
+        && (
+          get(memberPath).data.permissionLevel == 'editor'
+          || get(memberPath).data.permissionLevel == 'admin'
+        );
     }
 
     function projectMembershipDocActive(projectId) {
@@ -209,6 +233,15 @@ service cloud.firestore {
           || isOrgAdmin(linked, uid())
           || isOrgManager(linked, uid())
         );
+    }
+
+    /** Owner / admin / manager may hide GPS on time entries for org-linked projects. */
+    function canModerateTimeEntryGpsOnProject(projectId) {
+      let data = projectDoc(projectId);
+      let linked = projectLinkedOrgId(data);
+      return data.ownerId == uid()
+        || (linked != null && isOrgManagerExtended(linked, uid()))
+        || canManageOrgProjectAssignments(projectId);
     }
 
     function canReadOrgLinkedProject(projectId) {
@@ -297,6 +330,7 @@ service cloud.firestore {
     function canReadTasks(projectId) {
       return isOwner(projectId)
         || assignedMemberIdsIncludesSelf(projectId)
+        || projectMemberEditorCrew(projectId)
         || (hasAccessDoc(projectId) && access(projectId).sharedItems.tasks == true)
         || (isMember(projectId) && !hasAccessDoc(projectId))
         || projectMemberSharedItemAllowed(projectId, 'tasks');
@@ -304,6 +338,7 @@ service cloud.firestore {
     function canReadPhases(projectId) {
       return isOwner(projectId)
         || assignedMemberIdsIncludesSelf(projectId)
+        || projectMemberEditorCrew(projectId)
         || (hasAccessDoc(projectId) && access(projectId).sharedItems.phases == true)
         || (isMember(projectId) && !hasAccessDoc(projectId))
         || projectMemberSharedItemAllowed(projectId, 'phases');
@@ -476,6 +511,12 @@ service cloud.firestore {
 
       allow delete: if signedIn() && (isOrgAdmin(orgId, uid()) || isOrgOwner(orgId, uid()));
 
+      // Live crew timers — worker publishes; org members (managers) subscribe
+      match /liveTimers/{memberUid} {
+        allow read: if signedIn() && isOrgMemberActive(orgId);
+        allow create, update, delete: if signedIn() && uid() == memberUid && isOrgMemberActive(orgId);
+      }
+
       // B2B Org members: read for self or active member; create/update/delete ONLY for org admin
       match /members/{memberId} {
         allow create: if signedIn()
@@ -624,6 +665,7 @@ service cloud.firestore {
         && (
           resource.data.ownerId == uid()
           || ('assignedMemberIds' in resource.data && uid() in resource.data.assignedMemberIds)
+          || ('assignedUserIds' in resource.data && uid() in resource.data.assignedUserIds)
           || isMember(projectId)
           || canReadOrgLinkedProject(projectId)
         );
@@ -860,6 +902,17 @@ service cloud.firestore {
     }
 
     // Time entries (time tracking / attendance)
+    function timeEntryGpsHideUpdateValid() {
+      let changed = request.resource.data.diff(resource.data).affectedKeys();
+      return changed.hasOnly(['gpsStartHidden', 'gpsEndHidden', 'gpsHiddenReason', 'gpsHiddenBy', 'gpsHiddenAt', 'updatedAt'])
+        && request.resource.data.gpsHiddenBy == uid()
+        && (
+          request.resource.data.gpsStartHidden == true
+          || request.resource.data.gpsEndHidden == true
+        )
+        && !changed.hasAny(['userId', 'projectId', 'durationMinutes', 'startedAt', 'endedAt', 'gpsStart', 'gpsEnd', 'mode', 'date']);
+    }
+
     match /timeEntries/{entryId} {
       allow create: if signedIn()
         && request.resource.data.userId == uid()
@@ -870,7 +923,14 @@ service cloud.firestore {
           || canWriteAsEditor(resource.data.projectId)
           || (isMember(resource.data.projectId) && timeTrackingReadAllowed(resource.data.projectId))
         );
-      allow update, delete: if signedIn() && resource.data.userId == uid();
+      allow update: if signedIn() && (
+        resource.data.userId == uid()
+        || (
+          timeEntryGpsHideUpdateValid()
+          && canModerateTimeEntryGpsOnProject(resource.data.projectId)
+        )
+      );
+      allow delete: if signedIn() && resource.data.userId == uid();
     }
 
     // collectionGroup("members") — self membership discovery (org + project); no email-wide scans

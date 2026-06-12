@@ -36,9 +36,26 @@ export async function requestLocationPermission(): Promise<boolean> {
   }
 }
 
+const CHECKPOINT_TIMEOUT_MS = 6000;
+
+function coordsToGpsPoint(coords: {
+  latitude: number;
+  longitude: number;
+  accuracy?: number | null;
+}): GpsPoint {
+  const accuracyM = coords.accuracy ?? 0;
+  return {
+    lat: coords.latitude,
+    lng: coords.longitude,
+    accuracyM,
+    timestamp: new Date().toISOString(),
+    source: accuracyM <= 100 ? "gps" : "network",
+  };
+}
+
 /**
- * Get current position. Does not block if permission denied.
- * Returns null on any error, denied permission, or when expo-location is unavailable.
+ * One-shot GPS read for timer start/stop. Higher accuracy when available.
+ * Never starts background or continuous tracking.
  */
 export async function getCurrentPositionSafe(): Promise<GpsPoint | null> {
   const Location = getLocationModule();
@@ -51,16 +68,41 @@ export async function getCurrentPositionSafe(): Promise<GpsPoint | null> {
     const loc = await Location.getCurrentPositionAsync({
       accuracy: Location.Accuracy.High,
     });
-    const coords = loc.coords;
-    return {
-      lat: coords.latitude,
-      lng: coords.longitude,
-      accuracyM: coords.accuracy ?? 0,
-      timestamp: new Date().toISOString(),
-      source: (coords.accuracy ?? 999) <= 100 ? "gps" : "network",
-    };
+    return coordsToGpsPoint(loc.coords);
   } catch (err) {
     console.warn("[location] getCurrentPosition error:", err);
+    return null;
+  }
+}
+
+/**
+ * Battery-friendly one-shot GPS for pause/resume checkpoints.
+ * Balanced accuracy + hard timeout — no watchPosition, no background updates.
+ */
+export async function getTimerCheckpointGps(): Promise<GpsPoint | null> {
+  const Location = getLocationModule();
+  if (!Location) return null;
+  try {
+    const { status } = await Location.getForegroundPermissionsAsync();
+    if (status !== "granted") {
+      return null;
+    }
+    const locPromise = Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+      mayShowUserSettingsDialog: false,
+    });
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<null>((resolve) => {
+      timeoutId = setTimeout(() => resolve(null), CHECKPOINT_TIMEOUT_MS);
+    });
+    const result = await Promise.race([locPromise, timeoutPromise]);
+    if (timeoutId) clearTimeout(timeoutId);
+    if (!result || typeof result !== "object" || !("coords" in result)) {
+      return null;
+    }
+    return coordsToGpsPoint((result as { coords: Parameters<typeof coordsToGpsPoint>[0] }).coords);
+  } catch (err) {
+    console.warn("[location] getTimerCheckpointGps error:", err);
     return null;
   }
 }

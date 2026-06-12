@@ -30,6 +30,8 @@ export type CachedBusinessOrgSummary = {
 export type CachedProjectEntry = Record<string, unknown> & { id: string; name: string };
 
 export type CachedProjectList = {
+  /** Firebase uid — prevents showing another account's cached projects after switch. */
+  ownerUid: string;
   projects: CachedProjectEntry[];
   cachedAt: number;
 };
@@ -78,15 +80,32 @@ export async function saveCachedBusinessOrgSummary(
   await writeJson(BUSINESS_ORG_SUMMARY_KEY, { ...summary, cachedAt: Date.now() });
 }
 
-export async function loadCachedProjectList<T extends CachedProjectEntry = CachedProjectEntry>(): Promise<T[] | null> {
+export async function loadCachedProjectList<T extends CachedProjectEntry = CachedProjectEntry>(
+  ownerUid?: string | null
+): Promise<T[] | null> {
   const data = await readJson<CachedProjectList>(PROJECT_LIST_KEY);
   if (!data?.projects?.length) return null;
+  const cachedOwner = typeof data.ownerUid === "string" ? data.ownerUid.trim() : "";
+  if (!cachedOwner) return null;
+  if (ownerUid?.trim() && cachedOwner !== ownerUid.trim()) return null;
   return data.projects as T[];
 }
 
-export async function saveCachedProjectList(projects: CachedProjectEntry[]): Promise<void> {
-  if (!projects.length) return;
-  await writeJson(PROJECT_LIST_KEY, { projects, cachedAt: Date.now() });
+export async function saveCachedProjectList(
+  projects: CachedProjectEntry[],
+  ownerUid: string
+): Promise<void> {
+  const uid = ownerUid.trim();
+  if (!projects.length || !uid) return;
+  await writeJson(PROJECT_LIST_KEY, { ownerUid: uid, projects, cachedAt: Date.now() });
+}
+
+export async function clearCachedProjectList(): Promise<void> {
+  try {
+    await AsyncStorage.removeItem(PROJECT_LIST_KEY);
+  } catch {
+    /* ignore */
+  }
 }
 
 export async function loadLastOpenedProjectId(): Promise<string | null> {

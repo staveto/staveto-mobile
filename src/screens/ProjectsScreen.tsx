@@ -133,6 +133,7 @@ export function ProjectsScreen() {
   const { activeBusinessOrgId } = useActiveOrg();
   const { canViewAllProjects, restrictsToAssignedProjectsOnly, canCreateProject } = useOrgAccess();
   const authUid = user?.id ?? orgId ?? "";
+  const prevAuthUidRef = useRef<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -177,6 +178,23 @@ export function ProjectsScreen() {
     if (isLegacyMaintenanceEquipmentHub(project)) return "#7dcea0";
     return getActiveProductProjectType(project) === "TRADE" ? "#5dade2" : "#ff9f43";
   }, []);
+
+  useEffect(() => {
+    if (!authUid) {
+      prevAuthUidRef.current = null;
+      setProjects([]);
+      setProjectStats(new Map());
+      setLoading(true);
+      return;
+    }
+    if (prevAuthUidRef.current != null && prevAuthUidRef.current !== authUid) {
+      setProjects([]);
+      setProjectStats(new Map());
+      setLoading(true);
+      setError(null);
+    }
+    prevAuthUidRef.current = authUid;
+  }, [authUid]);
 
   useEffect(() => {
     AsyncStorage.getItem(PROJECTS_FILTER_KEY).then((saved) => {

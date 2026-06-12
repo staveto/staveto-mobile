@@ -41,9 +41,16 @@ import { useRoute, useNavigation, NavigationProp, useFocusEffect } from "@react-
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
+import { resolvePhaseDisplayName, derivePhasesFromTaskRows } from "../lib/projectPhases";
+import {
+  canWorkerToggleTaskStatus,
+  countDoneTasks,
+  canManageTaskPlanningFromAccess,
+  filterTasksForWorkerView,
+} from "../lib/taskPlanningPermissions";
 import { useCapabilities } from "../hooks/useCapabilities";
 import { useOrgAccess } from "../hooks/useOrgAccess";
-import { useProjectAccess, fetchProjectAccess } from "../hooks/useProjectAccess";
+import { useProjectAccess, fetchProjectAccess, type ProjectAccess } from "../hooks/useProjectAccess";
 import type { SmartReadOptions } from "../services/firestoreSmartRead";
 import { useI18n } from "../i18n/I18nContext";
 import * as projectsService from "../services/projects";
@@ -99,7 +106,7 @@ import * as timeTracking from "../services/timeTracking";
 import { postDebugIngest } from "../lib/debugIngest";
 import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
 import * as quickNotesService from "../services/quickNotes";
-import { updateTaskStatus } from "../services/taskService";
+import { updateTaskStatus } from "../services/tasks";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
 import { addPhasesToProject } from "../services/addPhasesToProject";
 import type { TaskDoc } from "../services/tasks";
@@ -301,7 +308,9 @@ export function ProjectOverviewScreen() {
       .forEach((id, idx) => {
         synthetic.push({
           id,
-          name: t("projectOverview.phaseSyntheticLabel", { index: String(idx + 1) }),
+          name:
+            resolvePhaseDisplayName(id, tasks) ??
+            t("projectOverview.phaseSyntheticLabel", { index: String(idx + 1) }),
           order: 1_000_000 + idx,
         });
       });
@@ -354,6 +363,8 @@ export function ProjectOverviewScreen() {
   const [showTaskDescriptionModal, setShowTaskDescriptionModal] = useState(false);
   /** Session-only dismiss for the post-create empty-state hero. Hides until next reload. */
   const [emptyHeroDismissed, setEmptyHeroDismissed] = useState(false);
+  /** Access resolved during load() — may grant task read before useProjectAccess hook catches up. */
+  const [loadAccess, setLoadAccess] = useState<ProjectAccess | null>(null);
   const [newTitle, setNewTitle] = useState("");
   const [selectedPhaseId, setSelectedPhaseId] = useState<string | null>(null); // Phase for new task
   const [showNewPhaseModal, setShowNewPhaseModal] = useState(false);
@@ -469,6 +480,18 @@ export function ProjectOverviewScreen() {
   const [expenseOcrRawText, setExpenseOcrRawText] = useState<string>("");
   const [materialImportSheet, setMaterialImportSheet] = useState<ExpenseMaterialImportContext | null>(null);
   const access = useProjectAccess(projectId, projectOwnerId);
+  const effectiveAccess = useMemo((): ProjectAccess => {
+    if (!loadAccess) return access;
+    return {
+      ...access,
+      loading: access.loading && loadAccess.loading,
+      isMember: access.isMember || loadAccess.isMember,
+      canReadTasks: access.canReadTasks || loadAccess.canReadTasks || tasks.length > 0,
+      canReadPhases: access.canReadPhases || loadAccess.canReadPhases || phases.length > 0,
+      canWrite: access.canWrite || loadAccess.canWrite,
+      canWriteTime: access.canWriteTime || loadAccess.canWriteTime,
+    };
+  }, [access, loadAccess, tasks.length, phases.length]);
   const isOwner = access.isOwner || (!!projectOwnerId && !!user?.id && projectOwnerId === user.id);
   /** Native tab bar is visible inside HomeStack; custom dock would duplicate it. */
   const insideMainTabs = useIsInsideMainTabNavigator();
@@ -501,6 +524,38 @@ export function ProjectOverviewScreen() {
     access.sharedItems.tasks,
     access.sharedItems.phases,
   ]);
+
+  /** Owner / editor — full task list; workers — unassigned + own (same as web Tasks tab). */
+  const canManagePlanning = useMemo(
+    () =>
+      canManageTaskPlanningFromAccess({
+        loading: access.loading,
+        isOwner: access.isOwner,
+        canWrite: access.canWrite,
+        sharedItems: access.sharedItems,
+      }),
+    [access.loading, access.isOwner, access.canWrite, access.sharedItems]
+  );
+  const tasksForDisplay = useMemo(() => {
+    const uid = user?.id ?? "";
+    if (canManagePlanning || !uid) return tasks;
+    return filterTasksForWorkerView(tasks, uid);
+  }, [tasks, canManagePlanning, user?.id]);
+
+  const canToggleTaskStatusFor = useCallback(
+    (task: TaskDoc) => canWorkerToggleTaskStatus(task, user?.id ?? "", canManagePlanning),
+    [user?.id, canManagePlanning]
+  );
+
+  const taskStatusLabel = useCallback(
+    (status: string | undefined) => {
+      const s = (status ?? "OPEN").toUpperCase();
+      if (s === "DONE") return t("tasks.statusDone");
+      if (s === "DOING") return t("tasks.statusDoing");
+      return t("tasks.statusOpen");
+    },
+    [t]
+  );
 
   const isTimerRunningOnThisProject = useMemo(
     () => !!activeTimer && activeTimer.projectId === projectId,
@@ -571,7 +626,7 @@ export function ProjectOverviewScreen() {
   const [uploadingDocumentAttachment, setUploadingDocumentAttachment] = useState(false);
   const [whatsappDiaryEnabled, setWhatsappDiaryEnabled] = useState(false);
   const [contractorsEnabled, setContractorsEnabled] = useState(false);
-  const [phasesSectionExpanded, setPhasesSectionExpanded] = useState(false);
+  const [phasesSectionExpanded, setPhasesSectionExpanded] = useState(true);
   const [taskFilter, setTaskFilter] = useState<'service' | 'all'>('service');
   const [activityEvents, setActivityEvents] = useState<ProjectEvent[]>([]);
   useEffect(() => {
@@ -810,15 +865,22 @@ export function ProjectOverviewScreen() {
       const isAiGeneratedPlan = project?.templateId === "ai-generated";
       
       const resolvedOwnerId = project?.ownerId ?? projectOwnerId ?? null;
-      if (project && resolvedOwnerId && resolvedOwnerId !== currentUserUid) {
+      const isProjectOwner = !!(resolvedOwnerId && resolvedOwnerId === currentUserUid);
+      if (project && resolvedOwnerId && !isProjectOwner) {
         await healProjectAccessForCurrentUser(projectId);
       }
-      const liveAccess = await fetchProjectAccess(projectId, currentUserUid, resolvedOwnerId);
+      const liveAccess = await fetchProjectAccess(projectId, currentUserUid, resolvedOwnerId, {
+        forceServer: !isProjectOwner,
+      });
+      if (routeProjectIdRef.current === loadForProjectId) {
+        setLoadAccess(liveAccess);
+      }
 
-      const isProjectOwner = !!(resolvedOwnerId && resolvedOwnerId === currentUserUid);
       const isOwnerForLoad = isProjectOwner || liveAccess.isOwner;
       const canReadPhases = isOwnerForLoad || liveAccess.canReadPhases;
-      const canReadTasks = isOwnerForLoad || liveAccess.canReadTasks;
+      /** Always attempt task load when project is readable — Firestore is authoritative (matches TasksScreen). */
+      const shouldLoadTasks = !!project;
+      const canReadTasks = isOwnerForLoad || liveAccess.canReadTasks || shouldLoadTasks;
       const canReadExpenses = isOwnerForLoad || liveAccess.canReadExpenses;
       const canReadDiary = isOwnerForLoad || liveAccess.canReadDiary;
       const canReadDocuments = isOwnerForLoad || liveAccess.canReadDocuments;
@@ -831,7 +893,7 @@ export function ProjectOverviewScreen() {
       const loadPromises: Promise<any>[] = [];
       
       const shouldLoadProjectPhases =
-        (isBuildProject || isAiGeneratedPlan || projectTypeForLoad === "TRADE") && canReadPhases;
+        !!project && (isBuildProject || isAiGeneratedPlan || projectTypeForLoad === "TRADE");
       if (shouldLoadProjectPhases) {
         loadPromises.push(
           projectsService.listProjectPhases(projectId, readOpts).catch((error: any) => {
@@ -847,7 +909,7 @@ export function ProjectOverviewScreen() {
         loadPromises.push(Promise.resolve([]));
       }
       
-      if (canReadTasks) {
+      if (shouldLoadTasks) {
         loadPromises.push(
           tasksService.listTasksByProject(projectId, readOpts).catch((error: any) => {
             console.error(`[ProjectOverview] Error loading tasks:`, error);
@@ -858,7 +920,7 @@ export function ProjectOverviewScreen() {
       } else {
         loadPromises.push(Promise.resolve([]));
       }
-      
+
       if (canReadExpenses) {
         loadPromises.push(
           expensesService.listExpensesByProject(projectId, readOpts).catch((error: any) => {
@@ -945,12 +1007,67 @@ export function ProjectOverviewScreen() {
         }
       }
       
+      let phasesLoaded: typeof ph = ph || [];
+      if (shouldLoadProjectPhases && phasesLoaded.length === 0 && !isOwnerForLoad) {
+        try {
+          const retryPhases = await projectsService.listProjectPhases(projectId, {
+            forceServer: true,
+            preferCacheWhenPoor: false,
+          });
+          if (retryPhases.length > 0) {
+            phasesLoaded = retryPhases;
+            if (__DEV__) {
+              console.log(`[ProjectOverview] Phase retry recovered ${retryPhases.length} phases`);
+            }
+          }
+        } catch (retryErr) {
+          if (__DEV__) console.warn("[ProjectOverview] Phase server retry failed:", retryErr);
+        }
+      }
+
+      let tasksLoaded: TaskDoc[] = tk || [];
+      if (shouldLoadTasks && tasksLoaded.length === 0 && !isOwnerForLoad) {
+        try {
+          const retryTasks = await tasksService.listTasksByProject(projectId, {
+            forceServer: true,
+            preferCacheWhenPoor: false,
+          });
+          if (retryTasks.length > 0) {
+            tasksLoaded = retryTasks;
+            if (__DEV__) {
+              console.log(`[ProjectOverview] Task retry recovered ${retryTasks.length} tasks`);
+            }
+          }
+        } catch (retryErr) {
+          if (__DEV__) console.warn("[ProjectOverview] Task server retry failed:", retryErr);
+        }
+      }
+
+      setTasks(tasksLoaded);
+
+      let phasesForState = phasesLoaded;
+      if (
+        (isBuildProject || isAiGeneratedPlan || projectTypeForLoad === "TRADE") &&
+        phasesForState.length === 0 &&
+        tasksLoaded.some((tk) => !!(tk.phaseId?.trim() || tk.phaseTitle?.trim()))
+      ) {
+        phasesForState = derivePhasesFromTaskRows(tasksLoaded);
+      }
       if (isBuildProject || isAiGeneratedPlan || projectTypeForLoad === "TRADE") {
-        setPhases(ph || []);
+        setPhases(phasesForState);
       } else {
         setPhases([]);
       }
-      setTasks(tk || []);
+
+      if (tasksLoaded.length > 0 || phasesForState.length > 0) {
+        setPhasesSectionExpanded(true);
+        if (phasesForState.length > 0) {
+          const expanded = new Map<string, boolean>();
+          phasesForState.forEach((p) => expanded.set(p.id, true));
+          expandedPhasesRef.current = expanded;
+          setExpandedPhases(expanded);
+        }
+      }
       setExpenses(exp || []);
       setDiaryEntries(hasDiary ? diary : []);
       setProjectDocuments(canReadDocuments ? docs : []);
@@ -1294,11 +1411,12 @@ export function ProjectOverviewScreen() {
   useEffect(() => {
     if (!projectId || access.loading) return;
     void load();
-  }, [projectId, access.loading, access.isOwner, access.canReadTasks, user?.id, load]);
+  }, [projectId, access.loading, user?.id, load]);
 
   useEffect(() => {
     projectDataLoadedOnceRef.current = false;
     projectLoadGenerationRef.current += 1;
+    setLoadAccess(null);
   }, [projectId]);
 
   useFocusEffect(
@@ -1735,6 +1853,7 @@ export function ProjectOverviewScreen() {
 
   const toggleTaskStatus = async (task: TaskDoc) => {
     if (!projectId) return;
+    if (!canToggleTaskStatusFor(task)) return;
     const newStatus = task.status === "DONE" ? "OPEN" : "DONE";
 
     if (newStatus === "DONE" && (task.subtasks?.length ?? 0) > 0) {
@@ -1758,7 +1877,7 @@ export function ProjectOverviewScreen() {
     if (!projectId) return;
     try {
       console.log(`[ProjectOverview] Toggling task ${task.id} to ${newStatus}`);
-      await updateTaskStatus(projectId, task.id, newStatus);
+      await updateTaskStatus(user?.id ?? orgId ?? "", projectId, task.id, newStatus);
       await load(true);
     } catch (error: any) {
       console.error(`[ProjectOverview] Error toggling task status:`, error);
@@ -2289,8 +2408,10 @@ export function ProjectOverviewScreen() {
 
   const assigneeDisplay = (task: TaskDoc) => {
     const name = task.assigneeName?.trim();
-    if (!name) return t("projectOverview.unassigned") || "Nepriradené";
-    if (name === "—" || name === "\u2014" || name === "â€\"" || name === "-" || name === "–") return t("projectOverview.unassigned") || "Nepriradené";
+    if (!name) return t("projectOverview.unassigned");
+    if (name === "—" || name === "\u2014" || name === "â€\"" || name === "-" || name === "–") {
+      return t("projectOverview.unassigned");
+    }
     return name;
   };
 
@@ -2321,8 +2442,8 @@ export function ProjectOverviewScreen() {
       {
         key: `user:${user.id}`,
         assigneeId: user.id,
-        assigneeName: user.name ?? user.email ?? "Ja",
-        label: user.name ?? user.email ?? "Ja",
+        assigneeName: user.name ?? user.email ?? t("time.dailyProtocol.me"),
+        label: user.name ?? user.email ?? t("time.dailyProtocol.me"),
       },
       ...activeMembers,
       ...invitedMembers,
@@ -2330,7 +2451,7 @@ export function ProjectOverviewScreen() {
         key: "unassigned",
         assigneeId: null as string | null,
         assigneeName: null,
-        label: t("projectOverview.unassigned") || "Nepriradené",
+        label: t("projectOverview.unassigned"),
       },
     ].filter((entry, index, arr) => arr.findIndex((x) => x.key === entry.key) === index);
 
@@ -4211,17 +4332,27 @@ export function ProjectOverviewScreen() {
   const aiPlanFallbackFlat =
     templateId === "ai-generated" &&
     phases.length === 0 &&
-    tasks.length > 0 &&
+    tasksForDisplay.length > 0 &&
     !hasPhaseLinksOnTasks;
   const renderTradeLikeFlatRows = tradeFlatNoPhaseUi || aiPlanFallbackFlat;
   const hasWorkPlanContent =
-    phases.length > 0 || tasks.length > 0 || hasPhaseLinksOnTasks || templateId === "ai-generated";
+    phases.length > 0 || tasksForDisplay.length > 0 || hasPhaseLinksOnTasks || templateId === "ai-generated";
+
+  const showWorkPlanSection =
+    projectType !== "MAINTENANCE" &&
+    !businessProjectAccessDenied &&
+    (hasWorkPlanContent ||
+      effectiveAccess.canReadTasks ||
+      effectiveAccess.canReadPhases ||
+      effectiveAccess.isMember ||
+      loadAccess != null ||
+      loading);
 
   const tasksByPhase = new Map<string, TaskDoc[]>();
   const phaseOrder: string[] = [];
 
   if (showPhaseGroupedTasks) {
-    tasks.forEach((tk) => {
+    tasksForDisplay.forEach((tk) => {
       let bucket: string | null = tk.phaseId?.trim() || null;
       if (!bucket && tk.phaseTitle?.trim()) {
         bucket = phaseTitleGroupKey(tk.phaseTitle.trim());
@@ -4238,14 +4369,14 @@ export function ProjectOverviewScreen() {
   }
 
   const tasksWithoutPhase = showPhaseGroupedTasks
-    ? tasks.filter((t) => !t.phaseId?.trim() && !t.phaseTitle?.trim())
+    ? tasksForDisplay.filter((t) => !t.phaseId?.trim() && !t.phaseTitle?.trim())
     : [];
   
   // MAINTENANCE: filter tasks by type (service vs all)
   const maintenanceTasks = projectType === 'MAINTENANCE' 
-    ? (taskFilter === 'service' ? tasks.filter(t => t.serviceRuleId != null) : tasks)
-    : tasks;
-  const displayTasksForMaintenance = projectType === 'MAINTENANCE' ? maintenanceTasks : tasks;
+    ? (taskFilter === 'service' ? tasksForDisplay.filter(t => t.serviceRuleId != null) : tasksForDisplay)
+    : tasksForDisplay;
+  const displayTasksForMaintenance = projectType === 'MAINTENANCE' ? maintenanceTasks : tasksForDisplay;
   
   // Equipment map for task row lookup (equipmentId -> equipment)
   const equipmentMap = React.useMemo(() => {
@@ -4524,6 +4655,7 @@ export function ProjectOverviewScreen() {
         {projectType !== 'MAINTENANCE'
           && !loading
           && !emptyHeroDismissed
+          && !showWorkPlanSection
           && tasks.length === 0
           && phases.length === 0
           && expenses.length === 0
@@ -4620,7 +4752,7 @@ export function ProjectOverviewScreen() {
         {/* Table: Task Name | Assignee - only show if user can read tasks or phases */}
         {/* For TRADE/MAINTENANCE: only show table if there are tasks */}
         {/* For BUILD/MANAGEMENT: always show table */}
-        {!access.loading && (access.canReadTasks || access.canReadPhases || hasWorkPlanContent) && (
+        {!access.loading && showWorkPlanSection && (
           <View style={styles.tableContainer}>
             <ScrollView 
               style={styles.tableScroll} 
@@ -4640,10 +4772,10 @@ export function ProjectOverviewScreen() {
                 style={{ marginRight: 8 }}
               />
               <Text style={styles.phasesSectionHeaderText}>
-                {projectType === 'MAINTENANCE' ? (t("equipment.openServiceTasks") || "Open service tasks") : (t("projectOverview.phasesSection") || "Fázy a úlohy")}
+                {projectType === 'MAINTENANCE' ? (t("equipment.openServiceTasks")) : t("projectOverview.phasesSection")}
               </Text>
               <Text style={styles.phasesSectionCount}>
-                ({projectType === 'MAINTENANCE' ? displayTasksForMaintenance.length : tasks.length})
+                ({projectType === 'MAINTENANCE' ? displayTasksForMaintenance.length : tasksForDisplay.length})
               </Text>
             </View>
           </TouchableOpacity>
@@ -4656,7 +4788,7 @@ export function ProjectOverviewScreen() {
                 style={[styles.filterChip, taskFilter === 'service' && { backgroundColor: colors.primary, borderColor: colors.primary }]}
               >
                 <Text style={[styles.filterChipText, taskFilter === 'service' && { color: '#fff' }]}>
-                  {t("projectOverview.serviceTasksFilter") || "Servisné"}
+                  {t("projectOverview.serviceTasksFilter")}
                 </Text>
               </TouchableOpacity>
               <TouchableOpacity
@@ -4664,7 +4796,7 @@ export function ProjectOverviewScreen() {
                 style={[styles.filterChip, taskFilter === 'all' && { backgroundColor: colors.primary, borderColor: colors.primary }]}
               >
                 <Text style={[styles.filterChipText, taskFilter === 'all' && { color: '#fff' }]}>
-                  {t("projectOverview.allTasksFilter") || "Všetky"}
+                  {t("projectOverview.allTasksFilter")}
                 </Text>
               </TouchableOpacity>
             </View>
@@ -4675,19 +4807,19 @@ export function ProjectOverviewScreen() {
           </View>
           {loading ? (
             <ActivityIndicator color={colors.primary} style={styles.loader} />
-          ) : (projectType === 'MAINTENANCE' ? displayTasksForMaintenance.length : tasks.length) === 0 &&
+          ) : (projectType === 'MAINTENANCE' ? displayTasksForMaintenance.length : tasksForDisplay.length) === 0 &&
             ((!showPhaseGroupedTasks && isTradeOrMaintenance) ||
               (showPhaseGroupedTasks && phasesForUi.length === 0 && !hasPhaseLinksOnTasks)) ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.empty}>
               {isTradeOrMaintenance 
                 ? t("projectOverview.noTasksProject")
-                : (t("projectOverview.noPhases") || "Projekt nemá žiadne fázy ani úlohy.")}
+                : t("projectOverview.noPhases")}
             </Text>
             <Text style={styles.emptySubtext}>
               {isTradeOrMaintenance 
                 ? t("projectOverview.noTasksHint")
-                : (t("projectOverview.addPhaseHint") || "Môžeš pridať fázy a úlohy neskôr.")}
+                : t("projectOverview.addPhaseHint")}
             </Text>
             {access.canWrite && !isTradeOrMaintenance && !templateId && (projectType === 'MANAGEMENT' || projectType === 'BUILD') && (access.canReadPhases || access.canReadTasks) && (
               <TouchableOpacity
@@ -4702,7 +4834,7 @@ export function ProjectOverviewScreen() {
         ) : renderTradeLikeFlatRows ? (
           // Plain TRADE / MAINTENANCE (non–AI wizard): flat list. AI-generated plans use phased layout below when phases load.
           <>
-            {(projectType === "MAINTENANCE" ? displayTasksForMaintenance : tasks)
+            {(projectType === "MAINTENANCE" ? displayTasksForMaintenance : tasksForDisplay)
               .slice()
               .sort((a, b) => {
                 const pa = a.phaseId ?? "";
@@ -4713,6 +4845,7 @@ export function ProjectOverviewScreen() {
               .map((task) => (
               <View key={task.id} style={styles.taskRow}>
               <View style={styles.taskNameCell}>
+                {canToggleTaskStatusFor(task) ? (
                 <TouchableOpacity 
                   onPress={() => toggleTaskStatus(task)} 
                   activeOpacity={0.7}
@@ -4724,6 +4857,15 @@ export function ProjectOverviewScreen() {
                     color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
                   />
                 </TouchableOpacity>
+                ) : (
+                <View style={styles.statusToggle}>
+                  <Ionicons 
+                    name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
+                    size={24}
+                    color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
+                  />
+                </View>
+                )}
                 <TouchableOpacity 
                   style={styles.taskTitleContainer} 
                   onPress={() => openTaskDetail(task)} 
@@ -4731,6 +4873,9 @@ export function ProjectOverviewScreen() {
                 >
                   <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={3}>
                     {task.title || t("tasks.noTitle")}
+                  </Text>
+                  <Text style={[styles.taskStatusChip, task.status === "DONE" && styles.taskStatusChipDone]}>
+                    {taskStatusLabel(task.status)}
                   </Text>
                   {(task.subtasks?.length ?? 0) > 0 && (
                     <Text style={styles.taskSubtaskProgress}>
@@ -4798,8 +4943,8 @@ export function ProjectOverviewScreen() {
           </>
         ) : phasesForUi.length === 0 ? (
           <View style={styles.emptyContainer}>
-            <Text style={styles.empty}>{t("projectOverview.noPhases") || "Projekt nemá žiadne fázy."}</Text>
-            <Text style={styles.emptySubtext}>{t("projectOverview.addPhaseHint") || "Môžeš pridať fázy neskôr."}</Text>
+            <Text style={styles.empty}>{t("projectOverview.noPhases")}</Text>
+            <Text style={styles.emptySubtext}>{t("projectOverview.addPhaseHint")}</Text>
             {isOwner && (projectType === 'BUILD' || (projectType === 'MANAGEMENT' && !templateId)) && (
               <>
                 <TouchableOpacity
@@ -4827,14 +4972,14 @@ export function ProjectOverviewScreen() {
             )}
             
             {/* For BUILD projects: show phases with tasks */}
-            {phaseOrder.map((phaseKey) => {
+            {phaseOrder.filter((phaseKey) => canManagePlanning || (tasksByPhase.get(phaseKey)?.length ?? 0) > 0).map((phaseKey) => {
               const phaseTasks = tasksByPhase.get(phaseKey) ?? [];
               const phase = phasesForUi.find((p) => p.id === phaseKey);
               const phaseExistsInFirestore = phases.some((p) => p.id === phaseKey);
 
               // Show phase (even if it has no tasks - make it clickable)
               if (phase) {
-                const expanded = expandedPhases.get(phaseKey) ?? false; // Default collapsed
+                const expanded = expandedPhases.get(phaseKey) ?? true;
                 return (
                   <View key={phaseKey} style={styles.phaseBlock}>
                     <View style={styles.phaseHeaderContainer}>
@@ -4864,7 +5009,7 @@ export function ProjectOverviewScreen() {
                               </Text>
                               {phaseTasks.length > 0 && (
                                 <Text style={[styles.phaseTaskCount, phaseComplete && styles.phaseTaskCountDone]}>
-                                  ({phaseTasks.length})
+                                  ({countDoneTasks(phaseTasks)}/{phaseTasks.length})
                                 </Text>
                               )}
                             </>
@@ -4920,7 +5065,7 @@ export function ProjectOverviewScreen() {
                             activeOpacity={0.7}
                           >
                             <Ionicons name="add-circle-outline" size={18} color={colors.primary} style={{ marginRight: 6 }} />
-                            <Text style={styles.addTaskToPhaseText}>{t("projectOverview.addTaskToPhase") || "Pridať úlohu"}</Text>
+                            <Text style={styles.addTaskToPhaseText}>{t("projectOverview.addTaskToPhase")}</Text>
                           </TouchableOpacity>
                         ) : null}
                         
@@ -4930,6 +5075,7 @@ export function ProjectOverviewScreen() {
                           phaseTasks.map((task) => (
                             <View key={task.id} style={styles.taskRow}>
                               <View style={styles.taskNameCell}>
+                                {canToggleTaskStatusFor(task) ? (
                                 <TouchableOpacity 
                                   onPress={() => toggleTaskStatus(task)} 
                                   activeOpacity={0.7}
@@ -4941,6 +5087,15 @@ export function ProjectOverviewScreen() {
                                     color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
                                   />
                                 </TouchableOpacity>
+                                ) : (
+                                <View style={styles.statusToggle}>
+                                  <Ionicons 
+                                    name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
+                                    size={24}
+                                    color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
+                                  />
+                                </View>
+                                )}
                                 <TouchableOpacity 
                                   style={styles.taskTitleContainer} 
                                   onPress={() => openTaskDetail(task)} 
@@ -4948,6 +5103,9 @@ export function ProjectOverviewScreen() {
                                 >
                                   <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={3}>
                                     {task.title || t("tasks.noTitle")}
+                                  </Text>
+                                  <Text style={[styles.taskStatusChip, task.status === "DONE" && styles.taskStatusChipDone]}>
+                                    {taskStatusLabel(task.status)}
                                   </Text>
                                   {(task.subtasks?.length ?? 0) > 0 && (
                                     <Text style={styles.taskSubtaskProgress}>
@@ -5027,12 +5185,13 @@ export function ProjectOverviewScreen() {
                     style={{ marginRight: 8 }}
                   />
                   <Text style={styles.phaseTitle}>{t("projectOverview.tasksWithoutPhase")}</Text>
-                  <Text style={styles.phaseTaskCount}>({tasksWithoutPhase.length})</Text>
+                  <Text style={styles.phaseTaskCount}>({countDoneTasks(tasksWithoutPhase)}/{tasksWithoutPhase.length})</Text>
                 </View>
                 <View style={styles.phaseContent}>
                   {tasksWithoutPhase.map((task) => (
                     <View key={task.id} style={styles.taskRow}>
                       <View style={styles.taskNameCell}>
+                        {canToggleTaskStatusFor(task) ? (
                         <TouchableOpacity 
                           onPress={() => toggleTaskStatus(task)} 
                           activeOpacity={0.7}
@@ -5044,6 +5203,15 @@ export function ProjectOverviewScreen() {
                             color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
                           />
                         </TouchableOpacity>
+                        ) : (
+                        <View style={styles.statusToggle}>
+                          <Ionicons 
+                            name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
+                            size={24}
+                            color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
+                          />
+                        </View>
+                        )}
                         <TouchableOpacity 
                           style={styles.taskTitleContainer} 
                           onPress={() => openTaskDetail(task)} 
@@ -5051,6 +5219,9 @@ export function ProjectOverviewScreen() {
                         >
                           <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={3}>
                             {task.title || t("tasks.noTitle")}
+                          </Text>
+                          <Text style={[styles.taskStatusChip, task.status === "DONE" && styles.taskStatusChipDone]}>
+                            {taskStatusLabel(task.status)}
                           </Text>
                           {(task.subtasks?.length ?? 0) > 0 && (
                             <Text style={styles.taskSubtaskProgress}>
@@ -8016,6 +8187,22 @@ const styles = StyleSheet.create({
     textDecorationLine: "line-through",
     textDecorationColor: DONE_COLOR,
     color: DONE_COLOR,
+  },
+  taskStatusChip: {
+    alignSelf: "flex-start",
+    marginTop: 4,
+    paddingHorizontal: 8,
+    paddingVertical: 2,
+    borderRadius: 10,
+    fontSize: 11,
+    fontWeight: "600",
+    color: colors.textMuted,
+    backgroundColor: colors.border,
+    overflow: "hidden",
+  },
+  taskStatusChipDone: {
+    color: DONE_COLOR,
+    backgroundColor: "rgba(76, 175, 80, 0.15)",
   },
   taskSubtaskProgress: {
     fontSize: 12,

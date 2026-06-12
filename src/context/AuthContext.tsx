@@ -12,7 +12,8 @@ import { IOS_SKIP_GOOGLE_SIGNIN } from "../lib/iosDiagnostic";
 import { bootStep, setLastBootStep } from "../lib/bootLogger";
 import { normalizeLegacyUsageMode, persistPrimaryUsageMode } from "../lib/primaryUsageMode";
 import { withTimeout } from "../utils/withTimeout";
-import { hydrateProjectsFromDiskCache } from "../services/projects";
+import { hydrateProjectsFromDiskCache, invalidateProjectsSessionCache } from "../services/projects";
+import { clearCachedProjectList } from "../services/appStateCache";
 
 export type BillingStatus = {
   status: "trial" | "active" | "expired";
@@ -65,6 +66,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
     bootStep("auth_provider_mount", "H6", {}).catch(() => {});
   }, []);
   const claimedInviteSessionsRef = useRef<Set<string>>(new Set());
+  const lastAuthUidRef = useRef<string | null>(null);
   const [state, setState] = useState<AuthState>({
     token: null,
     user: null,
@@ -102,7 +104,6 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
 
   useEffect(() => {
     loadFromStorage();
-    hydrateProjectsFromDiskCache().catch(() => {});
   }, []);
 
   useEffect(() => {
@@ -123,8 +124,21 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         if (getExtraEnv("EXPO_PUBLIC_DISABLE_PUSH") !== "1") {
           import("../services/pushNotifications").then((m) => m.removePushToken().catch(() => {})).catch(() => {});
         }
+        invalidateProjectsSessionCache();
+        void clearCachedProjectList();
+        lastAuthUidRef.current = null;
         setState((s) => ({ ...s, token: null, user: null, orgId: null, loading: false }));
         return;
+      }
+
+      const nextUid = fbUser.uid;
+      if (lastAuthUidRef.current !== nextUid) {
+        invalidateProjectsSessionCache();
+        if (lastAuthUidRef.current != null) {
+          void clearCachedProjectList();
+        }
+        lastAuthUidRef.current = nextUid;
+        void hydrateProjectsFromDiskCache(nextUid);
       }
       try {
         const token = await fbUser.getIdToken();
@@ -260,6 +274,9 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   };
 
   const logout = async () => {
+    invalidateProjectsSessionCache();
+    await clearCachedProjectList();
+    lastAuthUidRef.current = null;
     const fbAuth = getAuth();
     if (fbAuth) await fbAuth.signOut();
     await disconnectGoogleSignInSession({ revokeAccess: true });

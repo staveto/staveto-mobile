@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useMemo } from "react";
 import {
   View,
   Text,
@@ -22,10 +22,14 @@ import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
 import { useI18n } from "../i18n/I18nContext";
 import {
-  getStatusMappingsForUI,
   normalizeStatusValue,
   type StoredStatusValue,
 } from "../helpers/taskStatusMapping";
+import { fetchProjectAccess } from "../hooks/useProjectAccess";
+import {
+  canManageTaskPlanningFromAccess,
+  canWorkerToggleTaskStatus,
+} from "../lib/taskPlanningPermissions";
 import { toYmd } from "../utils/date";
 import {
   InAppAttachmentViewer,
@@ -72,7 +76,16 @@ export function TaskDetailScreen() {
   const [dueDate, setDueDate] = useState<string | null>(task?.dueDate ?? null);
   const [savingDate, setSavingDate] = useState(false);
   const [deleting, setDeleting] = useState(false);
-  const statusMappings = getStatusMappingsForUI();
+  const [canManagePlanning, setCanManagePlanning] = useState(false);
+
+  const planningStatusOptions = useMemo(
+    () =>
+      [
+        { value: "OPEN" as StoredStatusValue, label: t("taskDetail.statusOpen") },
+        { value: "DONE" as StoredStatusValue, label: t("taskDetail.statusDone") },
+      ] as const,
+    [t]
+  );
 
   const todayYmd = toYmd(new Date());
   const isOverdue = !!dueDate && dueDate < todayYmd && normalizeStatusValue(status) !== "DONE";
@@ -82,6 +95,18 @@ export function TaskDetailScreen() {
       loadAttachments();
     }
   }, [task?.projectId, task?.id]);
+
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      if (!orgId || !task?.projectId) return;
+      const access = await fetchProjectAccess(task.projectId, orgId);
+      if (!cancelled) setCanManagePlanning(canManageTaskPlanningFromAccess(access));
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [orgId, task?.projectId]);
 
   // Update status and dueDate when task changes (e.g., from navigation or refresh)
   useEffect(() => {
@@ -183,6 +208,15 @@ export function TaskDetailScreen() {
   const onStatusChange = async (newStatusValue: StoredStatusValue) => {
     if (!orgId || !task.projectId) return;
     const normalizedStatus = normalizeStatusValue(newStatusValue);
+    if (
+      !canWorkerToggleTaskStatus(
+        { assigneeId: task.assigneeId },
+        orgId,
+        canManagePlanning
+      )
+    ) {
+      return;
+    }
 
     if (normalizedStatus === "DONE" && subtasks.length > 0) {
       const doneCount = subtasks.filter((s) => s.done).length;
@@ -465,32 +499,31 @@ export function TaskDetailScreen() {
 
       <Text style={styles.sectionLabel}>{t("taskDetail.status")}</Text>
       <View style={styles.statusRow}>
-        {statusMappings.map((mapping) => {
-          const isActive = status === mapping.storedValue || 
-                          normalizeStatusValue(status) === normalizeStatusValue(mapping.storedValue);
-          const isDone = normalizeStatusValue(mapping.storedValue) === "DONE";
-          
+        {planningStatusOptions.map((option) => {
+          const isActive =
+            status === option.value ||
+            normalizeStatusValue(status) === normalizeStatusValue(option.value);
+          const isDone = normalizeStatusValue(option.value) === "DONE";
+          const canToggle = canWorkerToggleTaskStatus(
+            { assigneeId: task.assigneeId },
+            orgId ?? "",
+            canManagePlanning
+          );
+
           return (
             <TouchableOpacity
-              key={mapping.storedValue}
+              key={option.value}
               style={[styles.statusBtn, isActive && styles.statusBtnActive]}
-              onPress={() => onStatusChange(mapping.storedValue)}
-              disabled={savingStatus}
+              onPress={() => onStatusChange(option.value)}
+              disabled={savingStatus || !canToggle}
             >
               <View style={styles.statusBtnContent}>
                 {savingStatus && isActive ? (
                   <ActivityIndicator size="small" color={isDone ? "#fff" : colors.primary} />
                 ) : (
-                  <>
-                    <Text style={[styles.statusBtnText, isActive && styles.statusBtnTextActive]}>
-                      {mapping.uiLabel}
-                    </Text>
-                    {mapping.caption && (
-                      <Text style={[styles.statusBtnCaption, isActive && styles.statusBtnCaptionActive]}>
-                        {mapping.caption}
-                      </Text>
-                    )}
-                  </>
+                  <Text style={[styles.statusBtnText, isActive && styles.statusBtnTextActive]}>
+                    {option.label}
+                  </Text>
                 )}
               </View>
             </TouchableOpacity>

@@ -17,7 +17,7 @@ import {
   Image,
   AppState,
 } from "react-native";
-import { DrawerActions, TabActions, useFocusEffect, useNavigation } from "@react-navigation/native";
+import { DrawerActions, TabActions, useFocusEffect, useNavigation, useRoute } from "@react-navigation/native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
 import { Ionicons } from "@expo/vector-icons";
 import AsyncStorage from "@react-native-async-storage/async-storage";
@@ -365,6 +365,7 @@ const CompactProjectItem = React.memo(function CompactProjectItem({
 
 export function HomeScreen() {
   const navigation = useNavigation();
+  const route = useRoute<{ params?: { deferQuickAction?: "photo" | "problem" } }>();
   const insets = useSafeAreaInsets();
   const homeHeaderTopPadding = insets.top + (Platform.OS === "android" ? spacing.xs : spacing.sm);
   const { t } = useI18n();
@@ -1730,6 +1731,23 @@ export function HomeScreen() {
 
   const previewProjects = useMemo(() => otherProjects.slice(0, 2), [otherProjects]);
 
+  const deferredLauncherActionRef = useRef<"photo" | "problem" | null>(null);
+
+  useEffect(() => {
+    const action = route.params?.deferQuickAction;
+    if (action === "photo" || action === "problem") {
+      deferredLauncherActionRef.current = action;
+      navigation.setParams({ deferQuickAction: undefined } as never);
+    }
+  }, [navigation, route.params?.deferQuickAction]);
+
+  useEffect(() => {
+    const action = deferredLauncherActionRef.current;
+    if (!action || loading || !dashboardData) return;
+    deferredLauncherActionRef.current = null;
+    runContextAction(action, focusProject?.id);
+  }, [dashboardData, focusProject?.id, loading, runContextAction]);
+
   if (loading && !dashboardData) {
     return (
       <View style={styles.container}>
@@ -2111,7 +2129,11 @@ export function HomeScreen() {
                         );
                       })()}
                     </TouchableOpacity>
-                    <TouchableOpacity onPress={() => stackNav.navigate("Tasks")} style={styles.cmpLinkCta} accessibilityRole="button">
+                    <TouchableOpacity
+                      onPress={() => stackNav.navigate("Tasks", focusProject ? { projectId: focusProject.id } : undefined)}
+                      style={styles.cmpLinkCta}
+                      accessibilityRole="button"
+                    >
                       <Text style={styles.cmpLinkCtaText}>{t("home.compact.tasks")}</Text>
                     </TouchableOpacity>
                   </View>
@@ -2150,7 +2172,11 @@ export function HomeScreen() {
                   </Text>
                 ) : null}
                 <View style={styles.cmpMetricsRow}>
-                  <TouchableOpacity style={styles.cmpMetricPill} onPress={() => stackNav.navigate("Tasks")} activeOpacity={0.85}>
+                  <TouchableOpacity
+                    style={styles.cmpMetricPill}
+                    onPress={() => stackNav.navigate("Tasks", focusProject ? { projectId: focusProject.id } : undefined)}
+                    activeOpacity={0.85}
+                  >
                     <Text style={styles.cmpMetricText} numberOfLines={1}>
                       {t("home.compact.openTasks", { count: String(data.kpis.openCount) })}
                     </Text>

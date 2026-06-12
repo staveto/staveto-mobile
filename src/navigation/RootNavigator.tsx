@@ -14,6 +14,7 @@ import { OnboardingEvolutionScreen } from "../screens/OnboardingEvolutionScreen"
 import { ConsentRequiredScreen } from "../screens/ConsentRequiredScreen";
 import { OnboardingMvpScreen } from "../screens/OnboardingMvpScreen";
 import { HomeScreen } from "../screens/HomeScreen";
+import { HomeLauncherScreen } from "../screens/HomeLauncherScreen";
 import { SearchScreen } from "../screens/SearchScreen";
 import { NotificationsScreen } from "../screens/NotificationsScreen";
 import { CustomizeHomeScreen } from "../screens/CustomizeHomeScreen";
@@ -379,12 +380,14 @@ export function RootNavigator() {
       <QuickActionsSetup />
       <OfflineBanner />
       <Stack.Navigator
+        initialRouteName="FieldLauncher"
         screenOptions={{
           headerShown: false,
           headerStyle: { backgroundColor: colors.background },
           headerTintColor: colors.textOnDark,
         }}
       >
+        <Stack.Screen name="FieldLauncher" component={HomeLauncherScreen} />
         <Stack.Screen name="AppTabs" component={AppDrawer} />
       <Stack.Screen
         name="BusinessStack"

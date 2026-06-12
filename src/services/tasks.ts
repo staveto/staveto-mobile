@@ -17,6 +17,7 @@ import {
 import { getDocSmart, getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
+import { legacyPhaseIdFromName } from "../lib/projectPhases";
 import { firestoreValueToIsoString, normalizeDueDateToYmd } from "../utils/date";
 import { normalizeStatusValue } from "../helpers/taskStatusMapping";
 import { upsertTaskDueNotification, markTaskNotificationsRead, recordSyncIssue } from "./notifications";
@@ -68,16 +69,21 @@ function toDoc(
   }
 
   try {
+  const legacyPhaseName =
+    (typeof d.phaseTitle === "string" && d.phaseTitle.trim()) ||
+    (typeof d.phase === "string" && d.phase.trim()) ||
+    "";
+  const phaseIdRaw = typeof d.phaseId === "string" ? d.phaseId.trim() : "";
+  const resolvedPhaseId = phaseIdRaw || (legacyPhaseName ? legacyPhaseIdFromName(legacyPhaseName) : undefined);
+  const resolvedPhaseTitle = legacyPhaseName || undefined;
+
   return {
     id: docSnap.id,
     projectId,
     title: (d.title as string) ?? "",
     status: (d.status as string) ?? "OPEN",
-    phaseId: (d.phaseId as string | null | undefined) ?? undefined,
-    phaseTitle:
-      typeof d.phaseTitle === "string" && d.phaseTitle.trim() !== ""
-        ? (d.phaseTitle as string).trim()
-        : undefined,
+    phaseId: resolvedPhaseId,
+    phaseTitle: resolvedPhaseTitle,
     order: d.order as number | undefined,
     trade: d.trade as string | undefined,
     priority: d.priority as string | undefined,
@@ -441,15 +447,25 @@ export async function listTasksByProject(
 export async function listMyTasks(ownerId: string): Promise<TaskDoc[]> {
   // Import projectsService here to avoid circular dependency
   const { listMyProjects } = await import("./projects");
-  
+  const { fetchProjectAccess } = await import("../hooks/useProjectAccess");
+  const { canManageTaskPlanningFromAccess, filterTasksForWorkerView } = await import(
+    "../lib/taskPlanningPermissions"
+  );
+
   // Load all projects first
   const projects = await listMyProjects(ownerId);
-  
-  // Load all tasks from all projects in parallel
+
+  // Load all tasks from all projects in parallel (worker-filtered when user cannot manage planning)
   const allTasksPromises = projects.map(async (project) => {
     try {
-      const tasks = await listTasksByProject(project.id);
-      return tasks.map(task => ({ ...task, projectId: project.id }));
+      const access = await fetchProjectAccess(project.id, ownerId, project.ownerId);
+      if (!access.canReadTasks) return [];
+      let tasks = await listTasksByProject(project.id);
+      tasks = tasks.filter((task) => task.isActive !== false);
+      if (!canManageTaskPlanningFromAccess(access)) {
+        tasks = filterTasksForWorkerView(tasks, ownerId);
+      }
+      return tasks.map((task) => ({ ...task, projectId: project.id }));
     } catch (error: any) {
       console.warn(`[tasks] Error loading tasks for project ${project.id}:`, error);
       return [];
@@ -458,18 +474,15 @@ export async function listMyTasks(ownerId: string): Promise<TaskDoc[]> {
   
   const allTasksArrays = await Promise.all(allTasksPromises);
   const allTasks = allTasksArrays.flat();
-  
-  // Filter out archived tasks (isActive === false)
-  const activeTasks = allTasks.filter(task => task.isActive !== false);
-  
+
   // Sort by createdAt descending (most recent first)
-  activeTasks.sort((a, b) => {
+  allTasks.sort((a, b) => {
     const createdAtA = a.createdAt ?? "";
     const createdAtB = b.createdAt ?? "";
     return createdAtB.localeCompare(createdAtA);
   });
   
-  return activeTasks;
+  return allTasks;
 }
 
 export type TaskWithProject = TaskDoc & {
@@ -487,11 +500,21 @@ export async function listTasksWithDueDateInRange(
 ): Promise<TaskWithProject[]> {
   const { listMyProjects } = await import("./projects");
   const { isProjectShownOnProjectsJobsTab } = await import("../lib/projectTypeModel");
+  const { fetchProjectAccess } = await import("../hooks/useProjectAccess");
+  const { canManageTaskPlanningFromAccess, filterTasksForWorkerView } = await import(
+    "../lib/taskPlanningPermissions"
+  );
   const projects = (await listMyProjects(ownerId)).filter(isProjectShownOnProjectsJobsTab);
 
   const allTasksPromises = projects.map(async (project) => {
     try {
-      const tasks = await listTasksByProject(project.id, readOpts);
+      const access = await fetchProjectAccess(project.id, ownerId, project.ownerId);
+      if (!access.canReadTasks) return [];
+      let tasks = await listTasksByProject(project.id, readOpts);
+      tasks = tasks.filter((task) => task.isActive !== false);
+      if (!canManageTaskPlanningFromAccess(access)) {
+        tasks = filterTasksForWorkerView(tasks, ownerId);
+      }
       return tasks.map((task) => ({
         ...task,
         projectId: project.id,
@@ -505,9 +528,8 @@ export async function listTasksWithDueDateInRange(
   });
 
   const allTasks = (await Promise.all(allTasksPromises)).flat();
-  const activeTasks = allTasks.filter((t) => t.isActive !== false);
 
-  return activeTasks.filter((task) => {
+  return allTasks.filter((task) => {
     const dueYmd = normalizeDueDateToYmd(task.dueDate);
     if (dueYmd && dueYmd >= startYmd && dueYmd <= endYmd) return true;
     if (normalizeStatusValue(task.status) === "DONE") {
@@ -576,14 +598,16 @@ export async function updateTaskStatus(
   } catch (error) {
     console.warn("[tasks] Failed to read task before status update:", error);
   }
+  const normalized = (status ?? "OPEN").toUpperCase();
   const ref = doc(db, paths.projectTask(projectId, taskId));
   await updateDoc(ref, {
-    status,
+    status: normalized,
     updatedAt: new Date().toISOString(),
+    ...(normalized === "DONE" ? { doneAt: serverTimestamp() } : { doneAt: null }),
   });
 
   // MAINTENANCE v2: auto-next when service task marked DONE
-  if (status === "DONE" && serviceRuleId) {
+  if (normalized === "DONE" && serviceRuleId) {
     try {
       await runServiceAutoNextOnDone({
         projectId,
@@ -594,7 +618,7 @@ export async function updateTaskStatus(
     }
   }
 
-  if (currentUser?.uid && status === "DONE") {
+  if (currentUser?.uid && normalized === "DONE") {
     try {
       const { logTaskComplete } = require("./analytics");
       logTaskComplete("app");

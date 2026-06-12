@@ -9,6 +9,8 @@ import { getApp } from "@react-native-firebase/app";
 import { paths } from "../lib/firestorePaths";
 import { getUserTier, checkLimit, getSubscriptionLimits } from "./subscription";
 import type { WorkType, BusinessMode, CreationMode, JobWorkflowKind, ServiceMaintenanceScope } from "../lib/projectEnums";
+import { getAssignedMemberIdsFromProject } from "../lib/projectAssignment";
+import { legacyPhaseIdFromName } from "../lib/projectPhases";
 
 const COLLECTION = "projects";
 const CACHE_TTL_MS = 300_000;
@@ -33,49 +35,78 @@ export function getFirestoreErrorCode(error: unknown): string {
   return "";
 }
 let didLogProjectContext = false;
-let sessionCache: { projects: ProjectDoc[]; fetchedAt: number } | null = null;
+let sessionCache: { projects: ProjectDoc[]; fetchedAt: number; ownerUid: string } | null = null;
 let diskCacheProjects: ProjectDoc[] | null = null;
+let diskCacheOwnerUid: string | null = null;
 let diskCacheHydrated = false;
 let inFlightPromise: Promise<ProjectDoc[]> | null = null;
 let memberQueryPermissionDenied = false;
 let perfCallCount = 0;
 
-function getCachedProjects(): ProjectDoc[] | null {
-  if (sessionCache && Date.now() - sessionCache.fetchedAt <= CACHE_TTL_MS) {
+function getCachedProjects(ownerUid: string): ProjectDoc[] | null {
+  const uid = ownerUid.trim();
+  if (!uid) return null;
+  if (
+    sessionCache &&
+    sessionCache.ownerUid === uid &&
+    Date.now() - sessionCache.fetchedAt <= CACHE_TTL_MS
+  ) {
     return sessionCache.projects;
   }
-  if (diskCacheProjects?.length) return diskCacheProjects;
+  if (diskCacheProjects?.length && diskCacheOwnerUid === uid) {
+    return diskCacheProjects;
+  }
   return null;
 }
 
-/** Hydrate in-memory project cache from AsyncStorage for offline startup. */
-export async function hydrateProjectsFromDiskCache(): Promise<void> {
-  if (diskCacheHydrated) return;
+/** Hydrate in-memory project cache from AsyncStorage for offline startup (current user only). */
+export async function hydrateProjectsFromDiskCache(ownerUid: string): Promise<void> {
+  const uid = ownerUid.trim();
+  if (!uid) return;
+  if (diskCacheHydrated && diskCacheOwnerUid === uid && diskCacheProjects?.length) return;
+
   diskCacheHydrated = true;
-  const projects = await loadCachedProjectList<ProjectDoc>();
+  const projects = await loadCachedProjectList<ProjectDoc>(uid);
   if (projects?.length) {
     diskCacheProjects = projects;
-    sessionCache = { projects, fetchedAt: Date.now() };
-    if (__DEV__) console.log(`[projects] hydrated ${projects.length} projects from disk cache`);
-  }
-}
-
-function setCachedProjects(projects: ProjectDoc[]): void {
-  // Never cache an empty list: a failed/partial first load would hide real projects for CACHE_TTL_MS.
-  if (!projects.length) {
-    sessionCache = null;
+    diskCacheOwnerUid = uid;
+    sessionCache = { projects, fetchedAt: Date.now(), ownerUid: uid };
+    if (__DEV__) console.log(`[projects] hydrated ${projects.length} projects from disk cache for uid=${uid}`);
     return;
   }
-  sessionCache = { projects, fetchedAt: Date.now() };
-  diskCacheProjects = projects;
-  saveCachedProjectList(projects).catch(() => {});
+  if (diskCacheOwnerUid !== uid) {
+    diskCacheProjects = null;
+    sessionCache = null;
+    diskCacheOwnerUid = null;
+  }
 }
 
-/** Clears in-memory project list cache (e.g. after delete or leaving a shared project). */
+function setCachedProjects(projects: ProjectDoc[], ownerUid: string): void {
+  const uid = ownerUid.trim();
+  if (!uid) return;
+  // Never cache an empty list: a failed/partial first load would hide real projects for CACHE_TTL_MS.
+  if (!projects.length) {
+    if (sessionCache?.ownerUid === uid) sessionCache = null;
+    if (diskCacheOwnerUid === uid) {
+      diskCacheProjects = null;
+      diskCacheOwnerUid = null;
+    }
+    return;
+  }
+  sessionCache = { projects, fetchedAt: Date.now(), ownerUid: uid };
+  diskCacheProjects = projects;
+  diskCacheOwnerUid = uid;
+  saveCachedProjectList(projects, uid).catch(() => {});
+}
+
+/** Clears in-memory project list cache (e.g. after delete, logout, or account switch). */
 export function invalidateProjectsSessionCache(): void {
   sessionCache = null;
   diskCacheProjects = null;
+  diskCacheOwnerUid = null;
+  diskCacheHydrated = false;
   inFlightPromise = null;
+  memberQueryPermissionDenied = false;
 }
 
 /** Owner-only field patch (e.g. idempotent `projectType` migration). */
@@ -207,9 +238,7 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
       typeof d.workspaceType === "string" && d.workspaceType.trim() !== ""
         ? (d.workspaceType as string).trim()
         : undefined,
-    assignedMemberIds: Array.isArray(d.assignedMemberIds)
-      ? (d.assignedMemberIds as unknown[]).filter((id): id is string => typeof id === "string" && id.trim() !== "")
-      : undefined,
+    assignedMemberIds: getAssignedMemberIdsFromProject(d as Record<string, unknown>),
   };
 }
 
@@ -313,7 +342,16 @@ export async function listProjectPhases(
       })
       .filter((p): p is { id: string; name: string; description?: string; order: number } => p != null);
     phases.sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
-    return phases;
+    if (phases.length > 0) return phases;
+
+    // Web AI apply (`phase` string on tasks, no phases subcollection) — derive like office web.
+    const taskCol = collection(db, paths.projectTasks(projectId));
+    const taskSnap = await getDocsSmart(taskCol, readOpts);
+    const derived = derivePhasesFromTaskDocs(taskSnap.docs.map((d) => ({ id: d.id, data: d.data() as Record<string, unknown> })));
+    if (__DEV__ && derived.length > 0) {
+      console.log(`[projects] listProjectPhases: derived ${derived.length} phases from task.phase / phaseTitle`);
+    }
+    return derived;
   } catch (error: any) {
     console.error(`[projects] listProjectPhases error:`, error);
     const errorCode = error.code || '';
@@ -331,6 +369,39 @@ export async function listProjectPhases(
     
     throw error;
   }
+}
+
+function readPhaseNameFromTaskData(data: Record<string, unknown>): string {
+  const fromTitle = typeof data.phaseTitle === "string" ? data.phaseTitle.trim() : "";
+  if (fromTitle) return fromTitle;
+  const fromLegacy = typeof data.phase === "string" ? data.phase.trim() : "";
+  return fromLegacy;
+}
+
+/** When `projects/{id}/phases` is empty, build phase rows from task `phase` / `phaseTitle` (web AI jobs). */
+export function derivePhasesFromTaskDocs(
+  docs: Array<{ id: string; data: Record<string, unknown> }>
+): ProjectPhaseDoc[] {
+  const byKey = new Map<string, ProjectPhaseDoc>();
+  let order = 0;
+
+  for (const d of docs) {
+    const x = d.data;
+    if (x.isActive === false) continue;
+    const phaseName = readPhaseNameFromTaskData(x);
+    const phaseIdRaw = typeof x.phaseId === "string" ? x.phaseId.trim() : "";
+    const key = phaseIdRaw || (phaseName ? legacyPhaseIdFromName(phaseName) : "");
+    if (!key) continue;
+
+    if (byKey.has(key)) continue;
+    byKey.set(key, {
+      id: key,
+      name: phaseName || key,
+      order: order++,
+    });
+  }
+
+  return [...byKey.values()].sort((a, b) => a.order - b.order || a.name.localeCompare(b.name));
 }
 
 /** Heal members/{uid}, assignedMemberIds, and projectRefs when legacy assignment docs exist. */
@@ -653,7 +724,7 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
       return [];
     }
 
-    const diskProjects = await loadCachedProjectList<ProjectDoc>();
+    const diskProjects = await loadCachedProjectList<ProjectDoc>(actualOwnerId);
     if (diskProjects?.length) {
       if (__DEV__) console.warn("[projects] load failed, using disk cache:", diskProjects.length);
       return diskProjects;
@@ -671,9 +742,10 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
  */
 export async function listMyProjects(ownerId: string, options?: { forceServerRead?: boolean }): Promise<ProjectDoc[]> {
   const force = options?.forceServerRead === true;
+  const uid = ownerId.trim();
   if (!force) {
-    await hydrateProjectsFromDiskCache();
-    const cached = getCachedProjects();
+    await hydrateProjectsFromDiskCache(uid);
+    const cached = getCachedProjects(uid);
     if (cached) {
       const active = cached.filter((p) => !p.archivedAt);
       if (__DEV__) console.log(`[projects] listMyProjects: cache hit, ${active.length} active`);
@@ -687,7 +759,7 @@ export async function listMyProjects(ownerId: string, options?: { forceServerRea
   const promise = listAllMyProjectsInternal(ownerId, force)
     .then((p) => {
       inFlightPromise = null;
-      setCachedProjects(p);
+      setCachedProjects(p, uid);
       return p;
     })
     .catch((e) => {
@@ -707,9 +779,10 @@ export async function listMyProjects(ownerId: string, options?: { forceServerRea
  */
 export async function listAllMyProjects(ownerId: string, options?: { forceServerRead?: boolean }): Promise<ProjectDoc[]> {
   const force = options?.forceServerRead === true;
+  const uid = ownerId.trim();
   if (!force) {
-    await hydrateProjectsFromDiskCache();
-    const cached = getCachedProjects();
+    await hydrateProjectsFromDiskCache(uid);
+    const cached = getCachedProjects(uid);
     if (cached && cached.length > 0) {
       if (__DEV__) console.log(`[projects] listAllMyProjects: cache hit, ${cached.length} projects`);
       return cached;
@@ -719,7 +792,7 @@ export async function listAllMyProjects(ownerId: string, options?: { forceServer
   const promise = listAllMyProjectsInternal(ownerId, force)
     .then((p) => {
       inFlightPromise = null;
-      setCachedProjects(p);
+      setCachedProjects(p, uid);
       return p;
     })
     .catch((e) => {
@@ -1012,7 +1085,10 @@ export async function enrichProjectsWithBusinessAssignments(
     if (!isBusinessTeamProject(project)) return true;
     if (project.orgId !== orgId) return true;
     if (ctx.canViewAllProjects) return true;
-    return project.ownerId === authUid || (project.assignedMemberIds ?? []).includes(authUid);
+    return (
+      project.ownerId === authUid ||
+      getAssignedMemberIdsFromProject(project as unknown as Record<string, unknown>).includes(authUid)
+    );
   });
 }
 
@@ -1179,5 +1255,5 @@ export function canAccessBusinessTeamProject(
   if (options.orgRole === "owner" || options.orgRole === "admin" || options.orgRole === "manager") {
     return true;
   }
-  return (project.assignedMemberIds ?? []).includes(uid);
+  return getAssignedMemberIdsFromProject(project as unknown as Record<string, unknown>).includes(uid);
 }

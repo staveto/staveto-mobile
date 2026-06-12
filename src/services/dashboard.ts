@@ -2,6 +2,7 @@ import * as projectsService from "./projects";
 import * as tasksService from "./tasks";
 import * as expensesService from "./expenses";
 import { fetchProjectAccess } from "../hooks/useProjectAccess";
+import { canManageTaskPlanningFromAccess, filterTasksForWorkerView } from "../lib/taskPlanningPermissions";
 import { isProjectShownOnProjectsJobsTab } from "../lib/projectTypeModel";
 import type { ProjectDoc } from "./projects";
 import type { TaskDoc } from "./tasks";
@@ -86,7 +87,14 @@ async function loadDashboardDataInternal(ownerId: string, options?: LoadDashboar
     .filter((p) => p?.id)
     .map(async (project) => {
     try {
-      const tasks = await tasksService.listTasksByProject(project.id);
+      const authUid = options?.authUid ?? ownerId;
+      const access = await fetchProjectAccess(project.id, authUid, project.ownerId);
+      if (!access.canReadTasks) return [];
+      let tasks = await tasksService.listTasksByProject(project.id);
+      tasks = tasks.filter((task) => task.isActive !== false);
+      if (!canManageTaskPlanningFromAccess(access)) {
+        tasks = filterTasksForWorkerView(tasks, authUid);
+      }
       return tasks.map(task => ({ ...task, projectId: project.id }));
     } catch (error: any) {
       console.warn(`[dashboard] Error loading tasks for project ${project.id}:`, error);
@@ -153,6 +161,13 @@ async function loadDashboardDataInternal(ownerId: string, options?: LoadDashboar
       accessList.filter((a) => a.canReadExpenses).map((a) => a.projectId)
     );
     timeTrackingProjectIds = accessList.filter((a) => a.canWriteTime).map((a) => a.projectId);
+    for (const project of projects) {
+      if (project.ownerId === authUid || (project.assignedMemberIds ?? []).includes(authUid)) {
+        if (!timeTrackingProjectIds.includes(project.id)) {
+          timeTrackingProjectIds.push(project.id);
+        }
+      }
+    }
 
     // Load expenses only from projects where user has expenses permission
     const expensesPromises = projects

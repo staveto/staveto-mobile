@@ -20,6 +20,7 @@ import { toYmd } from "../utils/date";
 import * as timeTracking from "../services/timeTracking";
 import type { ActiveTimer, GetActiveTimerReadOpts } from "../services/timeTracking";
 import type { ProjectDoc } from "../services/projects";
+import { useAuth } from "../context/AuthContext";
 
 const SHEET_BG = "#1e2530";
 const SHEET_TEXT = "#ffffff";
@@ -54,6 +55,8 @@ type Props = {
   onRefreshActiveTimer: (readOpts?: GetActiveTimerReadOpts) => void | Promise<void>;
   /** Called right after start succeeds with the timer snapshot (UI updates before Firestore read round-trip). */
   onTimerStarted?: (projectName: string, timer: ActiveTimer) => void;
+  /** Called after pause/resume so the parent can update without waiting for a Firestore read. */
+  onTimerUpdated?: (timer: ActiveTimer | null) => void;
   onSaved?: () => void;
   t: (key: string, params?: Record<string, string>) => string;
 };
@@ -64,6 +67,7 @@ export function QuickTimeModal({
   activeTimer,
   onRefreshActiveTimer,
   onTimerStarted,
+  onTimerUpdated,
   onSaved,
   t,
 }: Props) {
@@ -79,8 +83,19 @@ export function QuickTimeModal({
   const [loading, setLoading] = useState(false);
   const [projectSearch, setProjectSearch] = useState("");
   const [elapsedDisplay, setElapsedDisplay] = useState("");
+  const [workDisplay, setWorkDisplay] = useState("");
   const rotateAnim = useRef(new Animated.Value(0)).current;
   const insets = useSafeAreaInsets();
+  const { user } = useAuth();
+
+  const isProjectAssignedToMe = useCallback(
+    (project: ProjectDoc) => {
+      const uid = user?.id;
+      if (!uid) return false;
+      return (project.assignedMemberIds ?? []).includes(uid) || project.isSharedToMe === true;
+    },
+    [user?.id]
+  );
 
   const filteredProjects = React.useMemo(() => {
     const active = projects.filter((p) => !p.archivedAt);
@@ -92,15 +107,20 @@ export function QuickTimeModal({
   const showProjectPicker = !activeTimer && (!selectedProject || pickingProject);
   const showSelectedProjectRow = !activeTimer && selectedProject && !pickingProject;
 
-  /** When paused: freeze on accumulatedMs (no ticking). When running: live tick from runningSince + accumulated. */
+  /** Running: main clock = work time. Paused: main clock = pause duration; work time shown below. */
   useEffect(() => {
     if (!activeTimer) return;
-    const update = () =>
-      setElapsedDisplay(formatElapsedMs(timeTracking.calculateActiveTimerWorkMs(activeTimer)));
+    const normalized = timeTracking.normalizeActiveTimer(activeTimer);
+    const update = () => {
+      if (normalized.status === "paused") {
+        setElapsedDisplay(formatElapsedMs(timeTracking.calculateActiveTimerPauseMs(normalized)));
+        setWorkDisplay(formatElapsedMs(timeTracking.calculateActiveTimerWorkMs(normalized)));
+      } else {
+        setElapsedDisplay(formatElapsedMs(timeTracking.calculateActiveTimerWorkMs(normalized)));
+        setWorkDisplay("");
+      }
+    };
     update();
-    if (activeTimer.status === "paused") {
-      return;
-    }
     const interval = setInterval(update, 1000);
     return () => clearInterval(interval);
   }, [activeTimer]);
@@ -144,6 +164,8 @@ export function QuickTimeModal({
       const timer = await timeTracking.startTimer(selectedProject.id, projectName, {
         ...NO_PHASE_TASK,
         projectOwnerId: selectedProject.ownerId ?? null,
+        assignedToMe: isProjectAssignedToMe(selectedProject),
+        orgId: selectedProject.orgId ?? null,
       });
       onTimerStarted?.(projectName, timer);
       /** Default (local) reads include pending writes — works offline; avoid server-only reads here. */
@@ -162,7 +184,7 @@ export function QuickTimeModal({
     } finally {
       setLoading(false);
     }
-  }, [selectedProject, onRefreshActiveTimer, onTimerStarted, sheetRef, t]);
+  }, [selectedProject, isProjectAssignedToMe, onRefreshActiveTimer, onTimerStarted, sheetRef, t]);
 
   const handleStop = useCallback(async () => {
     setLoading(true);
@@ -179,28 +201,50 @@ export function QuickTimeModal({
   }, [activeTimer, onRefreshActiveTimer, onSaved, sheetRef]);
 
   const handlePause = useCallback(async () => {
+    if (!activeTimer || activeTimer.status === "paused") return;
+    const optimisticNow = new Date().toISOString();
+    const workMs = timeTracking.calculateActiveTimerWorkMs(activeTimer, optimisticNow);
+    onTimerUpdated?.(
+      timeTracking.normalizeActiveTimer({
+        ...activeTimer,
+        status: "paused",
+        runningSince: null,
+        accumulatedMs: workMs,
+        pauses: [...(activeTimer.pauses ?? []), { startedAt: optimisticNow }],
+      })
+    );
     setLoading(true);
     try {
-      await timeTracking.pauseTimer();
-      await Promise.resolve(onRefreshActiveTimer());
+      const timer = await timeTracking.pauseTimer();
+      if (timer) {
+        onTimerUpdated?.(timer);
+      } else {
+        await Promise.resolve(onRefreshActiveTimer());
+      }
     } catch (err) {
+      await Promise.resolve(onRefreshActiveTimer());
       Alert.alert("Chyba", err instanceof Error ? err.message : "Nepodarilo sa pozastaviť časovač.");
     } finally {
       setLoading(false);
     }
-  }, [onRefreshActiveTimer]);
+  }, [activeTimer, onRefreshActiveTimer, onTimerUpdated]);
 
   const handleResume = useCallback(async () => {
     setLoading(true);
     try {
-      await timeTracking.resumeTimer();
-      await Promise.resolve(onRefreshActiveTimer());
+      const timer = await timeTracking.resumeTimer();
+      if (timer) {
+        onTimerUpdated?.(timer);
+      } else {
+        await Promise.resolve(onRefreshActiveTimer());
+      }
     } catch (err) {
+      await Promise.resolve(onRefreshActiveTimer());
       Alert.alert("Chyba", err instanceof Error ? err.message : "Nepodarilo sa obnoviť časovač.");
     } finally {
       setLoading(false);
     }
-  }, [onRefreshActiveTimer]);
+  }, [onRefreshActiveTimer, onTimerUpdated]);
 
   const handleManualSave = useCallback(async () => {
     if (!selectedProject) {
@@ -223,7 +267,11 @@ export function QuickTimeModal({
         dateYmd,
         totalMinutes,
         manualNote.trim() || undefined,
-        { ...NO_PHASE_TASK, projectOwnerId: selectedProject.ownerId ?? null }
+        {
+          ...NO_PHASE_TASK,
+          projectOwnerId: selectedProject.ownerId ?? null,
+          assignedToMe: isProjectAssignedToMe(selectedProject),
+        }
       );
       onSaved?.();
       sheetRef.current?.dismiss();
@@ -273,7 +321,7 @@ export function QuickTimeModal({
             {activeTimer.status === "paused" ? (
               <View style={styles.pausedBadge}>
                 <Ionicons name="pause" size={12} color={PAUSED_TIMER_AMBER} />
-                <Text style={styles.pausedBadgeText}>{t("time.timerPaused")}</Text>
+                <Text style={styles.pausedBadgeText}>{t("time.pauseRunning")}</Text>
               </View>
             ) : null}
           </View>
@@ -382,6 +430,11 @@ export function QuickTimeModal({
                     >
                       {elapsedDisplay || "00:00:00"}
                     </Text>
+                    {activeTimer.status === "paused" && workDisplay ? (
+                      <Text style={styles.workTimeDuringPause} numberOfLines={1}>
+                        {t("time.workTime")}: {workDisplay}
+                      </Text>
+                    ) : null}
                     {activeTimer.status === "paused" ? null : (
                       <Animated.View
                         style={[
@@ -757,6 +810,12 @@ const styles = StyleSheet.create({
   },
   elapsedTextPaused: {
     color: PAUSED_TIMER_AMBER,
+  },
+  workTimeDuringPause: {
+    marginTop: 4,
+    fontSize: 12,
+    fontWeight: "600",
+    color: "rgba(255,255,255,0.65)",
   },
   trackingBox: {
     padding: spacing.lg,

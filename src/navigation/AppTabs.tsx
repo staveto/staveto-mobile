@@ -1,5 +1,6 @@
 import React from "react";
 import { createBottomTabNavigator } from "@react-navigation/bottom-tabs";
+import { StackActions } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { useUnreadCount } from "../hooks/useUnreadCount";
@@ -38,7 +39,24 @@ export function AppTabs() {
         ),
       })}
     >
-      <Tab.Screen name="Home" component={HomeStack} options={{ title: t("tabs.home"), headerShown: false }} />
+      <Tab.Screen
+        name="Home"
+        component={HomeStack}
+        options={{ title: t("tabs.home"), headerShown: false }}
+        listeners={({ navigation, route }) => ({
+          tabPress: (e) => {
+            const homeStackKey = route.state?.key;
+            const homeIndex = route.state?.index ?? 0;
+            if (homeStackKey && homeIndex > 0) {
+              e.preventDefault();
+              navigation.dispatch({
+                ...StackActions.popToTop(),
+                target: homeStackKey,
+              });
+            }
+          },
+        })}
+      />
       <Tab.Screen name="Projects" component={ProjectsScreen} options={{ title: t("tabs.projects") }} />
       <Tab.Screen
         name="Equipment"

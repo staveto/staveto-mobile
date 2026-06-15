@@ -147,7 +147,27 @@ service firebase.storage {
     match /users/{userId}/aiProjectDrafts/{draftId}/documents/{fileName} {
       allow read: if signedIn() && uid() == userId;
       allow write: if signedIn() && uid() == userId
-        && request.resource.size < 20 * 1024 * 1024; // Max 20MB per document
+        && request.resource.size < 25 * 1024 * 1024;
+      allow delete: if signedIn() && uid() == userId;
+    }
+
+    // Staveto Office AI wizard — workspace-scoped draft uploads (before project exists)
+    match /workspaces/{workspaceId}/ai-drafts/{sessionId}/{fileName} {
+      allow read: if signedIn() && (
+        uid() == workspaceId
+        || isOrgMemberActive(workspaceId)
+      );
+      allow write: if signedIn()
+        && (
+          uid() == workspaceId
+          || isOrgMemberActive(workspaceId)
+        )
+        && request.resource.size < 25 * 1024 * 1024;
+      allow delete: if signedIn()
+        && (
+          uid() == workspaceId
+          || isOrgMemberActive(workspaceId)
+        );
     }
 
     // Deny all other paths (must come after specific matches)

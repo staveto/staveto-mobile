@@ -713,10 +713,12 @@ service cloud.firestore {
         allow write: if canWriteAsEditor(projectId);
       }
 
-      // constructionDiary: enforce sharedItems.diary
+      // constructionDiary: read when diary shared; create for field crew with diary access
       match /constructionDiary/{entryId} {
         allow read: if canReadDiary(projectId);
-        allow write: if canWriteAsEditor(projectId);
+        allow create: if canReadDiary(projectId);
+        allow update, delete: if canWriteAsEditor(projectId)
+          || (canReadDiary(projectId) && resource.data.createdBy == uid());
       }
 
       // documents: enforce sharedItems.documents
@@ -745,10 +747,11 @@ service cloud.firestore {
         allow write: if canWriteAsEditor(projectId);
       }
 
-      // attachments: used for tasks, expenses, and documents - allow read if user can read any of these
+      // attachments: used for tasks, expenses, documents, diary photos
       match /attachments/{attachmentId} {
-        allow read: if canReadTasks(projectId) || canReadExpenses(projectId) || canReadDocuments(projectId);
-        allow write: if canWriteAsEditor(projectId);
+        allow read: if canReadTasks(projectId) || canReadExpenses(projectId) || canReadDocuments(projectId) || canReadDiary(projectId);
+        allow create: if canWriteAsEditor(projectId) || canReadDiary(projectId);
+        allow update, delete: if canWriteAsEditor(projectId);
       }
 
       // problems: defects/issues per project - read: owner or member; create: owner or editor; update: owner or creator or assignee; delete: owner or org admin

@@ -27,6 +27,8 @@ export type ProjectAccess = {
   canReadDocuments: boolean;
   canWrite: boolean;
   canWriteTime: boolean;
+  /** Field crew may add diary/photo entries when they can read the construction diary. */
+  canWriteDiary: boolean;
 };
 
 const ALL_TRUE = {
@@ -52,6 +54,7 @@ const NO_ACCESS: ProjectAccess = {
   canReadDocuments: false,
   canWrite: false,
   canWriteTime: false,
+  canWriteDiary: false,
 };
 
 function accessFromProjectMemberData(mData: Record<string, unknown>): ProjectAccess | null {
@@ -88,7 +91,18 @@ function accessFromProjectMemberData(mData: Record<string, unknown>): ProjectAcc
     canReadDocuments: mSi.documents,
     canWrite: mPerm === "editor",
     canWriteTime: mPerm === "editor" && mSi.timeTracking === true,
+    canWriteDiary: diaryWriteFromMemberAccess(mSi, mSi.diary, true),
   };
+}
+
+/** Members with diary access may add site diary entries (field crew), not only editors. */
+function diaryWriteFromMemberAccess(
+  si: ProjectAccess["sharedItems"],
+  canReadDiary: boolean,
+  isMember: boolean
+): boolean {
+  if (!canReadDiary || !isMember) return false;
+  return si.diary !== false;
 }
 
 /** Union access flags — business assign writes projects/{id}/members/{uid} with full sharedItems. */
@@ -117,6 +131,7 @@ function mergeProjectAccess(base: ProjectAccess, extra: ProjectAccess): ProjectA
     canReadDocuments: base.canReadDocuments || extra.canReadDocuments,
     canWrite: base.canWrite || extra.canWrite,
     canWriteTime: base.canWriteTime || extra.canWriteTime,
+    canWriteDiary: base.canWriteDiary || extra.canWriteDiary,
   };
 }
 
@@ -137,6 +152,10 @@ export function finalizeProjectAccess(
     access.canWriteTime ||
     assigned ||
     (access.isMember && editorLike && timeNotBlocked);
+  const canWriteDiary =
+    isOwner ||
+    access.canWriteDiary ||
+    (access.canReadDiary && (access.isMember || assigned));
 
   return {
     ...access,
@@ -146,6 +165,7 @@ export function finalizeProjectAccess(
     canReadPhases: access.canReadPhases || crewReader,
     canWrite: isOwner || access.canWrite || (assigned && editorLike) || editorLike,
     canWriteTime,
+    canWriteDiary,
   };
 }
 
@@ -180,6 +200,7 @@ function accessFromOrgProjectMembership(
     canReadDocuments: true,
     canWrite: true,
     canWriteTime: true,
+    canWriteDiary: true,
   };
 }
 
@@ -223,6 +244,7 @@ async function enrichProjectAccess(
       canReadDocuments: true,
       canWrite: false,
       canWriteTime: false,
+      canWriteDiary: true,
     });
   }
 
@@ -259,6 +281,7 @@ function accessFromMembersByUidDoc(data: Record<string, unknown>): ProjectAccess
     canReadDocuments: si.documents,
     canWrite: permLevel === "editor",
     canWriteTime: permLevel === "editor" && si.timeTracking === true,
+    canWriteDiary: diaryWriteFromMemberAccess(si, si.diary, true),
   };
 }
 
@@ -304,6 +327,7 @@ function accessFromAssignedMemberIds(uid: string, projectData: Record<string, un
     canReadDocuments: true,
     canWrite: true,
     canWriteTime: true,
+    canWriteDiary: true,
   };
 }
 
@@ -356,6 +380,7 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
           canReadDocuments: true,
           canWrite: true,
           canWriteTime: true,
+          canWriteDiary: true,
         });
         setLoading(false);
         return;
@@ -474,6 +499,7 @@ export async function fetchProjectAccess(
         canReadDocuments: true,
         canWrite: true,
         canWriteTime: true,
+        canWriteDiary: true,
       };
     }
 

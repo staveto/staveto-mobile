@@ -58,7 +58,7 @@ export function ProjectMembersScreen() {
   const [shareTasks, setShareTasks] = useState(true);
   const [sharePhases, setSharePhases] = useState(true);
   const [shareExpenses, setShareExpenses] = useState(false);
-  const [shareDiary, setShareDiary] = useState(false);
+  const [shareDiary, setShareDiary] = useState(true);
   const [shareDocuments, setShareDocuments] = useState(false);
   const [shareTimeTracking, setShareTimeTracking] = useState(true);
   const [shareEquipment, setShareEquipment] = useState(false);
@@ -275,7 +275,7 @@ export function ProjectMembersScreen() {
     setEditShareTasks(member.sharedItems?.tasks ?? true);
     setEditSharePhases(member.sharedItems?.phases ?? true);
     setEditShareExpenses(member.sharedItems?.expenses ?? false);
-    setEditShareDiary(member.sharedItems?.diary ?? false);
+    setEditShareDiary(member.sharedItems?.diary ?? true);
     setEditShareDocuments(member.sharedItems?.documents ?? false);
     setEditShareTimeTracking(member.sharedItems?.timeTracking ?? (perm === 'editor'));
     setEditShareEquipment((member.sharedEquipmentIds?.length ?? 0) > 0);

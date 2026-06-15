@@ -155,6 +155,11 @@ const PROJECT_DETAIL_REFRESH_OPTS: SmartReadOptions = {
 };
 
 const DONE_COLOR = "#2e7d32";
+const STAVETO_NAVY = "#1D376A";
+const CARD_BORDER_LIGHT = "rgba(29, 55, 106, 0.14)";
+
+/** Synthetic phase bucket — unifies TRADE flat lists with BUILD phased layout. */
+const UNPHASED_TASKS_GROUP_ID = "__unphased_tasks__";
 
 /** Synthetic phase row id when tasks carry denormalized {@link TaskDoc.phaseTitle} but no phaseId. */
 const PHASE_TITLE_GROUP_PREFIX = "phase_title:";
@@ -1787,7 +1792,7 @@ export function ProjectOverviewScreen() {
 
   const openNewDiaryModal = useCallback(
     (mode: "text" | "voice" = "text", showPermissionAlert = true, prefillWorkDescription?: string) => {
-    if (!access.canWrite || access.sharedItems?.diary !== true) {
+    if (!access.canWriteDiary) {
       if (!showPermissionAlert) return;
       Alert.alert(t("common.error"), t("projectOverview.noPermission"));
       return;
@@ -1804,13 +1809,17 @@ export function ProjectOverviewScreen() {
     setDiaryAttachments([]);
     setShowDiaryModal(true);
   },
-  [access.canWrite, access.sharedItems.diary, t]
+  [access.canWriteDiary, t]
 );
 
   useEffect(() => {
     if (!paramOpenDiaryModal || !projectId) return;
     if (!projectOwnerId && access.loading) return;
-    if (!access.canReadDiary || !access.canWrite || access.sharedItems?.diary !== true) return;
+    if (access.loading) return;
+    if (!access.canWriteDiary) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
     openNewDiaryModal(
       paramDiaryInputMode === "voice" ? "voice" : "text",
       false,
@@ -1823,9 +1832,7 @@ export function ProjectOverviewScreen() {
     projectId,
     projectOwnerId,
     access.loading,
-    access.canReadDiary,
-    access.canWrite,
-    access.sharedItems?.diary,
+    access.canWriteDiary,
     openNewDiaryModal,
   ]);
 
@@ -3669,6 +3676,10 @@ export function ProjectOverviewScreen() {
 
   const handleSaveDiaryEntry = async () => {
     if (!projectId || !ownerIdForWrite) return;
+    if (!access.canWriteDiary) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
     
     // Validate: need either text or voice recording
     if (!diaryWorkDescription.trim() && !diaryWorkDescriptionRecordingUri) {
@@ -4315,28 +4326,20 @@ export function ProjectOverviewScreen() {
     );
   };
 
-  // Structure: BUILD (and MANAGEMENT build-like) = phased; plain TRADE/MAINTENANCE = flat unless tasks carry phaseId or AI template.
   const isTradeOrMaintenance = projectOverviewIsTradeOrMaintenanceFlatTasks(projectType);
   const supportsDiary = projectOverviewLoadsDiary(projectType);
-  /** Show phased layout when BUILD-like, AI template, or TRADE tasks reference phases (persisted or synthetic rows). */
+  /** One phased table layout for all project types whenever there is work-plan content. */
   const showPhaseGroupedTasks =
     isBuildLikeStorageType(projectType) ||
     templateId === "ai-generated" ||
-    (isTradeOrMaintenance && (hasPhaseLinksOnTasks || phases.length > 0));
-  const tradeFlatNoPhaseUi =
-    isTradeOrMaintenance &&
-    templateId !== "ai-generated" &&
-    !hasPhaseLinksOnTasks &&
-    phases.length === 0;
-  /** AI template but nothing phase-shaped — fall back to flat list (tasks truly have no phaseId). */
-  const aiPlanFallbackFlat =
-    templateId === "ai-generated" &&
-    phases.length === 0 &&
-    tasksForDisplay.length > 0 &&
-    !hasPhaseLinksOnTasks;
-  const renderTradeLikeFlatRows = tradeFlatNoPhaseUi || aiPlanFallbackFlat;
+    tasksForDisplay.length > 0 ||
+    phases.length > 0 ||
+    hasPhaseLinksOnTasks;
   const hasWorkPlanContent =
     phases.length > 0 || tasksForDisplay.length > 0 || hasPhaseLinksOnTasks || templateId === "ai-generated";
+  const canManagePhases =
+    canManagePlanning &&
+    (isBuildLikeStorageType(projectType) || phases.length > 0 || hasPhaseLinksOnTasks);
 
   const showWorkPlanSection =
     projectType !== "MAINTENANCE" &&
@@ -4357,20 +4360,42 @@ export function ProjectOverviewScreen() {
       if (!bucket && tk.phaseTitle?.trim()) {
         bucket = phaseTitleGroupKey(tk.phaseTitle.trim());
       }
-      if (!bucket) return;
+      if (!bucket) bucket = UNPHASED_TASKS_GROUP_ID;
       if (!tasksByPhase.has(bucket)) tasksByPhase.set(bucket, []);
       tasksByPhase.get(bucket)!.push(tk);
     });
     phaseOrder.push(...phasesForUi.map((p) => p.id));
-    const orphanPhaseIdsOnTasks = [...tasksByPhase.keys()].filter((id) => !phaseOrder.includes(id)).sort((a, b) =>
-      a.localeCompare(b)
-    );
+    const orphanPhaseIdsOnTasks = [...tasksByPhase.keys()]
+      .filter((id) => !phaseOrder.includes(id))
+      .sort((a, b) => {
+        if (a === UNPHASED_TASKS_GROUP_ID) return 1;
+        if (b === UNPHASED_TASKS_GROUP_ID) return -1;
+        return a.localeCompare(b);
+      });
     phaseOrder.push(...orphanPhaseIdsOnTasks);
   }
 
-  const tasksWithoutPhase = showPhaseGroupedTasks
-    ? tasksForDisplay.filter((t) => !t.phaseId?.trim() && !t.phaseTitle?.trim())
-    : [];
+  const resolvePhaseForKey = (phaseKey: string): ProjectPhaseDoc => {
+    const persisted = phasesForUi.find((p) => p.id === phaseKey);
+    if (persisted) return persisted;
+    if (phaseKey === UNPHASED_TASKS_GROUP_ID) {
+      return {
+        id: phaseKey,
+        name:
+          phasesForUi.length > 0
+            ? t("projectOverview.tasksWithoutPhase")
+            : t("projectOverview.generalTasksPhase"),
+        order: Number.MAX_SAFE_INTEGER,
+      };
+    }
+    return {
+      id: phaseKey,
+      name:
+        resolvePhaseDisplayName(phaseKey, tasks) ??
+        t("projectOverview.phaseSyntheticLabel", { index: "?" }),
+      order: 1_000_000,
+    };
+  };
   
   // MAINTENANCE: filter tasks by type (service vs all)
   const maintenanceTasks = projectType === 'MAINTENANCE' 
@@ -4801,27 +4826,22 @@ export function ProjectOverviewScreen() {
               </TouchableOpacity>
             </View>
           )}
-          <View style={styles.tableHeader}>
-            <Text style={styles.tableHeaderText}>{t("projectOverview.taskName")}</Text>
-            <Text style={[styles.tableHeaderText, styles.colAssignee]}>{t("projectOverview.assignee")}</Text>
-          </View>
           {loading ? (
             <ActivityIndicator color={colors.primary} style={styles.loader} />
           ) : (projectType === 'MAINTENANCE' ? displayTasksForMaintenance.length : tasksForDisplay.length) === 0 &&
-            ((!showPhaseGroupedTasks && isTradeOrMaintenance) ||
-              (showPhaseGroupedTasks && phasesForUi.length === 0 && !hasPhaseLinksOnTasks)) ? (
+            phaseOrder.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.empty}>
-              {isTradeOrMaintenance 
-                ? t("projectOverview.noTasksProject")
-                : t("projectOverview.noPhases")}
+              {isBuildLikeStorageType(projectType)
+                ? t("projectOverview.noPhases")
+                : t("projectOverview.noTasksProject")}
             </Text>
             <Text style={styles.emptySubtext}>
-              {isTradeOrMaintenance 
-                ? t("projectOverview.noTasksHint")
-                : t("projectOverview.addPhaseHint")}
+              {isBuildLikeStorageType(projectType)
+                ? t("projectOverview.addPhaseHint")
+                : t("projectOverview.noTasksHint")}
             </Text>
-            {access.canWrite && !isTradeOrMaintenance && !templateId && (projectType === 'MANAGEMENT' || projectType === 'BUILD') && (access.canReadPhases || access.canReadTasks) && (
+            {canManagePhases && (projectType !== 'MANAGEMENT' || !templateId) && (
               <TouchableOpacity
                 style={styles.addTemplateButton}
                 onPress={() => setShowNewPhaseModal(true)}
@@ -4831,136 +4851,9 @@ export function ProjectOverviewScreen() {
               </TouchableOpacity>
             )}
           </View>
-        ) : renderTradeLikeFlatRows ? (
-          // Plain TRADE / MAINTENANCE (non–AI wizard): flat list. AI-generated plans use phased layout below when phases load.
-          <>
-            {(projectType === "MAINTENANCE" ? displayTasksForMaintenance : tasksForDisplay)
-              .slice()
-              .sort((a, b) => {
-                const pa = a.phaseId ?? "";
-                const pb = b.phaseId ?? "";
-                if (pa !== pb) return pa.localeCompare(pb);
-                return (a.title || "").localeCompare(b.title || "");
-              })
-              .map((task) => (
-              <View key={task.id} style={styles.taskRow}>
-              <View style={styles.taskNameCell}>
-                {canToggleTaskStatusFor(task) ? (
-                <TouchableOpacity 
-                  onPress={() => toggleTaskStatus(task)} 
-                  activeOpacity={0.7}
-                  style={styles.statusToggle}
-                >
-                  <Ionicons 
-                    name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
-                    size={24}
-                    color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
-                  />
-                </TouchableOpacity>
-                ) : (
-                <View style={styles.statusToggle}>
-                  <Ionicons 
-                    name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
-                    size={24}
-                    color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
-                  />
-                </View>
-                )}
-                <TouchableOpacity 
-                  style={styles.taskTitleContainer} 
-                  onPress={() => openTaskDetail(task)} 
-                  activeOpacity={0.7}
-                >
-                  <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={3}>
-                    {task.title || t("tasks.noTitle")}
-                  </Text>
-                  <Text style={[styles.taskStatusChip, task.status === "DONE" && styles.taskStatusChipDone]}>
-                    {taskStatusLabel(task.status)}
-                  </Text>
-                  {(task.subtasks?.length ?? 0) > 0 && (
-                    <Text style={styles.taskSubtaskProgress}>
-                      {(task.subtasks?.filter((s) => s.done).length ?? 0)}/{(task.subtasks?.length ?? 0)}
-                    </Text>
-                  )}
-                  {projectType === 'MAINTENANCE' && task.equipmentId && (() => {
-                    const eq = equipmentMap.get(task.equipmentId);
-                    return eq ? (
-                      <Text style={[styles.taskEquipmentLabel, task.status === "DONE" && styles.taskEquipmentLabelDone]} numberOfLines={1}>
-                        {eq.labelCode || eq.name || ''}
-                      </Text>
-                    ) : null;
-                  })()}
-                  {task.dueDate && (
-                    <Text style={[styles.taskDueDate, task.status === "DONE" && styles.taskDueDateDone]}>
-                      <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
-                    </Text>
-                  )}
-                </TouchableOpacity>
-              </View>
-              {canMutateTasks ? (
-                <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
-                  <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                  <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
-                </TouchableOpacity>
-              ) : (
-                <View style={[styles.colAssignee, styles.assigneeCell]}>
-                  <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                  <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
-                </View>
-              )}
-              {canMutateTasks ? (
-                <>
-                  <TouchableOpacity
-                    style={styles.attachmentButton}
-                    onPress={() => openAttachmentModal('task', task.id)}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  >
-                    <Ionicons 
-                      name="attach-outline" 
-                      size={20} 
-                      color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
-                    />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.phaseActionButton}
-                    onPress={() => handleDeleteTask(task)}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                    accessibilityLabel={t("projectOverview.deleteTask")}
-                  >
-                    <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
-                  </TouchableOpacity>
-                  <TouchableOpacity
-                    style={styles.taskMenuButton}
-                    onPress={() => showTaskActionsMenu(task, false)}
-                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                  >
-                    <Ionicons name="ellipsis-vertical" size={20} color={colors.textMuted} />
-                  </TouchableOpacity>
-                </>
-              ) : null}
-              </View>
-            ))}
-          </>
-        ) : phasesForUi.length === 0 ? (
-          <View style={styles.emptyContainer}>
-            <Text style={styles.empty}>{t("projectOverview.noPhases")}</Text>
-            <Text style={styles.emptySubtext}>{t("projectOverview.addPhaseHint")}</Text>
-            {isOwner && (projectType === 'BUILD' || (projectType === 'MANAGEMENT' && !templateId)) && (
-              <>
-                <TouchableOpacity
-                  style={styles.addTemplateButton}
-                  onPress={() => setShowNewPhaseModal(true)}
-                >
-                  <Ionicons name="add-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
-                  <Text style={styles.addTemplateButtonText}>{t("projectOverview.createPhase")}</Text>
-                </TouchableOpacity>
-              </>
-            )}
-          </View>
         ) : (
           <>
-            {/* Add phase button - for MANAGEMENT projects created from scratch */}
-            {isOwner && (projectType === 'BUILD' || (projectType === 'MANAGEMENT' && !templateId)) && (
+            {canManagePhases && (projectType !== 'MANAGEMENT' || !templateId) && (
               <TouchableOpacity
                 style={styles.addPhaseButton}
                 onPress={() => setShowNewPhaseModal(true)}
@@ -4971,17 +4864,18 @@ export function ProjectOverviewScreen() {
               </TouchableOpacity>
             )}
             
-            {/* For BUILD projects: show phases with tasks */}
             {phaseOrder.filter((phaseKey) => canManagePlanning || (tasksByPhase.get(phaseKey)?.length ?? 0) > 0).map((phaseKey) => {
               const phaseTasks = tasksByPhase.get(phaseKey) ?? [];
-              const phase = phasesForUi.find((p) => p.id === phaseKey);
-              const phaseExistsInFirestore = phases.some((p) => p.id === phaseKey);
+              const phase = resolvePhaseForKey(phaseKey);
+              const phaseExistsInFirestore =
+                phaseKey !== UNPHASED_TASKS_GROUP_ID && phases.some((p) => p.id === phaseKey);
+              const hidePhaseChrome =
+                phaseKey === UNPHASED_TASKS_GROUP_ID && phasesForUi.length === 0;
 
-              // Show phase (even if it has no tasks - make it clickable)
-              if (phase) {
-                const expanded = expandedPhases.get(phaseKey) ?? true;
-                return (
-                  <View key={phaseKey} style={styles.phaseBlock}>
+              const expanded = expandedPhases.get(phaseKey) ?? true;
+              return (
+                  <View key={phaseKey} style={hidePhaseChrome ? undefined : styles.phaseGroupCard}>
+                    {!hidePhaseChrome ? (
                     <View style={styles.phaseHeaderContainer}>
                       <TouchableOpacity
                         style={styles.phaseHeader}
@@ -4997,7 +4891,7 @@ export function ProjectOverviewScreen() {
                         <Ionicons 
                           name={expanded ? "chevron-down" : "chevron-forward"} 
                           size={18} 
-                          color={colors.primary} 
+                          color={STAVETO_NAVY} 
                           style={{ marginRight: 8 }}
                         />
                         {(() => {
@@ -5016,7 +4910,7 @@ export function ProjectOverviewScreen() {
                           );
                         })()}
                       </TouchableOpacity>
-                      {isOwner ? (
+                      {canManagePhases && phaseKey !== UNPHASED_TASKS_GROUP_ID ? (
                         <View style={styles.phaseActions}>
                           <TouchableOpacity
                             style={styles.phaseActionButton}
@@ -5055,16 +4949,20 @@ export function ProjectOverviewScreen() {
                         </View>
                       ) : null}
                     </View>
+                    ) : null}
                     {expanded && (
                       <>
-                        {/* Add task button for this phase */}
-                        {access.canWrite && (access.sharedItems.tasks || access.sharedItems.phases) ? (
+                        {canMutateTasks && !hidePhaseChrome ? (
                           <TouchableOpacity 
                             style={styles.addTaskToPhaseButton}
-                            onPress={() => openNewTaskModal(phaseKey)}
+                            onPress={() =>
+                              openNewTaskModal(
+                                phaseKey === UNPHASED_TASKS_GROUP_ID ? undefined : phaseKey
+                              )
+                            }
                             activeOpacity={0.7}
                           >
-                            <Ionicons name="add-circle-outline" size={18} color={colors.primary} style={{ marginRight: 6 }} />
+                            <Ionicons name="add-circle-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
                             <Text style={styles.addTaskToPhaseText}>{t("projectOverview.addTaskToPhase")}</Text>
                           </TouchableOpacity>
                         ) : null}
@@ -5072,215 +4970,114 @@ export function ProjectOverviewScreen() {
                         {phaseTasks.length === 0 ? (
                           <Text style={styles.emptyPhase}>{t("projectOverview.noTasksInPhase")}</Text>
                         ) : (
-                          phaseTasks.map((task) => (
+                          phaseTasks.map((task) => {
+                            const isDone = (task.status ?? "OPEN").toUpperCase() === "DONE";
+                            return (
                             <View key={task.id} style={styles.taskRow}>
-                              <View style={styles.taskNameCell}>
-                                {canToggleTaskStatusFor(task) ? (
+                              {canToggleTaskStatusFor(task) ? (
                                 <TouchableOpacity 
                                   onPress={() => toggleTaskStatus(task)} 
                                   activeOpacity={0.7}
                                   style={styles.statusToggle}
                                 >
                                   <Ionicons 
-                                    name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
-                                    size={24}
-                                    color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
+                                    name={isDone ? "checkmark-circle" : "ellipse-outline"}
+                                    size={22}
+                                    color={isDone ? colors.primary : STAVETO_NAVY}
                                   />
-                                </TouchableOpacity>
-                                ) : (
-                                <View style={styles.statusToggle}>
-                                  <Ionicons 
-                                    name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
-                                    size={24}
-                                    color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
-                                  />
-                                </View>
-                                )}
-                                <TouchableOpacity 
-                                  style={styles.taskTitleContainer} 
-                                  onPress={() => openTaskDetail(task)} 
-                                  activeOpacity={0.7}
-                                >
-                                  <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={3}>
-                                    {task.title || t("tasks.noTitle")}
-                                  </Text>
-                                  <Text style={[styles.taskStatusChip, task.status === "DONE" && styles.taskStatusChipDone]}>
-                                    {taskStatusLabel(task.status)}
-                                  </Text>
-                                  {(task.subtasks?.length ?? 0) > 0 && (
-                                    <Text style={styles.taskSubtaskProgress}>
-                                      {(task.subtasks?.filter((s) => s.done).length ?? 0)}/{(task.subtasks?.length ?? 0)}
-                                    </Text>
-                                  )}
-                                  {task.dueDate && (
-                                    <Text style={[styles.taskDueDate, task.status === "DONE" && styles.taskDueDateDone]}>
-                                      <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
-                                    </Text>
-                                  )}
-                                </TouchableOpacity>
-                              </View>
-                              {canMutateTasks ? (
-                                <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
-                                  <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                                  <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
                                 </TouchableOpacity>
                               ) : (
-                                <View style={[styles.colAssignee, styles.assigneeCell]}>
-                                  <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                                  <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
+                                <View style={styles.statusToggle}>
+                                  <Ionicons 
+                                    name={isDone ? "checkmark-circle" : "ellipse-outline"}
+                                    size={22}
+                                    color={isDone ? colors.primary : STAVETO_NAVY}
+                                  />
                                 </View>
                               )}
-                              {canMutateTasks ? (
-                                <>
-                                  <TouchableOpacity
-                                    style={styles.attachmentButton}
-                                    onPress={() => openAttachmentModal('task', task.id)}
-                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                  >
-                                    <Ionicons 
-                                      name="attach-outline" 
-                                      size={20} 
-                                      color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
-                                    />
-                                  </TouchableOpacity>
-                                  <TouchableOpacity
-                                    style={styles.phaseActionButton}
-                                    onPress={() => handleDeleteTask(task)}
-                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                    accessibilityLabel={t("projectOverview.deleteTask")}
-                                  >
-                                    <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
-                                  </TouchableOpacity>
-                                  <TouchableOpacity
-                                    style={styles.taskMenuButton}
-                                    onPress={() => showTaskActionsMenu(task, true)}
-                                    hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                                  >
-                                    <Ionicons name="ellipsis-vertical" size={20} color={colors.textMuted} />
-                                  </TouchableOpacity>
-                                </>
-                              ) : null}
+                              <TouchableOpacity 
+                                style={styles.taskTitleContainer} 
+                                onPress={() => openTaskDetail(task)} 
+                                activeOpacity={0.7}
+                              >
+                                <Text style={[styles.taskTitle, isDone && styles.taskTitleDone]} numberOfLines={2}>
+                                  {task.title || t("tasks.noTitle")}
+                                </Text>
+                                {(task.subtasks?.length ?? 0) > 0 && (
+                                  <Text style={styles.taskSubtaskProgress}>
+                                    {(task.subtasks?.filter((s) => s.done).length ?? 0)}/{(task.subtasks?.length ?? 0)}
+                                  </Text>
+                                )}
+                                {projectType === 'MAINTENANCE' && task.equipmentId && (() => {
+                                  const eq = equipmentMap.get(task.equipmentId);
+                                  return eq ? (
+                                    <Text style={[styles.taskEquipmentLabel, isDone && styles.taskEquipmentLabelDone]} numberOfLines={1}>
+                                      {eq.labelCode || eq.name || ''}
+                                    </Text>
+                                  ) : null;
+                                })()}
+                                {task.dueDate && (
+                                  <Text style={[styles.taskDueDate, isDone && styles.taskDueDateDone]}>
+                                    <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
+                                  </Text>
+                                )}
+                              </TouchableOpacity>
+                              <View style={styles.taskTrailing}>
+                                <View style={styles.taskMetaRow}>
+                                  {canMutateTasks ? (
+                                    <TouchableOpacity style={styles.assigneePill} onPress={() => onAssigneePress(task)}>
+                                      <Ionicons name="person-outline" size={14} color={colors.textMuted} />
+                                      <Text style={styles.assigneePillText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
+                                    </TouchableOpacity>
+                                  ) : (
+                                    <View style={styles.assigneePill}>
+                                      <Ionicons name="person-outline" size={14} color={colors.textMuted} />
+                                      <Text style={styles.assigneePillText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
+                                    </View>
+                                  )}
+                                  <Text style={[styles.taskStatusChip, isDone && styles.taskStatusChipDone]}>
+                                    {taskStatusLabel(task.status)}
+                                  </Text>
+                                </View>
+                                {canMutateTasks ? (
+                                  <View style={styles.taskActionsRow}>
+                                    <TouchableOpacity
+                                      style={styles.phaseActionButton}
+                                      onPress={() => openAttachmentModal('task', task.id)}
+                                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                    >
+                                      <Ionicons 
+                                        name="attach-outline" 
+                                        size={18} 
+                                        color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? colors.primary : colors.textMuted} 
+                                      />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      style={styles.phaseActionButton}
+                                      onPress={() => handleDeleteTask(task)}
+                                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                      accessibilityLabel={t("projectOverview.deleteTask")}
+                                    >
+                                      <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
+                                    </TouchableOpacity>
+                                    <TouchableOpacity
+                                      style={styles.taskMenuButton}
+                                      onPress={() => showTaskActionsMenu(task, true)}
+                                      hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
+                                    >
+                                      <Ionicons name="ellipsis-vertical" size={18} color={colors.textMuted} />
+                                    </TouchableOpacity>
+                                  </View>
+                                ) : null}
+                              </View>
                             </View>
-                          ))
+                          );})
                         )}
                       </>
                     )}
                   </View>
                 );
-              }
-              
-              // This shouldn't happen for BUILD projects - all tasks should have phaseId
-              // But handle it gracefully just in case
-              return null;
             })}
-            
-            {/* Show tasks without phaseId for BUILD projects */}
-            {tasksWithoutPhase.length > 0 && (
-              <View style={styles.phaseBlock}>
-                <View style={styles.phaseHeader}>
-                  <Ionicons 
-                    name="chevron-down" 
-                    size={18} 
-                    color={colors.primary} 
-                    style={{ marginRight: 8 }}
-                  />
-                  <Text style={styles.phaseTitle}>{t("projectOverview.tasksWithoutPhase")}</Text>
-                  <Text style={styles.phaseTaskCount}>({countDoneTasks(tasksWithoutPhase)}/{tasksWithoutPhase.length})</Text>
-                </View>
-                <View style={styles.phaseContent}>
-                  {tasksWithoutPhase.map((task) => (
-                    <View key={task.id} style={styles.taskRow}>
-                      <View style={styles.taskNameCell}>
-                        {canToggleTaskStatusFor(task) ? (
-                        <TouchableOpacity 
-                          onPress={() => toggleTaskStatus(task)} 
-                          activeOpacity={0.7}
-                          style={styles.statusToggle}
-                        >
-                          <Ionicons 
-                            name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
-                            size={24}
-                            color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
-                          />
-                        </TouchableOpacity>
-                        ) : (
-                        <View style={styles.statusToggle}>
-                          <Ionicons 
-                            name={task.status === "DONE" ? "checkmark-circle" : "ellipse-outline"}
-                            size={24}
-                            color={task.status === "DONE" ? DONE_COLOR : colors.textMuted}
-                          />
-                        </View>
-                        )}
-                        <TouchableOpacity 
-                          style={styles.taskTitleContainer} 
-                          onPress={() => openTaskDetail(task)} 
-                          activeOpacity={0.7}
-                        >
-                          <Text style={[styles.taskTitle, task.status === "DONE" && styles.taskTitleDone]} numberOfLines={3}>
-                            {task.title || t("tasks.noTitle")}
-                          </Text>
-                          <Text style={[styles.taskStatusChip, task.status === "DONE" && styles.taskStatusChipDone]}>
-                            {taskStatusLabel(task.status)}
-                          </Text>
-                          {(task.subtasks?.length ?? 0) > 0 && (
-                            <Text style={styles.taskSubtaskProgress}>
-                              {(task.subtasks?.filter((s) => s.done).length ?? 0)}/{(task.subtasks?.length ?? 0)}
-                            </Text>
-                          )}
-                          {task.dueDate && (
-                            <Text style={[styles.taskDueDate, task.status === "DONE" && styles.taskDueDateDone]}>
-                              <Ionicons name="calendar-outline" size={12} color={colors.textMuted} /> {task.dueDate}
-                            </Text>
-                          )}
-                        </TouchableOpacity>
-                      </View>
-                      {canMutateTasks ? (
-                        <TouchableOpacity style={[styles.colAssignee, styles.assigneeCell]} onPress={() => onAssigneePress(task)}>
-                          <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                          <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
-                        </TouchableOpacity>
-                      ) : (
-                        <View style={[styles.colAssignee, styles.assigneeCell]}>
-                          <Ionicons name="person-outline" size={18} color={colors.textMuted} />
-                          <Text style={styles.assigneeText} numberOfLines={1}>{assigneeDisplay(task)}</Text>
-                        </View>
-                      )}
-                      {canMutateTasks ? (
-                        <>
-                          <TouchableOpacity
-                            style={styles.attachmentButton}
-                            onPress={() => openAttachmentModal('task', task.id)}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                          >
-                            <Ionicons 
-                              name="attach-outline" 
-                              size={20} 
-                              color={(taskAttachmentsMap.get(task.id) || 0) > 0 ? '#4CAF50' : colors.textMuted} 
-                            />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.phaseActionButton}
-                            onPress={() => handleDeleteTask(task)}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                            accessibilityLabel={t("projectOverview.deleteTask")}
-                          >
-                            <Ionicons name="trash-outline" size={18} color={colors.textMuted} />
-                          </TouchableOpacity>
-                          <TouchableOpacity
-                            style={styles.taskMenuButton}
-                            onPress={() => showTaskActionsMenu(task, true)}
-                            hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
-                          >
-                            <Ionicons name="ellipsis-vertical" size={20} color={colors.textMuted} />
-                          </TouchableOpacity>
-                        </>
-                      ) : null}
-                    </View>
-                  ))}
-                </View>
-              </View>
-            )}
           </>
         )}
           </>
@@ -5561,7 +5358,7 @@ export function ProjectOverviewScreen() {
               </Text>
               <Text style={styles.expensesCount}>({diaryEntries.length})</Text>
             </View>
-            {access.canWrite && access.sharedItems?.diary === true && (
+            {access.canWriteDiary && (
             <TouchableOpacity
               onPress={() => openNewDiaryModal("text")}
               hitSlop={{ top: 10, bottom: 10, left: 10, right: 10 }}
@@ -5605,7 +5402,7 @@ export function ProjectOverviewScreen() {
                       >
                         <Ionicons name="share-outline" size={20} color={colors.primary} />
                       </TouchableOpacity>
-                      {access.canWrite && access.sharedItems?.diary === true && (
+                      {access.canWriteDiary && (
                       <>
                       <TouchableOpacity
                         style={styles.expenseActionButton}
@@ -8008,19 +7805,29 @@ const styles = StyleSheet.create({
   tableContainer: { marginHorizontal: spacing.md, marginTop: spacing.md },
   tableScroll: { flex: 1 },
   table: {
-    backgroundColor: colors.card,
+    backgroundColor: "#fff",
     borderRadius: radius,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: CARD_BORDER_LIGHT,
     padding: spacing.md,
     paddingBottom: spacing.lg,
   },
   phaseBlock: { marginBottom: spacing.md },
+  phaseGroupCard: {
+    marginBottom: spacing.sm,
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: CARD_BORDER_LIGHT,
+    overflow: "hidden",
+    backgroundColor: "#fff",
+  },
   phaseHeaderContainer: {
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    marginBottom: spacing.sm,
+    paddingHorizontal: spacing.md,
+    paddingVertical: spacing.sm,
+    backgroundColor: "rgba(29, 55, 106, 0.06)",
   },
   phaseContent: {
     paddingLeft: spacing.md,
@@ -8032,10 +7839,10 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     minWidth: 0,
   },
-  phaseTitle: { fontSize: 13, fontWeight: "600", color: colors.primary, flex: 1 },
-  phaseTitleDone: { color: DONE_COLOR },
-  phaseTaskCount: { fontSize: 12, color: colors.textMuted, marginLeft: spacing.xs },
-  phaseTaskCountDone: { color: DONE_COLOR },
+  phaseTitle: { fontSize: 14, fontWeight: "700", color: STAVETO_NAVY, flex: 1 },
+  phaseTitleDone: { color: colors.textMuted },
+  phaseTaskCount: { fontSize: 12, fontWeight: "600", color: STAVETO_NAVY, marginLeft: spacing.xs },
+  phaseTaskCountDone: { color: colors.textMuted },
   phaseActions: {
     flexDirection: "row",
     alignItems: "center",
@@ -8077,9 +7884,9 @@ const styles = StyleSheet.create({
     marginBottom: spacing.md,
     flexDirection: "row",
     alignItems: "center",
-    backgroundColor: colors.card,
+    backgroundColor: "#fff",
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.primary,
     paddingHorizontal: spacing.lg,
     paddingVertical: spacing.md,
     borderRadius: radius,
@@ -8093,19 +7900,19 @@ const styles = StyleSheet.create({
   addTaskToPhaseButton: {
     flexDirection: "row",
     alignItems: "center",
+    justifyContent: "center",
     paddingVertical: spacing.sm,
     paddingHorizontal: spacing.md,
+    marginHorizontal: spacing.md,
+    marginTop: spacing.sm,
     marginBottom: spacing.sm,
-    backgroundColor: colors.background,
-    borderRadius: radius,
-    borderWidth: 1,
-    borderColor: colors.border,
-    borderStyle: "dashed",
+    backgroundColor: STAVETO_NAVY,
+    borderRadius: 10,
   },
   addTaskToPhaseText: {
     fontSize: 13,
-    color: colors.primary,
-    fontWeight: "500",
+    color: "#fff",
+    fontWeight: "600",
   },
   phaseSelector: {
     marginBottom: spacing.md,
@@ -8169,40 +7976,72 @@ const styles = StyleSheet.create({
   taskRow: {
     flexDirection: "row",
     alignItems: "flex-start",
-    paddingVertical: spacing.md,
-    paddingHorizontal: spacing.xs,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
-    minHeight: 56,
+    borderBottomColor: "rgba(29, 55, 106, 0.08)",
+    minHeight: 52,
+    gap: spacing.sm,
   },
   taskNameCell: { flex: 1, flexDirection: "row", alignItems: "flex-start", paddingTop: 2, minWidth: 0 },
   statusToggle: { 
     padding: spacing.xs,
-    marginRight: spacing.sm,
     marginTop: 2,
   },
-  taskTitleContainer: { flex: 1, minWidth: 0 },
-  taskTitle: { fontSize: 16, color: colors.text, lineHeight: 22, fontWeight: "500" },
+  taskTitleContainer: { flex: 1, minWidth: 0, paddingTop: 2 },
+  taskTitle: { fontSize: 15, color: colors.text, lineHeight: 20, fontWeight: "500" },
   taskTitleDone: {
     textDecorationLine: "line-through",
-    textDecorationColor: DONE_COLOR,
-    color: DONE_COLOR,
+    color: colors.textMuted,
+  },
+  taskTrailing: {
+    alignItems: "flex-end",
+    maxWidth: 132,
+    flexShrink: 0,
+    gap: 4,
+  },
+  taskMetaRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    justifyContent: "flex-end",
+    alignItems: "center",
+    gap: 6,
+  },
+  assigneePill: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 4,
+    maxWidth: 110,
+    paddingHorizontal: 8,
+    paddingVertical: 4,
+    borderRadius: 8,
+    borderWidth: 1,
+    borderColor: CARD_BORDER_LIGHT,
+    backgroundColor: "#fff",
+  },
+  assigneePillText: {
+    fontSize: 11,
+    color: colors.text,
+    flexShrink: 1,
+  },
+  taskActionsRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: 2,
   },
   taskStatusChip: {
-    alignSelf: "flex-start",
-    marginTop: 4,
     paddingHorizontal: 8,
-    paddingVertical: 2,
-    borderRadius: 10,
-    fontSize: 11,
+    paddingVertical: 3,
+    borderRadius: 999,
+    fontSize: 10,
     fontWeight: "600",
-    color: colors.textMuted,
-    backgroundColor: colors.border,
+    color: STAVETO_NAVY,
+    backgroundColor: "rgba(29, 55, 106, 0.08)",
     overflow: "hidden",
   },
   taskStatusChipDone: {
-    color: DONE_COLOR,
-    backgroundColor: "rgba(76, 175, 80, 0.15)",
+    color: "#166534",
+    backgroundColor: "rgba(22, 101, 52, 0.12)",
   },
   taskSubtaskProgress: {
     fontSize: 12,
@@ -8836,7 +8675,7 @@ const styles = StyleSheet.create({
     paddingBottom: spacing.sm,
     marginBottom: spacing.sm,
     borderBottomWidth: 1,
-    borderBottomColor: colors.border,
+    borderBottomColor: CARD_BORDER_LIGHT,
   },
   phasesSectionHeaderLeft: {
     flexDirection: "row",

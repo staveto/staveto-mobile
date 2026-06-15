@@ -75,7 +75,12 @@ export function HomeLauncherScreen() {
   }, [refreshActiveTimer]);
 
   const enterAppTabs = useCallback(
-    (homeScreen = "HomeMain", homeParams?: object) => {
+    (opts?: {
+      routes?: Array<{ name: string; params?: object }>;
+      index?: number;
+    }) => {
+      const routes = opts?.routes ?? [{ name: "HomeMain" }];
+      const index = opts?.index ?? Math.max(0, routes.length - 1);
       navigation.dispatch(
         CommonActions.reset({
           index: 0,
@@ -91,8 +96,8 @@ export function HomeLauncherScreen() {
                         {
                           name: "Home",
                           state: {
-                            routes: [{ name: homeScreen, params: homeParams }],
-                            index: 0,
+                            routes,
+                            index,
                           },
                         },
                       ],
@@ -150,13 +155,64 @@ export function HomeLauncherScreen() {
           openQuickTimeSheet();
           break;
         case "tasks":
-          enterAppTabs("Tasks");
+          if (!focusProject) {
+            Alert.alert(t("common.error"), t("home.noProjects"));
+            break;
+          }
+          enterAppTabs({
+            routes: [
+              { name: "HomeMain" },
+              {
+                name: "ProjectOverview",
+                params: {
+                  projectId: focusProject.id,
+                  projectName: focusProject.name,
+                },
+              },
+            ],
+            index: 1,
+          });
           break;
         case "photo":
-          enterAppTabs("HomeMain", { deferQuickAction: "photo" });
+          if (!focusProject) {
+            Alert.alert(t("common.error"), t("home.noProjects"));
+            break;
+          }
+          enterAppTabs({
+            routes: [
+              { name: "HomeMain" },
+              {
+                name: "ProjectOverview",
+                params: {
+                  projectId: focusProject.id,
+                  projectName: focusProject.name,
+                  openDiaryModal: true,
+                  diaryInputMode: "text",
+                },
+              },
+            ],
+            index: 1,
+          });
           break;
         case "problem":
-          enterAppTabs("HomeMain", { deferQuickAction: "problem" });
+          if (!focusProject) {
+            Alert.alert(t("common.error"), t("home.noProjects"));
+            break;
+          }
+          enterAppTabs({
+            routes: [
+              { name: "HomeMain" },
+              {
+                name: "CreateProblem",
+                params: {
+                  projectId: focusProject.id,
+                  projectName: focusProject.name,
+                  projectType: focusProject.projectType ?? "BUILD",
+                },
+              },
+            ],
+            index: 1,
+          });
           break;
         case "navigation": {
           const address = focusProject?.addressText?.trim();
@@ -172,7 +228,7 @@ export function HomeLauncherScreen() {
           break;
       }
     },
-    [enterAppTabs, focusProject?.addressText, openQuickTimeSheet, t]
+    [enterAppTabs, focusProject, openQuickTimeSheet, t]
   );
 
   return (

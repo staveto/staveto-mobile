@@ -1,7 +1,7 @@
 import { useState, useEffect, useCallback } from "react";
-import { doc } from "../lib/rnFirestore";
-import { getDocSmart } from "../services/firestoreSmartRead";
-import { db } from "../firebase";
+import { collection, doc, limit, query, where } from "../lib/rnFirestore";
+import { getDocSmart, getDocsSmart } from "../services/firestoreSmartRead";
+import { db, auth } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import { healProjectAccessForCurrentUser } from "../services/projects";
 import { getAssignedMemberIdsFromProject, isUserAssignedOnProject } from "../lib/projectAssignment";
@@ -29,6 +29,8 @@ export type ProjectAccess = {
   canWriteTime: boolean;
   /** Field crew may add diary/photo entries when they can read the construction diary. */
   canWriteDiary: boolean;
+  /** Assigned crew and project members may report site problems (not only editors). */
+  canReportProblem: boolean;
 };
 
 const ALL_TRUE = {
@@ -55,6 +57,7 @@ const NO_ACCESS: ProjectAccess = {
   canWrite: false,
   canWriteTime: false,
   canWriteDiary: false,
+  canReportProblem: false,
 };
 
 function accessFromProjectMemberData(mData: Record<string, unknown>): ProjectAccess | null {
@@ -92,6 +95,7 @@ function accessFromProjectMemberData(mData: Record<string, unknown>): ProjectAcc
     canWrite: mPerm === "editor",
     canWriteTime: mPerm === "editor" && mSi.timeTracking === true,
     canWriteDiary: diaryWriteFromMemberAccess(mSi, mSi.diary, true),
+    canReportProblem: true,
   };
 }
 
@@ -132,6 +136,7 @@ function mergeProjectAccess(base: ProjectAccess, extra: ProjectAccess): ProjectA
     canWrite: base.canWrite || extra.canWrite,
     canWriteTime: base.canWriteTime || extra.canWriteTime,
     canWriteDiary: base.canWriteDiary || extra.canWriteDiary,
+    canReportProblem: base.canReportProblem || extra.canReportProblem,
   };
 }
 
@@ -156,24 +161,50 @@ export function finalizeProjectAccess(
     isOwner ||
     access.canWriteDiary ||
     (access.canReadDiary && (access.isMember || assigned));
+  const isMember = access.isMember || assigned || isOwner;
+  const canReportProblem =
+    isOwner ||
+    access.canWrite ||
+    access.canReportProblem ||
+    isMember ||
+    canWriteTime ||
+    canWriteDiary;
 
   return {
     ...access,
     isOwner,
-    isMember: access.isMember || assigned || isOwner,
+    isMember,
     canReadTasks: access.canReadTasks || crewReader,
     canReadPhases: access.canReadPhases || crewReader,
     canWrite: isOwner || access.canWrite || (assigned && editorLike) || editorLike,
     canWriteTime,
     canWriteDiary,
+    canReportProblem,
   };
 }
 
 async function readMembersDocAccess(projectId: string, uid: string): Promise<ProjectAccess | null> {
   const membersRef = doc(db, "projects", projectId, "members", uid);
   const membersSnap = await getDocSmart(membersRef);
-  if (!membersSnap.exists()) return null;
-  return accessFromProjectMemberData(membersSnap.data() as Record<string, unknown>);
+  if (membersSnap.exists()) {
+    return accessFromProjectMemberData(membersSnap.data() as Record<string, unknown>);
+  }
+
+  try {
+    const memberQuery = query(
+      collection(db, "projects", projectId, "members"),
+      where("userId", "==", uid),
+      limit(1)
+    );
+    const querySnap = await getDocsSmart(memberQuery);
+    if (!querySnap.empty) {
+      return accessFromProjectMemberData(querySnap.docs[0].data() as Record<string, unknown>);
+    }
+  } catch (error) {
+    if (__DEV__) console.warn("[useProjectAccess] members userId query failed:", error);
+  }
+
+  return null;
 }
 
 function accessFromOrgProjectMembership(
@@ -201,6 +232,7 @@ function accessFromOrgProjectMembership(
     canWrite: true,
     canWriteTime: true,
     canWriteDiary: true,
+    canReportProblem: true,
   };
 }
 
@@ -221,9 +253,15 @@ async function enrichProjectAccess(
   const orgId = typeof projectData.orgId === "string" ? projectData.orgId.trim() : "";
   if (orgId) {
     const orgMemRef = doc(db, "organizations", orgId, "members", uid);
-    const orgMemSnap = await getDocSmart(orgMemRef);
+    let orgMemSnap = await getDocSmart(orgMemRef);
+    const authEmail = auth.currentUser?.email?.trim().toLowerCase() ?? "";
+    if (!orgMemSnap.exists() && authEmail) {
+      orgMemSnap = await getDocSmart(doc(db, "organizations", orgId, "members", authEmail));
+    }
     const oStatus = String(orgMemSnap.data()?.status ?? "").toLowerCase();
-    const orgActive = orgMemSnap.exists() && (oStatus === "active" || !oStatus);
+    const orgActive =
+      orgMemSnap.exists() &&
+      (oStatus === "active" || oStatus === "pending" || !oStatus);
     const fromOrg = accessFromOrgProjectMembership(uid, projectData, orgActive);
     if (fromOrg) resolved = mergeProjectAccess(resolved, fromOrg);
   }
@@ -245,6 +283,7 @@ async function enrichProjectAccess(
       canWrite: false,
       canWriteTime: false,
       canWriteDiary: true,
+      canReportProblem: true,
     });
   }
 
@@ -282,6 +321,7 @@ function accessFromMembersByUidDoc(data: Record<string, unknown>): ProjectAccess
     canWrite: permLevel === "editor",
     canWriteTime: permLevel === "editor" && si.timeTracking === true,
     canWriteDiary: diaryWriteFromMemberAccess(si, si.diary, true),
+    canReportProblem: true,
   };
 }
 
@@ -328,6 +368,7 @@ function accessFromAssignedMemberIds(uid: string, projectData: Record<string, un
     canWrite: true,
     canWriteTime: true,
     canWriteDiary: true,
+    canReportProblem: true,
   };
 }
 
@@ -381,6 +422,7 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
           canWrite: true,
           canWriteTime: true,
           canWriteDiary: true,
+          canReportProblem: true,
         });
         setLoading(false);
         return;
@@ -393,6 +435,11 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
 
       if (!finalized.canReadTasks && !finalized.canReadPhases) {
         await healProjectAccessForCurrentUser(projectId);
+        const serverSnap = await getDocSmart(projectRef, { forceServer: true });
+        const serverData = (serverSnap.data() ?? {}) as Record<string, unknown>;
+        resolved = await resolveNonOwnerProjectAccess(projectId, uid, serverData);
+        finalized = finalizeProjectAccess(resolved, uid, serverData, ownerIdForFinalize);
+      } else if (!finalized.canReportProblem) {
         const serverSnap = await getDocSmart(projectRef, { forceServer: true });
         const serverData = (serverSnap.data() ?? {}) as Record<string, unknown>;
         resolved = await resolveNonOwnerProjectAccess(projectId, uid, serverData);
@@ -460,6 +507,35 @@ export async function resolveCanWriteTimeForProject(
   return fromMembersDoc?.canWriteTime === true;
 }
 
+/** Authoritative check before reporting a site problem (field crew, not only editors). */
+export async function resolveCanReportProblemForProject(
+  projectId: string,
+  uid: string,
+  projectOwnerIdHint?: string | null,
+  opts?: { forceServer?: boolean }
+): Promise<boolean> {
+  const normalizedId = projectId.trim();
+  if (!normalizedId || !uid) return false;
+  if (projectOwnerIdHint && projectOwnerIdHint === uid) return true;
+
+  const access = await fetchProjectAccess(normalizedId, uid, projectOwnerIdHint ?? undefined, opts);
+  if (access.canReportProblem) return true;
+
+  const readOpts = opts?.forceServer ? { forceServer: true } : undefined;
+  const projectRef = doc(db, "projects", normalizedId);
+  const projectSnap = await getDocSmart(projectRef, readOpts);
+  if (!projectSnap.exists()) return false;
+
+  const projectData = (projectSnap.data() ?? {}) as Record<string, unknown>;
+  const ownerId = (projectData.ownerId as string) ?? projectOwnerIdHint ?? null;
+  if (ownerId === uid) return true;
+
+  if (isUserAssignedOnProject(projectData, uid)) return true;
+
+  const fromMembersDoc = await readMembersDocAccess(normalizedId, uid);
+  return fromMembersDoc?.canReportProblem === true || fromMembersDoc?.isMember === true;
+}
+
 /**
  * Fetch project access for a single project (for batch use, e.g. in ExpensesKpiScreen).
  * Returns the same shape as useProjectAccess but as a Promise.
@@ -500,6 +576,7 @@ export async function fetchProjectAccess(
         canWrite: true,
         canWriteTime: true,
         canWriteDiary: true,
+        canReportProblem: true,
       };
     }
 

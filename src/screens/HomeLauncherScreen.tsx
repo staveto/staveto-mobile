@@ -19,6 +19,7 @@ import { useActiveOrg } from "../hooks/useActiveOrg";
 import { colors, spacing } from "../theme";
 import { HomeQuickActionsGrid } from "../components/HomeQuickActionsGrid";
 import { QuickTimeModal } from "../components/QuickTimeModal";
+import { QuickProblemProjectSheet } from "../components/QuickProblemProjectSheet";
 import { HOME_LAUNCHER_ACTIONS, type HomeQuickActionId } from "../lib/homeQuickActions";
 import { openInMaps } from "../lib/maps";
 import { listMyProjects, type ProjectDoc } from "../services/projects";
@@ -43,6 +44,7 @@ export function HomeLauncherScreen() {
   const { user } = useAuth();
   const { activeOrganization } = useActiveOrg();
   const quickTimeSheetRef = useRef<BottomSheetModal | null>(null);
+  const problemSheetRef = useRef<BottomSheetModal | null>(null);
 
   const [projects, setProjects] = useState<ProjectDoc[]>([]);
   const [lastUsedProjectId, setLastUsedProjectId] = useState<string | null>(null);
@@ -145,6 +147,57 @@ export function HomeLauncherScreen() {
     return formatTimerHms(ms);
   }, [activeTimer, timerTick]);
 
+  const openProblemProjectSheet = useCallback(() => {
+    problemSheetRef.current?.present();
+  }, []);
+
+  const navigateToCreateProblem = useCallback(
+    (project: ProjectDoc) => {
+      void AsyncStorage.setItem(LAST_USED_PROJECT_KEY, project.id);
+      // CreateProblem lives on the root stack (RootNavigator), not inside HomeStack.
+      // Nesting it under Home > … silently drops the screen and lands on HomeMain.
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 1,
+          routes: [
+            {
+              name: "AppTabs",
+              state: {
+                routes: [
+                  {
+                    name: "Main",
+                    state: {
+                      routes: [
+                        {
+                          name: "Home",
+                          state: {
+                            routes: [{ name: "HomeMain" }],
+                            index: 0,
+                          },
+                        },
+                      ],
+                      index: 0,
+                    },
+                  },
+                ],
+                index: 0,
+              },
+            },
+            {
+              name: "CreateProblem",
+              params: {
+                projectId: project.id,
+                projectName: project.name,
+                projectType: project.projectType ?? "BUILD",
+              },
+            },
+          ],
+        })
+      );
+    },
+    [navigation]
+  );
+
   const handleAction = useCallback(
     (id: HomeQuickActionId) => {
       switch (id) {
@@ -195,24 +248,11 @@ export function HomeLauncherScreen() {
           });
           break;
         case "problem":
-          if (!focusProject) {
+          if (projects.length === 0) {
             Alert.alert(t("common.error"), t("home.noProjects"));
             break;
           }
-          enterAppTabs({
-            routes: [
-              { name: "HomeMain" },
-              {
-                name: "CreateProblem",
-                params: {
-                  projectId: focusProject.id,
-                  projectName: focusProject.name,
-                  projectType: focusProject.projectType ?? "BUILD",
-                },
-              },
-            ],
-            index: 1,
-          });
+          openProblemProjectSheet();
           break;
         case "navigation": {
           const address = focusProject?.addressText?.trim();
@@ -228,7 +268,7 @@ export function HomeLauncherScreen() {
           break;
       }
     },
-    [enterAppTabs, focusProject, openQuickTimeSheet, t]
+    [enterAppTabs, focusProject, navigation, openProblemProjectSheet, openQuickTimeSheet, projects, t]
   );
 
   return (
@@ -281,6 +321,13 @@ export function HomeLauncherScreen() {
           />
         )}
       </ScrollView>
+
+      <QuickProblemProjectSheet
+        sheetRef={problemSheetRef}
+        projects={projects}
+        onSelectProject={navigateToCreateProblem}
+        t={t}
+      />
 
       <QuickTimeModal
         sheetRef={quickTimeSheetRef}

@@ -74,7 +74,7 @@ export function buildHomeQuickActions(role: HomeQuickActionRole): HomeQuickActio
   return WORKER_ACTIONS;
 }
 
-/** Field launcher: 5 quick actions + one tile to open the full home dashboard. */
+/** Field launcher: quick actions + a tile to open the full home dashboard. */
 export const HOME_LAUNCHER_ACTIONS: HomeQuickActionDef[] = [
   WORKER_ACTIONS[0],
   WORKER_ACTIONS[1],

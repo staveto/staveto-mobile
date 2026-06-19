@@ -189,6 +189,16 @@ export function getProblemsTitleContext(project: {
   return "tradeLike";
 }
 
+/** i18n key for the Problems section title — field site issues, not warranty “Reklamationen”. */
+export function getProblemsSectionTitleKey(project: {
+  projectType?: ProjectTypeInput;
+  jobsTabVisible?: boolean;
+}): "problems.titlePoruchy" | "problems.titleDefekty" | "problems.title" {
+  if (isLegacyMaintenanceEquipmentHub(project)) return "problems.titlePoruchy";
+  if (isBuildLikeStorageType(project.projectType)) return "problems.titleDefekty";
+  return "problems.title";
+}
+
 export function isSoloOwnerProjectRow(p: { isSharedToMe?: boolean; sharedWithCount?: number | null }): boolean {
   return p.isSharedToMe !== true && (p.sharedWithCount ?? 0) === 0;
 }

@@ -440,6 +440,7 @@ service cloud.firestore {
               && request.resource.data.orgId != null
               && isOrgManager(request.resource.data.orgId, uid())
             )
+            || memberProblemOfficeNotificationCreateAllowed(userId)
           );
         allow update: if signedIn()
           && uid() == userId
@@ -754,10 +755,10 @@ service cloud.firestore {
         allow update, delete: if canWriteAsEditor(projectId);
       }
 
-      // problems: defects/issues per project - read: owner or member; create: owner or editor; update: owner or creator or assignee; delete: owner or org admin
+      // problems: defects/issues per project - read: owner or member; create: owner, editor, or assigned crew; update: owner or creator or assignee; delete: owner or org admin
       match /problems/{problemId} {
         allow read: if isOwner(projectId) || isMember(projectId);
-        allow create: if canWriteAsEditor(projectId);
+        allow create: if canWriteAsEditor(projectId) || isMember(projectId);
         allow update: if isOwner(projectId)
           || resource.data.createdByUid == uid()
           || resource.data.assigneeUid == uid()
@@ -943,6 +944,33 @@ service cloud.firestore {
     }
 
     // Notifications (inbox)
+    function memberProblemNotificationCreateAllowed() {
+      let pid = request.resource.data.projectId;
+      return request.resource.data.fromUserId == uid()
+        && pid is string
+        && pid.size() > 0
+        && exists(/databases/$(database)/documents/projects/$(pid))
+        && isMember(pid)
+        && request.resource.data.type in ['PROBLEM_ASSIGNED', 'PROBLEM_REPORTED']
+        && request.resource.data.userId != uid();
+    }
+
+    /**
+     * Web office mirror: a project member may create a PROBLEM_* notification in
+     * another user's users/{targetUserId}/notifications subcollection so the
+     * report/escalation also reaches the Staveto web inbox.
+     */
+    function memberProblemOfficeNotificationCreateAllowed(targetUserId) {
+      let pid = request.resource.data.projectId;
+      return request.resource.data.fromUserId == uid()
+        && pid is string
+        && pid.size() > 0
+        && exists(/databases/$(database)/documents/projects/$(pid))
+        && isMember(pid)
+        && request.resource.data.type in ['PROBLEM_ASSIGNED', 'PROBLEM_REPORTED']
+        && targetUserId != uid();
+    }
+
     match /notifications/{notificationId} {
       // Allow read when doc doesn't exist (getDoc for upsert check) or when user owns it
       allow read: if signedIn() && (
@@ -957,6 +985,7 @@ service cloud.firestore {
           && request.resource.data.orgId != null
           && isOrgManager(request.resource.data.orgId, uid())
         )
+        || memberProblemNotificationCreateAllowed()
       );
       // User can update their own notification (e.g. refresh task-due data); cannot change userId
       allow update: if signedIn()

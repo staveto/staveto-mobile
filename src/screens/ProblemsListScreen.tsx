@@ -17,6 +17,7 @@ import { useI18n } from "../i18n/I18nContext";
 import { useProjectAccess } from "../hooks/useProjectAccess";
 import * as problemsService from "../services/problems";
 import type { ProblemDoc, ProblemStatus, ProblemPriority, ProblemPhoto } from "../services/problems";
+import { getProblemsSectionTitleKey } from "../lib/projectTypeModel";
 import * as storageSmart from "../services/storageSmart";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
 import { colors, radius, spacing } from "../theme";
@@ -129,7 +130,7 @@ export function ProblemsListScreen() {
   };
 
   useEffect(() => {
-    const title = projectType === "MAINTENANCE" ? t("problems.titlePoruchy") : projectType === "TRADE" ? t("problems.titleReklamacie") : (projectType === "BUILD" || projectType === "MANAGEMENT") ? t("problems.titleDefekty") : projectType === "RESIDENTIAL" ? t("problems.titleProblemy") : t("problems.title");
+    const title = t(getProblemsSectionTitleKey({ projectType }));
     navigation.setOptions({ title });
   }, [navigation, projectType, t]);
 
@@ -248,7 +249,7 @@ export function ProblemsListScreen() {
         <View style={styles.center}>
           <Ionicons name="document-text-outline" size={64} color={colors.textMuted} />
           <Text style={styles.emptyText}>{t("problems.empty")}</Text>
-          {access.canWrite && (
+          {access.canReportProblem && (
             <TouchableOpacity style={styles.createButton} onPress={openCreate}>
               <Text style={styles.createButtonText}>{t("problems.new")}</Text>
             </TouchableOpacity>
@@ -264,7 +265,7 @@ export function ProblemsListScreen() {
         />
       )}
 
-      {access.canWrite && (
+      {access.canReportProblem && (
         <TouchableOpacity style={styles.fab} onPress={openCreate}>
           <Ionicons name="add" size={28} color="#fff" />
         </TouchableOpacity>

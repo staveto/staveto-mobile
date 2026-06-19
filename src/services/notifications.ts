@@ -28,6 +28,7 @@ export type NotificationType =
   | "PROJECT_INVITED"
   | "PROJECT_ASSIGNED"
   | "PROBLEM_ASSIGNED"
+  | "PROBLEM_REPORTED"
   | "EXPENSE_ADDED"
   | "DIARY_ADDED"
   | "MEMBER_JOINED"
@@ -114,6 +115,7 @@ const KNOWN_NOTIFICATION_TYPES: readonly NotificationType[] = [
   "PROJECT_INVITED",
   "PROJECT_ASSIGNED",
   "PROBLEM_ASSIGNED",
+  "PROBLEM_REPORTED",
   "EXPENSE_ADDED",
   "DIARY_ADDED",
   "MEMBER_JOINED",
@@ -523,7 +525,7 @@ function inferEntityType(
   }
   const t = typeof type === "string" ? type : "";
   if (t.includes("TASK")) return "task";
-  if (t === "PROBLEM_ASSIGNED") return "problem";
+  if (t === "PROBLEM_ASSIGNED" || t === "PROBLEM_REPORTED") return "problem";
   if (t.includes("PROJECT") || t.includes("MEMBER")) return "project";
   if (t.includes("EXPENSE")) return "expense";
   return "project";
@@ -1476,6 +1478,47 @@ export async function createTaskAssignedNotification(data: {
   return { id: ref.id };
 }
 
+/**
+ * Mirror a problem notification into the recipient's `users/{uid}/notifications`
+ * subcollection so it also shows up in the Staveto web office inbox
+ * (the web app reads only that subcollection). Best-effort: never blocks the
+ * primary top-level `notifications` write if rules/permissions reject it.
+ */
+async function writeOfficeProblemNotification(data: {
+  userId: string;
+  type: "PROBLEM_ASSIGNED" | "PROBLEM_REPORTED";
+  projectId: string;
+  projectName?: string | null;
+  problemId: string;
+  problemTitle?: string | null;
+  fromUserId: string;
+  fromUserName?: string | null;
+  escalated?: boolean;
+}): Promise<void> {
+  try {
+    const officeRef = doc(db, "users", data.userId, "notifications", `problem-${data.problemId}`);
+    await setDoc(
+      officeRef,
+      {
+        type: data.type,
+        projectId: data.projectId,
+        projectName: data.projectName ?? null,
+        problemId: data.problemId,
+        subject: data.problemTitle ?? null,
+        escalated: data.escalated === true,
+        fromUserId: data.fromUserId,
+        assignedBy: data.fromUserId,
+        assignedByName: data.fromUserName ?? null,
+        createdAt: serverTimestamp(),
+        read: false,
+      },
+      { merge: true }
+    );
+  } catch (e) {
+    if (__DEV__) console.warn("[notifications] writeOfficeProblemNotification failed", e);
+  }
+}
+
 export async function createProblemAssignedNotification(data: {
   userId: string;
   projectId: string;
@@ -1509,6 +1552,72 @@ export async function createProblemAssignedNotification(data: {
     createdAt: serverTimestamp(),
     readAt: null,
     severity: "info",
+  });
+  await writeOfficeProblemNotification({
+    userId: data.userId,
+    type: "PROBLEM_ASSIGNED",
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    problemId: data.problemId,
+    problemTitle: data.problemTitle ?? null,
+    fromUserId: data.fromUserId ?? auth.currentUser.uid,
+    fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
+  });
+  return { id: ref.id };
+}
+
+/** Notify project owner / manager when a crew member reports or escalates a site problem. */
+export async function createProblemReportedNotification(data: {
+  userId: string;
+  projectId: string;
+  projectName?: string | null;
+  problemId: string;
+  problemTitle?: string | null;
+  fromUserId?: string;
+  fromUserName?: string;
+  /** When true, this is an escalation (priority bumped to high) rather than a fresh report. */
+  escalated?: boolean;
+}): Promise<{ id: string } | null> {
+  if (!auth.currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+  if (data.userId === auth.currentUser.uid) return null;
+
+  const reporter = data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? "Mitarbeiter";
+  const prefix = data.escalated ? "\u26A0\uFE0F " : "";
+  const fallback = data.escalated
+    ? `${reporter} hat ein Problem eskaliert.`
+    : `${reporter} hat ein Problem gemeldet.`;
+  const c = collection(db, "notifications");
+  const ref = await addDoc(c, {
+    userId: data.userId,
+    type: "PROBLEM_REPORTED",
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    problemId: data.problemId,
+    message: data.problemTitle ? `${prefix}${reporter}: ${data.problemTitle}` : fallback,
+    fromUserId: data.fromUserId ?? auth.currentUser.uid,
+    fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
+    meta: { problemId: data.problemId, projectId: data.projectId, escalated: data.escalated === true },
+    entityType: "problem",
+    deepLink: {
+      screen: "ProblemDetail",
+      params: { projectId: data.projectId, problemId: data.problemId },
+    },
+    createdAt: serverTimestamp(),
+    readAt: null,
+    severity: data.escalated ? "warning" : "info",
+  });
+  await writeOfficeProblemNotification({
+    userId: data.userId,
+    type: "PROBLEM_REPORTED",
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    problemId: data.problemId,
+    problemTitle: data.problemTitle ?? null,
+    fromUserId: data.fromUserId ?? auth.currentUser.uid,
+    fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
+    escalated: data.escalated === true,
   });
   return { id: ref.id };
 }

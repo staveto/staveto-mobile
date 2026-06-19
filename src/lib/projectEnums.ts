@@ -37,6 +37,7 @@ export {
   projectOverviewLoadsEquipmentAndServiceRules,
   projectOverviewIsTradeOrMaintenanceFlatTasks,
   getProblemsTitleContext,
+  getProblemsSectionTitleKey,
   isSoloOwnerProjectRow,
   isSharedOrCollaborativeProjectRow,
 } from "./projectTypeModel";

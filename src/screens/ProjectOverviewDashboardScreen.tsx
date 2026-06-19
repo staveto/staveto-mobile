@@ -44,7 +44,7 @@ import type { DiaryEntryDoc } from "../services/constructionDiary";
 import type { ExpenseDoc } from "../services/expenses";
 import type { AttachmentDoc } from "../services/attachments";
 import type { ProblemDoc } from "../services/problems";
-import { isBuildLikeStorageType, getProblemsTitleContext } from "../lib/projectTypeModel";
+import { isBuildLikeStorageType, getProblemsSectionTitleKey } from "../lib/projectTypeModel";
 
 const TODAY = new Date().toISOString().slice(0, 10);
 
@@ -163,15 +163,16 @@ export function ProjectOverviewDashboardScreen() {
   const effectiveProjectType = project?.projectType ?? projectType;
   const isBuildOrManagement = isBuildLikeStorageType(effectiveProjectType);
 
-  const problemsTitle = useMemo(() => {
-    const ctx = getProblemsTitleContext({
-      projectType: project?.projectType ?? projectType,
-      jobsTabVisible: project?.jobsTabVisible,
-    });
-    if (ctx === "maintenanceHub") return t("problems.titlePoruchy");
-    if (ctx === "buildLike") return t("problems.titleDefekty");
-    return t("problems.titleReklamacie");
-  }, [project?.projectType, project?.jobsTabVisible, projectType, t]);
+  const problemsTitle = useMemo(
+    () =>
+      t(
+        getProblemsSectionTitleKey({
+          projectType: project?.projectType ?? projectType,
+          jobsTabVisible: project?.jobsTabVisible,
+        })
+      ),
+    [project?.projectType, project?.jobsTabVisible, projectType, t]
+  );
 
   const kpis = useMemo(() => {
     const activeTasks = tasks.filter((t) => t.isActive !== false);

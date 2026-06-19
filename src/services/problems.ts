@@ -64,6 +64,10 @@ export type ProblemDoc = {
   resolutionNote?: string | null;
   archivedAt?: string | null;
   archivedByUid?: string | null;
+  /** Set when the problem was escalated (priority forced high + owner/manager notified). */
+  escalatedAt?: string | null;
+  escalatedByUid?: string | null;
+  escalationReason?: string | null;
   photos: ProblemPhoto[];
   locationHint?: string | null;
   audit?: { lastStatusByUid?: string; lastStatusAt?: string };
@@ -126,6 +130,9 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
     resolutionNote: (d.resolutionNote as string) ?? null,
     archivedAt: convertTimestamp(d.archivedAt) ?? (d.archivedAt as string | null) ?? null,
     archivedByUid: (d.archivedByUid as string) ?? null,
+    escalatedAt: convertTimestamp(d.escalatedAt) ?? (d.escalatedAt as string | null) ?? null,
+    escalatedByUid: (d.escalatedByUid as string) ?? null,
+    escalationReason: (d.escalationReason as string) ?? null,
     photos,
     locationHint: (d.locationHint as string) ?? null,
     audit:
@@ -260,6 +267,61 @@ export type CreateProblemInput = {
   attachments?: string[];
 };
 
+/**
+ * Fan out a problem notification to the business org's owner / admins / managers
+ * so the office manager sees it on web + mobile — not only the literal project
+ * `ownerId`. Best-effort: reads org members (graceful on permission denial) and
+ * skips anyone already in `notified` or the actor themselves.
+ */
+async function notifyOrgManagersOfProblem(args: {
+  projectData: Record<string, unknown>;
+  projectId: string;
+  projectName: string | null;
+  problemId: string;
+  problemTitle: string | null;
+  creatorUid: string;
+  creatorName: string | null;
+  escalated?: boolean;
+  notified: Set<string>;
+}): Promise<void> {
+  const orgId =
+    (typeof args.projectData.orgId === "string" && args.projectData.orgId.trim()) ||
+    (typeof args.projectData.workspaceId === "string" && args.projectData.workspaceId.trim()) ||
+    "";
+  if (!orgId) return;
+  try {
+    const [{ listMembers }, { createProblemReportedNotification }] = await Promise.all([
+      import("./businessMembers"),
+      import("./notifications"),
+    ]);
+    const members = await listMembers(orgId);
+    for (const m of members) {
+      const uid = m.userId;
+      if (
+        m.status === "active" &&
+        (m.role === "owner" || m.role === "admin" || m.role === "manager") &&
+        uid &&
+        uid !== args.creatorUid &&
+        !args.notified.has(uid)
+      ) {
+        await createProblemReportedNotification({
+          userId: uid,
+          projectId: args.projectId,
+          projectName: args.projectName,
+          problemId: args.problemId,
+          problemTitle: args.problemTitle,
+          fromUserId: args.creatorUid,
+          fromUserName: args.creatorName,
+          escalated: args.escalated === true,
+        });
+        args.notified.add(uid);
+      }
+    }
+  } catch (e) {
+    if (__DEV__) console.warn("[problems] notifyOrgManagersOfProblem failed", e);
+  }
+}
+
 export async function createProblem(input: CreateProblemInput): Promise<ProblemDoc> {
   const currentUser = auth.currentUser;
   if (!currentUser?.uid) {
@@ -306,21 +368,57 @@ export async function createProblem(input: CreateProblemInput): Promise<ProblemD
   const created = await getProblem(input.projectId, ref.id);
   if (!created) throw new Error("Problém sa nepodarilo načítať po vytvorení.");
 
-  if (input.assigneeUid) {
-    try {
-      const { createProblemAssignedNotification } = await import("./notifications");
+  try {
+    const projectSnap = await getDocSmart(doc(db, "projects", input.projectId));
+    const projectData = (projectSnap.data() ?? {}) as Record<string, unknown>;
+    const ownerId = typeof projectData.ownerId === "string" ? projectData.ownerId : null;
+    const projectName = typeof projectData.name === "string" ? projectData.name : null;
+    const creatorUid = currentUser.uid;
+    const creatorName = currentUser.displayName ?? currentUser.email ?? null;
+    const notified = new Set<string>();
+
+    const { createProblemAssignedNotification, createProblemReportedNotification } = await import(
+      "./notifications"
+    );
+
+    if (input.assigneeUid && input.assigneeUid !== creatorUid) {
       await createProblemAssignedNotification({
         userId: input.assigneeUid,
         projectId: input.projectId,
-        projectName: undefined,
+        projectName,
         problemId: ref.id,
         problemTitle: input.shortDescription,
-        fromUserId: currentUser.uid,
-        fromUserName: currentUser.displayName ?? currentUser.email ?? null,
+        fromUserId: creatorUid,
+        fromUserName: creatorName,
       });
-    } catch (e) {
-      console.warn("[problems] Failed to create assignee notification:", e);
+      notified.add(input.assigneeUid);
     }
+
+    if (ownerId && ownerId !== creatorUid && !notified.has(ownerId)) {
+      await createProblemReportedNotification({
+        userId: ownerId,
+        projectId: input.projectId,
+        projectName,
+        problemId: ref.id,
+        problemTitle: input.shortDescription,
+        fromUserId: creatorUid,
+        fromUserName: creatorName,
+      });
+      notified.add(ownerId);
+    }
+
+    await notifyOrgManagersOfProblem({
+      projectData,
+      projectId: input.projectId,
+      projectName,
+      problemId: ref.id,
+      problemTitle: input.shortDescription,
+      creatorUid,
+      creatorName,
+      notified,
+    });
+  } catch (e) {
+    console.warn("[problems] Failed to create problem notifications:", e);
   }
 
   return created;
@@ -476,4 +574,136 @@ export async function listProblemsWithDueDateInRange(
     }
   }
   return allProblems;
+}
+
+export type ProblemHubFilters = {
+  status?: ProblemStatus | ProblemStatus[];
+  priority?: ProblemPriority;
+  includeArchived?: boolean;
+};
+
+/**
+ * Global "Problems" hub feed: aggregates problems across all the user's projects
+ * (owned + shared/assigned), tagged with project name + type. Same source set as
+ * `listProblems` per project, so counts and badges stay consistent.
+ */
+export async function listAllMyProblems(
+  ownerId: string,
+  filters?: ProblemHubFilters,
+  readOpts?: SmartReadOptions
+): Promise<ProblemWithProject[]> {
+  const { listMyProjects } = await import("./projects");
+  const projects = await listMyProjects(ownerId);
+  const statuses = filters?.status
+    ? Array.isArray(filters.status)
+      ? filters.status
+      : [filters.status]
+    : null;
+
+  const all: ProblemWithProject[] = [];
+  for (const project of projects) {
+    try {
+      const list = await listProblems(project.id, undefined, readOpts);
+      for (const p of list) {
+        if (!filters?.includeArchived && p.archivedAt) continue;
+        if (statuses && !statuses.includes(p.status)) continue;
+        if (filters?.priority && p.priority !== filters.priority) continue;
+        all.push({ ...p, projectName: project.name, projectType: project.projectType ?? p.projectType });
+      }
+    } catch (e) {
+      console.warn(`[problems] Failed to list for project ${project.id}:`, e);
+    }
+  }
+
+  return sortProblemsByCreatedAtDesc(all) as ProblemWithProject[];
+}
+
+/** Count of open/in_progress problems across all the user's projects (hub badge). */
+export async function countAllMyOpenProblems(ownerId: string): Promise<number> {
+  const list = await listAllMyProblems(ownerId, { status: ["open", "in_progress"] });
+  return list.length;
+}
+
+/**
+ * Escalate a problem: force priority to high, stamp escalation metadata, and notify
+ * the project owner (and assignee if different from the actor). Consistent across all
+ * project types — escalation is part of the unified Problems process.
+ */
+export async function escalateProblem(
+  projectId: string,
+  problemId: string,
+  reason?: string | null
+): Promise<void> {
+  const currentUser = auth.currentUser;
+  if (!currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený na eskaláciu problému.");
+  }
+
+  const ref = doc(db, paths.projectProblem(projectId, problemId));
+  await updateDoc(ref, {
+    priority: "high",
+    escalatedAt: serverTimestamp(),
+    escalatedByUid: currentUser.uid,
+    escalationReason: reason?.trim() || null,
+    updatedAt: serverTimestamp(),
+  });
+
+  try {
+    const problem = await getProblem(projectId, problemId);
+    const projectSnap = await getDocSmart(doc(db, "projects", projectId));
+    const projectData = (projectSnap.data() ?? {}) as Record<string, unknown>;
+    const ownerId = typeof projectData.ownerId === "string" ? projectData.ownerId : null;
+    const projectName = typeof projectData.name === "string" ? projectData.name : null;
+    const title = problem?.shortDescription ?? null;
+    const actorName = currentUser.displayName ?? currentUser.email ?? null;
+    const notified = new Set<string>([currentUser.uid]);
+
+    const { createProblemReportedNotification } = await import("./notifications");
+
+    if (ownerId && !notified.has(ownerId)) {
+      await createProblemReportedNotification({
+        userId: ownerId,
+        projectId,
+        projectName,
+        problemId,
+        problemTitle: title,
+        fromUserId: currentUser.uid,
+        fromUserName: actorName,
+        escalated: true,
+      });
+      notified.add(ownerId);
+    }
+
+    if (problem?.assigneeUid && !notified.has(problem.assigneeUid)) {
+      await createProblemReportedNotification({
+        userId: problem.assigneeUid,
+        projectId,
+        projectName,
+        problemId,
+        problemTitle: title,
+        fromUserId: currentUser.uid,
+        fromUserName: actorName,
+        escalated: true,
+      });
+      notified.add(problem.assigneeUid);
+    }
+
+    await notifyOrgManagersOfProblem({
+      projectData,
+      projectId,
+      projectName,
+      problemId,
+      problemTitle: title,
+      creatorUid: currentUser.uid,
+      creatorName: actorName,
+      escalated: true,
+      notified,
+    });
+  } catch (e) {
+    console.warn("[problems] Failed to send escalation notifications:", e);
+  }
+
+  if (__DEV__) {
+    console.log(`[problems] Escalated: ${problemId}, projectId=${projectId}`);
+  }
 }

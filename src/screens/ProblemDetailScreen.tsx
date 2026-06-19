@@ -212,6 +212,32 @@ export function ProblemDetailScreen() {
     }
   };
 
+  const escalate = () => {
+    if (!projectId || !problemId) return;
+    Alert.alert(
+      t("problems.escalate"),
+      t("problems.escalateConfirm"),
+      [
+        { text: t("common.cancel"), style: "cancel" },
+        {
+          text: t("problems.escalate"),
+          style: "destructive",
+          onPress: async () => {
+            try {
+              await problemsService.escalateProblem(projectId, problemId);
+              setProblem((p) =>
+                p ? { ...p, priority: "high", escalatedAt: new Date().toISOString() } : null
+              );
+              showToast(t("problems.escalated"));
+            } catch (e) {
+              Alert.alert(t("common.error"), e instanceof Error ? e.message : "Chyba");
+            }
+          },
+        },
+      ]
+    );
+  };
+
   const archiveProblem = async () => {
     if (!projectId || !problemId || !canEdit) return;
     if (!resolutionNote.trim()) {
@@ -592,6 +618,33 @@ export function ProblemDetailScreen() {
           )}
         </View>
 
+        {!problem.archivedAt && (access.canReportProblem || canEdit) && (
+          <View style={styles.escalateSection}>
+            {problem.escalatedAt ? (
+              <View style={styles.escalatedInfo}>
+                <Ionicons name="alert-circle" size={18} color="#c62828" />
+                <Text style={styles.escalatedInfoText} maxFontSizeMultiplier={1.2}>
+                  {t("problems.escalatedInfo")}
+                </Text>
+              </View>
+            ) : (
+              <TouchableOpacity
+                style={[styles.statusBtn, styles.escalateBtn]}
+                onPress={escalate}
+                accessibilityRole="button"
+                accessibilityLabel={t("problems.escalate")}
+              >
+                <View style={styles.statusBtnInner}>
+                  <Ionicons name="arrow-up-circle-outline" size={18} color="#fff" style={{ marginRight: 6 }} />
+                  <Text style={styles.statusBtnText} maxFontSizeMultiplier={1.2} numberOfLines={1}>
+                    {t("problems.escalate")}
+                  </Text>
+                </View>
+              </TouchableOpacity>
+            )}
+          </View>
+        )}
+
         {canEdit && !problem.archivedAt && (
           <View style={styles.archiveSection}>
             <TouchableOpacity
@@ -784,6 +837,18 @@ const styles = StyleSheet.create({
   statusBtnText: { color: "#fff", fontSize: 14, fontWeight: "600" },
   archiveSection: { marginTop: spacing.sm, gap: spacing.sm },
   archiveBtn: { backgroundColor: "#6b7280" },
+  escalateSection: { marginTop: spacing.sm },
+  escalateBtn: { backgroundColor: "#c62828" },
+  escalatedInfo: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.xs,
+    paddingVertical: spacing.sm,
+    paddingHorizontal: spacing.md,
+    borderRadius: radius,
+    backgroundColor: "rgba(198,40,40,0.12)",
+  },
+  escalatedInfoText: { color: "#c62828", fontWeight: "600", fontSize: 13 },
   archiveInputWrap: { gap: spacing.sm },
   archiveInput: {
     backgroundColor: colors.card,

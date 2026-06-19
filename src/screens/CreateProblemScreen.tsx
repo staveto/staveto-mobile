@@ -17,7 +17,7 @@ import { useRoute, useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useI18n } from "../i18n/I18nContext";
 import { useAuth } from "../context/AuthContext";
-import { useProjectAccess } from "../hooks/useProjectAccess";
+import { useProjectAccess, resolveCanReportProblemForProject } from "../hooks/useProjectAccess";
 import * as problemsService from "../services/problems";
 import * as problemPhotosService from "../services/problemPhotos";
 import * as projectMembersService from "../services/projectMembers";
@@ -248,9 +248,26 @@ export function CreateProblemScreen() {
       Alert.alert(t("common.error"), t("equipment.selectEquipment"));
       return;
     }
-    if (!access.canWrite) {
-      Alert.alert(t("common.error"), t("errors.auth.editorRequired"));
-      return;
+    if (!access.canReportProblem) {
+      if (access.loading) {
+        Alert.alert(t("common.error"), t("loading.text"));
+        return;
+      }
+
+      let canReport = false;
+      if (user?.id) {
+        canReport = await resolveCanReportProblemForProject(projectId, user.id, undefined, {
+          forceServer: true,
+        });
+        if (!canReport) {
+          canReport = members.some((m) => m.userId === user.id && m.status === "active");
+        }
+      }
+
+      if (!canReport) {
+        Alert.alert(t("common.error"), t("errors.auth.editorRequired"));
+        return;
+      }
     }
 
     setSubmitting(true);

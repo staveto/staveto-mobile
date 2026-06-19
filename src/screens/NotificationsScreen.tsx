@@ -268,6 +268,7 @@ export function NotificationsScreen() {
         return "warning-outline";
       case "TASK_ASSIGNED":
       case "PROBLEM_ASSIGNED":
+      case "PROBLEM_REPORTED":
         return "checkmark-circle-outline";
       case "EXPENSE_ADDED":
         return "cash-outline";
@@ -305,6 +306,8 @@ export function NotificationsScreen() {
         return t("notifications.assignedTask");
       case "PROBLEM_ASSIGNED":
         return t("notifications.problemAssigned");
+      case "PROBLEM_REPORTED":
+        return t("notifications.problemReported");
       case "EXPENSE_ADDED":
         return t("notifications.newExpense");
       case "DIARY_ADDED":
@@ -473,7 +476,10 @@ export function NotificationsScreen() {
           screen: "Tasks",
           params: { dueFilter },
         });
-      } else if (notification.type === "PROBLEM_ASSIGNED" && notification.projectId) {
+      } else if (
+        (notification.type === "PROBLEM_ASSIGNED" || notification.type === "PROBLEM_REPORTED") &&
+        notification.projectId
+      ) {
         const problemId = notification.problemId ?? (notification.meta?.problemId as string) ?? notification.deepLink?.params?.problemId;
         if (problemId) {
           const parentNav = navigation.getParent();

@@ -144,6 +144,7 @@ import {
   projectOverviewLoadsDocuments,
   projectOverviewLoadsEquipmentAndServiceRules,
   projectOverviewIsTradeOrMaintenanceFlatTasks,
+  getProblemsSectionTitleKey,
 } from "../lib/projectTypeModel";
 
 /** First paint: server-first + empty-cache retry (no parallel 28s forceServer timeouts). */
@@ -5476,7 +5477,7 @@ export function ProjectOverviewScreen() {
                 style={{ marginRight: spacing.sm }}
               />
               <Text style={styles.expensesHeaderText}>
-                {projectType === 'MAINTENANCE' ? t("problems.titlePoruchy") : projectType === 'TRADE' ? t("problems.titleReklamacie") : (projectType === 'BUILD' || projectType === 'MANAGEMENT') ? t("problems.titleDefekty") : projectType === 'RESIDENTIAL' ? t("problems.titleProblemy") : t("problems.title")}
+                {t(getProblemsSectionTitleKey({ projectType, jobsTabVisible: project?.jobsTabVisible }))}
               </Text>
               {openProblemsCount > 0 && (
                 <View style={styles.problemsBadge}>

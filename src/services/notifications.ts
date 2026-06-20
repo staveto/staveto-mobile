@@ -1515,7 +1515,12 @@ async function writeOfficeProblemNotification(data: {
       { merge: true }
     );
   } catch (e) {
-    if (__DEV__) console.warn("[notifications] writeOfficeProblemNotification failed", e);
+    console.warn("[notifications] writeOfficeProblemNotification failed", {
+      targetUserId: data.userId,
+      type: data.type,
+      problemId: data.problemId,
+      error: e instanceof Error ? e.message : String(e),
+    });
   }
 }
 

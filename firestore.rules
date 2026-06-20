@@ -755,9 +755,9 @@ service cloud.firestore {
         allow update, delete: if canWriteAsEditor(projectId);
       }
 
-      // problems: defects/issues per project - read: owner or member; create: owner, editor, or assigned crew; update: owner or creator or assignee; delete: owner or org admin
+      // problems: defects/issues per project - read: owner, member, or org-linked manager; create: owner, editor, or assigned crew
       match /problems/{problemId} {
-        allow read: if isOwner(projectId) || isMember(projectId);
+        allow read: if isOwner(projectId) || isMember(projectId) || canReadOrgLinkedProject(projectId);
         allow create: if canWriteAsEditor(projectId) || isMember(projectId);
         allow update: if isOwner(projectId)
           || resource.data.createdByUid == uid()

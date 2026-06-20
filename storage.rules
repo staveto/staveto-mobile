@@ -9,16 +9,19 @@ service firebase.storage {
     function uid() {
       return request.auth.uid;
     }
+
+    function projectData(projectId) {
+      return firestore.get(/databases/(default)/documents/projects/$(projectId)).data;
+    }
     
     // Project owner check - same as Firestore rules
     function projectOwner(projectId) {
       return signedIn()
         && firestore.exists(/databases/(default)/documents/projects/$(projectId))
-        && firestore.get(/databases/(default)/documents/projects/$(projectId)).data.ownerId == uid();
+        && projectData(projectId).ownerId == uid();
     }
     
     // Project member: membersByUid exists OR legacy members/{uid} with status active
-    // Matches Firestore isMember semantics
     function isProjectMember(projectId) {
       return signedIn()
         && (
@@ -32,9 +35,85 @@ service firebase.storage {
           )
         );
     }
+
+    function isAssignedOnProject(projectId) {
+      let data = projectData(projectId);
+      return signedIn()
+        && firestore.exists(/databases/(default)/documents/projects/$(projectId))
+        && (
+          ("assignedMemberIds" in data && uid() in data.assignedMemberIds)
+          || ("assignedUserIds" in data && uid() in data.assignedUserIds)
+          || (
+            firestore.exists(/databases/(default)/documents/projects/$(projectId)/members/$(uid()))
+            && (
+              !("status" in firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data)
+              || firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data.status == "active"
+            )
+          )
+        );
+    }
+
+    function editorInMembersByUid(projectId) {
+      return firestore.exists(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid()))
+        && (
+          firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.permissionLevel == 'editor'
+          || firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.permissionLevel == 'admin'
+        );
+    }
+
+    function editorInLegacyMembers(projectId) {
+      return firestore.exists(/databases/(default)/documents/projects/$(projectId)/members/$(uid()))
+        && (
+          !("status" in firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data)
+          || firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data.status == "active"
+        )
+        && (
+          firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data.permissionLevel == 'editor'
+          || firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data.permissionLevel == 'admin'
+        );
+    }
+
+    // Matches Firestore canWriteAsEditor for attachment uploads
+    function canWriteAsEditor(projectId) {
+      return projectOwner(projectId)
+        || editorInMembersByUid(projectId)
+        || (
+          isProjectMember(projectId)
+          && !firestore.exists(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid()))
+          && editorInLegacyMembers(projectId)
+        )
+        || isAssignedOnProject(projectId);
+    }
+
+    // Field crew with diary access may add site photos (Firestore attachments create rule)
+    function canReadDiary(projectId) {
+      return projectOwner(projectId)
+        || isAssignedOnProject(projectId)
+        || (
+          firestore.exists(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid()))
+          && (
+            !("sharedItems" in firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data)
+            || !(firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.sharedItems is map)
+            || !("diary" in firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.sharedItems)
+            || firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.sharedItems.diary != false
+          )
+        )
+        || (
+          firestore.exists(/databases/(default)/documents/projects/$(projectId)/members/$(uid()))
+          && (
+            !("status" in firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data)
+            || firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data.status == "active"
+          )
+          && (
+            !("sharedItems" in firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data)
+            || !(firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data.sharedItems is map)
+            || !("diary" in firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data.sharedItems)
+            || firestore.get(/databases/(default)/documents/projects/$(projectId)/members/$(uid())).data.sharedItems.diary != false
+          )
+        );
+    }
     
     // Read attachments: owner OR member with tasks/expenses/documents permission (matches Firestore)
-    // Legacy members without membersByUid get full read
     function canReadAttachments(projectId) {
       return projectOwner(projectId)
         || (
@@ -45,20 +124,17 @@ service firebase.storage {
             || firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.sharedItems.expenses == true
             || firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.sharedItems.documents == true
           )
-        );
+        )
+        || isAssignedOnProject(projectId)
+        || canReadDiary(projectId);
     }
     
-    // Write attachments: owner OR member with permissionLevel == 'editor' or 'admin' (matches Firestore canWriteAsEditor)
+    // Write attachments: align with Firestore — editors, assigned crew, diary-enabled field workers
     function canWriteAttachments(projectId) {
-      return projectOwner(projectId)
-        || (
-          firestore.exists(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid()))
-          && (firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.permissionLevel == 'editor' || firestore.get(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid())).data.permissionLevel == 'admin')
-        );
+      return canWriteAsEditor(projectId) || canReadDiary(projectId);
     }
     
     // Unified attachments: projects/{projectId}/attachments/{attachmentId}/{filename}
-    // Read: owner or member with tasks/expenses/documents; Write: owner or editor; max 50MB
     match /projects/{projectId}/attachments/{attachmentId}/{filename} {
       allow read: if canReadAttachments(projectId);
       allow write: if canWriteAttachments(projectId)
@@ -73,10 +149,10 @@ service firebase.storage {
     }
     
     // Problem photos: projects/{projectId}/problems/{problemId}/{filename}
-    // Read: owner or member; Write: owner or editor; max 15MB per photo
+    // Firestore allows create for editors OR any project member
     match /projects/{projectId}/problems/{problemId}/{filename} {
-      allow read: if projectOwner(projectId) || isProjectMember(projectId);
-      allow write: if canWriteAttachments(projectId)
+      allow read: if projectOwner(projectId) || isProjectMember(projectId) || isAssignedOnProject(projectId);
+      allow write: if (canWriteAttachments(projectId) || isProjectMember(projectId) || isAssignedOnProject(projectId))
         && request.resource.size < 15 * 1024 * 1024;
     }
     

@@ -239,8 +239,7 @@ export function HomeLauncherScreen() {
                 params: {
                   projectId: focusProject.id,
                   projectName: focusProject.name,
-                  openDiaryModal: true,
-                  diaryInputMode: "text",
+                  openSitePhotoPicker: true,
                 },
               },
             ],

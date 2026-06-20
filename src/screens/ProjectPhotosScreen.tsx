@@ -12,6 +12,9 @@ import {
   ActivityIndicator,
   RefreshControl,
   useWindowDimensions,
+  Alert,
+  Platform,
+  ActionSheetIOS,
 } from "react-native";
 import { InAppAttachmentViewer } from "../components/InAppAttachmentViewer";
 import { useRoute, useNavigation } from "@react-navigation/native";
@@ -21,8 +24,16 @@ import * as attachmentsService from "../services/attachments";
 import type { AttachmentDoc } from "../services/attachments";
 import * as storageSmart from "../services/storageSmart";
 import { useOnlineStatus } from "../hooks/useOnlineStatus";
+import { useProjectAccess } from "../hooks/useProjectAccess";
 import { useI18n } from "../i18n/I18nContext";
 import { colors, radius, spacing } from "../theme";
+
+let ImagePicker: typeof import("expo-image-picker") | null = null;
+try {
+  ImagePicker = require("expo-image-picker");
+} catch {
+  ImagePicker = null;
+}
 
 const GRID_GAP = spacing.sm;
 const NUM_COLUMNS = 3;
@@ -37,9 +48,11 @@ export function ProjectPhotosScreen() {
   const projectId = params.projectId ?? "";
   const projectName = params.projectName ?? "";
   const { isOffline, isPoorNetwork } = useOnlineStatus();
+  const access = useProjectAccess(projectId);
 
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
+  const [uploading, setUploading] = useState(false);
   const [photos, setPhotos] = useState<AttachmentDoc[]>([]);
   const [photoUrls, setPhotoUrls] = useState<Map<string, string>>(new Map());
   const [viewingPhoto, setViewingPhoto] = useState<AttachmentDoc | null>(null);
@@ -85,6 +98,100 @@ export function ProjectPhotosScreen() {
     load();
   }, [load]);
 
+  const uploadSitePhoto = useCallback(
+    async (localUri: string, fileName: string, mimeType = "image/jpeg") => {
+      if (!projectId) return;
+      if (!access.canWritePhotos) {
+        Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+        return;
+      }
+      setUploading(true);
+      try {
+        await attachmentsService.uploadAttachment(projectId, {
+          localUri,
+          fileName,
+          mimeType,
+          kind: "image",
+        });
+        await load(true);
+      } catch (error: unknown) {
+        const c = (error as { code?: string }).code;
+        Alert.alert(
+          t("common.error"),
+          c === "permission-denied"
+            ? t("projectOverview.noPermission")
+            : error instanceof Error
+              ? error.message
+              : t("common.error")
+        );
+      } finally {
+        setUploading(false);
+      }
+    },
+    [access.canWritePhotos, load, projectId, t]
+  );
+
+  const pickSitePhoto = useCallback(async () => {
+    if (!access.canWritePhotos) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
+    if (!ImagePicker) {
+      Alert.alert(t("common.error"), t("projectOverview.imagePickerInstallCommand"));
+      return;
+    }
+    const runCamera = async () => {
+      const { status } = await ImagePicker!.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(t("projectOverview.cameraPermission"), t("projectOverview.cameraPermissionForInvoice"));
+        return;
+      }
+      const result = await ImagePicker!.launchCameraAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.8,
+      });
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
+        await uploadSitePhoto(asset.uri, asset.fileName || "image.jpg", asset.mimeType || "image/jpeg");
+      }
+    };
+    const runGallery = async () => {
+      const { status } = await ImagePicker!.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(t("projectOverview.galleryPermission"), t("projectOverview.galleryPermissionForInvoice"));
+        return;
+      }
+      const result = await ImagePicker!.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.8,
+      });
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
+        await uploadSitePhoto(asset.uri, asset.fileName || "image.jpg", asset.mimeType || "image/jpeg");
+      }
+    };
+    if (Platform.OS === "ios") {
+      ActionSheetIOS.showActionSheetWithOptions(
+        {
+          options: [t("common.cancel"), t("projectOverview.takePhoto"), t("projectOverview.selectFromGallery")],
+          cancelButtonIndex: 0,
+        },
+        (buttonIndex) => {
+          if (buttonIndex === 1) void runCamera();
+          else if (buttonIndex === 2) void runGallery();
+        }
+      );
+    } else {
+      Alert.alert(t("projectOverview.selectSource"), t("projectOverview.selectSourceMessage"), [
+        { text: t("common.cancel"), style: "cancel" },
+        { text: t("projectOverview.takePhoto"), onPress: () => void runCamera() },
+        { text: t("projectOverview.selectFromGallery"), onPress: () => void runGallery() },
+      ]);
+    }
+  }, [access.canWritePhotos, t, uploadSitePhoto]);
+
   const openPhoto = async (att: AttachmentDoc) => {
     try {
       const cached =
@@ -126,6 +233,12 @@ export function ProjectPhotosScreen() {
         <View style={styles.centered}>
           <Ionicons name="images-outline" size={64} color={colors.textMuted} />
           <Text style={styles.emptyText}>{t("projectPhotos.noPhotos") || "Žiadne fotky"}</Text>
+          {access.canWritePhotos ? (
+            <TouchableOpacity style={styles.emptyAddBtn} onPress={() => void pickSitePhoto()} disabled={uploading}>
+              <Ionicons name="camera-outline" size={20} color={colors.textOnDark} />
+              <Text style={styles.emptyAddBtnText}>{t("projectOverview.addPhoto")}</Text>
+            </TouchableOpacity>
+          ) : null}
         </View>
       ) : (
         <ScrollView
@@ -170,6 +283,22 @@ export function ProjectPhotosScreen() {
         mode="image"
         debugOpenSource="projectPhotosGrid"
       />
+
+      {access.canWritePhotos ? (
+        <TouchableOpacity
+          style={[styles.fab, { bottom: insets.bottom + spacing.lg }]}
+          onPress={() => void pickSitePhoto()}
+          disabled={uploading}
+          accessibilityRole="button"
+          accessibilityLabel={t("projectOverview.addPhoto")}
+        >
+          {uploading ? (
+            <ActivityIndicator size="small" color={colors.textOnDark} />
+          ) : (
+            <Ionicons name="camera" size={26} color={colors.textOnDark} />
+          )}
+        </TouchableOpacity>
+      ) : null}
     </View>
   );
 }
@@ -230,6 +359,35 @@ const styles = StyleSheet.create({
     fontSize: 16,
     color: colors.textMuted,
     marginTop: spacing.md,
+  },
+  emptyAddBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginTop: spacing.lg,
+    backgroundColor: colors.primary,
+    paddingHorizontal: spacing.lg,
+    paddingVertical: spacing.sm,
+    borderRadius: radius.md,
+  },
+  emptyAddBtnText: {
+    color: colors.textOnDark,
+    fontWeight: "600",
+  },
+  fab: {
+    position: "absolute",
+    right: spacing.lg,
+    width: 56,
+    height: 56,
+    borderRadius: 28,
+    backgroundColor: colors.primary,
+    alignItems: "center",
+    justifyContent: "center",
+    elevation: 4,
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: 2 },
+    shadowOpacity: 0.25,
+    shadowRadius: 4,
   },
   modalOverlay: {
     flex: 1,

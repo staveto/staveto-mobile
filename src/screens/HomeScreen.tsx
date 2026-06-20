@@ -1332,8 +1332,7 @@ export function HomeScreen() {
           stackNav.navigate("ProjectOverview", {
             projectId,
             projectName: project?.name,
-            openDiaryModal: true,
-            diaryInputMode: "text",
+            openSitePhotoPicker: true,
           });
           break;
         case "voice":

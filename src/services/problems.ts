@@ -268,6 +268,17 @@ export type CreateProblemInput = {
 };
 
 /**
+ * Resolve Firebase uid from org membership (legacy docs may use doc id only).
+ */
+function resolveOrgMemberUid(member: { id: string; userId: string }): string {
+  const uid = member.userId?.trim();
+  if (uid) return uid;
+  const docId = member.id?.trim();
+  if (docId && !docId.includes("@")) return docId;
+  return "";
+}
+
+/**
  * Fan out a problem notification to the business org's owner / admins / managers
  * so the office manager sees it on web + mobile — not only the literal project
  * `ownerId`. Best-effort: reads org members (graceful on permission denial) and
@@ -289,36 +300,49 @@ async function notifyOrgManagersOfProblem(args: {
     (typeof args.projectData.workspaceId === "string" && args.projectData.workspaceId.trim()) ||
     "";
   if (!orgId) return;
+
+  const { createProblemReportedNotification } = await import("./notifications");
+
+  const notifyUid = async (targetUid: string) => {
+    if (!targetUid || targetUid === args.creatorUid || args.notified.has(targetUid)) return;
+    await createProblemReportedNotification({
+      userId: targetUid,
+      projectId: args.projectId,
+      projectName: args.projectName,
+      problemId: args.problemId,
+      problemTitle: args.problemTitle,
+      fromUserId: args.creatorUid,
+      fromUserName: args.creatorName,
+      escalated: args.escalated === true,
+    });
+    args.notified.add(targetUid);
+  };
+
   try {
-    const [{ listMembers }, { createProblemReportedNotification }] = await Promise.all([
-      import("./businessMembers"),
-      import("./notifications"),
-    ]);
+    const { getOrganization } = await import("./organizations");
+    const org = await getOrganization(orgId);
+    if (org?.ownerUid) {
+      await notifyUid(org.ownerUid);
+    }
+  } catch (e) {
+    console.warn("[problems] notifyOrgManagersOfProblem org owner lookup failed", e);
+  }
+
+  try {
+    const { listMembers } = await import("./businessMembers");
     const members = await listMembers(orgId);
     for (const m of members) {
-      const uid = m.userId;
+      const uid = resolveOrgMemberUid(m);
       if (
         m.status === "active" &&
         (m.role === "owner" || m.role === "admin" || m.role === "manager") &&
-        uid &&
-        uid !== args.creatorUid &&
-        !args.notified.has(uid)
+        uid
       ) {
-        await createProblemReportedNotification({
-          userId: uid,
-          projectId: args.projectId,
-          projectName: args.projectName,
-          problemId: args.problemId,
-          problemTitle: args.problemTitle,
-          fromUserId: args.creatorUid,
-          fromUserName: args.creatorName,
-          escalated: args.escalated === true,
-        });
-        args.notified.add(uid);
+        await notifyUid(uid);
       }
     }
   } catch (e) {
-    if (__DEV__) console.warn("[problems] notifyOrgManagersOfProblem failed", e);
+    console.warn("[problems] notifyOrgManagersOfProblem listMembers failed", e);
   }
 }
 

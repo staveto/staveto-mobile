@@ -29,6 +29,8 @@ export type ProjectAccess = {
   canWriteTime: boolean;
   /** Field crew may add diary/photo entries when they can read the construction diary. */
   canWriteDiary: boolean;
+  /** Upload site photos / attachments (editors + diary-enabled field crew). */
+  canWritePhotos: boolean;
   /** Assigned crew and project members may report site problems (not only editors). */
   canReportProblem: boolean;
 };
@@ -57,6 +59,7 @@ const NO_ACCESS: ProjectAccess = {
   canWrite: false,
   canWriteTime: false,
   canWriteDiary: false,
+  canWritePhotos: false,
   canReportProblem: false,
 };
 
@@ -95,6 +98,7 @@ function accessFromProjectMemberData(mData: Record<string, unknown>): ProjectAcc
     canWrite: mPerm === "editor",
     canWriteTime: mPerm === "editor" && mSi.timeTracking === true,
     canWriteDiary: diaryWriteFromMemberAccess(mSi, mSi.diary, true),
+    canWritePhotos: mPerm === "editor" || diaryWriteFromMemberAccess(mSi, mSi.diary, true),
     canReportProblem: true,
   };
 }
@@ -136,6 +140,7 @@ function mergeProjectAccess(base: ProjectAccess, extra: ProjectAccess): ProjectA
     canWrite: base.canWrite || extra.canWrite,
     canWriteTime: base.canWriteTime || extra.canWriteTime,
     canWriteDiary: base.canWriteDiary || extra.canWriteDiary,
+    canWritePhotos: base.canWritePhotos || extra.canWritePhotos,
     canReportProblem: base.canReportProblem || extra.canReportProblem,
   };
 }
@@ -170,6 +175,9 @@ export function finalizeProjectAccess(
     canWriteTime ||
     canWriteDiary;
 
+  const canWritePhotos =
+    isOwner || access.canWrite || canWriteDiary || access.canWritePhotos || assigned;
+
   return {
     ...access,
     isOwner,
@@ -179,6 +187,7 @@ export function finalizeProjectAccess(
     canWrite: isOwner || access.canWrite || (assigned && editorLike) || editorLike,
     canWriteTime,
     canWriteDiary,
+    canWritePhotos,
     canReportProblem,
   };
 }
@@ -232,6 +241,7 @@ function accessFromOrgProjectMembership(
     canWrite: true,
     canWriteTime: true,
     canWriteDiary: true,
+    canWritePhotos: true,
     canReportProblem: true,
   };
 }
@@ -283,6 +293,7 @@ async function enrichProjectAccess(
       canWrite: false,
       canWriteTime: false,
       canWriteDiary: true,
+      canWritePhotos: true,
       canReportProblem: true,
     });
   }
@@ -321,6 +332,7 @@ function accessFromMembersByUidDoc(data: Record<string, unknown>): ProjectAccess
     canWrite: permLevel === "editor",
     canWriteTime: permLevel === "editor" && si.timeTracking === true,
     canWriteDiary: diaryWriteFromMemberAccess(si, si.diary, true),
+    canWritePhotos: permLevel === "editor" || diaryWriteFromMemberAccess(si, si.diary, true),
     canReportProblem: true,
   };
 }
@@ -368,6 +380,7 @@ function accessFromAssignedMemberIds(uid: string, projectData: Record<string, un
     canWrite: true,
     canWriteTime: true,
     canWriteDiary: true,
+    canWritePhotos: true,
     canReportProblem: true,
   };
 }
@@ -422,6 +435,7 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
           canWrite: true,
           canWriteTime: true,
           canWriteDiary: true,
+          canWritePhotos: true,
           canReportProblem: true,
         });
         setLoading(false);
@@ -576,6 +590,7 @@ export async function fetchProjectAccess(
         canWrite: true,
         canWriteTime: true,
         canWriteDiary: true,
+        canWritePhotos: true,
         canReportProblem: true,
       };
     }

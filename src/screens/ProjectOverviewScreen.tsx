@@ -255,6 +255,8 @@ export function ProjectOverviewScreen() {
     /** Prefill new task title (e.g. from quick note inbox) */
     initialNewTaskTitle?: string;
     openDiaryModal?: boolean;
+    /** Open camera/gallery for a project site photo (field quick action). */
+    openSitePhotoPicker?: boolean;
     diaryInputMode?: "text" | "voice";
     /** Prefill diary work description (e.g. from quick note) */
     initialDiaryWorkDescription?: string;
@@ -274,6 +276,7 @@ export function ProjectOverviewScreen() {
     openNewTask: paramOpenNewTask,
     initialNewTaskTitle: paramInitialNewTaskTitle,
     openDiaryModal: paramOpenDiaryModal,
+    openSitePhotoPicker: paramOpenSitePhotoPicker,
     diaryInputMode: paramDiaryInputMode,
     initialDiaryWorkDescription: paramInitialDiaryWorkDescription,
     processQuickNoteId: paramProcessQuickNoteId,
@@ -298,6 +301,7 @@ export function ProjectOverviewScreen() {
   const projectDataLoadedOnceRef = useRef(false);
   /** Bumps on project change / new load — stale async results are ignored (no in-flight mutex). */
   const projectLoadGenerationRef = useRef(0);
+  const pendingSitePhotoPickerRef = useRef(false);
 
   const [phases, setPhases] = useState<ProjectPhaseDoc[]>([]);
   const [tasks, setTasks] = useState<TaskDoc[]>([]);
@@ -391,6 +395,7 @@ export function ProjectOverviewScreen() {
   const [datePickerMode, setDatePickerMode] = useState<'new' | 'edit' | 'expense'>('new');
   const [datePickerDate, setDatePickerDate] = useState(new Date());
   const [projectType, setProjectType] = useState<string | undefined>(undefined);
+  const [jobsTabVisible, setJobsTabVisible] = useState<boolean | undefined>(undefined);
   const [projectWorkspaceType, setProjectWorkspaceType] = useState<string | undefined>(undefined);
   const [projectOrgId, setProjectOrgId] = useState<string | undefined>(undefined);
   const [templateId, setTemplateId] = useState<string | undefined>(undefined);
@@ -841,6 +846,11 @@ export function ProjectOverviewScreen() {
       if (project) {
         console.log(`[ProjectOverview] Project loaded: projectType="${project.projectType}", templateId="${project.templateId}"`);
         setProjectType(project.projectType);
+        setJobsTabVisible(
+          typeof (project as { jobsTabVisible?: unknown }).jobsTabVisible === "boolean"
+            ? (project as { jobsTabVisible: boolean }).jobsTabVisible
+            : undefined
+        );
         const rawWorkspaceType = (project as { workspaceType?: unknown }).workspaceType;
         const rawOrgId = (project as { orgId?: unknown }).orgId;
         setProjectWorkspaceType(typeof rawWorkspaceType === "string" ? rawWorkspaceType : undefined);
@@ -860,6 +870,7 @@ export function ProjectOverviewScreen() {
         console.warn(`[ProjectOverview] Project ${projectId} not found or no access - continuing without project metadata`);
         setProjectWorkspaceType(undefined);
         setProjectOrgId(undefined);
+        setJobsTabVisible(undefined);
         if (routeProjectIdRef.current === loadForProjectId) {
           setFetchedProjectName("");
         }
@@ -1812,6 +1823,10 @@ export function ProjectOverviewScreen() {
   },
   [access.canWriteDiary, t]
 );
+
+  useEffect(() => {
+    if (paramOpenSitePhotoPicker) pendingSitePhotoPickerRef.current = true;
+  }, [paramOpenSitePhotoPicker]);
 
   useEffect(() => {
     if (!paramOpenDiaryModal || !projectId) return;
@@ -3941,7 +3956,7 @@ export function ProjectOverviewScreen() {
 
   // Attachment handlers
   const openAttachmentModal = async (type: 'task' | 'expense', id: string) => {
-    if (!isOwner) {
+    if (!access.canWritePhotos) {
       Alert.alert(t("common.error"), t("projectOverview.noPermission"));
       return;
     }
@@ -3980,6 +3995,129 @@ export function ProjectOverviewScreen() {
       Alert.alert(t("common.error"), t("projectOverview.failedToLoadAttachments"));
     }
   };
+
+  const uploadProjectSitePhoto = async (
+    localUri: string,
+    fileName: string,
+    mimeType = "image/jpeg"
+  ) => {
+    if (!projectId) return;
+    if (!access.canWritePhotos) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
+    setUploadingAttachment(true);
+    try {
+      await attachmentsService.uploadAttachment(projectId, {
+        localUri,
+        fileName,
+        mimeType,
+        kind: "image",
+      });
+      Alert.alert(t("common.success"), t("projectOverview.attachmentAdded"));
+      await load(true);
+    } catch (error: unknown) {
+      console.error("[ProjectOverview] Error uploading site photo:", error);
+      const c = (error as { code?: string }).code;
+      Alert.alert(
+        t("common.error"),
+        c === "permission-denied"
+          ? t("projectOverview.noPermission")
+          : error instanceof Error
+            ? error.message
+            : t("common.error")
+      );
+    } finally {
+      setUploadingAttachment(false);
+    }
+  };
+
+  const addProjectSitePhoto = async () => {
+    if (!access.canWritePhotos) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
+    if (!ImagePicker) {
+      Alert.alert(t("common.error"), t("projectOverview.imagePickerInstallCommand"));
+      return;
+    }
+    try {
+      if (Platform.OS === "ios") {
+        ActionSheetIOS.showActionSheetWithOptions(
+          {
+            options: [t("common.cancel"), t("projectOverview.takePhoto"), t("projectOverview.selectFromGallery")],
+            cancelButtonIndex: 0,
+          },
+          async (buttonIndex) => {
+            if (buttonIndex === 1) await launchCameraForSitePhoto();
+            else if (buttonIndex === 2) await launchGalleryForSitePhoto();
+          }
+        );
+      } else {
+        Alert.alert(t("projectOverview.selectSource"), t("projectOverview.selectSourceMessage"), [
+          { text: t("common.cancel"), style: "cancel" },
+          { text: t("projectOverview.takePhoto"), onPress: launchCameraForSitePhoto },
+          { text: t("projectOverview.selectFromGallery"), onPress: launchGalleryForSitePhoto },
+        ]);
+      }
+    } catch (error: unknown) {
+      console.error("[ProjectOverview] Error picking site photo:", error);
+      Alert.alert(t("common.error"), t("projectOverview.selectAttachmentFailed"));
+    }
+  };
+
+  const launchCameraForSitePhoto = async () => {
+    if (!ImagePicker) return;
+    try {
+      const { status } = await ImagePicker.requestCameraPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(t("projectOverview.cameraPermission"), t("projectOverview.cameraPermissionForInvoice"));
+        return;
+      }
+      const result = await ImagePicker.launchCameraAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.8,
+      });
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
+        await uploadProjectSitePhoto(asset.uri, asset.fileName || "image.jpg", asset.mimeType || "image/jpeg");
+      }
+    } catch (error: unknown) {
+      console.error("[ProjectOverview] Error launching camera for site photo:", error);
+      Alert.alert(t("common.error"), t("projectOverview.failedToOpenCamera"));
+    }
+  };
+
+  const launchGalleryForSitePhoto = async () => {
+    if (!ImagePicker) return;
+    try {
+      const { status } = await ImagePicker.requestMediaLibraryPermissionsAsync();
+      if (status !== "granted") {
+        Alert.alert(t("projectOverview.galleryPermission"), t("projectOverview.galleryPermissionForInvoice"));
+        return;
+      }
+      const result = await ImagePicker.launchImageLibraryAsync({
+        mediaTypes: ["images"],
+        allowsEditing: false,
+        quality: 0.8,
+      });
+      const asset = result?.assets?.[0];
+      if (!result?.canceled && asset?.uri) {
+        await uploadProjectSitePhoto(asset.uri, asset.fileName || "image.jpg", asset.mimeType || "image/jpeg");
+      }
+    } catch (error: unknown) {
+      console.error("[ProjectOverview] Error picking site photo from gallery:", error);
+      Alert.alert(t("common.error"), t("projectOverview.failedToSelectImage"));
+    }
+  };
+
+  useEffect(() => {
+    if (!pendingSitePhotoPickerRef.current || !projectId) return;
+    if (access.loading) return;
+    pendingSitePhotoPickerRef.current = false;
+    void addProjectSitePhoto();
+  }, [projectId, access.loading, access.canWritePhotos]);
 
   const pickImage = async () => {
     if (!ImagePicker) {
@@ -4747,8 +4885,9 @@ export function ProjectOverviewScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.emptyHeroBtn}
-                onPress={() => (navigation as any).navigate('ProjectPhotos', { projectId, projectName })}
+                onPress={() => void addProjectSitePhoto()}
                 accessibilityRole="button"
+                disabled={uploadingAttachment}
               >
                 <Ionicons name="image-outline" size={20} color={colors.primary} />
                 <Text style={styles.emptyHeroBtnText}>{t('projectOverview.emptyHero.addPhoto')}</Text>
@@ -5477,7 +5616,7 @@ export function ProjectOverviewScreen() {
                 style={{ marginRight: spacing.sm }}
               />
               <Text style={styles.expensesHeaderText}>
-                {t(getProblemsSectionTitleKey({ projectType, jobsTabVisible: project?.jobsTabVisible }))}
+                {t(getProblemsSectionTitleKey({ projectType, jobsTabVisible }))}
               </Text>
               {openProblemsCount > 0 && (
                 <View style={styles.problemsBadge}>

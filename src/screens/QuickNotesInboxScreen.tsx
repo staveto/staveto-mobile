@@ -106,6 +106,7 @@ export function QuickNotesInboxScreen() {
       if (isRefresh) setRefreshing(true);
       else setLoading(true);
       try {
+        void quickNotesService.syncOpenBusinessFieldNotesToFirestore(user.id);
         const all = await quickNotesService.listQuickNotes(user.id);
         let list: QuickNote[] = [];
         if (tab === "pending") list = all.filter((n) => n.status === "open").sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));

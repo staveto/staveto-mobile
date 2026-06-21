@@ -29,6 +29,7 @@ export type NotificationType =
   | "PROJECT_ASSIGNED"
   | "PROBLEM_ASSIGNED"
   | "PROBLEM_REPORTED"
+  | "FIELD_NOTE_SHARED"
   | "EXPENSE_ADDED"
   | "DIARY_ADDED"
   | "MEMBER_JOINED"
@@ -116,6 +117,7 @@ const KNOWN_NOTIFICATION_TYPES: readonly NotificationType[] = [
   "PROJECT_ASSIGNED",
   "PROBLEM_ASSIGNED",
   "PROBLEM_REPORTED",
+  "FIELD_NOTE_SHARED",
   "EXPENSE_ADDED",
   "DIARY_ADDED",
   "MEMBER_JOINED",
@@ -526,6 +528,7 @@ function inferEntityType(
   const t = typeof type === "string" ? type : "";
   if (t.includes("TASK")) return "task";
   if (t === "PROBLEM_ASSIGNED" || t === "PROBLEM_REPORTED") return "problem";
+  if (t === "FIELD_NOTE_SHARED") return "document";
   if (t.includes("PROJECT") || t.includes("MEMBER")) return "project";
   if (t.includes("EXPENSE")) return "expense";
   return "project";
@@ -1623,6 +1626,99 @@ export async function createProblemReportedNotification(data: {
     fromUserId: data.fromUserId ?? auth.currentUser.uid,
     fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
     escalated: data.escalated === true,
+  });
+  return { id: ref.id };
+}
+
+async function writeOfficeFieldNoteNotification(data: {
+  userId: string;
+  noteId: string;
+  noteText: string;
+  projectId: string | null;
+  projectName?: string | null;
+  fromUserId: string;
+  fromUserName?: string | null;
+}): Promise<void> {
+  try {
+    const officeRef = doc(db, "users", data.userId, "notifications", `field-note-${data.noteId}`);
+    const snippet =
+      data.noteText.trim().length > 120
+        ? `${data.noteText.trim().slice(0, 119)}…`
+        : data.noteText.trim();
+    await setDoc(
+      officeRef,
+      {
+        type: "FIELD_NOTE_SHARED",
+        projectId: data.projectId,
+        projectName: data.projectName ?? null,
+        noteId: data.noteId,
+        subject: snippet || null,
+        fromUserId: data.fromUserId,
+        assignedBy: data.fromUserId,
+        assignedByName: data.fromUserName ?? null,
+        createdAt: serverTimestamp(),
+        read: false,
+      },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn("[notifications] writeOfficeFieldNoteNotification failed", {
+      targetUserId: data.userId,
+      noteId: data.noteId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/** Notify org managers when a worker shares a field note (Schnellnotiz). */
+export async function createFieldNoteSharedNotification(data: {
+  userId: string;
+  noteId: string;
+  noteText: string;
+  projectId: string | null;
+  projectName?: string | null;
+  fromUserId?: string;
+  fromUserName?: string | null;
+}): Promise<{ id: string } | null> {
+  if (!auth.currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+  if (data.userId === auth.currentUser.uid) return null;
+
+  const author = data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? "Mitarbeiter";
+  const snippet =
+    data.noteText.trim().length > 80 ? `${data.noteText.trim().slice(0, 79)}…` : data.noteText.trim();
+  const message = snippet ? `${author}: ${snippet}` : `${author} hat eine Notiz geteilt.`;
+
+  const c = collection(db, "notifications");
+  const ref = await addDoc(c, {
+    userId: data.userId,
+    type: "FIELD_NOTE_SHARED",
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    message,
+    fromUserId: data.fromUserId ?? auth.currentUser.uid,
+    fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
+    meta: { noteId: data.noteId, projectId: data.projectId },
+    entityType: "document",
+    deepLink: data.projectId
+      ? {
+          screen: "ProjectOverview",
+          params: { projectId: data.projectId },
+        }
+      : undefined,
+    createdAt: serverTimestamp(),
+    readAt: null,
+    severity: "info",
+  });
+  await writeOfficeFieldNoteNotification({
+    userId: data.userId,
+    noteId: data.noteId,
+    noteText: data.noteText,
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    fromUserId: data.fromUserId ?? auth.currentUser.uid,
+    fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
   });
   return { id: ref.id };
 }

@@ -22,10 +22,18 @@ type Props = {
   projects: ProjectDoc[];
   onSelectProject: (project: ProjectDoc) => void;
   t: (key: string, params?: Record<string, string>) => string;
+  /** i18n key for sheet title — defaults to problem report title. */
+  titleKey?: string;
 };
 
-/** Project picker shown before CreateProblem — same pattern as QuickTimeModal. */
-export function QuickProblemProjectSheet({ sheetRef, projects, onSelectProject, t }: Props) {
+/** Dark project picker bottom sheet (Problem melden, Foto hinzufügen, …). */
+export function QuickProblemProjectSheet({
+  sheetRef,
+  projects,
+  onSelectProject,
+  t,
+  titleKey = "home.reportProblem",
+}: Props) {
   const [projectSearch, setProjectSearch] = useState("");
   const insets = useSafeAreaInsets();
 
@@ -56,7 +64,7 @@ export function QuickProblemProjectSheet({ sheetRef, projects, onSelectProject, 
         contentContainerStyle={[styles.content, { paddingBottom: scrollBottomPad }]}
         keyboardShouldPersistTaps="handled"
       >
-        <Text style={styles.title}>{t("home.reportProblem")}</Text>
+        <Text style={styles.title}>{t(titleKey)}</Text>
         <Text style={styles.label}>{t("time.selectProject")}</Text>
         <TextInput
           style={styles.searchInput}

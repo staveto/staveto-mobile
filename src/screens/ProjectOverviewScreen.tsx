@@ -4116,8 +4116,12 @@ export function ProjectOverviewScreen() {
     if (!pendingSitePhotoPickerRef.current || !projectId) return;
     if (access.loading) return;
     pendingSitePhotoPickerRef.current = false;
-    void addProjectSitePhoto();
-  }, [projectId, access.loading, access.canWritePhotos]);
+    (navigation as { navigate: (name: string, params?: object) => void }).navigate("AddWorkPhoto", {
+      projectId,
+      projectName,
+      initialStep: "photo",
+    });
+  }, [projectId, projectName, access.loading, navigation]);
 
   const pickImage = async () => {
     if (!ImagePicker) {
@@ -4885,7 +4889,12 @@ export function ProjectOverviewScreen() {
               </TouchableOpacity>
               <TouchableOpacity
                 style={styles.emptyHeroBtn}
-                onPress={() => void addProjectSitePhoto()}
+                onPress={() =>
+                  (navigation as { navigate: (name: string, params?: object) => void }).navigate(
+                    "AddWorkPhoto",
+                    { projectId, projectName, initialStep: "photo" }
+                  )
+                }
                 accessibilityRole="button"
                 disabled={uploadingAttachment}
               >

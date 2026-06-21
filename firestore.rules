@@ -195,8 +195,28 @@ service cloud.firestore {
 
     function assignedMemberIdsIncludesSelf(projectId) {
       let data = projectDoc(projectId);
-      return ('assignedMemberIds' in data && uid() in data.assignedMemberIds)
-        || ('assignedUserIds' in data && uid() in data.assignedUserIds);
+      return ('assignedMemberIds' in data && data.assignedMemberIds is list && data.assignedMemberIds.hasAny([uid()]))
+        || ('assignedUserIds' in data && data.assignedUserIds is list && data.assignedUserIds.hasAny([uid()]));
+    }
+
+    function isTaskAssigneeForAttachment(projectId) {
+      let taskId = request.resource.data.taskId;
+      return taskId != null
+        && taskId != ''
+        && exists(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId))
+        && (
+          get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.assigneeId == uid()
+          || (
+            'assignedUserIds' in get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data
+            && get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.assignedUserIds is list
+            && get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.assignedUserIds.hasAny([uid()])
+          )
+          || (
+            'assignedMemberIds' in get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data
+            && get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.assignedMemberIds is list
+            && get(/databases/$(database)/documents/projects/$(projectId)/tasks/$(taskId)).data.assignedMemberIds.hasAny([uid()])
+          )
+        );
     }
 
     function projectMemberEditorCrew(projectId) {
@@ -476,6 +496,24 @@ service cloud.firestore {
     }
 
     // B2B Organizations
+    function fieldNoteCreateValid(orgId) {
+      return signedIn()
+        && request.resource.data.orgId == orgId
+        && request.resource.data.createdBy == uid()
+        && request.resource.data.shareWithManager == true
+        && request.resource.data.status == 'open'
+        && (
+          isOrgMemberActive(orgId)
+          || (
+            request.resource.data.projectId is string
+            && request.resource.data.projectId != ''
+            && exists(/databases/$(database)/documents/projects/$(request.resource.data.projectId))
+            && projectLinkedOrgId(projectDoc(request.resource.data.projectId)) == orgId
+            && hasProjectAccess(request.resource.data.projectId)
+          )
+        );
+    }
+
     match /organizations/{orgId} {
       allow read: if signedIn() && isOrgMemberActive(orgId);
       // Organizations are created only via callable (admin SDK bypasses rules).
@@ -516,6 +554,20 @@ service cloud.firestore {
       match /liveTimers/{memberUid} {
         allow read: if signedIn() && isOrgMemberActive(orgId);
         allow create, update, delete: if signedIn() && uid() == memberUid && isOrgMemberActive(orgId);
+      }
+
+      // Shared Schnellnotiz / field notes (worker shares with manager)
+      match /fieldNotes/{noteId} {
+        allow read: if signedIn() && isOrgMemberActive(orgId)
+          && (isOrgManager(orgId, uid()) || resource.data.createdBy == uid());
+        allow create: if fieldNoteCreateValid(orgId);
+        allow update: if signedIn() && isOrgMemberActive(orgId)
+          && resource.data.createdBy == uid()
+          && request.resource.data.orgId == resource.data.orgId
+          && request.resource.data.createdBy == resource.data.createdBy
+          && request.resource.data.shareWithManager == true
+          && request.resource.data.diff(resource.data).affectedKeys().hasOnly(['status', 'updatedAt', 'text']);
+        allow delete: if false;
       }
 
       // B2B Org members: read for self or active member; create/update/delete ONLY for org admin
@@ -665,8 +717,8 @@ service cloud.firestore {
       allow read: if signedIn()
         && (
           resource.data.ownerId == uid()
-          || ('assignedMemberIds' in resource.data && uid() in resource.data.assignedMemberIds)
-          || ('assignedUserIds' in resource.data && uid() in resource.data.assignedUserIds)
+          || ('assignedMemberIds' in resource.data && resource.data.assignedMemberIds is list && resource.data.assignedMemberIds.hasAny([uid()]))
+          || ('assignedUserIds' in resource.data && resource.data.assignedUserIds is list && resource.data.assignedUserIds.hasAny([uid()]))
           || isMember(projectId)
           || canReadOrgLinkedProject(projectId)
         );
@@ -751,7 +803,7 @@ service cloud.firestore {
       // attachments: used for tasks, expenses, documents, diary photos
       match /attachments/{attachmentId} {
         allow read: if canReadTasks(projectId) || canReadExpenses(projectId) || canReadDocuments(projectId) || canReadDiary(projectId);
-        allow create: if canWriteAsEditor(projectId) || canReadDiary(projectId);
+        allow create: if canWriteAsEditor(projectId) || canReadDiary(projectId) || isTaskAssigneeForAttachment(projectId);
         allow update, delete: if canWriteAsEditor(projectId);
       }
 

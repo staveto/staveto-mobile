@@ -269,6 +269,7 @@ export function NotificationsScreen() {
       case "TASK_ASSIGNED":
       case "PROBLEM_ASSIGNED":
       case "PROBLEM_REPORTED":
+      case "FIELD_NOTE_SHARED":
         return "checkmark-circle-outline";
       case "EXPENSE_ADDED":
         return "cash-outline";
@@ -308,6 +309,8 @@ export function NotificationsScreen() {
         return t("notifications.problemAssigned");
       case "PROBLEM_REPORTED":
         return t("notifications.problemReported");
+      case "FIELD_NOTE_SHARED":
+        return t("notifications.fieldNoteShared");
       case "EXPENSE_ADDED":
         return t("notifications.newExpense");
       case "DIARY_ADDED":
@@ -488,6 +491,12 @@ export function NotificationsScreen() {
           }
           return;
         }
+        const parentNav = navigation.getParent();
+        const po = projectOverviewParams();
+        if (parentNav && po) {
+          (parentNav as any).navigate("ProjectOverview", po);
+        }
+      } else if (notification.type === "FIELD_NOTE_SHARED" && notification.projectId) {
         const parentNav = navigation.getParent();
         const po = projectOverviewParams();
         if (parentNav && po) {

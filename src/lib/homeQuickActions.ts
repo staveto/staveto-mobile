@@ -5,6 +5,7 @@ export type HomeQuickActionRole = "worker" | "teamleader" | "manager";
 
 export type HomeQuickActionId =
   | "time"
+  | "quickNote"
   | "tasks"
   | "photo"
   | "problem"
@@ -77,6 +78,7 @@ export function buildHomeQuickActions(role: HomeQuickActionRole): HomeQuickActio
 /** Field launcher: quick actions + a tile to open the full home dashboard. */
 export const HOME_LAUNCHER_ACTIONS: HomeQuickActionDef[] = [
   WORKER_ACTIONS[0],
+  { id: "quickNote", icon: "create-outline", labelKey: "home.launcher.quickNote", accent: "#e06737" },
   WORKER_ACTIONS[1],
   WORKER_ACTIONS[2],
   WORKER_ACTIONS[3],

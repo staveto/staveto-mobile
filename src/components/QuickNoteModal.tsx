@@ -14,6 +14,7 @@ import {
   Alert,
   Dimensions,
   ActionSheetIOS,
+  Switch,
 } from "react-native";
 import { Ionicons } from "@expo/vector-icons";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
@@ -51,13 +52,25 @@ const SPEECH_LOCALE_MAP: Record<string, string> = {
 const MAX_ATTACHMENTS = 5;
 const { height: SCREEN_H } = Dimensions.get("window");
 
+export type QuickNoteSubmitOptions = {
+  shareWithManager?: boolean;
+};
+
 type Props = {
   visible: boolean;
   onClose: () => void;
   onSaved: () => void;
-  onSubmit: (text: string, attachments?: QuickNoteAttachment[]) => Promise<void>;
+  onSubmit: (
+    text: string,
+    attachments?: QuickNoteAttachment[],
+    options?: QuickNoteSubmitOptions
+  ) => Promise<void>;
   placeholder?: string;
   saveLabel?: string;
+  /** Show toggle to share note with manager (field workers). */
+  showShareWithManager?: boolean;
+  /** Default for share toggle when modal opens (defaults to showShareWithManager). */
+  defaultShareWithManager?: boolean;
 };
 
 export function QuickNoteModal({
@@ -67,11 +80,16 @@ export function QuickNoteModal({
   onSubmit,
   placeholder = "Čo si chcete zapamätať?",
   saveLabel = "Uložiť",
+  showShareWithManager = false,
+  defaultShareWithManager,
 }: Props) {
   const insets = useSafeAreaInsets();
   const { t, locale } = useI18n();
   const [text, setText] = useState("");
   const [attachments, setAttachments] = useState<QuickNoteAttachment[]>([]);
+  const [shareWithManager, setShareWithManager] = useState(
+    defaultShareWithManager ?? showShareWithManager
+  );
   const [saving, setSaving] = useState(false);
   const [keyboardOffset, setKeyboardOffset] = useState(0);
   const [picking, setPicking] = useState(false);
@@ -106,6 +124,7 @@ export function QuickNoteModal({
       ensureSpeechModule();
       setText("");
       setAttachments([]);
+      setShareWithManager(defaultShareWithManager ?? showShareWithManager);
       setSaving(false);
       setKeyboardOffset(0);
       setIsRecording(false);
@@ -118,7 +137,7 @@ export function QuickNoteModal({
         safeCatch(SpeechRecognition.ExpoSpeechRecognitionModule.abort());
       }
     }
-  }, [visible, cleanupListeners, safeCatch]);
+  }, [visible, cleanupListeners, safeCatch, defaultShareWithManager, showShareWithManager]);
 
   useEffect(() => {
     return () => {
@@ -329,15 +348,18 @@ export function QuickNoteModal({
     if ((!trimmed && attachments.length === 0) || saving) return;
     setSaving(true);
     try {
-      await onSubmit(trimmed, attachments.length > 0 ? attachments : undefined);
+      await onSubmit(trimmed, attachments.length > 0 ? attachments : undefined, {
+        shareWithManager: showShareWithManager ? shareWithManager : undefined,
+      });
       onSaved();
       onClose();
     } catch (e) {
       if (__DEV__) console.warn("[QuickNoteModal] save failed:", e);
+      Alert.alert(t("common.error") || "Error", t("quickNote.saveFailed") || "Could not save note.");
     } finally {
       setSaving(false);
     }
-  }, [text, attachments, saving, onSubmit, onSaved, onClose]);
+  }, [text, attachments, saving, onSubmit, onSaved, onClose, showShareWithManager, shareWithManager]);
 
   const canSave = (text.trim().length > 0 || attachments.length > 0) && !saving;
 
@@ -362,6 +384,7 @@ export function QuickNoteModal({
             contentContainerStyle={styles.scrollContent}
           >
             <View style={styles.panel}>
+              <View style={styles.handle} accessibilityElementsHidden importantForAccessibility="no" />
               <View style={styles.header}>
                 <Text style={styles.title}>{t("quickNotes.add") || "Rýchly zápis"}</Text>
                 <View style={styles.headerActions}>
@@ -373,10 +396,10 @@ export function QuickNoteModal({
                     accessibilityRole="button"
                     accessibilityLabel={`${t("projectOverview.takePhoto")}, ${t("projectOverview.selectFromGallery")}`}
                   >
-                    <Ionicons name="images-outline" size={26} color={colors.primary} />
+                    <Ionicons name="images-outline" size={24} color="#c85528" />
                   </TouchableOpacity>
                   <TouchableOpacity onPress={onClose} hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}>
-                    <Ionicons name="close" size={24} color={colors.text} />
+                    <Ionicons name="close" size={24} color="#475569" />
                   </TouchableOpacity>
                 </View>
               </View>
@@ -411,7 +434,7 @@ export function QuickNoteModal({
                   value={text}
                   onChangeText={setText}
                   placeholder={placeholder}
-                  placeholderTextColor={colors.textMuted}
+                  placeholderTextColor={colors.inputPlaceholderOnLight}
                   multiline
                   numberOfLines={4}
                   maxLength={500}
@@ -449,15 +472,40 @@ export function QuickNoteModal({
                 </Text>
               ) : null}
 
+              {showShareWithManager ? (
+                <View style={[styles.shareRow, shareWithManager && styles.shareRowActive]}>
+                  <View style={styles.shareIconWrap}>
+                    <Ionicons
+                      name={shareWithManager ? "people" : "people-outline"}
+                      size={20}
+                      color={shareWithManager ? colors.primary : "#64748b"}
+                    />
+                  </View>
+                  <View style={styles.shareRowText}>
+                    <Text style={styles.shareLabel}>{t("quickNote.shareWithManager")}</Text>
+                    <Text style={styles.shareHint}>{t("quickNote.shareWithManagerHint")}</Text>
+                  </View>
+                  <Switch
+                    value={shareWithManager}
+                    onValueChange={setShareWithManager}
+                    trackColor={{ false: "#cbd5e1", true: "#f4b494" }}
+                    thumbColor={shareWithManager ? colors.primary : "#f8fafc"}
+                    ios_backgroundColor="#cbd5e1"
+                    accessibilityLabel={t("quickNote.shareWithManager")}
+                  />
+                </View>
+              ) : null}
+
               <TouchableOpacity
-                style={[styles.saveBtn, !canSave && styles.saveBtnDisabled]}
+                style={[styles.saveBtn, canSave ? styles.saveBtnEnabled : styles.saveBtnDisabled]}
                 onPress={handleSave}
                 disabled={!canSave}
+                activeOpacity={0.88}
               >
                 {saving ? (
                   <ActivityIndicator color="#fff" size="small" />
                 ) : (
-                  <Text style={styles.saveBtnText}>{saveLabel}</Text>
+                  <Text style={[styles.saveBtnText, !canSave && styles.saveBtnTextDisabled]}>{saveLabel}</Text>
                 )}
               </TouchableOpacity>
             </View>
@@ -475,7 +523,7 @@ const styles = StyleSheet.create({
   },
   backdrop: {
     ...StyleSheet.absoluteFillObject,
-    backgroundColor: "rgba(0,0,0,0.5)",
+    backgroundColor: "rgba(15,23,42,0.55)",
   },
   sheetOuter: {
     width: "100%",
@@ -486,11 +534,26 @@ const styles = StyleSheet.create({
     justifyContent: "flex-end",
   },
   panel: {
-    backgroundColor: colors.card,
-    borderTopLeftRadius: radius,
-    borderTopRightRadius: radius,
+    backgroundColor: "#ffffff",
+    borderTopLeftRadius: radius + 4,
+    borderTopRightRadius: radius + 4,
     padding: spacing.lg,
-    paddingTop: spacing.md,
+    paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderColor: "rgba(255,255,255,0.9)",
+    shadowColor: "#000",
+    shadowOffset: { width: 0, height: -4 },
+    shadowOpacity: 0.12,
+    shadowRadius: 12,
+    elevation: 8,
+  },
+  handle: {
+    alignSelf: "center",
+    width: 40,
+    height: 4,
+    borderRadius: 2,
+    backgroundColor: "#cbd5e1",
+    marginBottom: spacing.md,
   },
   header: {
     flexDirection: "row",
@@ -504,15 +567,21 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   attachIconBtn: {
-    padding: spacing.xs,
+    width: 40,
+    height: 40,
+    borderRadius: 20,
+    backgroundColor: "rgba(224,103,55,0.12)",
+    alignItems: "center",
+    justifyContent: "center",
   },
   attachIconBtnDisabled: { opacity: 0.45 },
   title: {
     flex: 1,
-    fontSize: 18,
-    fontWeight: "600",
-    color: colors.text,
+    fontSize: 20,
+    fontWeight: "800",
+    color: "#0f172a",
     marginRight: spacing.sm,
+    letterSpacing: -0.2,
   },
   thumbRow: {
     marginBottom: spacing.md,
@@ -547,14 +616,15 @@ const styles = StyleSheet.create({
     gap: spacing.sm,
   },
   input: {
-    backgroundColor: "#fff",
-    borderWidth: 1,
-    borderColor: colors.border,
+    backgroundColor: "#f8fafc",
+    borderWidth: 1.5,
+    borderColor: "#cbd5e1",
     borderRadius: radius,
     padding: spacing.md,
-    fontSize: 16,
-    color: colors.text,
-    minHeight: 100,
+    fontSize: 17,
+    lineHeight: 24,
+    color: "#0f172a",
+    minHeight: 112,
     maxHeight: 180,
     textAlignVertical: "top",
     marginBottom: spacing.md,
@@ -567,12 +637,12 @@ const styles = StyleSheet.create({
     width: 52,
     height: 52,
     borderRadius: 26,
-    backgroundColor: colors.primary,
+    backgroundColor: "#c85528",
     alignItems: "center",
     justifyContent: "center",
     shadowColor: "#000",
     shadowOffset: { width: 0, height: 2 },
-    shadowOpacity: 0.18,
+    shadowOpacity: 0.2,
     shadowRadius: 4,
     elevation: 3,
   },
@@ -596,18 +666,75 @@ const styles = StyleSheet.create({
     marginTop: -spacing.sm,
     marginBottom: spacing.sm,
   },
-  saveBtn: {
-    backgroundColor: colors.primary,
+  shareRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    backgroundColor: "#f1f5f9",
+    borderWidth: 1.5,
+    borderColor: "#cbd5e1",
+    borderRadius: radius,
+    paddingHorizontal: spacing.md,
     paddingVertical: spacing.md,
+    marginBottom: spacing.md,
+  },
+  shareRowActive: {
+    backgroundColor: "rgba(224,103,55,0.08)",
+    borderColor: "rgba(224,103,55,0.35)",
+  },
+  shareIconWrap: {
+    width: 36,
+    height: 36,
+    borderRadius: 18,
+    backgroundColor: "#fff",
+    alignItems: "center",
+    justifyContent: "center",
+    borderWidth: 1,
+    borderColor: "#e2e8f0",
+  },
+  shareRowText: {
+    flex: 1,
+    minWidth: 0,
+  },
+  shareLabel: {
+    fontSize: 16,
+    fontWeight: "700",
+    color: "#0f172a",
+  },
+  shareHint: {
+    marginTop: 3,
+    fontSize: 13,
+    color: "#475569",
+    lineHeight: 18,
+  },
+  saveBtn: {
+    paddingVertical: spacing.md + 2,
     borderRadius: radius,
     alignItems: "center",
+    minHeight: 52,
+    justifyContent: "center",
+  },
+  saveBtnEnabled: {
+    backgroundColor: "#c85528",
+    shadowColor: "#c85528",
+    shadowOffset: { width: 0, height: 3 },
+    shadowOpacity: 0.35,
+    shadowRadius: 6,
+    elevation: 4,
   },
   saveBtnDisabled: {
-    opacity: 0.5,
+    backgroundColor: "#e2e8f0",
+    borderWidth: 1,
+    borderColor: "#cbd5e1",
   },
   saveBtnText: {
-    color: "#fff",
-    fontSize: 16,
-    fontWeight: "600",
+    color: "#ffffff",
+    fontSize: 17,
+    fontWeight: "800",
+    letterSpacing: 0.2,
+  },
+  saveBtnTextDisabled: {
+    color: "#64748b",
+    fontWeight: "700",
   },
 });

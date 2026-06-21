@@ -48,6 +48,7 @@ import { ProjectInvitesScreen } from "../screens/ProjectInvitesScreen";
 import { ProblemsListScreen } from "../screens/ProblemsListScreen";
 import { ProblemDetailScreen } from "../screens/ProblemDetailScreen";
 import { CreateProblemScreen } from "../screens/CreateProblemScreen";
+import { AddWorkPhotoScreen } from "../screens/workPhotos/AddWorkPhotoScreen";
 import { AbsenceHomeScreen } from "../screens/absence/AbsenceHomeScreen";
 import { AbsenceRequestScreen } from "../screens/absence/AbsenceRequestScreen";
 import { AbsenceDetailScreen } from "../screens/absence/AbsenceDetailScreen";
@@ -475,6 +476,11 @@ export function RootNavigator() {
         name="CreateProblem"
         component={CreateProblemScreen}
         options={{ headerShown: true, title: t("problems.new") || "Nový problém" }}
+      />
+      <Stack.Screen
+        name="AddWorkPhoto"
+        component={AddWorkPhotoScreen}
+        options={{ headerShown: true, title: t("workPhoto.title") }}
       />
       <Stack.Screen
         name="Subscription"

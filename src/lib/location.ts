@@ -56,6 +56,7 @@ function coordsToGpsPoint(coords: {
 /**
  * One-shot GPS read for timer start/stop. Higher accuracy when available.
  * Never starts background or continuous tracking.
+ * Hard timeout so quick-note / form saves never hang on emulator.
  */
 export async function getCurrentPositionSafe(): Promise<GpsPoint | null> {
   const Location = getLocationModule();
@@ -65,10 +66,20 @@ export async function getCurrentPositionSafe(): Promise<GpsPoint | null> {
     if (status !== "granted") {
       return null;
     }
-    const loc = await Location.getCurrentPositionAsync({
-      accuracy: Location.Accuracy.High,
+    const locPromise = Location.getCurrentPositionAsync({
+      accuracy: Location.Accuracy.Balanced,
+      mayShowUserSettingsDialog: false,
     });
-    return coordsToGpsPoint(loc.coords);
+    let timeoutId: ReturnType<typeof setTimeout> | undefined;
+    const timeoutPromise = new Promise<null>((resolve) => {
+      timeoutId = setTimeout(() => resolve(null), CHECKPOINT_TIMEOUT_MS);
+    });
+    const result = await Promise.race([locPromise, timeoutPromise]);
+    if (timeoutId) clearTimeout(timeoutId);
+    if (!result || typeof result !== "object" || !("coords" in result)) {
+      return null;
+    }
+    return coordsToGpsPoint((result as { coords: Parameters<typeof coordsToGpsPoint>[0] }).coords);
   } catch (err) {
     console.warn("[location] getCurrentPosition error:", err);
     return null;

@@ -456,6 +456,22 @@ export function TaskDetailScreen() {
         </View>
       </View>
 
+      {/* Work photo */}
+      <TouchableOpacity
+        style={styles.addPhotoBtn}
+        onPress={() =>
+          (navigation as { navigate: (name: string, params?: object) => void }).navigate("AddWorkPhoto", {
+            projectId: task.projectId,
+            taskId: task.id,
+            initialStep: "photo",
+          })
+        }
+        accessibilityRole="button"
+      >
+        <Ionicons name="camera-outline" size={20} color={colors.primary} />
+        <Text style={styles.addPhotoBtnText}>{t("workPhoto.title")}</Text>
+      </TouchableOpacity>
+
       {/* Attachments Section */}
       {attachments.length > 0 && (
         <>
@@ -701,6 +717,18 @@ const styles = StyleSheet.create({
   },
   attachmentsContainer: {
     marginBottom: spacing.md,
+  },
+  addPhotoBtn: {
+    flexDirection: "row",
+    alignItems: "center",
+    gap: spacing.sm,
+    marginBottom: spacing.md,
+    paddingVertical: spacing.sm,
+  },
+  addPhotoBtnText: {
+    color: colors.primary,
+    fontSize: 15,
+    fontWeight: "600",
   },
   attachmentItem: {
     flexDirection: "row",

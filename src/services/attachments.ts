@@ -2,7 +2,12 @@ import { collection, addDoc, query, where, deleteDoc, doc, serverTimestamp, Time
 import { getDocsSmart, type SmartReadOptions } from "./firestoreSmartRead";
 import { getStorage, db, auth } from "../firebase";
 import { paths } from "../lib/firestorePaths";
-import type { AttachmentMetadata, AttachmentKind } from "../lib/attachmentTypes";
+import type {
+  AttachmentMetadata,
+  AttachmentKind,
+  WorkPhotoLocation,
+  WorkPhotoType,
+} from "../lib/attachmentTypes";
 import { addProjectEvent } from "./projectEvents";
 import { compressImageForUpload } from "../utils/imageCompress";
 
@@ -62,6 +67,18 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): At
       createdAt: convertTimestamp(d.createdAt) ?? new Date().toISOString(),
       updatedAt: convertTimestamp(d.updatedAt),
       downloadURL: (d.downloadURL as string) ?? undefined,
+      kind: (d.kind as string) ?? undefined,
+      photoType: (d.photoType as WorkPhotoType) ?? undefined,
+      comment: typeof d.comment === "string" ? d.comment : undefined,
+      source: typeof d.source === "string" ? d.source : undefined,
+      uploadedByName: typeof d.uploadedByName === "string" ? d.uploadedByName : undefined,
+      orgId: typeof d.orgId === "string" ? d.orgId : undefined,
+      location:
+        d.location != null && typeof d.location === "object"
+          ? (d.location as WorkPhotoLocation)
+          : undefined,
+      timeEntryId: typeof d.timeEntryId === "string" ? d.timeEntryId : undefined,
+      workSessionId: typeof d.workSessionId === "string" ? d.workSessionId : undefined,
     } as AttachmentDoc & { downloadURL?: string };
   } catch (e) {
     if (__DEV__) console.warn(`[attachments] toDoc: serialize failed for ${docSnap.id}`, e);
@@ -206,6 +223,172 @@ export async function uploadAttachment(
     size: fileSize,
     storagePath: finalFilePath,
     uploadedBy: currentUser.uid,
+    createdAt: new Date().toISOString(),
+    updatedAt: new Date().toISOString(),
+    downloadURL,
+  } as AttachmentDoc & { downloadURL?: string };
+}
+
+export type UploadWorkPhotoInput = {
+  projectId: string;
+  localUri: string;
+  fileName: string;
+  mimeType: string;
+  photoType: WorkPhotoType;
+  taskId?: string | null;
+  phaseId?: string | null;
+  orgId?: string | null;
+  comment?: string;
+  uploadedByName?: string;
+  location?: WorkPhotoLocation;
+  timeEntryId?: string;
+  workSessionId?: string;
+};
+
+/**
+ * Upload a field work photo with extended metadata (backwards-compatible attachment doc).
+ */
+export async function uploadWorkPhoto(input: UploadWorkPhotoInput): Promise<AttachmentDoc> {
+  const currentUser = auth.currentUser;
+  if (!currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený na nahrávanie fotky.");
+  }
+
+  const projectId = input.projectId.trim();
+  if (!projectId) throw new Error("Neplatný projekt.");
+
+  try {
+    const projectRef = doc(db, "projects", projectId);
+    const projectSnap = await getDoc(projectRef);
+    if (!projectSnap.exists()) {
+      throw new Error(`Projekt ${projectId} neexistuje v Firestore.`);
+    }
+  } catch (error) {
+    console.error("[attachments] uploadWorkPhoto project verification:", error);
+    throw error;
+  }
+
+  let uploadUri = input.localUri;
+  let uploadMime = input.mimeType;
+  let uploadFileName = input.fileName;
+
+  try {
+    const prepared = await compressImageForUpload(input.localUri, input.fileName, input.mimeType);
+    uploadUri = prepared.uri;
+    uploadMime = prepared.mimeType;
+    uploadFileName = prepared.fileName;
+  } catch (e) {
+    console.warn("[attachments] uploadWorkPhoto compress failed, using original:", e);
+  }
+
+  const response = await fetch(uploadUri);
+  const blob = await response.blob();
+  const fileSize = blob.size;
+
+  const attachmentId = `${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  const storagePath = `projects/${projectId}/attachments/${attachmentId}/${uploadFileName}`;
+  const storageInstance = getStorage();
+  if (!storageInstance) throw new Error("Firebase Storage nie je dostupný.");
+  const storageRef = storageInstance.ref(storagePath);
+
+  const customMetadata: Record<string, string> = {
+    projectId,
+    kind: "work_photo",
+    uploadedBy: currentUser.uid,
+  };
+  const taskId = input.taskId?.trim();
+  if (taskId) customMetadata.taskId = taskId;
+  const orgId = input.orgId?.trim();
+  if (orgId) customMetadata.orgId = orgId;
+
+  try {
+    await storageRef.putFile(uploadUri, {
+      contentType: uploadMime,
+      customMetadata,
+    });
+  } catch (error: unknown) {
+    const err = error as { code?: string; message?: string };
+    const code = String(err?.code ?? "").toLowerCase();
+    const msg = err?.message ?? "";
+    console.error("[attachments] uploadWorkPhoto storage error:", { code, msg, projectId });
+    if (code === "storage/unauthorized" || code === "storage/canceled" || msg.includes("permission-denied")) {
+      throw new Error("permission-denied");
+    }
+    throw new Error(`Nepodarilo sa nahrať fotku: ${msg || code || "Neznáma chyba"}`);
+  }
+
+  const finalFilePath = storageRef.fullPath || storagePath;
+  const downloadURL = await storageRef.getDownloadURL();
+
+  const firestorePayload: Record<string, unknown> = {
+    projectId,
+    taskId: taskId ?? null,
+    phaseId: input.phaseId ?? null,
+    expenseId: null,
+    fileName: uploadFileName,
+    fileType: "image" as AttachmentKind,
+    kind: "work_photo",
+    photoType: input.photoType,
+    comment: input.comment?.trim() || null,
+    source: "mobile",
+    contentType: uploadMime,
+    mimeType: uploadMime,
+    size: fileSize,
+    storagePath: finalFilePath,
+    filePath: finalFilePath,
+    uploadStatus: "uploaded",
+    ocrStatus: "pending",
+    downloadURL,
+    uploadedBy: currentUser.uid,
+    uploadedByName: input.uploadedByName?.trim() || null,
+    orgId: orgId ?? null,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+  if (input.location) {
+    firestorePayload.location = input.location;
+  }
+  if (input.timeEntryId?.trim()) {
+    firestorePayload.timeEntryId = input.timeEntryId.trim();
+  }
+  if (input.workSessionId?.trim()) {
+    firestorePayload.workSessionId = input.workSessionId.trim();
+  }
+
+  const c = collection(db, paths.projectAttachments(projectId));
+  const refDoc = await addDoc(c, firestorePayload);
+
+  try {
+    await addProjectEvent(
+      projectId,
+      "photo_added",
+      { fileName: uploadFileName },
+      { kind: "attachment", id: refDoc.id }
+    );
+  } catch (error) {
+    console.warn("[attachments] uploadWorkPhoto project event failed:", error);
+  }
+
+  return {
+    id: refDoc.id,
+    projectId,
+    taskId: taskId ?? undefined,
+    phaseId: input.phaseId ?? undefined,
+    fileName: uploadFileName,
+    fileType: "image",
+    kind: "work_photo",
+    photoType: input.photoType,
+    comment: input.comment?.trim() || undefined,
+    source: "mobile",
+    contentType: uploadMime,
+    size: fileSize,
+    storagePath: finalFilePath,
+    uploadedBy: currentUser.uid,
+    uploadedByName: input.uploadedByName?.trim() || undefined,
+    orgId: orgId ?? undefined,
+    location: input.location,
+    timeEntryId: input.timeEntryId,
+    workSessionId: input.workSessionId,
     createdAt: new Date().toISOString(),
     updatedAt: new Date().toISOString(),
     downloadURL,

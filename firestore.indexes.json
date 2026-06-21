@@ -245,6 +245,15 @@
           "order": "DESCENDING"
         }
       ]
+    },
+    {
+      "collectionGroup": "fieldNotes",
+      "queryScope": "COLLECTION",
+      "fields": [
+        { "fieldPath": "shareWithManager", "order": "ASCENDING" },
+        { "fieldPath": "status", "order": "ASCENDING" },
+        { "fieldPath": "createdAt", "order": "DESCENDING" }
+      ]
     }
   ],
   "fieldOverrides": [

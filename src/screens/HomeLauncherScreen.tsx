@@ -22,7 +22,13 @@ import { QuickTimeModal } from "../components/QuickTimeModal";
 import { QuickProblemProjectSheet } from "../components/QuickProblemProjectSheet";
 import { HOME_LAUNCHER_ACTIONS, type HomeQuickActionId } from "../lib/homeQuickActions";
 import { openInMaps } from "../lib/maps";
-import { listMyProjects, type ProjectDoc } from "../services/projects";
+import { listMyProjects, type ProjectDoc, isBusinessTeamProject } from "../services/projects";
+import { listTasksByProject } from "../services/tasks";
+import { QuickWorkPhotoTaskSheet, type WorkPhotoFlowSelection } from "../components/QuickWorkPhotoTaskSheet";
+import { QuickNoteModal } from "../components/QuickNoteModal";
+import type { WorkPhotoType } from "../lib/attachmentTypes";
+import * as quickNotesService from "../services/quickNotes";
+import type { QuickNoteAttachment } from "../services/quickNotes";
 import * as timeTracking from "../services/timeTracking";
 import { showToast } from "../helpers/toast";
 
@@ -42,11 +48,19 @@ export function HomeLauncherScreen() {
   const insets = useSafeAreaInsets();
   const { t } = useI18n();
   const { user } = useAuth();
-  const { activeOrganization } = useActiveOrg();
+  const { activeBusinessOrgId, activeOrganization } = useActiveOrg();
   const quickTimeSheetRef = useRef<BottomSheetModal | null>(null);
   const problemSheetRef = useRef<BottomSheetModal | null>(null);
+  const photoSheetRef = useRef<BottomSheetModal | null>(null);
+  const photoTaskSheetRef = useRef<BottomSheetModal | null>(null);
+  const quickNoteSheetRef = useRef<BottomSheetModal | null>(null);
 
   const [projects, setProjects] = useState<ProjectDoc[]>([]);
+  const [photoPickerProject, setPhotoPickerProject] = useState<ProjectDoc | null>(null);
+  const [quickNoteProject, setQuickNoteProject] = useState<ProjectDoc | null>(null);
+  const [showQuickNoteModal, setShowQuickNoteModal] = useState(false);
+  const [photoPickerTasks, setPhotoPickerTasks] = useState<Awaited<ReturnType<typeof listTasksByProject>>>([]);
+  const [photoTasksLoading, setPhotoTasksLoading] = useState(false);
   const [lastUsedProjectId, setLastUsedProjectId] = useState<string | null>(null);
   const [projectsLoading, setProjectsLoading] = useState(true);
   const [activeTimer, setActiveTimer] = useState<timeTracking.ActiveTimer | null>(null);
@@ -63,6 +77,35 @@ export function HomeLauncherScreen() {
     }
     return projects[0] ?? null;
   }, [lastUsedProjectId, projects]);
+
+  const resolveQuickNoteProject = useCallback((): ProjectDoc | null => {
+    if (activeTimer?.projectId) {
+      const timerProject = projects.find((p) => p.id === activeTimer.projectId);
+      if (timerProject) return timerProject;
+    }
+    return focusProject;
+  }, [activeTimer?.projectId, focusProject, projects]);
+
+  const openQuickNoteFlow = useCallback(() => {
+    if (projects.length === 0) {
+      Alert.alert(t("common.error"), t("quickNote.noProjects"));
+      return;
+    }
+    const preset = resolveQuickNoteProject();
+    if (preset) {
+      setQuickNoteProject(preset);
+      setShowQuickNoteModal(true);
+      return;
+    }
+    quickNoteSheetRef.current?.present();
+  }, [projects.length, resolveQuickNoteProject, t]);
+
+  useFocusEffect(
+    useCallback(() => {
+      if (!user?.id) return;
+      void quickNotesService.syncOpenBusinessFieldNotesToFirestore(user.id);
+    }, [user?.id])
+  );
 
   const refreshActiveTimer = useCallback(async () => {
     if (!user?.id) return;
@@ -151,6 +194,10 @@ export function HomeLauncherScreen() {
     problemSheetRef.current?.present();
   }, []);
 
+  const openPhotoProjectSheet = useCallback(() => {
+    photoSheetRef.current?.present();
+  }, []);
+
   const navigateToCreateProblem = useCallback(
     (project: ProjectDoc) => {
       void AsyncStorage.setItem(LAST_USED_PROJECT_KEY, project.id);
@@ -198,6 +245,156 @@ export function HomeLauncherScreen() {
     [navigation]
   );
 
+  const navigateToAddWorkPhoto = useCallback(
+    (
+      project: ProjectDoc,
+      opts?: {
+        taskId?: string | null;
+        phaseId?: string | null;
+        photoType?: WorkPhotoType;
+      }
+    ) => {
+      void AsyncStorage.setItem(LAST_USED_PROJECT_KEY, project.id);
+      const taskId = opts?.taskId === null ? undefined : opts?.taskId ?? undefined;
+      navigation.dispatch(
+        CommonActions.reset({
+          index: 1,
+          routes: [
+            {
+              name: "AppTabs",
+              state: {
+                routes: [
+                  {
+                    name: "Main",
+                    state: {
+                      routes: [
+                        {
+                          name: "Home",
+                          state: {
+                            routes: [{ name: "HomeMain" }],
+                            index: 0,
+                          },
+                        },
+                      ],
+                      index: 0,
+                    },
+                  },
+                ],
+                index: 0,
+              },
+            },
+            {
+              name: "AddWorkPhoto",
+              params: {
+                projectId: project.id,
+                projectName: project.name,
+                taskId,
+                phaseId: opts?.phaseId ?? undefined,
+                photoType: opts?.photoType ?? "progress",
+                initialStep: "photo",
+              },
+            },
+          ],
+        })
+      );
+    },
+    [navigation]
+  );
+
+  const onPhotoFlowSelect = useCallback(
+    (selection: WorkPhotoFlowSelection) => {
+      if (!photoPickerProject) return;
+      if (selection.kind === "general") {
+        navigateToAddWorkPhoto(photoPickerProject, { taskId: null, photoType: "progress" });
+        return;
+      }
+      navigateToAddWorkPhoto(photoPickerProject, {
+        taskId: selection.taskId,
+        phaseId: selection.phaseId,
+        photoType: "progress",
+      });
+    },
+    [navigateToAddWorkPhoto, photoPickerProject]
+  );
+
+  const onPhotoDocumentProblem = useCallback(() => {
+    if (!photoPickerProject) return;
+    // CreateProblem handles its own photo attachments; taskId is not supported on that screen.
+    navigateToCreateProblem(photoPickerProject);
+  }, [navigateToCreateProblem, photoPickerProject]);
+
+  const onQuickNoteProjectSelected = useCallback(
+    (project: ProjectDoc) => {
+      if (!projects.some((p) => p.id === project.id)) {
+        Alert.alert(t("common.error"), t("quickNote.permissionDenied"));
+        return;
+      }
+      setQuickNoteProject(project);
+      setShowQuickNoteModal(true);
+    },
+    [projects, t]
+  );
+
+  const saveLauncherQuickNote = useCallback(
+    async (text: string, attachments?: QuickNoteAttachment[], options?: { shareWithManager?: boolean }) => {
+      if (!user?.id || !quickNoteProject) return;
+      if (!projects.some((p) => p.id === quickNoteProject.id)) {
+        Alert.alert(t("common.error"), t("quickNote.permissionDenied"));
+        return;
+      }
+
+      const timerTaskId =
+        activeTimer && activeTimer.projectId === quickNoteProject.id ? activeTimer.taskId ?? null : null;
+
+      const resolvedOrgId =
+        activeBusinessOrgId ??
+        activeOrganization?.id ??
+        quickNoteProject.orgId ??
+        null;
+
+      const shareWithManager =
+        options?.shareWithManager !== false &&
+        (options?.shareWithManager === true || isBusinessTeamProject(quickNoteProject));
+
+      const { sharePublished } = await quickNotesService.addQuickNote(user.id, text, attachments, {
+        sourceScreen: "mobile_launcher",
+        createdByUserId: user.id,
+        createdByName: user.firstName ?? user.name ?? null,
+        orgId: resolvedOrgId,
+        taskId: timerTaskId,
+        sourceProjectId: quickNoteProject.id,
+        sourceProjectName: quickNoteProject.name ?? null,
+        shareWithManager,
+      });
+
+      void AsyncStorage.setItem(LAST_USED_PROJECT_KEY, quickNoteProject.id);
+      showToast(t("quickNote.saved"));
+      if (shareWithManager && sharePublished === false) {
+        showToast(t("quickNote.shareSyncFailed"));
+      }
+    },
+    [activeBusinessOrgId, activeOrganization?.id, activeTimer, projects, quickNoteProject, t, user]
+  );
+
+  const onPhotoProjectSelected = useCallback(
+    async (project: ProjectDoc) => {
+      setPhotoPickerProject(project);
+      setPhotoTasksLoading(true);
+      setPhotoPickerTasks([]);
+      photoSheetRef.current?.dismiss();
+      try {
+        const tasks = await listTasksByProject(project.id);
+        setPhotoPickerTasks(tasks);
+      } catch {
+        setPhotoPickerTasks([]);
+      } finally {
+        setPhotoTasksLoading(false);
+        photoTaskSheetRef.current?.present();
+      }
+    },
+    []
+  );
+
   const handleAction = useCallback(
     (id: HomeQuickActionId) => {
       switch (id) {
@@ -206,6 +403,9 @@ export function HomeLauncherScreen() {
           break;
         case "time":
           openQuickTimeSheet();
+          break;
+        case "quickNote":
+          openQuickNoteFlow();
           break;
         case "tasks":
           if (!focusProject) {
@@ -227,24 +427,11 @@ export function HomeLauncherScreen() {
           });
           break;
         case "photo":
-          if (!focusProject) {
+          if (projects.length === 0) {
             Alert.alert(t("common.error"), t("home.noProjects"));
             break;
           }
-          enterAppTabs({
-            routes: [
-              { name: "HomeMain" },
-              {
-                name: "ProjectOverview",
-                params: {
-                  projectId: focusProject.id,
-                  projectName: focusProject.name,
-                  openSitePhotoPicker: true,
-                },
-              },
-            ],
-            index: 1,
-          });
+          openPhotoProjectSheet();
           break;
         case "problem":
           if (projects.length === 0) {
@@ -267,7 +454,7 @@ export function HomeLauncherScreen() {
           break;
       }
     },
-    [enterAppTabs, focusProject, navigation, openProblemProjectSheet, openQuickTimeSheet, projects, t]
+    [enterAppTabs, focusProject, openPhotoProjectSheet, openProblemProjectSheet, openQuickNoteFlow, openQuickTimeSheet, projects, t]
   );
 
   return (
@@ -328,6 +515,30 @@ export function HomeLauncherScreen() {
         t={t}
       />
 
+      <QuickProblemProjectSheet
+        sheetRef={photoSheetRef}
+        projects={projects}
+        titleKey="workPhoto.title"
+        onSelectProject={onPhotoProjectSelected}
+        t={t}
+      />
+
+      <QuickWorkPhotoTaskSheet
+        sheetRef={photoTaskSheetRef}
+        project={photoPickerProject}
+        tasks={photoPickerTasks}
+        loading={photoTasksLoading}
+        userId={user?.id}
+        activeTimerTaskId={
+          activeTimer && photoPickerProject && activeTimer.projectId === photoPickerProject.id
+            ? activeTimer.taskId ?? null
+            : null
+        }
+        onSelect={onPhotoFlowSelect}
+        onDocumentProblem={onPhotoDocumentProblem}
+        t={t}
+      />
+
       <QuickTimeModal
         sheetRef={quickTimeSheetRef}
         projects={projects}
@@ -345,6 +556,28 @@ export function HomeLauncherScreen() {
         }}
         onSaved={() => {}}
         t={t}
+      />
+
+      <QuickProblemProjectSheet
+        sheetRef={quickNoteSheetRef}
+        projects={projects}
+        titleKey="quickNote.selectProject"
+        onSelectProject={onQuickNoteProjectSelected}
+        t={t}
+      />
+
+      <QuickNoteModal
+        visible={showQuickNoteModal}
+        onClose={() => {
+          setShowQuickNoteModal(false);
+          setQuickNoteProject(null);
+        }}
+        onSaved={() => {}}
+        onSubmit={saveLauncherQuickNote}
+        placeholder={t("quickNotes.placeholder")}
+        saveLabel={t("quickNotes.save")}
+        showShareWithManager
+        defaultShareWithManager
       />
     </View>
   );

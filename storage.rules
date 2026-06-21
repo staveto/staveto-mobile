@@ -41,8 +41,8 @@ service firebase.storage {
       return signedIn()
         && firestore.exists(/databases/(default)/documents/projects/$(projectId))
         && (
-          ("assignedMemberIds" in data && uid() in data.assignedMemberIds)
-          || ("assignedUserIds" in data && uid() in data.assignedUserIds)
+          ("assignedMemberIds" in data && data.assignedMemberIds is list && data.assignedMemberIds.hasAny([uid()]))
+          || ("assignedUserIds" in data && data.assignedUserIds is list && data.assignedUserIds.hasAny([uid()]))
           || (
             firestore.exists(/databases/(default)/documents/projects/$(projectId)/members/$(uid()))
             && (
@@ -51,6 +51,40 @@ service firebase.storage {
             )
           )
         );
+    }
+
+    function projectLinkedOrgId(data) {
+      return data.orgId != null && data.orgId != ''
+        ? data.orgId
+        : (data.workspaceId != null && data.workspaceId != '' ? data.workspaceId : null);
+    }
+
+    /** Task assignee upload: customMetadata.taskId must point to a task assigned to uid. */
+    function isTaskAssigneeUpload(projectId) {
+      return signedIn()
+        && request.resource.metadata.keys().hasAll(['taskId'])
+        && request.resource.metadata.taskId != ''
+        && request.resource.metadata.taskId.size() > 0
+        && firestore.exists(/databases/(default)/documents/projects/$(projectId)/tasks/$(request.resource.metadata.taskId))
+        && (
+          firestore.get(/databases/(default)/documents/projects/$(projectId)/tasks/$(request.resource.metadata.taskId)).data.assigneeId == uid()
+          || (
+            'assignedUserIds' in firestore.get(/databases/(default)/documents/projects/$(projectId)/tasks/$(request.resource.metadata.taskId)).data
+            && firestore.get(/databases/(default)/documents/projects/$(projectId)/tasks/$(request.resource.metadata.taskId)).data.assignedUserIds is list
+            && firestore.get(/databases/(default)/documents/projects/$(projectId)/tasks/$(request.resource.metadata.taskId)).data.assignedUserIds.hasAny([uid()])
+          )
+          || (
+            'assignedMemberIds' in firestore.get(/databases/(default)/documents/projects/$(projectId)/tasks/$(request.resource.metadata.taskId)).data
+            && firestore.get(/databases/(default)/documents/projects/$(projectId)/tasks/$(request.resource.metadata.taskId)).data.assignedMemberIds is list
+            && firestore.get(/databases/(default)/documents/projects/$(projectId)/tasks/$(request.resource.metadata.taskId)).data.assignedMemberIds.hasAny([uid()])
+          )
+        );
+    }
+
+    /** Org-linked projects: uploader must belong to the same org (prevents cross-org writes). */
+    function orgUploadAllowed(projectId) {
+      let linked = projectLinkedOrgId(projectData(projectId));
+      return linked == null || isOrgMemberActive(linked);
     }
 
     function editorInMembersByUid(projectId) {
@@ -129,9 +163,11 @@ service firebase.storage {
         || canReadDiary(projectId);
     }
     
-    // Write attachments: align with Firestore — editors, assigned crew, diary-enabled field workers
+    // Write attachments: editors, assigned crew, diary-enabled field workers, task assignees
     function canWriteAttachments(projectId) {
-      return canWriteAsEditor(projectId) || canReadDiary(projectId);
+      return signedIn()
+        && orgUploadAllowed(projectId)
+        && (canWriteAsEditor(projectId) || canReadDiary(projectId) || isTaskAssigneeUpload(projectId));
     }
     
     // Unified attachments: projects/{projectId}/attachments/{attachmentId}/{filename}

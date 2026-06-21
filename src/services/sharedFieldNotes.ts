@@ -47,22 +47,62 @@ export function buildSharedFieldNoteDoc(note: QuickNote, orgId: string): SharedF
   };
 }
 
-/** Resolve org id from note metadata or linked project. */
-export async function resolveFieldNoteOrgId(note: QuickNote): Promise<string | null> {
+/** Resolve org id from note metadata, active org fallback, linked project, or org membership. */
+export async function resolveFieldNoteOrgId(
+  note: QuickNote,
+  fallbackOrgId?: string | null
+): Promise<string | null> {
   const fromNote = note.orgId?.trim();
   if (fromNote) return fromNote;
 
-  const projectId = note.sourceProjectId ?? note.suggestedProjectId ?? null;
-  if (!projectId) return null;
+  const fallback = fallbackOrgId?.trim();
+  if (fallback) return fallback;
 
-  try {
+  const projectId = note.sourceProjectId ?? note.suggestedProjectId ?? null;
+  if (projectId) {
     const { getProject } = await import("./projects");
-    const project = await getProject(projectId);
-    const fromProject = project?.orgId?.trim();
-    return fromProject || null;
-  } catch {
-    return null;
+    try {
+      const project = await getProject(projectId);
+      const fromProject = project?.orgId?.trim();
+      if (fromProject) return fromProject;
+    } catch {
+      /* fall through to membership lookup */
+    }
   }
+
+  // Fallbacks so a shared note can always reach the manager even without a
+  // project or an active business workspace selected. Workers are active org
+  // members, so their org id can be recovered from their profile / membership.
+  const authorUid = note.createdByUserId?.trim();
+  if (authorUid) {
+    // 1) Single-doc read of the persisted active business org hint (rules-safe).
+    try {
+      const { readUserActiveBusinessOrgIdHint } = await import("./organizations");
+      const hint = await readUserActiveBusinessOrgIdHint(authorUid);
+      if (hint) return hint;
+    } catch (e) {
+      if (__DEV__) console.warn("[sharedFieldNotes] org hint lookup failed:", e);
+    }
+
+    // 2) Collection-group membership scan (used when the hint is missing).
+    try {
+      const { listMyMemberships } = await import("./organizations");
+      const memberships = await listMyMemberships(authorUid);
+      const activeOrgIds = [
+        ...new Set(
+          memberships
+            .filter((m) => !m.status || m.status === "active")
+            .map((m) => m.orgId?.trim())
+            .filter((id): id is string => !!id)
+        ),
+      ];
+      if (activeOrgIds.length === 1) return activeOrgIds[0];
+    } catch (e) {
+      if (__DEV__) console.warn("[sharedFieldNotes] membership orgId lookup failed:", e);
+    }
+  }
+
+  return null;
 }
 
 async function upsertSharedFieldNote(orgId: string, note: QuickNote): Promise<void> {
@@ -87,6 +127,7 @@ async function notifyOrgManagersOfFieldNote(args: {
     if (!targetUid || targetUid === creatorUid || notified.has(targetUid)) return;
     await createFieldNoteSharedNotification({
       userId: targetUid,
+      orgId: args.orgId,
       noteId: args.note.id,
       noteText: args.note.text,
       projectId: args.projectId,
@@ -124,10 +165,13 @@ async function notifyOrgManagersOfFieldNote(args: {
 }
 
 /** Sync to Firestore + notify org managers. Returns true on successful Firestore write. */
-export async function publishSharedFieldNote(note: QuickNote): Promise<boolean> {
+export async function publishSharedFieldNote(
+  note: QuickNote,
+  fallbackOrgId?: string | null
+): Promise<boolean> {
   if (!note.shareWithManager) return false;
 
-  const orgId = await resolveFieldNoteOrgId(note);
+  const orgId = await resolveFieldNoteOrgId(note, fallbackOrgId);
   if (!orgId) {
     if (__DEV__) console.warn("[sharedFieldNotes] missing orgId for shared note", note.id);
     return false;
@@ -151,12 +195,13 @@ export async function publishSharedFieldNote(note: QuickNote): Promise<boolean> 
 
 export async function publishSharedFieldNoteWithTimeout(
   note: QuickNote,
-  timeoutMs = PUBLISH_TIMEOUT_MS
+  timeoutMs = PUBLISH_TIMEOUT_MS,
+  fallbackOrgId?: string | null
 ): Promise<boolean> {
   let timeoutId: ReturnType<typeof setTimeout> | undefined;
   try {
     return await Promise.race([
-      publishSharedFieldNote(note),
+      publishSharedFieldNote(note, fallbackOrgId),
       new Promise<boolean>((resolve) => {
         timeoutId = setTimeout(() => resolve(false), timeoutMs);
       }),

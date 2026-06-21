@@ -1632,6 +1632,7 @@ export async function createProblemReportedNotification(data: {
 
 async function writeOfficeFieldNoteNotification(data: {
   userId: string;
+  orgId: string;
   noteId: string;
   noteText: string;
   projectId: string | null;
@@ -1649,6 +1650,7 @@ async function writeOfficeFieldNoteNotification(data: {
       officeRef,
       {
         type: "FIELD_NOTE_SHARED",
+        orgId: data.orgId,
         projectId: data.projectId,
         projectName: data.projectName ?? null,
         noteId: data.noteId,
@@ -1673,6 +1675,7 @@ async function writeOfficeFieldNoteNotification(data: {
 /** Notify org managers when a worker shares a field note (Schnellnotiz). */
 export async function createFieldNoteSharedNotification(data: {
   userId: string;
+  orgId: string;
   noteId: string;
   noteText: string;
   projectId: string | null;
@@ -1694,6 +1697,7 @@ export async function createFieldNoteSharedNotification(data: {
   const ref = await addDoc(c, {
     userId: data.userId,
     type: "FIELD_NOTE_SHARED",
+    orgId: data.orgId,
     projectId: data.projectId,
     projectName: data.projectName ?? null,
     message,
@@ -1713,6 +1717,7 @@ export async function createFieldNoteSharedNotification(data: {
   });
   await writeOfficeFieldNoteNotification({
     userId: data.userId,
+    orgId: data.orgId,
     noteId: data.noteId,
     noteText: data.noteText,
     projectId: data.projectId,

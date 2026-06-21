@@ -103,8 +103,10 @@ export function HomeLauncherScreen() {
   useFocusEffect(
     useCallback(() => {
       if (!user?.id) return;
-      void quickNotesService.syncOpenBusinessFieldNotesToFirestore(user.id);
-    }, [user?.id])
+      const fallbackOrgId =
+        activeBusinessOrgId ?? activeOrganization?.id ?? quickNoteProject?.orgId ?? null;
+      void quickNotesService.syncOpenBusinessFieldNotesToFirestore(user.id, { fallbackOrgId });
+    }, [activeBusinessOrgId, activeOrganization?.id, quickNoteProject?.orgId, user?.id])
   );
 
   const refreshActiveTimer = useCallback(async () => {

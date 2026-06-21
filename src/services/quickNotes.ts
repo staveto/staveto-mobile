@@ -199,13 +199,13 @@ export async function addQuickNote(
     const { publishSharedFieldNoteWithTimeout, resolveFieldNoteOrgId } = await import(
       "./sharedFieldNotes"
     );
-    const resolvedOrgId = await resolveFieldNoteOrgId(note);
+    const resolvedOrgId = await resolveFieldNoteOrgId(note, meta?.orgId ?? null);
     if (resolvedOrgId && !note.orgId?.trim()) {
       note.orgId = resolvedOrgId;
       notes[0] = note;
       await saveAll(userId, notes);
     }
-    sharePublished = await publishSharedFieldNoteWithTimeout(note);
+    sharePublished = await publishSharedFieldNoteWithTimeout(note, undefined, meta?.orgId ?? null);
   }
 
   return { note, sharePublished };
@@ -281,22 +281,47 @@ export async function updateQuickNote(userId: string, noteId: string, text: stri
   await saveAll(userId, notes);
 }
 
-/** Priradiť / zmeniť projekt zápisu */
+/** Priradiť / zmeniť projekt zápisu + sync na manager dashboard. */
 export async function assignQuickNoteToProject(
   userId: string,
   noteId: string,
   projectId: string,
-  projectName: string | null
+  projectName: string | null,
+  opts?: { fallbackOrgId?: string | null }
 ): Promise<void> {
   const notes = await loadAll(userId);
   const idx = notes.findIndex((n) => n.id === noteId);
   if (idx === -1) return;
-  notes[idx] = {
+
+  const { getProject } = await import("./projects");
+  const { publishSharedFieldNoteWithTimeout, resolveFieldNoteOrgId } = await import(
+    "./sharedFieldNotes"
+  );
+  const project = await getProject(projectId).catch(() => null);
+
+  const updated: QuickNote = {
     ...notes[idx],
     sourceProjectId: projectId,
     sourceProjectName: projectName,
+    shareWithManager: true,
+    orgId:
+      notes[idx].orgId?.trim() ||
+      project?.orgId?.trim() ||
+      opts?.fallbackOrgId?.trim() ||
+      null,
   };
+  notes[idx] = updated;
   await saveAll(userId, notes);
+
+  const orgId = await resolveFieldNoteOrgId(updated, opts?.fallbackOrgId ?? null);
+  if (orgId) {
+    if (!updated.orgId?.trim()) {
+      updated.orgId = orgId;
+      notes[idx] = updated;
+      await saveAll(userId, notes);
+    }
+    void publishSharedFieldNoteWithTimeout(updated, undefined, opts?.fallbackOrgId ?? null);
+  }
 }
 
 async function syncNoteStatusToFirestore(note: QuickNote, status: QuickNoteStatus): Promise<void> {
@@ -337,10 +362,13 @@ export async function reopenQuickNote(userId: string, noteId: string): Promise<v
   void syncNoteStatusToFirestore(prev, "open");
 }
 
-/** Backfill: push open notes on business projects to Firestore (manager dashboard). */
-export async function syncOpenBusinessFieldNotesToFirestore(userId: string): Promise<number> {
+/** Backfill: push open notes to Firestore for manager dashboard (with or without project). */
+export async function syncOpenBusinessFieldNotesToFirestore(
+  userId: string,
+  opts?: { fallbackOrgId?: string | null }
+): Promise<number> {
   const notes = await loadAll(userId);
-  const { getProject, isBusinessTeamProject } = await import("./projects");
+  const { getProject } = await import("./projects");
   const { publishSharedFieldNoteWithTimeout, resolveFieldNoteOrgId } = await import(
     "./sharedFieldNotes"
   );
@@ -353,31 +381,33 @@ export async function syncOpenBusinessFieldNotesToFirestore(userId: string): Pro
     if (note.status !== "open") continue;
 
     const projectId = note.sourceProjectId ?? note.suggestedProjectId ?? null;
-    if (!projectId) continue;
-
-    const project = await getProject(projectId).catch(() => null);
-    if (!project || !isBusinessTeamProject(project)) continue;
-
-    let next = note;
-    if (!note.shareWithManager || !note.orgId?.trim()) {
-      next = {
-        ...note,
-        shareWithManager: true,
-        orgId: note.orgId?.trim() || project.orgId?.trim() || null,
-      };
-      notes[i] = next;
-      changed = true;
+    let projectOrgId: string | null = null;
+    if (projectId) {
+      const project = await getProject(projectId).catch(() => null);
+      projectOrgId = project?.orgId?.trim() || null;
     }
 
-    const orgId = await resolveFieldNoteOrgId(next);
+    const orgId = await resolveFieldNoteOrgId(
+      note,
+      opts?.fallbackOrgId ?? note.orgId ?? projectOrgId ?? null
+    );
     if (!orgId) continue;
-    if (!next.orgId?.trim()) {
-      next = { ...next, orgId };
-      notes[i] = next;
-      changed = true;
-    }
 
-    const ok = await publishSharedFieldNoteWithTimeout(next, 8000);
+    let next: QuickNote = {
+      ...note,
+      shareWithManager: true,
+      orgId,
+    };
+    if (projectId && !next.sourceProjectId) {
+      next = {
+        ...next,
+        sourceProjectId: projectId,
+      };
+    }
+    notes[i] = next;
+    changed = true;
+
+    const ok = await publishSharedFieldNoteWithTimeout(next, 8000, opts?.fallbackOrgId ?? orgId);
     if (ok) synced += 1;
   }
 

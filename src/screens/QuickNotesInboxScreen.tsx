@@ -19,6 +19,7 @@ import { Ionicons } from "@expo/vector-icons";
 import { useFocusEffect, useNavigation } from "@react-navigation/native";
 import { useAuth } from "../context/AuthContext";
 import { useI18n } from "../i18n/I18nContext";
+import { useActiveOrg } from "../hooks/useActiveOrg";
 import { colors, radius, spacing } from "../theme";
 import * as quickNotesService from "../services/quickNotes";
 import type { QuickNote, QuickNoteAttachment } from "../services/quickNotes";
@@ -73,6 +74,8 @@ export function QuickNotesInboxScreen() {
   const navigation = useNavigation();
   const { t } = useI18n();
   const { user, orgId } = useAuth();
+  const { activeBusinessOrgId, activeOrganization } = useActiveOrg();
+  const businessOrgId = activeBusinessOrgId ?? activeOrganization?.id ?? null;
   const [notes, setNotes] = useState<QuickNote[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -106,7 +109,9 @@ export function QuickNotesInboxScreen() {
       if (isRefresh) setRefreshing(true);
       else setLoading(true);
       try {
-        void quickNotesService.syncOpenBusinessFieldNotesToFirestore(user.id);
+        void quickNotesService.syncOpenBusinessFieldNotesToFirestore(user.id, {
+          fallbackOrgId: businessOrgId,
+        });
         const all = await quickNotesService.listQuickNotes(user.id);
         let list: QuickNote[] = [];
         if (tab === "pending") list = all.filter((n) => n.status === "open").sort((a, b) => (a.createdAt < b.createdAt ? 1 : -1));
@@ -121,7 +126,7 @@ export function QuickNotesInboxScreen() {
         setRefreshing(false);
       }
     },
-    [user?.id, tab]
+    [tab, user?.id, businessOrgId]
   );
 
   useFocusEffect(
@@ -180,12 +185,14 @@ export function QuickNotesInboxScreen() {
       await quickNotesService.addQuickNote(user.id, text, attachments, {
         sourceScreen: "inbox",
         createdByUserId: user.id,
+        orgId: businessOrgId,
+        shareWithManager: !!businessOrgId,
         latitude,
         longitude,
       });
       await loadNotes(true);
     },
-    [user?.id, loadNotes]
+    [user?.id, loadNotes, businessOrgId]
   );
 
   const effectiveProjectLabel = useCallback(
@@ -207,7 +214,13 @@ export function QuickNotesInboxScreen() {
       if (!user?.id || !picker) return;
       const { note, intent } = picker;
       try {
-        await quickNotesService.assignQuickNoteToProject(user.id, note.id, project.id, project.name ?? null);
+        await quickNotesService.assignQuickNoteToProject(
+          user.id,
+          note.id,
+          project.id,
+          project.name ?? null,
+          { fallbackOrgId: businessOrgId }
+        );
       } catch {
         showToast(t("common.error"));
         return;
@@ -247,7 +260,7 @@ export function QuickNotesInboxScreen() {
         });
       }
     },
-    [user?.id, picker, loadNotes, navigation, t]
+    [user?.id, picker, loadNotes, navigation, t, businessOrgId]
   );
 
   const startConversion = useCallback(

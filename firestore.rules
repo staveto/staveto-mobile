@@ -461,6 +461,7 @@ service cloud.firestore {
               && isOrgManager(request.resource.data.orgId, uid())
             )
             || memberProblemOfficeNotificationCreateAllowed(userId)
+            || memberFieldNoteOfficeNotificationCreateAllowed(userId)
           );
         allow update: if signedIn()
           && uid() == userId
@@ -497,6 +498,7 @@ service cloud.firestore {
 
     // B2B Organizations
     function fieldNoteCreateValid(orgId) {
+      let pid = request.resource.data.get('projectId', null);
       return signedIn()
         && request.resource.data.orgId == orgId
         && request.resource.data.createdBy == uid()
@@ -505,11 +507,11 @@ service cloud.firestore {
         && (
           isOrgMemberActive(orgId)
           || (
-            request.resource.data.projectId is string
-            && request.resource.data.projectId != ''
-            && exists(/databases/$(database)/documents/projects/$(request.resource.data.projectId))
-            && projectLinkedOrgId(projectDoc(request.resource.data.projectId)) == orgId
-            && hasProjectAccess(request.resource.data.projectId)
+            pid is string
+            && pid != ''
+            && exists(/databases/$(database)/documents/projects/$(pid))
+            && projectLinkedOrgId(projectDoc(pid)) == orgId
+            && hasProjectAccess(pid)
           )
         );
     }
@@ -1007,6 +1009,26 @@ service cloud.firestore {
         && request.resource.data.userId != uid();
     }
 
+    function memberFieldNoteNotificationCreateAllowed() {
+      let oid = request.resource.data.orgId;
+      let pid = request.resource.data.get('projectId', null);
+      return request.resource.data.fromUserId == uid()
+        && oid is string
+        && oid.size() > 0
+        && request.resource.data.type == 'FIELD_NOTE_SHARED'
+        && request.resource.data.userId != uid()
+        && (
+          isOrgMemberActive(oid)
+          || (
+            pid is string
+            && pid != ''
+            && exists(/databases/$(database)/documents/projects/$(pid))
+            && projectLinkedOrgId(projectDoc(pid)) == oid
+            && hasProjectAccess(pid)
+          )
+        );
+    }
+
     /**
      * Web office mirror: a project member may create a PROBLEM_* notification in
      * another user's users/{targetUserId}/notifications subcollection so the
@@ -1021,6 +1043,26 @@ service cloud.firestore {
         && isMember(pid)
         && request.resource.data.type in ['PROBLEM_ASSIGNED', 'PROBLEM_REPORTED']
         && targetUserId != uid();
+    }
+
+    function memberFieldNoteOfficeNotificationCreateAllowed(targetUserId) {
+      let oid = request.resource.data.orgId;
+      let pid = request.resource.data.get('projectId', null);
+      return request.resource.data.fromUserId == uid()
+        && oid is string
+        && oid.size() > 0
+        && request.resource.data.type == 'FIELD_NOTE_SHARED'
+        && targetUserId != uid()
+        && (
+          isOrgMemberActive(oid)
+          || (
+            pid is string
+            && pid != ''
+            && exists(/databases/$(database)/documents/projects/$(pid))
+            && projectLinkedOrgId(projectDoc(pid)) == oid
+            && hasProjectAccess(pid)
+          )
+        );
     }
 
     match /notifications/{notificationId} {
@@ -1038,6 +1080,7 @@ service cloud.firestore {
           && isOrgManager(request.resource.data.orgId, uid())
         )
         || memberProblemNotificationCreateAllowed()
+        || memberFieldNoteNotificationCreateAllowed()
       );
       // User can update their own notification (e.g. refresh task-due data); cannot change userId
       allow update: if signedIn()

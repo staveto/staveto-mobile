@@ -30,6 +30,7 @@ export type NotificationType =
   | "PROBLEM_ASSIGNED"
   | "PROBLEM_REPORTED"
   | "FIELD_NOTE_SHARED"
+  | "ABSENCE_REQUESTED"
   | "EXPENSE_ADDED"
   | "DIARY_ADDED"
   | "MEMBER_JOINED"
@@ -118,6 +119,7 @@ const KNOWN_NOTIFICATION_TYPES: readonly NotificationType[] = [
   "PROBLEM_ASSIGNED",
   "PROBLEM_REPORTED",
   "FIELD_NOTE_SHARED",
+  "ABSENCE_REQUESTED",
   "EXPENSE_ADDED",
   "DIARY_ADDED",
   "MEMBER_JOINED",
@@ -1705,12 +1707,16 @@ export async function createFieldNoteSharedNotification(data: {
     fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
     meta: { noteId: data.noteId, projectId: data.projectId },
     entityType: "document",
-    deepLink: data.projectId
+    // Firestore client rejects `undefined`; only attach a deep link when we
+    // actually have a project to point at (project-less notes have none).
+    ...(data.projectId
       ? {
-          screen: "ProjectOverview",
-          params: { projectId: data.projectId },
+          deepLink: {
+            screen: "ProjectOverview",
+            params: { projectId: data.projectId },
+          },
         }
-      : undefined,
+      : {}),
     createdAt: serverTimestamp(),
     readAt: null,
     severity: "info",
@@ -1722,6 +1728,95 @@ export async function createFieldNoteSharedNotification(data: {
     noteText: data.noteText,
     projectId: data.projectId,
     projectName: data.projectName ?? null,
+    fromUserId: data.fromUserId ?? auth.currentUser.uid,
+    fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
+  });
+  return { id: ref.id };
+}
+
+async function writeOfficeAbsenceNotification(data: {
+  userId: string;
+  orgId: string;
+  absenceId: string;
+  subject: string;
+  fromUserId: string;
+  fromUserName?: string | null;
+}): Promise<void> {
+  try {
+    const officeRef = doc(db, "users", data.userId, "notifications", `absence-${data.absenceId}`);
+    await setDoc(
+      officeRef,
+      {
+        type: "ABSENCE_REQUESTED",
+        orgId: data.orgId,
+        absenceId: data.absenceId,
+        subject: data.subject || null,
+        fromUserId: data.fromUserId,
+        assignedBy: data.fromUserId,
+        assignedByName: data.fromUserName ?? null,
+        createdAt: serverTimestamp(),
+        read: false,
+      },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn("[notifications] writeOfficeAbsenceNotification failed", {
+      targetUserId: data.userId,
+      absenceId: data.absenceId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/** Notify an org manager that a worker requested time off (Abwesenheit). */
+export async function createAbsenceRequestedNotification(data: {
+  userId: string;
+  orgId: string;
+  absenceId: string;
+  absenceType: string;
+  startDate: string;
+  endDate: string;
+  fromUserId?: string;
+  fromUserName?: string | null;
+}): Promise<{ id: string } | null> {
+  if (!auth.currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+  if (data.userId === auth.currentUser.uid) return null;
+
+  const author =
+    data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? "Mitarbeiter";
+  const range =
+    data.startDate === data.endDate
+      ? data.startDate
+      : `${data.startDate} – ${data.endDate}`;
+  const message = `${author}: ${range}`;
+  const subject = `${data.absenceType} · ${range}`;
+
+  const c = collection(db, "notifications");
+  const ref = await addDoc(c, {
+    userId: data.userId,
+    type: "ABSENCE_REQUESTED",
+    orgId: data.orgId,
+    message,
+    fromUserId: data.fromUserId ?? auth.currentUser.uid,
+    fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
+    meta: {
+      absenceId: data.absenceId,
+      absenceType: data.absenceType,
+      startDate: data.startDate,
+      endDate: data.endDate,
+    },
+    entityType: "absence",
+    createdAt: serverTimestamp(),
+    readAt: null,
+    severity: "info",
+  });
+  await writeOfficeAbsenceNotification({
+    userId: data.userId,
+    orgId: data.orgId,
+    absenceId: data.absenceId,
+    subject,
     fromUserId: data.fromUserId ?? auth.currentUser.uid,
     fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
   });

@@ -1,4 +1,4 @@
-import React, { useCallback, useMemo, useState } from "react";
+import React, { useCallback, useEffect, useMemo, useState } from "react";
 import {
   View,
   Text,
@@ -9,6 +9,7 @@ import {
   Alert,
   ActivityIndicator,
   Platform,
+  Switch,
 } from "react-native";
 import DateTimePicker from "@react-native-community/datetimepicker";
 import { useNavigation, useRoute } from "@react-navigation/native";
@@ -38,8 +39,26 @@ export function AbsenceRequestScreen() {
   const [showStartPicker, setShowStartPicker] = useState(false);
   const [showEndPicker, setShowEndPicker] = useState(false);
   const [saving, setSaving] = useState(false);
+  const [businessOrgId, setBusinessOrgId] = useState<string | null>(null);
+  const [shareWithManager, setShareWithManager] = useState(true);
 
-  const isOwner = !!user?.id && !!orgId && absencesService.isSoloOwner(user.id, orgId);
+  // Resolve the worker's business org so the absence can be shared for approval.
+  useEffect(() => {
+    let cancelled = false;
+    if (!user?.id) return;
+    absencesService
+      .resolveActiveBusinessOrgId(user.id)
+      .then((oid) => {
+        if (!cancelled) setBusinessOrgId(oid);
+      })
+      .catch(() => {
+        if (!cancelled) setBusinessOrgId(null);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.id]);
+
   const userName = useMemo(() => {
     if (user?.name) return user.name;
     if (user?.firstName || user?.lastName) return `${user?.firstName ?? ""} ${user?.lastName ?? ""}`.trim();
@@ -72,23 +91,54 @@ export function AbsenceRequestScreen() {
     }
     setSaving(true);
     try {
-      await absencesService.requestAbsence({
-        orgId,
+      // When sharing, file the absence under the business org so managers can
+      // see / approve it; otherwise keep it in the personal namespace.
+      const shared = shareWithManager && !!businessOrgId;
+      const effectiveOrgId = shared ? (businessOrgId as string) : orgId;
+      const ownerOrManager =
+        !!user.id && absencesService.isSoloOwner(user.id, effectiveOrgId);
+
+      const absenceId = await absencesService.requestAbsence({
+        orgId: effectiveOrgId,
         userId: user.id,
         userNameSnapshot: userName,
         type,
         startDate,
         endDate,
         note: note.trim() || undefined,
-        isOwnerOrManager: isOwner,
+        isOwnerOrManager: ownerOrManager,
       });
+
+      if (shared) {
+        await absencesService.notifyManagersOfAbsenceRequest({
+          orgId: effectiveOrgId,
+          absenceId,
+          requesterUid: user.id,
+          requesterName: userName,
+          absenceType: t(ABSENCE_TYPE_KEYS[type]),
+          startDate,
+          endDate,
+        });
+      }
       navigation.goBack();
     } catch (e: any) {
       Alert.alert(t("common.error"), e?.message ?? "");
     } finally {
       setSaving(false);
     }
-  }, [user?.id, orgId, userName, type, startDate, endDate, note, isOwner, navigation, t]);
+  }, [
+    user?.id,
+    orgId,
+    businessOrgId,
+    shareWithManager,
+    userName,
+    type,
+    startDate,
+    endDate,
+    note,
+    navigation,
+    t,
+  ]);
 
   return (
     <ScrollView style={styles.container} contentContainerStyle={styles.content} keyboardShouldPersistTaps="handled">
@@ -137,6 +187,27 @@ export function AbsenceRequestScreen() {
           style={styles.noteInput}
         />
       </View>
+
+      {businessOrgId ? (
+        <View style={styles.card}>
+          <View style={styles.shareRow}>
+            <View style={styles.shareTextWrap}>
+              <Text style={styles.label}>{t("absence.shareWithManager")}</Text>
+              <Text style={styles.shareHint}>
+                {shareWithManager
+                  ? t("absence.shareWithManagerOn")
+                  : t("absence.shareWithManagerOff")}
+              </Text>
+            </View>
+            <Switch
+              value={shareWithManager}
+              onValueChange={setShareWithManager}
+              trackColor={{ false: colors.border, true: colors.primary }}
+              thumbColor="#fff"
+            />
+          </View>
+        </View>
+      ) : null}
 
       <TouchableOpacity
         style={[styles.saveBtn, saving && styles.saveBtnDisabled]}
@@ -213,6 +284,9 @@ const styles = StyleSheet.create({
   dateRowLabel: { fontSize: 12, color: colors.textMuted },
   dateRowValue: { fontSize: 16, fontWeight: "600", color: colors.text },
   divider: { height: 1, backgroundColor: colors.border, opacity: 0.25 },
+  shareRow: { flexDirection: "row", alignItems: "center", gap: spacing.md },
+  shareTextWrap: { flex: 1 },
+  shareHint: { fontSize: 12, color: colors.textMuted, lineHeight: 17 },
   noteInput: {
     minHeight: 80,
     padding: spacing.sm,

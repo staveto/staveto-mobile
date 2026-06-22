@@ -410,15 +410,18 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
     try {
       const projectRef = doc(db, "projects", projectId);
       const projectSnap = await getDocSmart(projectRef);
-      const ownerId = (projectSnap.data()?.ownerId as string) ?? projectOwnerId ?? null;
 
-      if (!ownerId) {
+      // Team/org projects may have no `ownerId` (owned by the org, not a person).
+      // Only bail when the project document itself is missing — otherwise fall
+      // through to non-owner resolution (assigned crew + members + org + refs).
+      if (!projectSnap.exists()) {
         setAccess({ ...NO_ACCESS, loading: false });
         setLoading(false);
         return;
       }
+      const ownerId = (projectSnap.data()?.ownerId as string) ?? projectOwnerId ?? null;
 
-      const isOwner = ownerId === uid;
+      const isOwner = !!ownerId && ownerId === uid;
       if (isOwner) {
         setAccess({
           loading: false,
@@ -567,13 +570,14 @@ export async function fetchProjectAccess(
     const readOpts = opts?.forceServer ? { forceServer: true as const } : undefined;
     const projectRef = doc(db, "projects", projectId);
     const projectSnap = await getDocSmart(projectRef, readOpts);
-    const ownerId = (projectSnap.data()?.ownerId as string) ?? projectOwnerId ?? null;
 
-    if (!ownerId) {
+    // Team/org projects may have no `ownerId`; only bail when the document is missing.
+    if (!projectSnap.exists()) {
       return { ...NO_ACCESS, loading: false };
     }
+    const ownerId = (projectSnap.data()?.ownerId as string) ?? projectOwnerId ?? null;
 
-    const isOwner = ownerId === uid;
+    const isOwner = !!ownerId && ownerId === uid;
     if (isOwner) {
       return {
         loading: false,

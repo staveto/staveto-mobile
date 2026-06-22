@@ -239,6 +239,106 @@ export async function requestAbsence(input: RequestAbsenceInput): Promise<string
   return ref.id;
 }
 
+/**
+ * Resolve the worker's active business org id (≠ personal uid namespace).
+ * Returns null when the user is solo / has no single active business org.
+ */
+export async function resolveActiveBusinessOrgId(uid: string): Promise<string | null> {
+  const id = uid?.trim();
+  if (!id) return null;
+
+  try {
+    const { readUserActiveBusinessOrgIdHint } = await import("./organizations");
+    const hint = (await readUserActiveBusinessOrgIdHint(id))?.trim();
+    if (hint && hint !== id) return hint;
+  } catch (e) {
+    if (__DEV__) console.warn("[absences] active org hint lookup failed:", e);
+  }
+
+  try {
+    const { listMyMemberships } = await import("./organizations");
+    const memberships = await listMyMemberships(id);
+    const activeOrgIds = [
+      ...new Set(
+        memberships
+          .filter((m) => !m.status || m.status === "active")
+          .map((m) => m.orgId?.trim())
+          .filter((x): x is string => !!x && x !== id)
+      ),
+    ];
+    if (activeOrgIds.length === 1) return activeOrgIds[0];
+  } catch (e) {
+    if (__DEV__) console.warn("[absences] membership org lookup failed:", e);
+  }
+
+  return null;
+}
+
+/**
+ * Notify org owner + managers/admins that a worker requested time off.
+ * Best-effort: never throws (the absence is already saved at this point).
+ */
+export async function notifyManagersOfAbsenceRequest(args: {
+  orgId: string;
+  absenceId: string;
+  requesterUid: string;
+  requesterName?: string | null;
+  absenceType: string;
+  startDate: string;
+  endDate: string;
+}): Promise<void> {
+  const { orgId, requesterUid } = args;
+  if (!orgId || orgId === requesterUid) return; // personal namespace → no manager to notify
+
+  const notified = new Set<string>();
+  const { createAbsenceRequestedNotification } = await import("./notifications");
+
+  const notifyUid = async (targetUid: string) => {
+    const uid = targetUid?.trim();
+    if (!uid || uid === requesterUid || notified.has(uid)) return;
+    try {
+      await createAbsenceRequestedNotification({
+        userId: uid,
+        orgId,
+        absenceId: args.absenceId,
+        absenceType: args.absenceType,
+        startDate: args.startDate,
+        endDate: args.endDate,
+        fromUserId: requesterUid,
+        fromUserName: args.requesterName ?? null,
+      });
+      notified.add(uid);
+    } catch (e) {
+      if (__DEV__) console.warn("[absences] notify manager failed:", e);
+    }
+  };
+
+  try {
+    const { getOrganization } = await import("./organizations");
+    const org = await getOrganization(orgId);
+    if (org?.ownerUid) await notifyUid(org.ownerUid);
+  } catch (e) {
+    if (__DEV__) console.warn("[absences] org owner lookup failed:", e);
+  }
+
+  try {
+    const { listMembers } = await import("./businessMembers");
+    const members = await listMembers(orgId);
+    for (const m of members) {
+      const uid = (m.userId?.trim() || m.id?.trim()) ?? "";
+      if (
+        m.status === "active" &&
+        (m.role === "owner" || m.role === "admin" || m.role === "manager") &&
+        uid
+      ) {
+        await notifyUid(uid);
+      }
+    }
+  } catch (e) {
+    if (__DEV__) console.warn("[absences] listMembers failed:", e);
+  }
+}
+
 export type UpdateAbsenceDatesInput = {
   startDate: string;
   endDate: string;

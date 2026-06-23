@@ -19,6 +19,7 @@ import { colors, radius, spacing } from "../../theme";
 import {
   listMyProjects,
   listProjectsAssignedToCurrentUser,
+  getProject,
   type ProjectDoc,
 } from "../../services/projects";
 import { listTasksByProject, type TaskDoc } from "../../services/tasks";
@@ -114,10 +115,12 @@ export function AddWorkPhotoScreen() {
       if (!user?.id) return;
       if (hasPrefilledProject && params.projectId) {
         const timer = await timeTracking.getActiveTimer();
+        const fullProject = await getProject(params.projectId).catch(() => null);
         if (cancelled) return;
         setActiveTimer(timer);
-        setSelectedProject((prev) =>
-          prev ?? { id: params.projectId!, name: params.projectName ?? "" }
+        setSelectedProject(
+          fullProject ??
+            ({ id: params.projectId!, name: params.projectName ?? "" } as ProjectDoc)
         );
         const timerTaskId =
           timer?.projectId === params.projectId ? timer.taskId ?? null : null;
@@ -226,6 +229,7 @@ export function AddWorkPhotoScreen() {
     const result = await resolveCanUploadWorkPhoto(selectedProject.id, {
       taskId: selectedTaskId,
       projectOwnerId: selectedProject.ownerId,
+      activeTimerProjectId: activeTimer?.projectId ?? null,
     });
     if (!result.allowed) {
       Alert.alert(t("common.error"), t("workPhoto.permissionDeniedAssigned"));

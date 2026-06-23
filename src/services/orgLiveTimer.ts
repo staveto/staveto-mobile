@@ -7,6 +7,7 @@ import { db, auth } from "../firebase";
 import { getDocSmart } from "./firestoreSmartRead";
 import type { ActiveTimer } from "./timeTracking";
 import { resolveLatestWorkGps } from "./timeTracking";
+import { emitTimerTransitionNotifications } from "./orgLiveTimerNotify";
 
 export async function resolveProjectOrgId(projectId: string): Promise<string | null> {
   const normalized = projectId.trim();
@@ -32,6 +33,7 @@ export async function syncOrgLiveTimer(
   if (!timer) {
     try {
       await deleteDoc(ref);
+      await emitTimerTransitionNotifications(normalizedOrg, null);
     } catch {
       /* best effort */
     }
@@ -62,6 +64,7 @@ export async function syncOrgLiveTimer(
       },
       { merge: true }
     );
+    await emitTimerTransitionNotifications(normalizedOrg, timer);
   } catch (err) {
     if (__DEV__) console.warn("[orgLiveTimer] sync failed:", err);
   }

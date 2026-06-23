@@ -1,8 +1,14 @@
 import { auth } from "../firebase";
-import { fetchProjectAccess, type ProjectAccess } from "../hooks/useProjectAccess";
+import {
+  fetchProjectAccess,
+  resolveCanWriteTimeForProject,
+  resolveCanReportProblemForProject,
+  type ProjectAccess,
+} from "../hooks/useProjectAccess";
 import { isUserAssignedOnProject } from "../lib/projectAssignment";
 import { getProject } from "../services/projects";
 import { getTaskById, listTasksByProject } from "../services/tasks";
+import * as timeTracking from "../services/timeTracking";
 import { doc, getDoc } from "../lib/rnFirestore";
 import { db } from "../firebase";
 import { paths } from "../lib/firestorePaths";
@@ -15,7 +21,7 @@ export type WorkPhotoPermissionResult = {
 
 /**
  * Resolves whether the current user may upload a work photo to a project/task.
- * Mirrors Firebase rules: owner/editor/assigned/diary + task assignee.
+ * Mirrors Firebase Storage rules + field workflow (timer, diary, org crew).
  */
 export async function resolveCanUploadWorkPhoto(
   projectId: string,
@@ -24,6 +30,7 @@ export async function resolveCanUploadWorkPhoto(
     projectOwnerId?: string | null;
     access?: ProjectAccess;
     healFirst?: boolean;
+    activeTimerProjectId?: string | null;
   }
 ): Promise<WorkPhotoPermissionResult> {
   const uid = auth.currentUser?.uid?.trim() ?? "";
@@ -42,6 +49,26 @@ export async function resolveCanUploadWorkPhoto(
     (await fetchProjectAccess(projectId, uid, opts?.projectOwnerId ?? undefined));
 
   if (access.canWritePhotos || access.isOwner || access.canWrite) {
+    return { allowed: true };
+  }
+
+  if (access.canWriteTime || access.canReportProblem || access.canWriteDiary) {
+    return { allowed: true };
+  }
+
+  const timerProjectId =
+    opts?.activeTimerProjectId?.trim() ||
+    (await timeTracking.getActiveTimer().catch(() => null))?.projectId?.trim() ||
+    "";
+  if (timerProjectId && timerProjectId === projectId) {
+    return { allowed: true };
+  }
+
+  if (await resolveCanWriteTimeForProject(projectId, uid, opts?.projectOwnerId ?? null)) {
+    return { allowed: true };
+  }
+
+  if (await resolveCanReportProblemForProject(projectId, uid, opts?.projectOwnerId ?? null)) {
     return { allowed: true };
   }
 

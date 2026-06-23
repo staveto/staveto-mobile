@@ -87,6 +87,55 @@ service firebase.storage {
       return linked == null || isOrgMemberActive(linked);
     }
 
+    /** Matches Firestore isMember — invited user with projectRefs but no membersByUid yet. */
+    function hasProjectRef(projectId) {
+      return firestore.exists(/databases/(default)/documents/users/$(uid())/projectRefs/$(projectId));
+    }
+
+    function isOrgManager(orgId) {
+      return isOrgMemberActive(orgId)
+        && (
+          isOrgOwner(orgId)
+          || firestore.get(/databases/(default)/documents/organizations/$(orgId)/members/$(uid())).data.role in ['owner', 'admin', 'manager']
+        );
+    }
+
+    /** Read problem photos — field crew + org managers (web office). */
+    function canReadProblemPhotos(projectId) {
+      let data = projectData(projectId);
+      let linked = projectLinkedOrgId(data);
+      return projectOwner(projectId)
+        || isProjectMember(projectId)
+        || isAssignedOnProject(projectId)
+        || hasProjectRef(projectId)
+        || (linked != null && (data.ownerId == uid() || isOrgOwner(linked) || isOrgManager(linked)));
+    }
+
+    /** Active org member on an org-linked project — field crew photo uploads. */
+    function orgFieldWorkerUpload(projectId) {
+      let linked = projectLinkedOrgId(projectData(projectId));
+      return linked != null && isOrgMemberActive(linked);
+    }
+
+    /** Site photos + work attachments — aligned with Firestore problems create / diary crew. */
+    function canUploadFieldMedia(projectId) {
+      return signedIn()
+        && orgUploadAllowed(projectId)
+        && (
+          canWriteAttachments(projectId)
+          || isProjectMember(projectId)
+          || isAssignedOnProject(projectId)
+          || hasProjectRef(projectId)
+          || orgFieldWorkerUpload(projectId)
+        );
+    }
+
+    /** Write problem photos — same audience as field media uploads. */
+    function canWriteProblemPhotos(projectId) {
+      return canUploadFieldMedia(projectId)
+        && request.resource.size < 15 * 1024 * 1024;
+    }
+
     function editorInMembersByUid(projectId) {
       return firestore.exists(/databases/(default)/documents/projects/$(projectId)/membersByUid/$(uid()))
         && (
@@ -160,7 +209,9 @@ service firebase.storage {
           )
         )
         || isAssignedOnProject(projectId)
-        || canReadDiary(projectId);
+        || canReadDiary(projectId)
+        || hasProjectRef(projectId)
+        || orgFieldWorkerUpload(projectId);
     }
     
     // Write attachments: editors, assigned crew, diary-enabled field workers, task assignees
@@ -173,7 +224,7 @@ service firebase.storage {
     // Unified attachments: projects/{projectId}/attachments/{attachmentId}/{filename}
     match /projects/{projectId}/attachments/{attachmentId}/{filename} {
       allow read: if canReadAttachments(projectId);
-      allow write: if canWriteAttachments(projectId)
+      allow write: if canUploadFieldMedia(projectId)
         && request.resource.size < 50 * 1024 * 1024;
     }
     
@@ -185,11 +236,9 @@ service firebase.storage {
     }
     
     // Problem photos: projects/{projectId}/problems/{problemId}/{filename}
-    // Firestore allows create for editors OR any project member
-    match /projects/{projectId}/problems/{problemId}/{filename} {
-      allow read: if projectOwner(projectId) || isProjectMember(projectId) || isAssignedOnProject(projectId);
-      allow write: if (canWriteAttachments(projectId) || isProjectMember(projectId) || isAssignedOnProject(projectId))
-        && request.resource.size < 15 * 1024 * 1024;
+    match /projects/{projectId}/problems/{problemId}/{allPaths=**} {
+      allow read: if canReadProblemPhotos(projectId);
+      allow write: if canWriteProblemPhotos(projectId);
     }
     
     // Equipment photos (MAINTENANCE): projects/{projectId}/equipment/{equipmentId}/photo_*.jpg|png

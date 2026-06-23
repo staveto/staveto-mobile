@@ -332,6 +332,7 @@ export function CreateProblemScreen() {
       const problemId = created.id;
 
       const uploadedPhotos: ProblemPhoto[] = [];
+      let photoUploadFailures = 0;
       for (let i = 0; i < photos.length; i++) {
         try {
           const photo = await problemPhotosService.uploadProblemPhoto(
@@ -341,14 +342,26 @@ export function CreateProblemScreen() {
           );
           uploadedPhotos.push(photo);
         } catch (e) {
+          photoUploadFailures += 1;
           console.warn("[CreateProblem] Photo upload failed:", e);
         }
       }
       if (uploadedPhotos.length > 0) {
-        await problemsService.updateProblem(projectId, problemId, { photos: uploadedPhotos });
+        try {
+          await problemsService.updateProblem(projectId, problemId, { photos: uploadedPhotos });
+        } catch (e) {
+          photoUploadFailures += uploadedPhotos.length;
+          console.warn("[CreateProblem] Failed to save photo metadata:", e);
+        }
       }
 
-      showToast(t("problems.saved"));
+      if (photos.length > 0 && uploadedPhotos.length === 0) {
+        Alert.alert(t("common.error"), t("problems.photosUploadFailed"));
+      } else if (photoUploadFailures > 0) {
+        showToast(t("problems.savedPhotoFailed"));
+      } else {
+        showToast(t("problems.saved"));
+      }
       if (processQuickNoteId && user?.id) {
         try {
           await quickNotesService.markQuickNoteProcessed(user.id, processQuickNoteId);

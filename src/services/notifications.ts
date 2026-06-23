@@ -38,6 +38,9 @@ export type NotificationType =
   | "MEMBER_REMOVED"
   | "SYNC_ISSUE"
   | "TIME_TRACKING_STOPPED"
+  | "TIMER_STARTED"
+  | "TIMER_PAUSED"
+  | "TIMER_STOPPED"
   | "BUSINESS_CHAT_MESSAGE";
 
 export type NotificationSeverity = "info" | "warning" | "error";
@@ -127,6 +130,9 @@ const KNOWN_NOTIFICATION_TYPES: readonly NotificationType[] = [
   "MEMBER_REMOVED",
   "SYNC_ISSUE",
   "TIME_TRACKING_STOPPED",
+  "TIMER_STARTED",
+  "TIMER_PAUSED",
+  "TIMER_STOPPED",
   "BUSINESS_CHAT_MESSAGE",
 ] as const;
 
@@ -1926,4 +1932,116 @@ export async function runNotificationsSelfCheck(): Promise<void> {
   } catch (error: any) {
     console.error("[notifications:self-check] Failed:", error?.message ?? error);
   }
+}
+
+async function writeOfficeTimerNotification(data: {
+  userId: string;
+  orgId: string;
+  workerUid: string;
+  type: "TIMER_STARTED" | "TIMER_PAUSED" | "TIMER_STOPPED";
+  projectId?: string | null;
+  projectName?: string | null;
+  subject: string;
+  fromUserId: string;
+  fromUserName?: string | null;
+  startedAt?: string | null;
+}): Promise<void> {
+  try {
+    const eventKey = data.startedAt ?? "latest";
+    const officeRef = doc(
+      db,
+      "users",
+      data.userId,
+      "notifications",
+      `timer-${data.type.toLowerCase()}-${data.workerUid}-${eventKey}`.slice(0, 120)
+    );
+    await setDoc(
+      officeRef,
+      {
+        type: data.type,
+        orgId: data.orgId,
+        projectId: data.projectId ?? null,
+        projectName: data.projectName ?? null,
+        subject: data.subject,
+        assignedBy: data.fromUserId,
+        assignedByName: data.fromUserName ?? null,
+        createdAt: serverTimestamp(),
+        read: false,
+      },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn("[notifications] writeOfficeTimerNotification failed", e);
+  }
+}
+
+export async function createTimerEventNotification(data: {
+  userId: string;
+  orgId: string;
+  workerUid: string;
+  type: "TIMER_STARTED" | "TIMER_PAUSED" | "TIMER_STOPPED";
+  projectId?: string | null;
+  projectName?: string | null;
+  taskTitle?: string | null;
+  fromUserId: string;
+  fromUserName?: string | null;
+  startedAt?: string | null;
+}): Promise<{ id: string } | null> {
+  if (!auth.currentUser?.uid) return null;
+  if (data.userId === data.fromUserId) return null;
+
+  const worker = data.fromUserName ?? "Mitarbeiter";
+  const project = data.projectName?.trim();
+  let message: string;
+  switch (data.type) {
+    case "TIMER_STARTED":
+      message = project
+        ? `${worker} hat den Timer gestartet — ${project}`
+        : `${worker} hat den Timer gestartet`;
+      break;
+    case "TIMER_PAUSED":
+      message = project
+        ? `${worker} hat pausiert — ${project}`
+        : `${worker} hat den Timer pausiert`;
+      break;
+    default:
+      message = project
+        ? `${worker} hat den Timer beendet — ${project}`
+        : `${worker} hat den Timer beendet`;
+  }
+  if (data.taskTitle?.trim()) {
+    message = `${message} (${data.taskTitle.trim()})`;
+  }
+
+  const c = collection(db, "notifications");
+  const ref = await addDoc(c, {
+    userId: data.userId,
+    type: data.type,
+    orgId: data.orgId,
+    projectId: data.projectId ?? null,
+    projectName: data.projectName ?? null,
+    message,
+    fromUserId: data.fromUserId,
+    fromUserName: data.fromUserName ?? null,
+    meta: { workerUid: data.workerUid, startedAt: data.startedAt ?? null },
+    entityType: "timer",
+    createdAt: serverTimestamp(),
+    readAt: null,
+    severity: "info",
+  });
+
+  await writeOfficeTimerNotification({
+    userId: data.userId,
+    orgId: data.orgId,
+    workerUid: data.workerUid,
+    type: data.type,
+    projectId: data.projectId,
+    projectName: data.projectName,
+    subject: message,
+    fromUserId: data.fromUserId,
+    fromUserName: data.fromUserName,
+    startedAt: data.startedAt,
+  });
+
+  return { id: ref.id };
 }

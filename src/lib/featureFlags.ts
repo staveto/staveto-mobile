@@ -11,6 +11,7 @@
  */
 
 import { getExtraEnv } from "./env";
+import { getAuth } from "../firebase";
 
 const TRUTHY_VALUES = new Set(["1", "true", "yes", "on"]);
 
@@ -57,4 +58,27 @@ export function isAdminEmail(email: string | null | undefined): boolean {
   const list = getAdminEmails();
   if (list.length === 0) return false;
   return list.includes(email.trim().toLowerCase());
+}
+
+function hasFirebaseAdminClaim(claims: Record<string, unknown> | undefined): boolean {
+  return claims?.admin === true;
+}
+
+/**
+ * Drawer / client UI: show Admin when email is whitelisted OR Firebase custom claim admin=true.
+ * Server-side checks remain authoritative for data and callables.
+ */
+export async function resolveAdminMenuEnabled(
+  email: string | null | undefined
+): Promise<boolean> {
+  if (isAdminEmail(email)) return true;
+  const auth = getAuth();
+  const fbUser = auth?.currentUser;
+  if (!fbUser) return false;
+  try {
+    const token = await fbUser.getIdTokenResult();
+    return hasFirebaseAdminClaim(token.claims as Record<string, unknown>);
+  } catch {
+    return false;
+  }
 }

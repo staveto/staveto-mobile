@@ -26,7 +26,7 @@ import type { SubscriptionTier } from "../services/subscription";
 import { SUPPORT_EMAIL } from "../constants/consent";
 import { useUnreadCount } from "../hooks/useUnreadCount";
 import { ICON_HIT_SLOP } from "../utils/accessibility";
-import { isAdminEmail, isBusinessFeatureEnabled } from "../lib/featureFlags";
+import { getAdminEmails, isBusinessFeatureEnabled, resolveAdminMenuEnabled } from "../lib/featureFlags";
 import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
 import { useActiveOrg } from "../hooks/useActiveOrg";
 import { useOrgAccess } from "../hooks/useOrgAccess";
@@ -60,7 +60,26 @@ export function DrawerContent(props: DrawerContentComponentProps) {
   const [updatingOpenToWork, setUpdatingOpenToWork] = useState(false);
   const [uploadingPhoto, setUploadingPhoto] = useState(false);
   const businessFeatureFlag = isBusinessFeatureEnabled();
-  const adminEnabled = isAdminEmail(user?.email);
+  const [adminEnabled, setAdminEnabled] = useState(false);
+
+  useEffect(() => {
+    let cancelled = false;
+    void resolveAdminMenuEnabled(user?.email).then((enabled) => {
+      if (!cancelled) setAdminEnabled(enabled);
+    });
+    return () => {
+      cancelled = true;
+    };
+  }, [user?.email, user?.id]);
+
+  useEffect(() => {
+    if (!__DEV__) return;
+    console.log("[DrawerAdminDebug]", {
+      authEmailPresent: !!user?.email,
+      adminEnabled,
+      whitelistCount: getAdminEmails().length,
+    });
+  }, [user?.email, adminEnabled]);
 
   const sendAgentDebugLog = useCallback(
     (hypothesisId: string, location: string, message: string, data: Record<string, unknown> = {}, runId = "profile-photo-upload") => {

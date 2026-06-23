@@ -1616,41 +1616,39 @@ export function CreateProjectAIFlow({
         <View
           style={[
             styles.previewFooter,
-            { paddingBottom: Math.max(insets.bottom, spacing.xs) },
+            { paddingBottom: Math.max(insets.bottom, spacing.sm) },
           ]}
         >
-          <View style={[styles.previewActionsSecondary, narrowActions && styles.secondaryActionsColumn]}>
-            <TouchableOpacity
-              style={[styles.btn, styles.btnSecondary, styles.btnCompact, narrowActions && styles.btnFullWidth]}
-              onPress={handleChangeDescription}
-            >
-              <Text style={styles.btnSecondaryTextCompact} numberOfLines={1}>
-                {t("createProject.aiDraft.backToPrompt")}
-              </Text>
-            </TouchableOpacity>
-            <TouchableOpacity
-              style={[styles.btn, styles.btnSecondary, styles.btnCompact, narrowActions && styles.btnFullWidth]}
-              onPress={handleGenerateAgain}
-              disabled={refiningKey !== null}
-            >
-              <Text style={styles.btnSecondaryTextCompact} numberOfLines={1}>
-                {t("createProject.aiDraft.regenerateWholeDraft")}
-              </Text>
-            </TouchableOpacity>
-          </View>
           <TouchableOpacity
-            style={[styles.btn, styles.btnPrimary, styles.createBtnCompact]}
+            style={[styles.btn, styles.btnPrimary, styles.previewPrimaryBtn]}
             onPress={handleCreate}
             disabled={submitting || refiningKey !== null}
           >
             {submitting ? (
               <ActivityIndicator size="small" color="#fff" />
             ) : (
-              <Text style={styles.btnPrimaryTextCompact}>
+              <Text style={styles.btnPrimaryText}>
                 {isUnified ? archetypeCopy.aiConfirmCta : t("createProject.aiDraft.confirmProject")}
               </Text>
             )}
           </TouchableOpacity>
+          <View style={styles.previewLinkRow}>
+            <TouchableOpacity
+              onPress={handleChangeDescription}
+              disabled={refiningKey !== null}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.previewLinkText}>{t("createProject.aiDraft.backToPrompt")}</Text>
+            </TouchableOpacity>
+            <Text style={styles.previewLinkSep}>·</Text>
+            <TouchableOpacity
+              onPress={handleGenerateAgain}
+              disabled={refiningKey !== null}
+              hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}
+            >
+              <Text style={styles.previewLinkText}>{t("createProject.aiDraft.regenerateWholeDraft")}</Text>
+            </TouchableOpacity>
+          </View>
           <TouchableOpacity style={styles.cancelInlineBtn} onPress={onCancel} hitSlop={{ top: 8, bottom: 8, left: 16, right: 16 }}>
             <Text style={styles.cancelText}>{t("projects.cancel")}</Text>
           </TouchableOpacity>
@@ -2230,9 +2228,30 @@ const styles = StyleSheet.create({
   },
   previewFooter: {
     borderTopWidth: 1,
-    borderTopColor: colors.border,
-    paddingTop: spacing.sm,
+    borderTopColor: colors.formPanelBorder,
+    paddingTop: spacing.md,
+    gap: spacing.sm,
+    backgroundColor: colors.card,
+  },
+  previewPrimaryBtn: {
+    width: "100%",
+    minHeight: 48,
+  },
+  previewLinkRow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    justifyContent: "center",
     gap: spacing.xs,
+  },
+  previewLinkText: {
+    fontSize: 14,
+    fontWeight: "600",
+    color: colors.primary,
+  },
+  previewLinkSep: {
+    fontSize: 14,
+    color: colors.textMuted,
   },
   previewActionsSecondary: {
     flexDirection: "row",

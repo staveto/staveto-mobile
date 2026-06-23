@@ -173,7 +173,7 @@ export function ContactPickerSheet({
             {mode === "create" ? t("createProject.newJob.contact.createTitle") : t("createProject.newJob.contact.pickerTitle")}
           </Text>
           <TouchableOpacity onPress={onDismiss} hitSlop={{ top: 8, bottom: 8, left: 8, right: 8 }}>
-            <Ionicons name="close" size={24} color={colors.text} />
+            <Ionicons name="close" size={24} color={colors.textMuted} />
           </TouchableOpacity>
         </View>
 
@@ -189,14 +189,14 @@ export function ContactPickerSheet({
               value={newDisplayName}
               onChangeText={setNewDisplayName}
               placeholder={t("business.contacts.displayNamePlaceholder")}
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
             />
             <Text style={styles.fieldLabel}>{t("business.contacts.companyName")}</Text>
             <TextInput
               style={styles.input}
               value={newCompanyName}
               onChangeText={setNewCompanyName}
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
             />
             <Text style={styles.fieldLabel}>{t("business.contacts.email")}</Text>
             <TextInput
@@ -205,7 +205,7 @@ export function ContactPickerSheet({
               onChangeText={setNewEmail}
               keyboardType="email-address"
               autoCapitalize="none"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
             />
             <Text style={styles.fieldLabel}>{t("business.contacts.phone")}</Text>
             <TextInput
@@ -213,7 +213,7 @@ export function ContactPickerSheet({
               value={newPhone}
               onChangeText={setNewPhone}
               keyboardType="phone-pad"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
             />
             <Text style={styles.fieldLabel}>{t("business.contacts.address")}</Text>
             <TextInput
@@ -222,7 +222,7 @@ export function ContactPickerSheet({
               onChangeText={setNewAddress}
               multiline
               textAlignVertical="top"
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
             />
             <TouchableOpacity
               style={[styles.btnPrimary, creating && styles.btnDisabled]}
@@ -246,7 +246,7 @@ export function ContactPickerSheet({
               value={search}
               onChangeText={setSearch}
               placeholder={t("business.contacts.searchPlaceholder")}
-              placeholderTextColor={colors.textMuted}
+              placeholderTextColor={colors.inputPlaceholderOnLight}
             />
             <ScrollView horizontal showsHorizontalScrollIndicator={false} style={styles.filterScroll}>
               {filterOptions.map((opt) => {
@@ -316,19 +316,21 @@ export function ContactPickerSheet({
 const styles = StyleSheet.create({
   backdrop: { flex: 1, backgroundColor: "rgba(0,0,0,0.45)" },
   sheet: {
-    backgroundColor: colors.background,
+    backgroundColor: colors.formPanel,
     borderTopLeftRadius: radius,
     borderTopRightRadius: radius,
     maxHeight: "88%",
     paddingHorizontal: spacing.md,
     paddingTop: spacing.sm,
+    borderTopWidth: 1,
+    borderColor: colors.formPanelBorder,
   },
   handle: {
     alignSelf: "center",
     width: 40,
     height: 4,
     borderRadius: 2,
-    backgroundColor: colors.border,
+    backgroundColor: colors.formPanelBorder,
     marginBottom: spacing.sm,
   },
   headerRow: {
@@ -340,13 +342,13 @@ const styles = StyleSheet.create({
   title: { fontSize: 18, fontWeight: "700", color: colors.text, flex: 1 },
   input: {
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     borderRadius: radius,
     paddingHorizontal: spacing.md,
     paddingVertical: spacing.sm,
     fontSize: 16,
     color: colors.text,
-    backgroundColor: colors.card,
+    backgroundColor: "#ffffff",
     marginBottom: spacing.sm,
   },
   textArea: { minHeight: 72 },
@@ -356,12 +358,12 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.xs,
     borderRadius: 999,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: colors.formPanelBorder,
     marginRight: spacing.xs,
-    backgroundColor: colors.card,
+    backgroundColor: "#ffffff",
   },
   filterChipActive: {
-    backgroundColor: "rgba(224, 103, 55, 0.12)",
+    backgroundColor: "rgba(224, 103, 55, 0.14)",
     borderColor: colors.primary,
   },
   filterChipText: { fontSize: 13, color: colors.textMuted },
@@ -371,8 +373,12 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     paddingVertical: spacing.md,
-    borderBottomWidth: StyleSheet.hairlineWidth,
-    borderBottomColor: colors.border,
+    paddingHorizontal: spacing.md,
+    marginBottom: spacing.sm,
+    backgroundColor: "#ffffff",
+    borderRadius: 12,
+    borderWidth: 1,
+    borderColor: colors.formPanelBorder,
   },
   rowText: { flex: 1, marginRight: spacing.sm },
   rowTitle: { fontSize: 16, fontWeight: "600", color: colors.text },

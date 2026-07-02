@@ -28,11 +28,32 @@ function getApiKey(): string {
 function extractJsonFromResponse(text: string): Record<string, unknown> {
   let s = text.trim();
   s = s.replace(/^```(?:json)?\s*/i, "").replace(/\s*```\s*$/i, "").trim();
-  const parsed = JSON.parse(s) as unknown;
-  if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
-    return parsed as Record<string, unknown>;
+  if (s.charCodeAt(0) === 0xfeff) {
+    s = s.slice(1);
   }
-  throw new Error("Expected JSON object");
+
+  const parseObject = (raw: string): Record<string, unknown> => {
+    const parsed = JSON.parse(raw) as unknown;
+    if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+      return parsed as Record<string, unknown>;
+    }
+    if (Array.isArray(parsed) && parsed.length === 1 && parsed[0] && typeof parsed[0] === "object") {
+      return parsed[0] as Record<string, unknown>;
+    }
+    throw new Error("Expected JSON object (or single-element object array)");
+  };
+
+  try {
+    return parseObject(s);
+  } catch {
+    // fall through: model may wrap JSON in prose
+  }
+
+  const jsonMatch = s.match(/\{[\s\S]*\}/);
+  if (!jsonMatch) {
+    throw new Error("No JSON found in AI response");
+  }
+  return parseObject(jsonMatch[0]);
 }
 
 function isNonEmptyString(v: unknown): v is string {
@@ -126,9 +147,14 @@ export const refineGeneratedProjectNode = onCall(
       taskIndex?: number;
       currentPhaseJson?: unknown;
       currentTaskJson?: unknown;
+      currentPhase?: unknown;
+      currentTask?: unknown;
       userChangeRequest?: string;
       extraContext?: string;
     };
+
+    const currentPhaseJson = data.currentPhaseJson ?? data.currentPhase ?? {};
+    const currentTaskJson = data.currentTaskJson ?? data.currentTask ?? {};
 
     const kind = typeof data.nodeKind === "string" ? data.nodeKind.trim().toLowerCase() : "";
     if (kind !== "phase" && kind !== "task") {
@@ -193,7 +219,7 @@ Rules:
         `Original job brief: ${brief}`,
         draftSummary ? `Draft summary: ${draftSummary}` : "",
         `Phase index (0-based): ${phaseIdx}`,
-        `Current phase JSON: ${JSON.stringify(data.currentPhaseJson ?? {})}`,
+        `Current phase JSON: ${JSON.stringify(currentPhaseJson)}`,
         `User wants this change: ${feedback}`,
         extra ? `Extra context: ${extra}` : "",
       ]
@@ -211,7 +237,7 @@ Rules:
         `Original job brief: ${brief}`,
         draftSummary ? `Draft summary: ${draftSummary}` : "",
         `Phase index: ${phaseIdx}, task index: ${taskIdx}`,
-        `Current task JSON: ${JSON.stringify(data.currentTaskJson ?? {})}`,
+        `Current task JSON: ${JSON.stringify(currentTaskJson)}`,
         `User wants this change: ${feedback}`,
         extra ? `Extra context: ${extra}` : "",
       ]

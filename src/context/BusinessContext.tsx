@@ -13,8 +13,10 @@ import {
   findPreferredBusinessOrgForUser,
   type MembershipDoc,
   type OrganizationDoc,
+  persistUserActiveBusinessOrgIdHint,
+  persistUserLastActiveWorkspaceId,
 } from "../services/organizations";
-import { persistUserActiveBusinessOrgIdHint } from "../services/organizations";
+import { SOLO_WORKSPACE_ID } from "../lib/workspace/workspaceContract";
 import {
   loadCachedBusinessOrgSummary,
   saveCachedBusinessOrgSummary,
@@ -22,6 +24,24 @@ import {
 import { fetchNetworkSnapshot } from "../services/networkStatus";
 
 const ACTIVE_BUSINESS_ORG_STORAGE_KEY = "staveto_active_business_org_id";
+/** Same-session explicit solo choice (mirrors web staveto.explicitPersonalWorkspace). */
+const EXPLICIT_SOLO_WORKSPACE_KEY = "staveto.explicitSoloWorkspace";
+
+async function readExplicitSoloWorkspace(): Promise<boolean> {
+  try {
+    return (await AsyncStorage.getItem(EXPLICIT_SOLO_WORKSPACE_KEY)) === "1";
+  } catch {
+    return false;
+  }
+}
+
+async function markExplicitSoloWorkspace(): Promise<void> {
+  await AsyncStorage.setItem(EXPLICIT_SOLO_WORKSPACE_KEY, "1");
+}
+
+async function clearExplicitSoloWorkspace(): Promise<void> {
+  await AsyncStorage.removeItem(EXPLICIT_SOLO_WORKSPACE_KEY);
+}
 
 type BusinessContextValue = {
   activeBusinessOrgId: string | null;
@@ -47,6 +67,7 @@ async function mirrorActiveBusinessOrgIdToUserDoc(userId: string, orgId: string 
   if (!userId) return;
   try {
     await persistUserActiveBusinessOrgIdHint(userId, orgId);
+    await persistUserLastActiveWorkspaceId(userId, orgId ? orgId : SOLO_WORKSPACE_ID);
   } catch {
     /* Rules sync is best-effort — equipment still loads when org is in memory. */
   }
@@ -97,6 +118,11 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       const message = e instanceof Error ? e.message : String(e);
       setError(`BusinessContext storage write failed: ${message}`);
     });
+    if (orgId) {
+      void clearExplicitSoloWorkspace();
+    } else {
+      void markExplicitSoloWorkspace();
+    }
     if (user?.id) {
       void mirrorActiveBusinessOrgIdToUserDoc(user.id, orgId);
     }
@@ -121,6 +147,16 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
     const expectedUserId = user.id;
 
     try {
+      const explicitSolo = await readExplicitSoloWorkspace();
+      if (explicitSolo) {
+        if (runId !== refreshRunRef.current) return;
+        setActiveBusinessOrgIdState(null);
+        setActiveOrganization(null);
+        setActiveMembership(null);
+        setLoading(false);
+        return;
+      }
+
       const preferred = await findPreferredBusinessOrgForUser(expectedUserId);
 
       if (runId !== refreshRunRef.current) {
@@ -161,6 +197,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       setActiveBusinessOrgIdState(preferred.org.id);
       setActiveOrganization(preferred.org);
       setActiveMembership(preferred.membership);
+      await clearExplicitSoloWorkspace();
       saveCachedBusinessOrgSummary({
         id: preferred.org.id,
         name: preferred.org.name,
@@ -216,6 +253,7 @@ export function BusinessProvider({ children }: { children: React.ReactNode }) {
       setActiveMembership(null);
       setError(null);
       setLoading(false);
+      void clearExplicitSoloWorkspace();
       persistActiveBusinessOrgId(null).catch((e) => {
         const message = e instanceof Error ? e.message : String(e);
         setError(`BusinessContext storage clear failed: ${message}`);

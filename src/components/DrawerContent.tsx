@@ -30,6 +30,7 @@ import { isAdminEmail, isBusinessFeatureEnabled } from "../lib/featureFlags";
 import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
 import { useActiveOrg } from "../hooks/useActiveOrg";
 import { useOrgAccess } from "../hooks/useOrgAccess";
+import { useActiveWorkspaceContext } from "../hooks/useActiveWorkspaceContext";
 
 type NavItem = {
   id: string;
@@ -295,32 +296,17 @@ export function DrawerContent(props: DrawerContentComponentProps) {
 
   const { count: unreadCount } = useUnreadCount();
   const { activeBusinessOrgId, activeOrganization, activeMembership } = useActiveOrg();
+  const { activeWorkspaceName, soloDisplayName, isCompany } = useActiveWorkspaceContext();
   const { canViewBusinessDashboard, canAccessBusiness, canAccessBusinessChat, pendingCanAccess } =
     useOrgAccess();
   const displayName = user?.name ?? user?.firstName ?? user?.email ?? "—";
   const initials = displayName !== "—" ? displayName.slice(0, 2).toUpperCase() : "?";
   const isProTier = planTier === "PRO";
 
-  const displayCompanyName = useMemo(() => {
-    if (!activeOrganization) return "";
-    const orgWithLegacy = activeOrganization as { companyName?: string };
-    const fromOrg =
-      (typeof orgWithLegacy.companyName === "string" ? orgWithLegacy.companyName.trim() : "") ||
-      (typeof activeOrganization.name === "string" ? activeOrganization.name.trim() : "");
-    const fromMembership =
-      typeof activeMembership?.organizationName === "string"
-        ? activeMembership.organizationName.trim()
-        : "";
-    return fromOrg || fromMembership;
-  }, [activeOrganization, activeMembership]);
+  const activeSpaceLabel = isCompany ? activeWorkspaceName : soloDisplayName;
 
   const showBusinessCompanyLine =
-    !!activeBusinessOrgId &&
-    !!activeOrganization &&
-    displayCompanyName.length > 0 &&
-    (activeMembership?.status === "active" ||
-      canViewBusinessDashboard ||
-      canAccessBusiness);
+    !!user?.id && activeSpaceLabel.length > 0;
 
   // Business admin surface: owners/managers without org yet (onboarding), or dashboard role.
   // Workers/viewers use Projekte for assigned stavby — they do not need this menu item.
@@ -394,8 +380,7 @@ export function DrawerContent(props: DrawerContentComponentProps) {
     mainNavItems.push({
       id: "business",
       icon: "business-outline",
-      labelKey: "nav.business",
-      label: "Staveto Business",
+      labelKey: "workspace.companyOverview",
       action: () => {
         closeDrawer();
         navigation.navigate("BusinessStack");
@@ -466,14 +451,23 @@ export function DrawerContent(props: DrawerContentComponentProps) {
           {displayName}
         </Text>
         {showBusinessCompanyLine ? (
-          <Text
-            style={styles.businessCompanyName}
-            numberOfLines={1}
-            ellipsizeMode="tail"
-            maxFontSizeMultiplier={1.1}
-          >
-            {displayCompanyName}
-          </Text>
+          <>
+            <Text
+              style={styles.workspaceSwitcherLabel}
+              numberOfLines={1}
+              maxFontSizeMultiplier={1.1}
+            >
+              {t("workspace.switcherLabel")}
+            </Text>
+            <Text
+              style={styles.businessCompanyName}
+              numberOfLines={1}
+              ellipsizeMode="tail"
+              maxFontSizeMultiplier={1.1}
+            >
+              {activeSpaceLabel}
+            </Text>
+          </>
         ) : null}
         <View style={[styles.planBadge, isProTier && styles.planBadgePro]}>
           <Text style={[styles.planText, isProTier && styles.planTextPro]} maxFontSizeMultiplier={1.1} numberOfLines={1}>
@@ -628,6 +622,16 @@ const styles = StyleSheet.create({
     fontWeight: "700",
     color: colors.textOnDark,
     marginBottom: spacing.xs,
+  },
+  workspaceSwitcherLabel: {
+    fontSize: 10,
+    fontWeight: "600",
+    letterSpacing: 0.6,
+    textTransform: "uppercase",
+    color: "rgba(255,255,255,0.55)",
+    marginTop: spacing.xs,
+    alignSelf: "stretch",
+    textAlign: "center",
   },
   businessCompanyName: {
     fontSize: 13,

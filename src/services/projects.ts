@@ -1082,8 +1082,8 @@ export async function enrichProjectsWithBusinessAssignments(
   }
 
   return merged.filter((project) => {
-    if (!isBusinessTeamProject(project)) return true;
-    if (project.orgId !== orgId) return true;
+    if (!isBusinessTeamProject(project)) return false;
+    if (project.orgId !== orgId) return false;
     if (ctx.canViewAllProjects) return true;
     return (
       project.ownerId === authUid ||

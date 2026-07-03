@@ -910,6 +910,44 @@ export async function persistUserActiveBusinessOrgIdHint(
   );
 }
 
+/** Phase 1 — cross-device last active workspace (`personal` or org id). */
+export async function readUserLastActiveWorkspaceId(userId: string): Promise<string | null> {
+  if (!userId) return null;
+  const currentUid = requireSignedInUid();
+  if (currentUid !== userId) return null;
+  try {
+    const ref = doc(db, paths.userDoc(userId));
+    const snap = await getDocSmart(ref);
+    if (!snap.exists()) return null;
+    const data = snap.data();
+    if (!data || typeof data !== "object") return null;
+    const hint =
+      typeof data.lastActiveWorkspaceId === "string" ? data.lastActiveWorkspaceId.trim() : "";
+    return hint.length > 0 ? hint : null;
+  } catch (error) {
+    if (isPermissionDenied(error)) return null;
+    throw error;
+  }
+}
+
+export async function persistUserLastActiveWorkspaceId(
+  userId: string,
+  workspaceId: string | null
+): Promise<void> {
+  if (!userId) return;
+  const currentUid = requireSignedInUid();
+  if (currentUid !== userId) return;
+  const ref = doc(db, paths.userDoc(userId));
+  await setDoc(
+    ref,
+    {
+      lastActiveWorkspaceId: workspaceId?.trim() ? workspaceId.trim() : null,
+      updatedAt: serverTimestamp(),
+    },
+    { merge: true }
+  );
+}
+
 export async function listOrganizationsOwnedByUser(userId: string): Promise<OrganizationDoc[]> {
   if (!userId) return [];
   const currentUid = requireSignedInUid();
@@ -986,11 +1024,13 @@ export async function findPreferredBusinessOrgForUser(
 ): Promise<PreferredBusinessOrg | null> {
   if (!userId) return null;
 
-  const [orderOrgBoost, memberships, ownedOrgs, profileOrgHint] = await Promise.all([
+  const [orderOrgBoost, memberships, ownedOrgs, profileOrgHint, lastActiveWorkspaceId] =
+    await Promise.all([
     fetchBillingOwnerOrderOrgSurfaceBoostsByOrgId(userId),
     listMyMemberships(userId),
     listOrganizationsOwnedByUser(userId),
     readUserActiveBusinessOrgIdHint(userId),
+    readUserLastActiveWorkspaceId(userId),
   ]);
 
   type Cand = { org: OrganizationDoc; membership: MembershipDoc; score: number; freshness: number };
@@ -1032,6 +1072,13 @@ export async function findPreferredBusinessOrgForUser(
 
   if (profileOrgHint) {
     const org = await getOrganization(profileOrgHint);
+    const membership = org ? await resolveMembership(org) : null;
+    await consider(org, membership);
+  }
+
+  // Profile "personal" is ignored on login when companies exist (Phase 1.1).
+  if (lastActiveWorkspaceId && lastActiveWorkspaceId !== "personal") {
+    const org = await getOrganization(lastActiveWorkspaceId);
     const membership = org ? await resolveMembership(org) : null;
     await consider(org, membership);
   }

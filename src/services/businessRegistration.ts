@@ -1,4 +1,5 @@
 import { getCallable } from "../firebase";
+import { guardCompanyCreation } from "../lib/workspace/guardCompanyCreation";
 
 export type CreateBusinessOrgInput = {
   companyName: string;
@@ -24,16 +25,38 @@ export type CreateBusinessOrgInput = {
 export type CreateBusinessOrgResult = {
   ok: true;
   orgId: string;
-  orderId: string;
-  orderNumber: string;
-  variableSymbol: string;
-  paymentReference: string;
-  status: "pending_payment";
+  orderId?: string;
+  orderNumber?: string;
+  variableSymbol?: string;
+  paymentReference?: string;
+  status: "pending_payment" | "existing";
+  reusedExistingOrg?: boolean;
+  guardReason?: string;
 };
 
 export async function createBusinessOrg(
-  input: CreateBusinessOrgInput
+  input: CreateBusinessOrgInput,
+  options?: { userId?: string }
 ): Promise<CreateBusinessOrgResult> {
+  if (options?.userId?.trim()) {
+    const guard = await guardCompanyCreation(options.userId.trim(), {
+      companyName: input.companyName,
+      legalName: input.legalName,
+    });
+    if (guard.action === "manual_review_required") {
+      throw new Error(guard.reason);
+    }
+    if (guard.action === "use_existing") {
+      return {
+        ok: true,
+        orgId: guard.orgId,
+        status: "existing",
+        reusedExistingOrg: true,
+        guardReason: guard.reason,
+      };
+    }
+  }
+
   try {
     console.log("[businessRegistration] createBusinessOrg callable start");
     const callable = getCallable("createBusinessOrg");

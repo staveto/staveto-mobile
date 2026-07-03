@@ -29,6 +29,7 @@ type User = {
   name?: string;
   firstName?: string;
   lastName?: string;
+  preferredLanguage?: string;
   billing?: BillingStatus | null;
 };
 
@@ -156,8 +157,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
             const fn = d.firstName as string | undefined;
             const ln = d.lastName as string | undefined;
             const dn = d.displayName as string | undefined;
+            const preferredLanguage =
+              typeof d.preferredLanguage === "string" ? d.preferredLanguage.trim() : undefined;
             if (fn) user = { ...user, firstName: fn };
             if (ln) user = { ...user, lastName: ln };
+            if (preferredLanguage) user = { ...user, preferredLanguage };
             if (dn && !user.name) user = { ...user, name: dn };
             if (!user.name && fn && ln) user = { ...user, name: `${fn} ${ln}`.trim() };
             const rawUsage = d.primaryUsageMode as unknown;
@@ -312,8 +316,11 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         const fn = d.firstName as string | undefined;
         const ln = d.lastName as string | undefined;
         const dn = d.displayName as string | undefined;
+        const preferredLanguage =
+          typeof d.preferredLanguage === "string" ? d.preferredLanguage.trim() : undefined;
         if (fn) user = { ...user, firstName: fn };
         if (ln) user = { ...user, lastName: ln };
+        if (preferredLanguage) user = { ...user, preferredLanguage };
         if (dn && !user.name) user = { ...user, name: dn };
         if (!user.name && fn && ln) user = { ...user, name: `${fn} ${ln}`.trim() };
         saveCachedUserSummary({

@@ -4,6 +4,10 @@ import * as expensesService from "./expenses";
 import { fetchProjectAccess } from "../hooks/useProjectAccess";
 import { canManageTaskPlanningFromAccess, filterTasksForWorkerView } from "../lib/taskPlanningPermissions";
 import { isProjectShownOnProjectsJobsTab } from "../lib/projectTypeModel";
+import {
+  filterProjectsForCompanyWorkspace,
+  filterProjectsForSoloWorkspace,
+} from "../lib/workspace/projectWorkspaceFilter";
 import type { ProjectDoc } from "./projects";
 import type { TaskDoc } from "./tasks";
 
@@ -72,14 +76,28 @@ export async function loadDashboardData(ownerId: string, options?: LoadDashboard
 }
 
 async function loadDashboardDataInternal(ownerId: string, options?: LoadDashboardOptions): Promise<DashboardViewModel> {
-  // Load projects, then keep only job workspaces (same rule as Projects tab — hide legacy MAINTENANCE equipment hubs).
-  const allFetched = await projectsService.listMyProjects(ownerId, { forceServerRead: options?.forceServerRead });
-  const enriched = await projectsService.enrichProjectsWithBusinessAssignments(allFetched, {
-    activeBusinessOrgId: options?.activeBusinessOrgId,
-    authUid: options?.authUid ?? ownerId,
-    canViewAllProjects: options?.canViewAllProjects,
-    restrictsToAssignedProjectsOnly: options?.restrictsToAssignedProjectsOnly,
-  });
+  const orgId = options?.activeBusinessOrgId?.trim() ?? "";
+  let enriched: ProjectDoc[];
+
+  if (orgId && options?.authUid) {
+    if (options.canViewAllProjects) {
+      enriched = await projectsService.listBusinessOrgProjects(orgId);
+    } else {
+      enriched = await projectsService.enrichProjectsWithBusinessAssignments([], {
+        activeBusinessOrgId: orgId,
+        authUid: options.authUid,
+        canViewAllProjects: options.canViewAllProjects,
+        restrictsToAssignedProjectsOnly: options.restrictsToAssignedProjectsOnly,
+      });
+    }
+    enriched = filterProjectsForCompanyWorkspace(enriched, orgId);
+  } else {
+    const allFetched = await projectsService.listMyProjects(ownerId, {
+      forceServerRead: options?.forceServerRead,
+    });
+    enriched = filterProjectsForSoloWorkspace(allFetched, ownerId);
+  }
+
   const projects = enriched.filter(isProjectShownOnProjectsJobsTab);
 
   // Load all tasks from all projects in parallel (skip projects without valid id)

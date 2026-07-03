@@ -531,17 +531,22 @@ export function BusinessRegistrationScreen() {
         },
         contactName: form.contactName.trim() || null,
         phone: form.phone.trim() || null,
-      });
+      }, { userId: authUser.uid });
       console.log("[BusinessRegistration] createBusinessOrg success", {
         orgId: result.orgId,
         orderId: result.orderId,
         orderNumber: result.orderNumber,
+        reusedExistingOrg: result.reusedExistingOrg ?? false,
       });
 
       setActiveBusinessOrgId(result.orgId);
       Alert.alert(
-        t("business.registration.alert.trialActivatedTitle"),
-        t("business.registration.alert.trialActivatedBody")
+        result.reusedExistingOrg
+          ? t("business.registration.alert.existingOrgTitle")
+          : t("business.registration.alert.trialActivatedTitle"),
+        result.reusedExistingOrg
+          ? result.guardReason ?? t("business.registration.alert.existingOrgBody")
+          : t("business.registration.alert.trialActivatedBody")
       );
       (navigation as { navigate: (name: string, params?: object) => void }).navigate("BusinessDashboard");
     } catch (error) {

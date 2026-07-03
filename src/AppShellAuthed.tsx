@@ -7,6 +7,7 @@ import { GestureHandlerRootView } from "react-native-gesture-handler";
 
 import { AuthProvider } from "./context/AuthContext";
 import { BusinessProvider } from "./context/BusinessContext";
+import { UserPreferredLocaleSync } from "./i18n/UserPreferredLocaleSync";
 import { QuickNoteProvider } from "./context/QuickNoteContext";
 import { IOS_SKIP_BOTTOMSHEET } from "./lib/iosDiagnostic";
 import { UnreadCountProvider } from "./context/UnreadCountContext";
@@ -82,6 +83,7 @@ export default function AppShellAuthed() {
       }}
     >
       <AuthProvider>
+        <UserPreferredLocaleSync />
         <BusinessProvider>
           <QuickNoteProvider>
             <UnreadCountProvider>

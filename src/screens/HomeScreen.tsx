@@ -34,7 +34,17 @@ import * as dashboardService from "../services/dashboard";
 import type { TodaysWorkTask } from "../services/dashboard";
 import * as projectEventsService from "../services/projectEvents";
 import * as projectCoverService from "../services/projectCover";
-import { enrichProjectsWithBusinessAssignments, listMyProjects, type ProjectDoc, isBusinessTeamProject } from "../services/projects";
+import {
+  enrichProjectsWithBusinessAssignments,
+  listMyProjects,
+  listBusinessOrgProjects,
+  type ProjectDoc,
+  isBusinessTeamProject,
+} from "../services/projects";
+import {
+  filterProjectsForCompanyWorkspace,
+  filterProjectsForSoloWorkspace,
+} from "../lib/workspace/projectWorkspaceFilter";
 import type { TaskDoc } from "../services/tasks";
 import { colors, radius, spacing } from "../theme";
 import { db, getCallable } from "../firebase";
@@ -917,12 +927,22 @@ export function HomeScreen() {
           HOME_LOAD_TIMEOUT_MS,
           "listMyProjects"
         );
-        const mergedProjects = await enrichProjectsWithBusinessAssignments(rawProjects, {
-          activeBusinessOrgId,
-          authUid: authUid ?? undefined,
-          canViewAllProjects,
-          restrictsToAssignedProjectsOnly,
-        });
+        let mergedProjects: ProjectDoc[];
+        if (activeBusinessOrgId && authUid) {
+          if (canViewAllProjects) {
+            mergedProjects = await listBusinessOrgProjects(activeBusinessOrgId);
+          } else {
+            mergedProjects = await enrichProjectsWithBusinessAssignments([], {
+              activeBusinessOrgId,
+              authUid: authUid ?? undefined,
+              canViewAllProjects,
+              restrictsToAssignedProjectsOnly,
+            });
+          }
+          mergedProjects = filterProjectsForCompanyWorkspace(mergedProjects, activeBusinessOrgId);
+        } else {
+          mergedProjects = filterProjectsForSoloWorkspace(rawProjects, orgId);
+        }
         projectsPhase = mergedProjects.filter(isProjectShownOnProjectsJobsTab);
         homeLoadDebug(loadId, authUid, "end projects", {
           projectCount: projectsPhase.length,

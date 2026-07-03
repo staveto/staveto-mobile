@@ -31,7 +31,12 @@ import {
   enrichProjectsWithBusinessAssignments,
   isBusinessTeamProject,
   stampBusinessTeamProject,
+  listBusinessOrgProjects,
 } from "../services/projects";
+import {
+  filterProjectsForCompanyWorkspace,
+  filterProjectsForSoloWorkspace,
+} from "../lib/workspace/projectWorkspaceFilter";
 import * as projectMembersService from "../services/projectMembers";
 import * as tasksService from "../services/tasks";
 import * as projectCoverService from "../services/projectCover";
@@ -297,12 +302,19 @@ export function ProjectsScreen() {
       let list = await projectsService.listAllMyProjects(orgId, { forceServerRead: isRefresh });
 
       if (activeBusinessOrgId && authUid) {
-        list = await enrichProjectsWithBusinessAssignments(list, {
-          activeBusinessOrgId,
-          authUid,
-          canViewAllProjects,
-          restrictsToAssignedProjectsOnly,
-        });
+        if (canViewAllProjects) {
+          list = await listBusinessOrgProjects(activeBusinessOrgId);
+        } else {
+          list = await enrichProjectsWithBusinessAssignments([], {
+            activeBusinessOrgId,
+            authUid,
+            canViewAllProjects,
+            restrictsToAssignedProjectsOnly,
+          });
+        }
+        list = filterProjectsForCompanyWorkspace(list, activeBusinessOrgId);
+      } else {
+        list = filterProjectsForSoloWorkspace(list, orgId);
       }
 
       console.log('[ProjectsScreen] Loaded', list.length, 'projects');

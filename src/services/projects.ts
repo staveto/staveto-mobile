@@ -1146,7 +1146,7 @@ function isOrgTeamProjectForMember(
 /**
  * Lists team projects visible to a worker/viewer in an organization.
  * Sources (office parity): assignedMemberIds, legacy assignedUserIds,
- * projects/*/members, users/{uid}/projectRefs.
+ * projects/{projectId}/members, users/{uid}/projectRefs.
  */
 export async function listBusinessProjectsAssignedToMember(
   orgId: string,

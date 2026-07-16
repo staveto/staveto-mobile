@@ -932,7 +932,7 @@ export function HomeScreen() {
           if (canViewAllProjects) {
             mergedProjects = await listBusinessOrgProjects(activeBusinessOrgId);
           } else {
-            mergedProjects = await enrichProjectsWithBusinessAssignments([], {
+            mergedProjects = await enrichProjectsWithBusinessAssignments(rawProjects, {
               activeBusinessOrgId,
               authUid: authUid ?? undefined,
               canViewAllProjects,

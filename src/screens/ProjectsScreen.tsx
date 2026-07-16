@@ -305,7 +305,8 @@ export function ProjectsScreen() {
         if (canViewAllProjects) {
           list = await listBusinessOrgProjects(activeBusinessOrgId);
         } else {
-          list = await enrichProjectsWithBusinessAssignments([], {
+          // Keep personal/shared hits (members + projectRefs); merge assigned* for this org.
+          list = await enrichProjectsWithBusinessAssignments(list, {
             activeBusinessOrgId,
             authUid,
             canViewAllProjects,
@@ -707,7 +708,12 @@ export function ProjectsScreen() {
     <View style={styles.container}>
       {!visibleProjects.length && !loading ? (
         <View style={[styles.emptyHero, { paddingTop: insets.top + spacing.xl }]}>
-          <Ionicons name="folder-open-outline" size={48} color={colors.textMuted} style={styles.emptyHeroIcon} />
+          <Ionicons
+            name="folder-open-outline"
+            size={48}
+            color={colors.labelMutedOnDark}
+            style={styles.emptyHeroIcon}
+          />
           {showBusinessWorkerEmpty ? (
             <>
               <Text style={styles.emptyHeroTitle}>{t("business.projects.noAssigned.title")}</Text>
@@ -1241,13 +1247,13 @@ const styles = StyleSheet.create({
   emptyHeroTitle: {
     fontSize: 20,
     fontWeight: "700",
-    color: colors.text,
+    color: colors.textOnDark,
     textAlign: "center",
     marginBottom: spacing.sm,
   },
   emptyHeroBody: {
     fontSize: 15,
-    color: colors.textMuted,
+    color: colors.onboardingHelperOnDark,
     textAlign: "center",
     lineHeight: 22,
     marginBottom: spacing.lg,

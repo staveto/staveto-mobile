@@ -161,6 +161,8 @@ export type ProjectDoc = {
   referenceNumber?: string;
   /** Business team workspace: organization that owns this job. */
   orgId?: string;
+  /** Legacy / parallel org link (office may set workspaceId === orgId for team jobs). */
+  workspaceId?: string;
   /** `team` = company project with assignment-based access. */
   workspaceType?: string;
   /** UIDs of org members explicitly assigned to this team project. */
@@ -234,6 +236,10 @@ function toDoc(docSnap: { id: string; data: () => Record<string, unknown> }): Pr
         ? (d.referenceNumber as string).trim()
         : undefined,
     orgId: typeof d.orgId === "string" && d.orgId.trim() !== "" ? (d.orgId as string).trim() : undefined,
+    workspaceId:
+      typeof d.workspaceId === "string" && d.workspaceId.trim() !== ""
+        ? (d.workspaceId as string).trim()
+        : undefined,
     workspaceType:
       typeof d.workspaceType === "string" && d.workspaceType.trim() !== ""
         ? (d.workspaceType as string).trim()
@@ -1017,6 +1023,7 @@ export async function stampBusinessTeamProject(projectId: string, orgId: string)
 
   await updateDoc(projectRef, {
     orgId: normalizedOrgId,
+    workspaceId: normalizedOrgId,
     workspaceType: "team",
     assignedMemberIds: firestore.FieldValue.arrayUnion(uid),
     updatedAt: serverTimestamp(),
@@ -1048,8 +1055,9 @@ export type BusinessProjectsMergeContext = {
 };
 
 /**
- * Merges org team projects into a personal project list (Home, dashboard, Projects tab).
- * Workers only see projects they own or are listed on assignedMemberIds.
+ * Merges org team projects into a personal/shared project list (Home, Projects tab).
+ * Workers/viewers see projects they own, are assigned to, or have active project membership on
+ * (assignedMemberIds / assignedUserIds / members / projectRefs — office parity).
  */
 export async function enrichProjectsWithBusinessAssignments(
   list: ProjectDoc[],
@@ -1061,6 +1069,8 @@ export async function enrichProjectsWithBusinessAssignments(
 
   let merged = [...list];
   const known = new Set(merged.map((p) => p.id));
+  /** Project IDs visible via members/projectRefs (not only assigned* arrays). */
+  const membershipAccessIds = new Set<string>();
 
   if (ctx.canViewAllProjects) {
     const orgProjects = await listBusinessOrgProjects(orgId);
@@ -1073,21 +1083,35 @@ export async function enrichProjectsWithBusinessAssignments(
   } else if (ctx.restrictsToAssignedProjectsOnly) {
     const assigned = await listBusinessProjectsAssignedToMember(orgId, authUid);
     for (const row of assigned) {
+      membershipAccessIds.add(row.id);
       if (!known.has(row.id)) {
         row.isSharedToMe = true;
         merged.push(row);
         known.add(row.id);
       }
     }
+    // Keep already-loaded shared company rows from listAllMyProjects / listMyProjects.
+    for (const row of list) {
+      if (row.isSharedToMe && row.orgId === orgId) membershipAccessIds.add(row.id);
+    }
   }
 
   return merged.filter((project) => {
     if (!isBusinessTeamProject(project)) return false;
-    if (project.orgId !== orgId) return false;
+    if (
+      project.orgId !== orgId &&
+      project.workspaceId?.trim() !== orgId
+    ) {
+      return false;
+    }
     if (ctx.canViewAllProjects) return true;
     return (
       project.ownerId === authUid ||
-      getAssignedMemberIdsFromProject(project as unknown as Record<string, unknown>).includes(authUid)
+      getAssignedMemberIdsFromProject(project as unknown as Record<string, unknown>).includes(
+        authUid
+      ) ||
+      membershipAccessIds.has(project.id) ||
+      project.isSharedToMe === true
     );
   });
 }
@@ -1108,7 +1132,22 @@ export async function listProjectsAssignedToCurrentUser(): Promise<ProjectDoc[]>
     .filter((p): p is ProjectDoc => p != null && !p.archivedAt);
 }
 
-/** Lists team projects assigned to a member within an organization. */
+function isOrgTeamProjectForMember(
+  project: ProjectDoc,
+  orgId: string
+): boolean {
+  if (project.archivedAt) return false;
+  if (!isBusinessTeamProject(project)) return false;
+  return (
+    project.orgId === orgId || project.workspaceId?.trim() === orgId
+  );
+}
+
+/**
+ * Lists team projects visible to a worker/viewer in an organization.
+ * Sources (office parity): assignedMemberIds, legacy assignedUserIds,
+ * projects/*/members, users/{uid}/projectRefs.
+ */
 export async function listBusinessProjectsAssignedToMember(
   orgId: string,
   memberUid: string
@@ -1117,21 +1156,138 @@ export async function listBusinessProjectsAssignedToMember(
   const uid = memberUid.trim();
   if (!normalizedOrgId || !uid) return [];
 
-  const q = query(
-    collection(db, COLLECTION),
-    where("assignedMemberIds", "array-contains", uid),
-    limit(MAX_ORG_PROJECTS)
-  );
-  const snap = await getDocsSmart(q);
-  return snap.docs
-    .map((d) => toDoc({ id: d.id, data: d.data.bind(d) }))
-    .filter(
-      (p): p is ProjectDoc =>
-        p != null &&
-        !p.archivedAt &&
-        p.orgId === normalizedOrgId &&
-        isBusinessTeamProject(p)
+  const byId = new Map<string, ProjectDoc>();
+  const memberAccessIds = new Set<string>();
+
+  const include = (project: ProjectDoc | null) => {
+    if (!project || !isOrgTeamProjectForMember(project, normalizedOrgId)) return;
+    if (
+      project.ownerId === uid ||
+      getAssignedMemberIdsFromProject(project as unknown as Record<string, unknown>).includes(
+        uid
+      ) ||
+      memberAccessIds.has(project.id)
+    ) {
+      project.isSharedToMe = project.ownerId !== uid ? true : project.isSharedToMe;
+      byId.set(project.id, project);
+    }
+  };
+
+  // 1) assignedMemberIds
+  try {
+    const snap = await getDocsSmart(
+      query(
+        collection(db, COLLECTION),
+        where("assignedMemberIds", "array-contains", uid),
+        limit(MAX_ORG_PROJECTS)
+      )
     );
+    for (const d of snap.docs) {
+      include(toDoc({ id: d.id, data: d.data.bind(d) }));
+    }
+  } catch (e) {
+    if (__DEV__) console.warn("[projects] assignedMemberIds query failed:", e);
+  }
+
+  // 2) legacy assignedUserIds (web may write this field only)
+  try {
+    const snap = await getDocsSmart(
+      query(
+        collection(db, COLLECTION),
+        where("assignedUserIds", "array-contains", uid),
+        limit(MAX_ORG_PROJECTS)
+      )
+    );
+    for (const d of snap.docs) {
+      include(toDoc({ id: d.id, data: d.data.bind(d) }));
+    }
+  } catch (e) {
+    if (__DEV__) console.warn("[projects] assignedUserIds query failed:", e);
+  }
+
+  // 3) collectionGroup members + projectRefs (same path as listAllMyProjects)
+  try {
+    const projectIds: string[] = [];
+    if (!memberQueryPermissionDenied) {
+      try {
+        const memberSnap = await getDocsSmart(
+          query(collectionGroup(db, "members"), where("userId", "==", uid), limit(100))
+        );
+        for (const d of memberSnap.docs) {
+          const projectId = projectIdFromProjectMembersDoc(d.ref.path, d.ref.parent);
+          if (!projectId) continue;
+          const status = ((d.data() as { status?: string }).status || "active").toLowerCase();
+          if (status === "removed" || status === "invited") continue;
+          memberAccessIds.add(projectId);
+          projectIds.push(projectId);
+        }
+      } catch (error: unknown) {
+        const code = (error as { code?: string })?.code ?? "";
+        const msg = (error as { message?: string })?.message ?? "";
+        if (
+          code === "permission-denied" ||
+          code === "firestore/permission-denied" ||
+          msg.includes("permission-denied")
+        ) {
+          memberQueryPermissionDenied = true;
+        } else if (__DEV__) {
+          console.warn("[projects] member collectionGroup for assigned list failed:", error);
+        }
+      }
+    }
+
+    try {
+      const refsSnap = await getDocsSmart(collection(db, paths.userProjectRefs(uid)));
+      for (const d of refsSnap.docs) {
+        const raw = d.data() as Record<string, unknown>;
+        const projectId =
+          typeof raw.projectId === "string" && raw.projectId.trim() !== ""
+            ? (raw.projectId as string).trim()
+            : d.id;
+        if (!projectId || memberAccessIds.has(projectId)) continue;
+        if (memberQueryPermissionDenied) {
+          memberAccessIds.add(projectId);
+          projectIds.push(projectId);
+          continue;
+        }
+        try {
+          const mq = query(
+            collection(db, paths.projectMembers(projectId)),
+            where("userId", "==", uid),
+            limit(1)
+          );
+          const mSnap = await getDocsSmart(mq);
+          if (mSnap.empty) continue;
+          const status = (
+            (mSnap.docs[0]?.data() as { status?: string } | undefined)?.status || "active"
+          ).toLowerCase();
+          if (status === "removed" || status === "invited") continue;
+          memberAccessIds.add(projectId);
+          projectIds.push(projectId);
+        } catch {
+          memberAccessIds.add(projectId);
+          projectIds.push(projectId);
+        }
+      }
+    } catch (e) {
+      if (__DEV__) console.warn("[projects] projectRefs for assigned list failed:", e);
+    }
+
+    for (const projectId of [...new Set(projectIds)]) {
+      if (byId.has(projectId)) continue;
+      try {
+        const snap = await getDocSmart(doc(db, COLLECTION, projectId));
+        if (!snap.exists()) continue;
+        include(toDoc({ id: snap.id, data: snap.data.bind(snap) }));
+      } catch (e) {
+        if (__DEV__) console.warn("[projects] load assigned member project failed:", projectId, e);
+      }
+    }
+  } catch (e) {
+    if (__DEV__) console.warn("[projects] membership fallback for assigned list failed:", e);
+  }
+
+  return [...byId.values()];
 }
 
 export async function assignMemberToBusinessProject(input: {

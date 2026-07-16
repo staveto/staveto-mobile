@@ -83,7 +83,10 @@ async function loadDashboardDataInternal(ownerId: string, options?: LoadDashboar
     if (options.canViewAllProjects) {
       enriched = await projectsService.listBusinessOrgProjects(orgId);
     } else {
-      enriched = await projectsService.enrichProjectsWithBusinessAssignments([], {
+      const sharedBase = await projectsService.listMyProjects(ownerId, {
+        forceServerRead: options?.forceServerRead,
+      });
+      enriched = await projectsService.enrichProjectsWithBusinessAssignments(sharedBase, {
         activeBusinessOrgId: orgId,
         authUid: options.authUid,
         canViewAllProjects: options.canViewAllProjects,

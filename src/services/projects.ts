@@ -1314,28 +1314,26 @@ export async function assignMemberToBusinessProject(input: {
   }
 
   const memberRef = doc(db, paths.projectMember(projectId, memberUid));
-  await setDoc(
-    memberRef,
-    {
-      userId: memberUid,
-      role: "member",
-      status: "active",
-      pendingAcknowledgment: true,
-      permissionLevel: "editor",
-      addedAt: serverTimestamp(),
-      addedBy: actorUid,
-      name: input.memberName?.trim() || undefined,
-      sharedItems: {
-        tasks: true,
-        phases: true,
-        expenses: true,
-        diary: true,
-        documents: true,
-        timeTracking: true,
-      },
+  const memberDoc: Record<string, unknown> = {
+    userId: memberUid,
+    role: "member",
+    status: "active",
+    pendingAcknowledgment: true,
+    permissionLevel: "editor",
+    addedAt: serverTimestamp(),
+    addedBy: actorUid,
+    sharedItems: {
+      tasks: true,
+      phases: true,
+      expenses: true,
+      diary: true,
+      documents: true,
+      timeTracking: true,
     },
-    { merge: true }
-  );
+  };
+  // Firestore rejects undefined field values — only write name when present.
+  if (input.memberName?.trim()) memberDoc.name = input.memberName.trim();
+  await setDoc(memberRef, memberDoc, { merge: true });
 
   const patch: Record<string, unknown> = {
     assignedMemberIds: firestore.FieldValue.arrayUnion(memberUid),
@@ -1343,12 +1341,18 @@ export async function assignMemberToBusinessProject(input: {
   };
   if (input.memberName?.trim() || input.memberRole?.trim()) {
     const existing = parseAssignedSnapshots(projectSnap.data()?.assignedMemberSnapshots);
-    const next = existing.filter((row) => row.uid !== memberUid);
-    next.push({
-      uid: memberUid,
-      name: input.memberName?.trim() || undefined,
-      role: input.memberRole?.trim() || undefined,
-    });
+    const next = existing
+      .filter((row) => row.uid !== memberUid)
+      .map((row) => {
+        const clean: { uid: string; name?: string; role?: string } = { uid: row.uid };
+        if (row.name?.trim()) clean.name = row.name.trim();
+        if (row.role?.trim()) clean.role = row.role.trim();
+        return clean;
+      });
+    const nextRow: { uid: string; name?: string; role?: string } = { uid: memberUid };
+    if (input.memberName?.trim()) nextRow.name = input.memberName.trim();
+    if (input.memberRole?.trim()) nextRow.role = input.memberRole.trim();
+    next.push(nextRow);
     patch.assignedMemberSnapshots = next;
   }
 

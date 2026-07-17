@@ -1,6 +1,7 @@
 import React, { createContext, useCallback, useContext, useEffect, useMemo, useState } from "react";
 import AsyncStorage from "@react-native-async-storage/async-storage";
 import { interpolate, translations, LOCALE_NAMES } from "./translations";
+import { setCurrentLocale } from "./currentLocale";
 import { postDebugIngest } from "../lib/debugIngest";
 import type { Locale } from "./translations";
 
@@ -33,7 +34,11 @@ type I18nContextValue = {
 const ctx = createContext<I18nContextValue | null>(null);
 
 export function I18nProvider({ children }: { children: React.ReactNode }) {
-  const [locale, setLocaleState] = useState<Locale>(getDefaultLocale);
+  const [locale, setLocaleState] = useState<Locale>(() => {
+    const initial = getDefaultLocale();
+    setCurrentLocale(initial);
+    return initial;
+  });
   const [loaded, setLoaded] = useState(false);
 
   useEffect(() => {
@@ -49,6 +54,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
       });
       // #endregion
       if (applied) {
+        setCurrentLocale(applied);
         setLocaleState(applied);
       }
       setLoaded(true);
@@ -56,6 +62,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const setLocale = useCallback((l: Locale) => {
+    setCurrentLocale(l);
     setLocaleState((prev) => {
       if (__DEV__) {
         console.log("[LanguageDebug]", {

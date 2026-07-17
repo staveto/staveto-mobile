@@ -5,7 +5,12 @@ import { getDocSmart } from "../services/firestoreSmartRead";
 import { loadCachedUserSummary, saveCachedUserSummary } from "../services/appStateCache";
 import { getAuth, db, getCallable } from "../firebase";
 import { claimProjectInvites } from "../services/invites";
-import { configureGoogleSignInAtStartup, disconnectGoogleSignInSession, logAuthSignInFailure } from "../services/auth";
+import {
+  configureGoogleSignInAtStartup,
+  disconnectGoogleSignInSession,
+  logAuthSignInFailure,
+  login as emailPasswordLogin,
+} from "../services/auth";
 import { configurePurchases } from "../services/billing";
 import { getExtraEnv } from "../lib/env";
 import { IOS_SKIP_GOOGLE_SIGNIN } from "../lib/iosDiagnostic";
@@ -256,13 +261,16 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
   }, []);
 
   const login = async (email: string, password: string) => {
-    const fbAuth = getAuth();
-    if (!fbAuth) throw new Error("FIREBASE_DISABLED");
-    const trimEmail = email.trim().toLowerCase();
     try {
-      await fbAuth.signInWithEmailAndPassword(trimEmail, password);
+      // Service path also ensures users/{uid} profile exists (parity with Google/Apple).
+      await emailPasswordLogin(email, password);
     } catch (e) {
       logAuthSignInFailure("email", e);
+      if ((e as { code?: string })?.code == null && e instanceof Error && e.message === "FIREBASE_DISABLED") {
+        const err = e as Error & { code?: string };
+        err.code = "auth/firebase-disabled";
+        throw err;
+      }
       throw e;
     }
   };

@@ -644,8 +644,6 @@ export async function sendPasswordResetEmail(email: string): Promise<void> {
 
 export type AuthErrorContext = "email" | "google" | "apple" | "generic";
 
-const EMAIL_PASSWORD_INVALID_MESSAGE = "Neplatný email alebo heslo.";
-
 function readFirebaseProjectIdForLogs(): string {
   try {
     const app = require("@react-native-firebase/app").getApp();
@@ -653,6 +651,19 @@ function readFirebaseProjectIdForLogs(): string {
   } catch {
     return "(unavailable)";
   }
+}
+
+function authTr(key: string): string {
+  // Lazy require avoids circular import at module load (auth ↔ i18n).
+  const { translations } = require("../i18n/translations") as typeof import("../i18n/translations");
+  const { getCurrentLocale } = require("../i18n/currentLocale") as typeof import("../i18n/currentLocale");
+  const locale = getCurrentLocale();
+  return (
+    translations[locale]?.[key] ??
+    translations.en?.[key] ??
+    translations.sk?.[key] ??
+    key
+  );
 }
 
 /** Dev-only: log auth failure with Firebase project id (helps catch web vs mobile project mismatch). */
@@ -668,7 +679,7 @@ export function logAuthSignInFailure(method: AuthErrorContext, error: unknown): 
   });
 }
 
-/** Maps Firebase auth/ error codes to user-friendly messages. */
+/** Maps Firebase auth/ error codes to user-friendly messages (current UI locale). */
 export function getAuthErrorMessage(code: string, context: AuthErrorContext = "generic"): string {
   if (
     context === "email" &&
@@ -676,45 +687,39 @@ export function getAuthErrorMessage(code: string, context: AuthErrorContext = "g
       code === "auth/wrong-password" ||
       code === "auth/user-not-found")
   ) {
-    return EMAIL_PASSWORD_INVALID_MESSAGE;
+    return authTr("auth.error.invalidCredential");
   }
 
   if (context === "google" && code === "auth/invalid-credential") {
-    return (
-      "Google prihlásenie zlyhalo. Skontrolujte EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID a SHA-1 v Firebase Console."
-    );
+    return authTr("auth.error.googleFailed");
   }
 
-  const m: Record<string, string> = {
-    "auth/invalid-email": "Neplatný email.",
-    "auth/user-disabled": "Účet je deaktivovaný.",
-    "auth/user-not-found": EMAIL_PASSWORD_INVALID_MESSAGE,
-    "auth/wrong-password": EMAIL_PASSWORD_INVALID_MESSAGE,
-    "auth/email-already-in-use": "Email je už registrovaný.",
-    "auth/weak-password": "Heslo musí mať aspoň 6 znakov.",
-    "auth/invalid-credential": EMAIL_PASSWORD_INVALID_MESSAGE,
-    "auth/account-exists-with-different-credential": "Účet s týmto emailom už existuje. Prihláste sa heslom.",
-    "auth/credential-already-in-use": "Tieto prihlasovacie údaje sú už použité.",
-    "auth/operation-not-allowed": "Google alebo Apple prihlásenie nie je povolené. Skontrolujte Firebase Console.",
-    "auth/configuration-not-found": "Chýba Web Client ID. Pridajte EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID do .env",
-    "auth/apple-unavailable": "Prihlásenie cez Apple nie je na tomto zariadení dostupné. Použite prihlásenie emailom.",
-    "auth/apple-missing-identity-token": "Apple sign-in did not return required data. Please try again or use email.",
-    "auth/apple-timeout": "Apple sign-in timed out. Please try again.",
-    "auth/apple-link-expired": "Apple prepojenie vypršalo. Skúste prihlásenie cez Apple znova.",
-    "auth/cancelled": "Používateľ zrušil prihlásenie.",
-    "auth/google-missing-web-client-id":
-      "Chýba EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID (Web client ID z Google Cloud → Credentials → OAuth 2.0 Client IDs → typ Web application). Pridajte do .env a znova zostavte aplikáciu.",
-    "auth/google-missing-id-token":
-      "Google nevrátil ID token. Skontrolujte, že EXPO_PUBLIC_GOOGLE_WEB_CLIENT_ID je Web client ID (nie Android), a že v Firebase Authentication je zapnuté prihlásenie cez Google.",
-    "auth/google-requires-dev-client":
-      "Google prihlásenie nefunguje v Expo Go. Nainštalujte vývojovú aplikáciu (napr. run-android.bat alebo npx expo run:android), a spustite Metro s --dev-client.",
-    "auth/firebase-disabled": "Firebase Auth nie je k dispozícii. Reštartujte aplikáciu.",
-    "DEVELOPER_ERROR":
-      "Google Sign-In: v Firebase musí byť SHA-1 kľúča, ktorý naozaj podpisuje APK (Expo často používa android/app/debug.keystore, nie len ~/.android). npm run android:debug-sha. Potom nový google-services.json a rebuild.",
-    /** Android Google Sign-In numeric code for misconfigured SHA-1 / OAuth client */
-    "10": "Kód 10: pridajte SHA-1 z projektového android/app/debug.keystore do Firebase (nie len z ~/.android). npm run android:debug-sha.",
-    "SIGN_IN_REQUIRED": "Používateľ zrušil prihlásenie.",
-    "ERR_REQUEST_CANCELED": "Používateľ zrušil prihlásenie.",
+  const keyByCode: Record<string, string> = {
+    "auth/invalid-email": "auth.error.invalidEmail",
+    "auth/user-disabled": "auth.error.userDisabled",
+    "auth/user-not-found": "auth.error.invalidCredential",
+    "auth/wrong-password": "auth.error.invalidCredential",
+    "auth/email-already-in-use": "auth.error.emailInUse",
+    "auth/weak-password": "auth.error.weakPassword",
+    "auth/invalid-credential": "auth.error.invalidCredential",
+    "auth/account-exists-with-different-credential": "auth.error.accountExistsDifferent",
+    "auth/credential-already-in-use": "auth.error.credentialInUse",
+    "auth/operation-not-allowed": "auth.error.operationNotAllowed",
+    "auth/configuration-not-found": "auth.error.googleFailed",
+    "auth/apple-unavailable": "auth.error.appleUnavailable",
+    "auth/apple-missing-identity-token": "auth.error.appleUnavailable",
+    "auth/apple-timeout": "auth.error.appleTimeout",
+    "auth/apple-link-expired": "auth.error.appleLinkExpired",
+    "auth/cancelled": "auth.error.cancelled",
+    "auth/google-missing-web-client-id": "auth.error.googleFailed",
+    "auth/google-missing-id-token": "auth.error.googleFailed",
+    "auth/google-requires-dev-client": "auth.error.googleFailed",
+    "auth/firebase-disabled": "auth.error.firebaseDisabled",
+    FIREBASE_DISABLED: "auth.error.firebaseDisabled",
+    DEVELOPER_ERROR: "auth.error.googleFailed",
+    "10": "auth.error.googleFailed",
+    SIGN_IN_REQUIRED: "auth.error.cancelled",
+    ERR_REQUEST_CANCELED: "auth.error.cancelled",
   };
-  return m[code] ?? "Chyba prihlásenia. Skúste znova.";
+  return authTr(keyByCode[code] ?? "auth.error.generic");
 }

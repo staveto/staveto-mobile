@@ -57,7 +57,7 @@ export function LoginScreen() {
 
   const onLogin = async () => {
     if (!email.trim() || !password) {
-      setError(t("login.failed"));
+      setError(t("login.credentialsRequired"));
       return;
     }
     setSubmitting(true);
@@ -65,7 +65,7 @@ export function LoginScreen() {
     try {
       await login(email.trim(), password);
     } catch (e: unknown) {
-      const code = (e as { code?: string })?.code;
+      const code = getAuthErrorCodeFromUnknown(e);
       setError(code ? getAuthErrorMessage(code, "email") : (e instanceof Error ? e.message : t("login.failed")));
     } finally {
       setSubmitting(false);
@@ -92,7 +92,7 @@ export function LoginScreen() {
       setForgotEmail("");
       Alert.alert(t("login.forgotSuccessTitle"), t("login.forgotSuccessMessage"));
     } catch (e: unknown) {
-      const code = (e as { code?: string })?.code;
+      const code = getAuthErrorCodeFromUnknown(e);
       setError(code ? getAuthErrorMessage(code, "email") : (e instanceof Error ? e.message : t("login.failed")));
     } finally {
       setForgotSubmitting(false);

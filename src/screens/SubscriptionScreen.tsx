@@ -19,6 +19,7 @@ import {
   Platform,
 } from "react-native";
 import { useAuth } from "../context/AuthContext";
+import { useOrgAccess } from "../hooks/useOrgAccess";
 import { useNavigation } from "@react-navigation/native";
 import {
   getEntitlement,
@@ -36,6 +37,7 @@ import { showToast } from "../helpers/toast";
 export function SubscriptionScreen() {
   const { t } = useI18n();
   const { user, refreshUser } = useAuth();
+  const { canAccessBusiness } = useOrgAccess();
   const navigation = useNavigation();
   const billing = user?.billing ?? null;
   const [usage, setUsage] = useState<{ ocrUsed: number; ocrLimit: number } | null>(null);
@@ -89,8 +91,13 @@ export function SubscriptionScreen() {
       } catch (error: unknown) {
         if (cancelled) return;
         const msg = error instanceof Error ? error.message : String(error);
+        const storeUnavailable =
+          /problem with the store|billing_unavailable|storeproblemerror/i.test(msg);
         console.warn("[RC] getOfferings error:", msg);
-        Alert.alert("RevenueCat", `getOfferings failed: ${msg}`);
+        // Emulator / no Play Store — don't block UI with an alert.
+        if (!storeUnavailable) {
+          Alert.alert("RevenueCat", `getOfferings failed: ${msg}`);
+        }
       }
     })();
     return () => {
@@ -156,9 +163,11 @@ export function SubscriptionScreen() {
   }
 
   const isPro = billing?.isPro ?? false;
+  const companyCovered = canAccessBusiness;
   const status = billing?.status ?? "expired";
-  const statusLabel =
-    status === "trial"
+  const statusLabel = companyCovered
+    ? t("subscription.coveredByCompany")
+    : status === "trial"
       ? t("subscription.statusTrial")
       : status === "active"
         ? t("subscription.statusActive")
@@ -199,22 +208,27 @@ export function SubscriptionScreen() {
               {statusLabel}
             </Text>
           </View>
-          {status === "trial" && (
+          {companyCovered ? (
+            <Text style={styles.trialRemaining} maxFontSizeMultiplier={1.2} numberOfLines={3}>
+              {t("subscription.coveredByCompanyHint")}
+            </Text>
+          ) : null}
+          {!companyCovered && status === "trial" && (
             <Text style={styles.trialRemaining} maxFontSizeMultiplier={1.2} numberOfLines={2}>
               {t("subscription.trialRemainingDays", { count: String(billing?.remainingTrialDays ?? 0) })}
             </Text>
           )}
-          {status === "expired" && (
+          {!companyCovered && status === "expired" && (
             <Text style={styles.trialExpiredText} maxFontSizeMultiplier={1.2} numberOfLines={2}>
               {t("subscription.trialExpired")}
             </Text>
           )}
-          {status === "active" && billing?.currentPeriodEndAt && (
+          {!companyCovered && status === "active" && billing?.currentPeriodEndAt && (
             <Text style={styles.renewsAt} maxFontSizeMultiplier={1.2} numberOfLines={2}>
               {t("subscription.renewsAt", { date: formatDate(billing.currentPeriodEndAt) })}
             </Text>
           )}
-          {!isPro && (
+          {!companyCovered && !isPro && (
             <TouchableOpacity
               style={[styles.activateButton, purchasing && styles.upgradeButtonDisabled]}
               onPress={handleActivatePro}
@@ -231,7 +245,7 @@ export function SubscriptionScreen() {
               )}
             </TouchableOpacity>
           )}
-          {!isPro && (
+          {!companyCovered && !isPro && (
             <TouchableOpacity
               style={styles.restoreButton}
               onPress={handleRestore}
@@ -246,7 +260,7 @@ export function SubscriptionScreen() {
           )}
         </View>
 
-        {!isPro && (
+        {!companyCovered && !isPro && (
         <View style={styles.usageSection}>
           <Text style={styles.usageTitle} maxFontSizeMultiplier={1.2} numberOfLines={1}>
             {t("subscription.ocrUsed")}

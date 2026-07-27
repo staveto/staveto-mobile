@@ -623,6 +623,9 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
         memberSnap.docs.forEach((d) => {
           const projectId = projectIdFromProjectMembersDoc(d.ref.path, d.ref.parent);
           if (!projectId) return;
+          const status = String((d.data() as { status?: string }).status || "active").toLowerCase();
+          // Invited / removed must not keep the project in the worker overview.
+          if (status === "removed" || status === "invited") return;
           if (!ownerIds.has(projectId)) memberProjectIds.add(projectId);
         });
         if (memberSnap.docs.length > 0) {
@@ -658,14 +661,29 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
             : d.id;
         if (!projectId || ownerIds.has(projectId)) continue;
         if (memberProjectIds.has(projectId)) continue;
-        if (memberQueryPermissionDenied) {
-          memberProjectIds.add(projectId);
-          continue;
-        }
+        // Always verify — stale projectRefs after unassign must not keep listing the job.
         refOnlyToVerify.push(projectId);
       }
       for (const projectId of refOnlyToVerify) {
         try {
+          // Prefer uid-keyed member doc (business assign path).
+          const keyed = await getDocSmart(
+            doc(db, paths.projectMember(projectId, actualOwnerId)),
+            smartOpts
+          );
+          if (keyed.exists()) {
+            const status = String(
+              (keyed.data() as { status?: string } | undefined)?.status || "active"
+            ).toLowerCase();
+            if (status === "removed" || status === "invited") {
+              if (__DEV__) {
+                console.log("[projects] Skipping projectRef (member not active)", projectId, status);
+              }
+              continue;
+            }
+            memberProjectIds.add(projectId);
+            continue;
+          }
           const mq = query(
             collection(db, paths.projectMembers(projectId)),
             where("userId", "==", actualOwnerId),
@@ -678,10 +696,16 @@ async function listAllMyProjectsInternal(ownerId: string, forceServerRead?: bool
             }
             continue;
           }
+          const status = String(
+            (mSnap.docs[0]?.data() as { status?: string } | undefined)?.status || "active"
+          ).toLowerCase();
+          if (status === "removed" || status === "invited") continue;
           memberProjectIds.add(projectId);
         } catch (vErr) {
-          console.warn("[projects] projectRef membership verify failed, keeping ref", projectId, vErr);
-          memberProjectIds.add(projectId);
+          // Do not keep unverified refs — that left removed workers seeing shared jobs.
+          if (__DEV__) {
+            console.warn("[projects] projectRef membership verify failed, skipping", projectId, vErr);
+          }
         }
       }
     } catch (error) {
@@ -888,13 +912,43 @@ export async function unarchiveProject(_ownerId: string, projectId: string): Pro
   console.log(`[projects] Unarchived project ${projectId}`);
 }
 
+async function canWritePhasesOnProject(
+  projectId: string,
+  uid: string,
+  projectData: Record<string, unknown>
+): Promise<boolean> {
+  if (typeof projectData.ownerId === "string" && projectData.ownerId === uid) return true;
+
+  try {
+    const memberSnap = await getDocSmart(doc(db, paths.projectMember(projectId, uid)));
+    if (memberSnap.exists()) {
+      const level = String((memberSnap.data() as { permissionLevel?: string }).permissionLevel ?? "");
+      if (level === "editor" || level === "admin" || level === "owner") return true;
+    }
+  } catch {
+    /* fall through */
+  }
+
+  try {
+    const byUidSnap = await getDocSmart(doc(db, paths.projectMemberByUid(projectId, uid)));
+    if (byUidSnap.exists()) {
+      const level = String((byUidSnap.data() as { permissionLevel?: string }).permissionLevel ?? "");
+      if (level === "editor" || level === "admin" || level === "owner") return true;
+    }
+  } catch {
+    /* fall through */
+  }
+
+  return false;
+}
+
 export async function createPhase(projectId: string, name: string): Promise<ProjectPhaseDoc> {
   const currentUser = auth.currentUser;
   if (!currentUser || !currentUser.uid) {
     throw new Error('Musíte byť prihlásený na vytvorenie fázy.');
   }
   
-  // Verify project exists and user is owner
+  // Verify project exists and user can write phases (owner or editor — matches Firestore rules).
   const projectRef = doc(db, paths.project(projectId));
   const projectSnap = await getDocSmart(projectRef);
   
@@ -902,8 +956,9 @@ export async function createPhase(projectId: string, name: string): Promise<Proj
     throw new Error(`Projekt ${projectId} neexistuje.`);
   }
   
-  const projectData = projectSnap.data();
-  if (projectData.ownerId !== currentUser.uid) {
+  const projectData = (projectSnap.data() ?? {}) as Record<string, unknown>;
+  const allowed = await canWritePhasesOnProject(projectId, currentUser.uid, projectData);
+  if (!allowed) {
     throw new Error('Nemáte oprávnenie vytvárať fázy v tomto projekte.');
   }
   
@@ -1245,12 +1300,17 @@ export async function listBusinessProjectsAssignedToMember(
             ? (raw.projectId as string).trim()
             : d.id;
         if (!projectId || memberAccessIds.has(projectId)) continue;
-        if (memberQueryPermissionDenied) {
-          memberAccessIds.add(projectId);
-          projectIds.push(projectId);
-          continue;
-        }
         try {
+          const keyed = await getDocSmart(doc(db, paths.projectMember(projectId, uid)));
+          if (keyed.exists()) {
+            const status = String(
+              (keyed.data() as { status?: string } | undefined)?.status || "active"
+            ).toLowerCase();
+            if (status === "removed" || status === "invited") continue;
+            memberAccessIds.add(projectId);
+            projectIds.push(projectId);
+            continue;
+          }
           const mq = query(
             collection(db, paths.projectMembers(projectId)),
             where("userId", "==", uid),
@@ -1265,8 +1325,7 @@ export async function listBusinessProjectsAssignedToMember(
           memberAccessIds.add(projectId);
           projectIds.push(projectId);
         } catch {
-          memberAccessIds.add(projectId);
-          projectIds.push(projectId);
+          /* Stale projectRefs must not grant access when membership cannot be verified. */
         }
       }
     } catch (e) {
@@ -1313,19 +1372,53 @@ export async function assignMemberToBusinessProject(input: {
     throw new Error("Projekt nepatrí tejto firme.");
   }
 
+  // Align with web: workers without canEditProject get viewer (field) access.
+  let permissionLevel: "viewer" | "editor" = "viewer";
+  try {
+    const orgMemSnap = await getDocSmart(doc(db, "organizations", orgId, "members", memberUid));
+    if (orgMemSnap.exists()) {
+      const rawRole = String(orgMemSnap.data()?.role ?? input.memberRole ?? "viewer").toLowerCase();
+      const role =
+        rawRole === "owner" || rawRole === "admin" || rawRole === "manager" || rawRole === "worker"
+          ? rawRole
+          : "viewer";
+      const { getEffectivePermissions, parseCustomPermissions } = await import(
+        "../lib/businessRolePermissions"
+      );
+      const perms = getEffectivePermissions(
+        role,
+        parseCustomPermissions(orgMemSnap.data()?.permissions)
+      );
+      if (
+        role === "owner" ||
+        role === "admin" ||
+        role === "manager" ||
+        perms.canEditProject
+      ) {
+        permissionLevel = "editor";
+      }
+    } else if (
+      ["owner", "admin", "manager"].includes(String(input.memberRole ?? "").toLowerCase())
+    ) {
+      permissionLevel = "editor";
+    }
+  } catch {
+    /* keep viewer */
+  }
+
   const memberRef = doc(db, paths.projectMember(projectId, memberUid));
   const memberDoc: Record<string, unknown> = {
     userId: memberUid,
     role: "member",
     status: "active",
     pendingAcknowledgment: true,
-    permissionLevel: "editor",
+    permissionLevel,
     addedAt: serverTimestamp(),
     addedBy: actorUid,
     sharedItems: {
       tasks: true,
       phases: true,
-      expenses: true,
+      expenses: permissionLevel === "editor",
       diary: true,
       documents: true,
       timeTracking: true,
@@ -1379,6 +1472,33 @@ export async function unassignMemberFromBusinessProject(input: {
   const raw = projectSnap.data();
   if (raw?.orgId !== orgId) throw new Error("Projekt nepatrí tejto firme.");
 
+  // Preferred: CF clears projectRefs / membersByUid / notifications too.
+  try {
+    const res = await getCallable("removeProjectMember")({
+      projectId,
+      memberId: memberUid,
+      memberUid,
+    });
+    const data = res?.data as { ok?: boolean } | undefined;
+    if (data?.ok === true) {
+      try {
+        await updateDoc(projectRef, {
+          assignedMemberIds: firestore.FieldValue.arrayRemove(memberUid),
+          assignedUserIds: firestore.FieldValue.arrayRemove(memberUid),
+          updatedAt: serverTimestamp(),
+        });
+      } catch {
+        /* optional */
+      }
+      invalidateProjectsSessionCache();
+      return;
+    }
+  } catch (err) {
+    if (__DEV__) {
+      console.warn("[projects] removeProjectMember failed, client fallback:", err);
+    }
+  }
+
   const memberRef = doc(db, paths.projectMember(projectId, memberUid));
   try {
     await deleteDoc(memberRef);
@@ -1386,9 +1506,27 @@ export async function unassignMemberFromBusinessProject(input: {
     // Member doc may already be missing; assignment array is authoritative.
   }
 
+  try {
+    const byUserId = await getDocsSmart(
+      query(collection(db, paths.projectMembers(projectId)), where("userId", "==", memberUid), limit(20))
+    );
+    await Promise.all(
+      byUserId.docs.map(async (d) => {
+        try {
+          await deleteDoc(d.ref);
+        } catch {
+          /* ignore */
+        }
+      })
+    );
+  } catch {
+    /* ignore */
+  }
+
   const existing = parseAssignedSnapshots(raw?.assignedMemberSnapshots);
   const patch: Record<string, unknown> = {
     assignedMemberIds: firestore.FieldValue.arrayRemove(memberUid),
+    assignedUserIds: firestore.FieldValue.arrayRemove(memberUid),
     updatedAt: serverTimestamp(),
   };
   if (existing.length > 0) {

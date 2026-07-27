@@ -14,6 +14,7 @@ import {
   writeBatch,
   getDoc,
   addDoc,
+  onSnapshot,
 } from "../lib/rnFirestore";
 import { db, auth } from "../firebase";
 import { getExtraEnv } from "../lib/env";
@@ -30,6 +31,7 @@ export type NotificationType =
   | "PROBLEM_ASSIGNED"
   | "PROBLEM_REPORTED"
   | "FIELD_NOTE_SHARED"
+  | "PHOTO_ADDED"
   | "ABSENCE_REQUESTED"
   | "EXPENSE_ADDED"
   | "DIARY_ADDED"
@@ -122,6 +124,7 @@ const KNOWN_NOTIFICATION_TYPES: readonly NotificationType[] = [
   "PROBLEM_ASSIGNED",
   "PROBLEM_REPORTED",
   "FIELD_NOTE_SHARED",
+  "PHOTO_ADDED",
   "ABSENCE_REQUESTED",
   "EXPENSE_ADDED",
   "DIARY_ADDED",
@@ -438,6 +441,44 @@ async function listOfficeUserNotifications(userId: string, limitCount: number): 
               ? raw.fromUserName
               : assignedByName ?? null;
 
+          const problemId =
+            typeof raw.problemId === "string"
+              ? raw.problemId
+              : typeof (raw.meta as Record<string, unknown> | undefined)?.problemId === "string"
+                ? String((raw.meta as Record<string, unknown>).problemId)
+                : null;
+          const noteId =
+            typeof raw.noteId === "string"
+              ? raw.noteId
+              : typeof (raw.meta as Record<string, unknown> | undefined)?.noteId === "string"
+                ? String((raw.meta as Record<string, unknown>).noteId)
+                : null;
+          const attachmentId =
+            typeof raw.attachmentId === "string"
+              ? raw.attachmentId
+              : typeof (raw.meta as Record<string, unknown> | undefined)?.attachmentId === "string"
+                ? String((raw.meta as Record<string, unknown>).attachmentId)
+                : null;
+          const absenceId =
+            typeof raw.absenceId === "string"
+              ? raw.absenceId
+              : typeof (raw.meta as Record<string, unknown> | undefined)?.absenceId === "string"
+                ? String((raw.meta as Record<string, unknown>).absenceId)
+                : null;
+
+          const metaBase =
+            raw.meta && typeof raw.meta === "object" && !Array.isArray(raw.meta)
+              ? { ...(raw.meta as Record<string, unknown>) }
+              : {};
+          if (problemId) metaBase.problemId = problemId;
+          if (noteId) metaBase.noteId = noteId;
+          if (attachmentId) metaBase.attachmentId = attachmentId;
+          if (absenceId) metaBase.absenceId = absenceId;
+          if (typeof raw.orgId === "string") metaBase.orgId = raw.orgId;
+          if (typeof raw.chatId === "string") metaBase.chatId = raw.chatId;
+          if (raw.chatType != null) metaBase.chatType = raw.chatType;
+          if (typeof raw.chatTitle === "string") metaBase.chatTitle = raw.chatTitle;
+
           return {
             id: `${OFFICE_USER_NOTIFICATION_ID_PREFIX}${d.id}`,
             userId,
@@ -451,7 +492,7 @@ async function listOfficeUserNotifications(userId: string, limitCount: number): 
             projectName: typeof raw.projectName === "string" ? raw.projectName : null,
             taskId: typeof raw.taskId === "string" ? raw.taskId : null,
             taskTitle: typeof raw.taskName === "string" ? raw.taskName : null,
-            problemId: null,
+            problemId,
             dueDate: null,
             expenseId: null,
             amount: null,
@@ -466,15 +507,7 @@ async function listOfficeUserNotifications(userId: string, limitCount: number): 
             orgId: typeof raw.orgId === "string" ? raw.orgId : null,
             chatId: typeof raw.chatId === "string" ? raw.chatId : null,
             chatTitle: typeof raw.chatTitle === "string" ? raw.chatTitle : null,
-            meta:
-              typeof raw.orgId === "string" || typeof raw.chatId === "string"
-                ? {
-                    orgId: raw.orgId,
-                    chatId: raw.chatId,
-                    chatType: raw.chatType,
-                    chatTitle: raw.chatTitle,
-                  }
-                : undefined,
+            meta: Object.keys(metaBase).length > 0 ? metaBase : undefined,
             dedupeKey: null,
             createdAtClient: null,
             updatedAt: convertTimelikeToIso(raw.updatedAt) ?? null,
@@ -536,7 +569,7 @@ function inferEntityType(
   const t = typeof type === "string" ? type : "";
   if (t.includes("TASK")) return "task";
   if (t === "PROBLEM_ASSIGNED" || t === "PROBLEM_REPORTED") return "problem";
-  if (t === "FIELD_NOTE_SHARED") return "document";
+  if (t === "FIELD_NOTE_SHARED" || t === "PHOTO_ADDED" || t === "DIARY_ADDED") return "document";
   if (t.includes("PROJECT") || t.includes("MEMBER")) return "project";
   if (t.includes("EXPENSE")) return "expense";
   return "project";
@@ -674,6 +707,99 @@ async function flushPendingReads(userId: string): Promise<void> {
     remaining: remaining.length,
     remainingIds: remaining.slice(0, 24),
   });
+}
+
+/**
+ * Collapse duplicate project invite/assign rows from dual writes (users/.../notifications
+ * + root notifications/) and CF sync. Prefer PROJECT_INVITED over PROJECT_ASSIGNED
+ * for the same project (accept flow).
+ */
+function notificationCrossStoreKey(row: NotificationDoc): string | null {
+  const projectId = typeof row.projectId === "string" ? row.projectId.trim() : "";
+  if (projectId && (row.type === "PROJECT_INVITED" || row.type === "PROJECT_ASSIGNED")) {
+    return `${row.type}:${projectId}`;
+  }
+  const problemId =
+    (typeof row.problemId === "string" && row.problemId.trim()) ||
+    (typeof row.meta?.problemId === "string" ? String(row.meta.problemId).trim() : "");
+  if (problemId && (row.type === "PROBLEM_REPORTED" || row.type === "PROBLEM_ASSIGNED")) {
+    return `${row.type}:${problemId}`;
+  }
+  const noteId =
+    (typeof row.meta?.noteId === "string" && String(row.meta.noteId).trim()) || "";
+  if (row.type === "FIELD_NOTE_SHARED" && noteId) return `FIELD_NOTE_SHARED:${noteId}`;
+  const attachmentId =
+    (typeof row.meta?.attachmentId === "string" && String(row.meta.attachmentId).trim()) ||
+    "";
+  if (row.type === "PHOTO_ADDED" && attachmentId) return `PHOTO_ADDED:${attachmentId}`;
+  const absenceId =
+    (typeof row.meta?.absenceId === "string" && String(row.meta.absenceId).trim()) || "";
+  if (row.type === "ABSENCE_REQUESTED" && absenceId) return `ABSENCE_REQUESTED:${absenceId}`;
+  return null;
+}
+
+function preferReadNotification(a: NotificationDoc, b: NotificationDoc): NotificationDoc {
+  const aRead = hasMeaningfulReadAt(a.readAt);
+  const bRead = hasMeaningfulReadAt(b.readAt);
+  if (aRead !== bRead) return aRead ? a : b;
+  const aMs = a.createdAt ? Date.parse(a.createdAt) : 0;
+  const bMs = b.createdAt ? Date.parse(b.createdAt) : 0;
+  return bMs >= aMs ? b : a;
+}
+
+export function dedupeProjectMembershipNotifications(
+  rows: NotificationDoc[]
+): NotificationDoc[] {
+  const sorted = [...rows].sort((a, b) => {
+    const aMs = a.createdAt ? Date.parse(a.createdAt) : 0;
+    const bMs = b.createdAt ? Date.parse(b.createdAt) : 0;
+    return bMs - aMs;
+  });
+
+  const byKey = new Map<string, NotificationDoc>();
+  const others: NotificationDoc[] = [];
+
+  for (const row of sorted) {
+    const key = notificationCrossStoreKey(row);
+    if (!key) {
+      others.push(row);
+      continue;
+    }
+    const existing = byKey.get(key);
+    byKey.set(key, existing ? preferReadNotification(existing, row) : row);
+  }
+
+  const invitedProjectIds = new Set<string>();
+  for (const key of byKey.keys()) {
+    if (key.startsWith("PROJECT_INVITED:")) {
+      invitedProjectIds.add(key.slice("PROJECT_INVITED:".length));
+    }
+  }
+
+  const membership: NotificationDoc[] = [];
+  for (const [key, row] of byKey) {
+    if (key.startsWith("PROJECT_ASSIGNED:")) {
+      const projectId = key.slice("PROJECT_ASSIGNED:".length);
+      if (invitedProjectIds.has(projectId)) continue;
+    }
+    membership.push(row);
+  }
+
+  return [...membership, ...others].sort((a, b) => {
+    const aMs = a.createdAt ? Date.parse(a.createdAt) : 0;
+    const bMs = b.createdAt ? Date.parse(b.createdAt) : 0;
+    return bMs - aMs;
+  });
+}
+
+/** True when a pending invite card already covers this inbox row. */
+export function isCoveredByPendingProjectInvite(
+  notification: Pick<NotificationDoc, "type" | "projectId">,
+  pendingProjectIds: Set<string>
+): boolean {
+  const projectId = typeof notification.projectId === "string" ? notification.projectId.trim() : "";
+  if (!projectId || !pendingProjectIds.has(projectId)) return false;
+  return notification.type === "PROJECT_INVITED" || notification.type === "PROJECT_ASSIGNED";
 }
 
 /**
@@ -854,12 +980,19 @@ export async function listNotifications(
   }
 
   const sessionUid = auth.currentUser?.uid;
-  if (!sessionUid) return mergedWithPendingRead;
-  const inboxOnly = mergedWithPendingRead.filter((n) => n.userId === sessionUid);
-  if (__DEV__ && inboxOnly.length !== mergedWithPendingRead.length) {
+  if (!sessionUid) return dedupeProjectMembershipNotifications(mergedWithPendingRead);
+  const owned = mergedWithPendingRead.filter((n) => n.userId === sessionUid);
+  const inboxOnly = dedupeProjectMembershipNotifications(owned);
+  if (__DEV__ && owned.length !== mergedWithPendingRead.length) {
     console.warn("[notifications] dropped notifications not owned by current user", {
       sessionUid,
-      dropped: mergedWithPendingRead.length - inboxOnly.length,
+      dropped: mergedWithPendingRead.length - owned.length,
+    });
+  }
+  if (__DEV__ && inboxOnly.length !== owned.length) {
+    console.log("[notifications] deduped project membership notifications", {
+      before: owned.length,
+      after: inboxOnly.length,
     });
   }
 
@@ -953,11 +1086,198 @@ function mergeRemoteAndLocalNotifications(remote: NotificationDoc[], local: Noti
   return Array.from(byId.values()).sort((a, b) => notificationSortKey(b) - notificationSortKey(a));
 }
 
+
+function officeTwinIdsFromMobileNotification(n: NotificationDoc): string[] {
+  const ids: string[] = [];
+  const problemId =
+    (typeof n.problemId === "string" && n.problemId.trim()) ||
+    (typeof n.meta?.problemId === "string" ? String(n.meta.problemId).trim() : "");
+  const noteId = typeof n.meta?.noteId === "string" ? String(n.meta.noteId).trim() : "";
+  const attachmentId =
+    typeof n.meta?.attachmentId === "string" ? String(n.meta.attachmentId).trim() : "";
+  const absenceId =
+    typeof n.meta?.absenceId === "string" ? String(n.meta.absenceId).trim() : "";
+  const projectId = typeof n.projectId === "string" ? n.projectId.trim() : "";
+  if (problemId) ids.push(`problem-${problemId}`);
+  if (noteId) ids.push(`field-note-${noteId}`);
+  if (attachmentId) ids.push(`photo-${attachmentId}`);
+  if (absenceId) ids.push(`absence-${absenceId}`);
+  if (projectId) {
+    const safe = projectId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80);
+    ids.push(`project-assigned-${safe}`);
+    ids.push(`project-invited-${safe}`);
+  }
+  return ids;
+}
+
+async function markOfficeTwinRead(uid: string, officeId: string): Promise<void> {
+  try {
+    await setDoc(
+      doc(db, "users", uid, "notifications", officeId),
+      { read: true, updatedAt: serverTimestamp() },
+      { merge: true }
+    );
+  } catch {
+    /* twin may not exist */
+  }
+}
+
+async function markRootTwinRead(rootId: string): Promise<void> {
+  try {
+    await setDoc(
+      doc(db, "notifications", rootId),
+      { readAt: serverTimestamp(), read: true },
+      { merge: true }
+    );
+  } catch {
+    /* twin may not exist */
+  }
+}
+
+function rootMatchesOfficeTwin(
+  data: Record<string, unknown>,
+  officeId: string,
+  notification?: NotificationDoc
+): boolean {
+  const type = typeof data.type === "string" ? data.type : "";
+  const meta =
+    data.meta && typeof data.meta === "object" && !Array.isArray(data.meta)
+      ? (data.meta as Record<string, unknown>)
+      : undefined;
+  const problemId =
+    (typeof data.problemId === "string" && data.problemId) ||
+    (typeof meta?.problemId === "string" && meta.problemId) ||
+    "";
+  const noteId =
+    (typeof data.noteId === "string" && data.noteId) ||
+    (typeof meta?.noteId === "string" && meta.noteId) ||
+    "";
+  const attachmentId =
+    (typeof data.attachmentId === "string" && data.attachmentId) ||
+    (typeof meta?.attachmentId === "string" && meta.attachmentId) ||
+    "";
+  const absenceId =
+    (typeof data.absenceId === "string" && data.absenceId) ||
+    (typeof meta?.absenceId === "string" && meta.absenceId) ||
+    "";
+  const projectId = typeof data.projectId === "string" ? data.projectId : "";
+
+  if (officeId.startsWith("problem-") && problemId && officeId === `problem-${problemId}`) {
+    return type === "PROBLEM_REPORTED" || type === "PROBLEM_ASSIGNED";
+  }
+  if (officeId.startsWith("field-note-") && noteId && officeId === `field-note-${noteId}`) {
+    return type === "FIELD_NOTE_SHARED";
+  }
+  if (officeId.startsWith("photo-") && attachmentId && officeId === `photo-${attachmentId}`) {
+    return type === "PHOTO_ADDED";
+  }
+  if (officeId.startsWith("absence-") && absenceId && officeId === `absence-${absenceId}`) {
+    return type === "ABSENCE_REQUESTED";
+  }
+  if (projectId) {
+    const safe = projectId.replace(/[^a-zA-Z0-9_-]/g, "_").slice(0, 80);
+    if (officeId === `project-assigned-${safe}` || officeId === `project-invited-${safe}`) {
+      return type === "PROJECT_ASSIGNED" || type === "PROJECT_INVITED";
+    }
+  }
+  if (notification) {
+    return officeTwinIdsFromMobileNotification(notification).includes(officeId);
+  }
+  return false;
+}
+
+async function markMatchingRootTwinsForOffice(
+  uid: string,
+  officeId: string,
+  notification: NotificationDoc
+): Promise<void> {
+  await markRootTwinRead(`${uid}_${officeId}`);
+  try {
+    const q = query(
+      collection(db, "notifications"),
+      where("userId", "==", uid),
+      orderBy("createdAt", "desc"),
+      limit(USER_NOTIFICATION_QUERY_LIMIT)
+    );
+    const snap = await getDocs(q);
+    await Promise.all(
+      snap.docs
+        .filter((d) => {
+          const data = d.data() as Record<string, unknown>;
+          if (hasMeaningfulReadAt(data.readAt) || data.read === true) return false;
+          return rootMatchesOfficeTwin(data, officeId, notification);
+        })
+        .map((d) => markRootTwinRead(d.id))
+    );
+  } catch {
+    /* best effort */
+  }
+}
+
 /**
- * Marks one notification read in Firestore (or local AsyncStorage for isLocal).
- * @returns true if the inbox should treat the item as read: persisted on server, already read on server,
- *   saved locally, or **queued for retry with a client read receipt** (reload stays read until Firestore catches up).
- * @returns false only if neither server nor durable local fallback (receipt + pending queue) could be applied.
+ * Live listener on office + root notification stores.
+ * Fires whenever either side changes (e.g. mark-read from web).
+ */
+export function subscribeNotificationInboxChanges(
+  userId: string,
+  onChange: () => void
+): () => void {
+  const unsubs: Array<() => void> = [];
+  let scheduled: ReturnType<typeof setTimeout> | null = null;
+  const emit = () => {
+    if (scheduled) clearTimeout(scheduled);
+    scheduled = setTimeout(() => {
+      scheduled = null;
+      onChange();
+    }, 120);
+  };
+
+  try {
+    const officeRef = collection(db, "users", userId, "notifications");
+    unsubs.push(
+      onSnapshot(
+        officeRef,
+        () => emit(),
+        () => emit()
+      )
+    );
+  } catch {
+    /* permission / offline */
+  }
+
+  try {
+    const rootQ = query(
+      collection(db, "notifications"),
+      where("userId", "==", userId),
+      orderBy("createdAt", "desc"),
+      limit(USER_NOTIFICATION_QUERY_LIMIT)
+    );
+    unsubs.push(
+      onSnapshot(
+        rootQ,
+        () => emit(),
+        () => emit()
+      )
+    );
+  } catch {
+    /* index / permission */
+  }
+
+  return () => {
+    if (scheduled) clearTimeout(scheduled);
+    unsubs.forEach((u) => {
+      try {
+        u();
+      } catch {
+        /* ignore */
+      }
+    });
+  };
+}
+
+/**
+ * Mark read on BOTH office + root stores so web and mobile stay in sync.
+ * @returns true if the inbox should treat the item as read.
  */
 export async function markNotificationAsRead(notification: NotificationDoc): Promise<boolean> {
   if (notification.isLocal) {
@@ -979,28 +1299,6 @@ export async function markNotificationAsRead(notification: NotificationDoc): Pro
   }
 
   const readAtBefore = notification.readAt ?? null;
-
-  if (notification.id.startsWith(OFFICE_USER_NOTIFICATION_ID_PREFIX)) {
-    const officeId = notification.id.slice(OFFICE_USER_NOTIFICATION_ID_PREFIX.length);
-    const officeRef = doc(db, "users", currentUser.uid, "notifications", officeId);
-    notifReadLog("markNotificationAsRead office user subcollection", { id: notification.id, officeId });
-    try {
-      await updateDoc(officeRef, { read: true });
-      return true;
-    } catch (e) {
-      if (receiptRecorded) return true;
-      throw e;
-    }
-  }
-
-  const ref = doc(db, "notifications", notification.id);
-  notifReadLog("markNotificationAsRead start", { id: notification.id, readAtBefore });
-
-  /**
-   * Always record a local read receipt at the start of a read attempt.
-   * This bridges eventual consistency / stale snapshots even when the server write succeeds.
-   * Do NOT clear it on success; `listNotifications` will clear it once server returns a real readAt.
-   */
   const readNow = new Date().toISOString();
   let receiptRecorded = false;
   try {
@@ -1012,81 +1310,47 @@ export async function markNotificationAsRead(notification: NotificationDoc): Pro
       err: receiptErr instanceof Error ? receiptErr.message : String(receiptErr),
     });
   }
-  if (NOTIF_READ_DEBUG) {
-    console.log("[notifications][markRead] receipt_recorded", {
-      id: notification.id,
-      readAtBefore,
-      readNow,
-      receiptRecorded,
-    });
-  }
 
-  // Client may already show optimistic readAt while server still has null — must not skip the write.
-  if (notification.readAt) {
+  if (notification.id.startsWith(OFFICE_USER_NOTIFICATION_ID_PREFIX)) {
+    const officeId = notification.id.slice(OFFICE_USER_NOTIFICATION_ID_PREFIX.length);
+    notifReadLog("markNotificationAsRead office + root twins", { id: notification.id, officeId });
     try {
-      const snap = await getDoc(ref);
-      if (snap.exists()) {
-        const rawRa = (snap.data() as Record<string, unknown> | undefined)?.readAt;
-        if (hasMeaningfulReadAt(rawRa)) {
-          const readAtAfter = convertTimelikeToIso(rawRa) ?? null;
-          notifReadLog("markNotificationAsRead server already read — skip write", {
-            id: notification.id,
-            readAtBefore,
-            readAtAfter,
-          });
-          console.log("[notifications][markRead] server_already_has_readAt", { id: notification.id, readAtAfter });
-          return true;
-        }
-      }
+      await markOfficeTwinRead(currentUser.uid, officeId);
+      await markMatchingRootTwinsForOffice(currentUser.uid, officeId, notification);
+      return true;
     } catch (e) {
-      console.warn("[notifications:diag] markNotificationAsRead getDoc check failed, will persist", {
-        id: notification.id,
-        reason: e instanceof Error ? e.message : String(e),
-      });
+      if (receiptRecorded) return true;
+      throw e;
     }
   }
+
+  const ref = doc(db, "notifications", notification.id);
+  notifReadLog("markNotificationAsRead start", { id: notification.id, readAtBefore });
 
   try {
     await persistReadAtOnNotificationDoc(ref, notification.id);
+    const prefix = `${currentUser.uid}_`;
+    if (notification.id.startsWith(prefix)) {
+      await markOfficeTwinRead(currentUser.uid, notification.id.slice(prefix.length));
+    }
+    await Promise.all(
+      officeTwinIdsFromMobileNotification(notification).map((officeId) =>
+        markOfficeTwinRead(currentUser.uid, officeId)
+      )
+    );
     notifReadLog("markNotificationAsRead remote write OK", { id: notification.id, readAtBefore });
-    console.log("[notifications][markRead] remote_persist_ok", { id: notification.id, readAtBefore, receiptRecorded });
     return true;
   } catch (e) {
     const reason = e instanceof Error ? e.message : String(e);
-    let queued = false;
     try {
       await queuePendingRead(notification.id, reason);
-      queued = true;
-    } catch (queueErr) {
-      notifReadLog("markNotificationAsRead queuePendingRead failed — caller may rollback UI", {
-        id: notification.id,
-        err: queueErr instanceof Error ? queueErr.message : String(queueErr),
-      });
-      console.warn("[notifications][markRead] remote_persist_failed_not_queued", {
-        id: notification.id,
-        reason,
-        receiptRecorded,
-      });
-      // Only safe to claim "read" if we have a durable local receipt.
+    } catch {
       return receiptRecorded;
     }
-    notifReadLog("markNotificationAsRead remote write FAILED — receipt + pending queue", {
-      id: notification.id,
-      readAtBefore,
-      readAtAfterClient: readNow,
-      remoteWriteOk: false,
-      queued,
-      reason,
-    });
-    console.warn("[notifications][markRead] remote_persist_failed_queued", {
-      id: notification.id,
-      reason,
-      receiptRecorded,
-      queued,
-    });
     return true;
   }
 }
+
 
 export async function markAllAsRead(userId: string, maxCount: number = USER_NOTIFICATION_QUERY_LIMIT): Promise<void> {
   const currentUser = auth.currentUser;
@@ -1103,12 +1367,18 @@ export async function markAllAsRead(userId: string, maxCount: number = USER_NOTI
 
   const c = collection(db, "notifications");
   const q = query(c, where("userId", "==", userId), orderBy("createdAt", "desc"), limit(maxCount));
-  const snap = await getDocs(q);
+  const [snap, officeSnap] = await Promise.all([
+    getDocs(q),
+    getDocs(collection(db, "users", userId, "notifications")).catch(() => null),
+  ]);
   const unreadDocs = snap.docs.filter((d) => {
     const ra = (d.data() as Record<string, unknown>).readAt;
     return !hasMeaningfulReadAt(ra);
   });
-  if (unreadDocs.length === 0) return;
+  const unreadOfficeDocs =
+    officeSnap?.docs.filter((d) => (d.data() as Record<string, unknown>).read !== true) ?? [];
+
+  if (unreadDocs.length === 0 && unreadOfficeDocs.length === 0) return;
   const ids = unreadDocs.map((d) => d.id);
 
   // Record receipts for all targeted IDs up-front (best effort).
@@ -1126,14 +1396,27 @@ export async function markAllAsRead(userId: string, maxCount: number = USER_NOTI
   );
   console.log("[notifications][markAllRead] receipts_recorded", {
     targeted: ids.length,
+    officeTargeted: unreadOfficeDocs.length,
     receiptsRecorded,
     idsHead: ids.slice(0, 20),
     readNow,
   });
 
+  await Promise.all(
+    unreadOfficeDocs.map((d) =>
+      setDoc(
+        doc(db, "users", userId, "notifications", d.id),
+        { read: true, updatedAt: serverTimestamp() },
+        { merge: true }
+      ).catch(() => undefined)
+    )
+  );
+
+  if (unreadDocs.length === 0) return;
+
   const batch = writeBatch(db);
   unreadDocs.forEach((d) => {
-    batch.set(d.ref, { readAt: serverTimestamp() }, { merge: true });
+    batch.set(d.ref, { readAt: serverTimestamp(), read: true }, { merge: true });
   });
   try {
     await batch.commit();
@@ -1734,6 +2017,113 @@ export async function createFieldNoteSharedNotification(data: {
     noteText: data.noteText,
     projectId: data.projectId,
     projectName: data.projectName ?? null,
+    fromUserId: data.fromUserId ?? auth.currentUser.uid,
+    fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
+  });
+  return { id: ref.id };
+}
+
+async function writeOfficePhotoAddedNotification(data: {
+  userId: string;
+  orgId?: string | null;
+  attachmentId: string;
+  projectId: string;
+  projectName?: string | null;
+  subject: string;
+  fromUserId: string;
+  fromUserName?: string | null;
+}): Promise<void> {
+  try {
+    const officeRef = doc(db, "users", data.userId, "notifications", `photo-${data.attachmentId}`);
+    await setDoc(
+      officeRef,
+      {
+        type: "PHOTO_ADDED",
+        orgId: data.orgId ?? null,
+        projectId: data.projectId,
+        projectName: data.projectName ?? null,
+        attachmentId: data.attachmentId,
+        subject: data.subject || null,
+        fromUserId: data.fromUserId,
+        assignedBy: data.fromUserId,
+        assignedByName: data.fromUserName ?? null,
+        createdAt: serverTimestamp(),
+        read: false,
+      },
+      { merge: true }
+    );
+  } catch (e) {
+    console.warn("[notifications] writeOfficePhotoAddedNotification failed", {
+      targetUserId: data.userId,
+      attachmentId: data.attachmentId,
+      error: e instanceof Error ? e.message : String(e),
+    });
+  }
+}
+
+/** Notify managers when a worker uploads a site / work photo. */
+export async function createWorkPhotoAddedNotification(data: {
+  userId: string;
+  projectId: string;
+  projectName?: string | null;
+  attachmentId: string;
+  comment?: string | null;
+  photoType?: string | null;
+  orgId?: string | null;
+  fromUserId?: string;
+  fromUserName?: string | null;
+}): Promise<{ id: string } | null> {
+  if (!auth.currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie notifikácie.");
+  }
+  if (data.userId === auth.currentUser.uid) return null;
+
+  const author =
+    data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? "Pracovník";
+  const snippet =
+    typeof data.comment === "string" && data.comment.trim()
+      ? data.comment.trim().length > 80
+        ? `${data.comment.trim().slice(0, 79)}…`
+        : data.comment.trim()
+      : "";
+  const subject = snippet ? `${author}: ${snippet}` : `${author} pridal fotku zo stavby`;
+  const projectLabel = data.projectName?.trim() || "projekt";
+  const message = snippet
+    ? `${author} pridal fotku do ${projectLabel}: ${snippet}`
+    : `${author} pridal fotku do ${projectLabel}.`;
+
+  const c = collection(db, "notifications");
+  const ref = await addDoc(c, {
+    userId: data.userId,
+    type: "PHOTO_ADDED",
+    orgId: data.orgId ?? null,
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    attachmentId: data.attachmentId,
+    message,
+    fromUserId: data.fromUserId ?? auth.currentUser.uid,
+    fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
+    meta: {
+      attachmentId: data.attachmentId,
+      projectId: data.projectId,
+      photoType: data.photoType ?? null,
+    },
+    entityType: "document",
+    deepLink: {
+      screen: "ProjectOverview",
+      params: { projectId: data.projectId },
+    },
+    createdAt: serverTimestamp(),
+    readAt: null,
+    severity: "info",
+  });
+  await writeOfficePhotoAddedNotification({
+    userId: data.userId,
+    orgId: data.orgId,
+    attachmentId: data.attachmentId,
+    projectId: data.projectId,
+    projectName: data.projectName ?? null,
+    subject,
     fromUserId: data.fromUserId ?? auth.currentUser.uid,
     fromUserName: data.fromUserName ?? auth.currentUser.displayName ?? auth.currentUser.email ?? null,
   });

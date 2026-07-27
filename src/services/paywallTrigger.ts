@@ -1,7 +1,8 @@
 /**
  * Paywall trigger – show paywall when user reaches usage thresholds without entitlement.
  * Uses server billing status (billing.isPro, billing.status).
- * Rule: billing.isPro => never show. billing.status==="expired" => show with 24h cooldown.
+ * Rule: billing.isPro => never show. businessCovered => never show (company pays).
+ *       billing.status==="expired" => show with 24h cooldown.
  *       billing.status==="trial" => engagement trigger (projects>=1 && tasks>=3) + 24h cooldown.
  * Uses navigationRef for Paywall navigation (root navigator has Paywall; nested screens may not).
  */
@@ -16,6 +17,14 @@ const LAST_PAYWALL_SHOWN_AT = "@staveto:lastPaywallShownAt";
 const COOLDOWN_MS = 24 * 60 * 60 * 1000; // 24 hours
 
 type Counts = { projects: number; tasks: number; appOpened: number };
+
+export type PaywallCheckOptions = {
+  /**
+   * Active company membership — personal Pro paywall must not appear;
+   * the organization subscription covers the seat.
+   */
+  businessCovered?: boolean;
+};
 
 async function getCounts(): Promise<Counts> {
   try {
@@ -58,10 +67,14 @@ async function markPaywallShown(): Promise<void> {
 export type PaywallEvent = "project_created" | "task_created" | "app_opened";
 
 /**
- * Require Pro or valid trial before OCR/export/advanced actions.
+ * Require Pro, valid trial, or company-covered seat before OCR/export/advanced actions.
  * Returns true if user can proceed, false if paywall should be shown.
  */
-export function requireProOrTrialValid(billing: BillingStatus | null | undefined): boolean {
+export function requireProOrTrialValid(
+  billing: BillingStatus | null | undefined,
+  options?: PaywallCheckOptions
+): boolean {
+  if (options?.businessCovered) return true;
   if (!billing) return false;
   if (billing.isPro) return true;
   if (billing.status === "trial" && billing.remainingTrialDays > 0) return true;
@@ -89,16 +102,15 @@ export async function trackPaywallEvent(event: PaywallEvent): Promise<void> {
 
 /**
  * Check if paywall should be shown and navigate if so.
- * billing.isPro => never show.
- * billing.status==="expired" => show with 24h cooldown.
- * billing.status==="trial" => engagement trigger (projects>=1 && tasks>=3) + 24h cooldown.
- * @param source – analytics source (e.g. project_created, task_created, app_opened)
+ * businessCovered / billing.isPro => never show.
  */
 export async function checkAndShowPaywall(
   billing: BillingStatus | null | undefined,
   navigation: NavigationProp<Record<string, object>>,
-  source?: PaywallEvent
+  source?: PaywallEvent,
+  options?: PaywallCheckOptions
 ): Promise<boolean> {
+  if (options?.businessCovered) return false;
   if (billing?.isPro) return false;
   if (await isWithinCooldown()) return false;
 

@@ -3,12 +3,23 @@
  * Hides BUILD / TRADE and other internal enums from UI; callers pass plain text + hints.
  */
 
+import {
+  collection,
+  doc,
+  setDoc,
+  writeBatch,
+  serverTimestamp,
+} from "../lib/rnFirestore";
+import { db, getAuth } from "../firebase";
+import { paths } from "../lib/firestorePaths";
 import type { ActiveProjectStorageType } from "../lib/projectTypeModel";
 import { shouldUseCountryCatalogTemplate } from "../lib/projectTypeModel";
 import type { PrimaryUsageMode } from "../lib/primaryUsageMode";
 import { resolveTemplateIdForCountry } from "../utils/templateResolver";
 import type { CreationMode, JobWorkflowKind, ServiceMaintenanceScope, WorkType } from "../lib/projectEnums";
 import { createProjectFromTemplate, type CreateProjectFromTemplateParams } from "./projectFactory";
+import { createProjectCreatedNotification } from "./notifications";
+import type { ProjectCustomerFields } from "./customers";
 
 export type InternalProjectHints = {
   /** From onboarding step 2 / profile — used only for optional BUILD catalog template. */
@@ -98,4 +109,98 @@ export async function createManualBlankProject(input: CreateManualBlankInput): P
     addressText,
     phaseCustomizations: undefined,
   });
+}
+
+/** Matches web `SIMPLIFIED_LEGACY_WORK_TYPE` / `createDraftJob` for customer_job. */
+export const SIMPLIFIED_LEGACY_JOB_ARCHETYPE = "customer_job" as const;
+
+export type CreateDraftJobInput = {
+  name: string;
+  customerRequest?: string;
+  addressText?: string;
+  city?: string;
+  countryCode?: string;
+  customer?: ProjectCustomerFields;
+};
+
+/**
+ * Web-aligned draft job create (phase sales / lifecycle new_request).
+ * Also writes owner member so mobile access rules work immediately.
+ * Company workspace is applied after create via `stampBusinessTeamProject` when needed.
+ */
+export async function createDraftJob(input: CreateDraftJobInput): Promise<string> {
+  const currentUser = getAuth()?.currentUser ?? null;
+  if (!currentUser?.uid) {
+    throw new Error("Musíte byť prihlásený na vytvorenie projektu.");
+  }
+  const ownerId = currentUser.uid;
+  const name = input.name?.trim();
+  if (!name) throw new Error("Názov zákazky je povinný.");
+
+  const projectRef = doc(collection(db, "projects"));
+  const projectId = projectRef.id;
+
+  const projectData: Record<string, unknown> = {
+    name,
+    projectType: "TRADE",
+    workType: "REPAIR",
+    jobArchetype: SIMPLIFIED_LEGACY_JOB_ARCHETYPE,
+    phase: "sales",
+    lifecycleStatus: "new_request",
+    salesStatus: "draft",
+    quoteStatus: "none",
+    creationMode: "MANUAL",
+    jobsTabVisible: true,
+    source: "mobile",
+    ownerId,
+    workspaceType: "personal",
+    workspaceId: ownerId,
+    createdAt: serverTimestamp(),
+    updatedAt: serverTimestamp(),
+  };
+
+  const customer = input.customer;
+  if (customer?.customerId?.trim()) projectData.customerId = customer.customerId.trim();
+  const customerRequest = input.customerRequest?.trim();
+  if (customerRequest) projectData.customerRequest = customerRequest;
+  if (customer?.customerName?.trim()) projectData.customerName = customer.customerName.trim();
+  if (customer?.customerCompanyName?.trim()) {
+    projectData.customerCompanyName = customer.customerCompanyName.trim();
+  }
+  if (customer?.customerContactPersonName?.trim()) {
+    projectData.customerContactPersonName = customer.customerContactPersonName.trim();
+  }
+  if (customer?.customerEmail?.trim()) projectData.customerEmail = customer.customerEmail.trim();
+  if (customer?.customerPhone?.trim()) projectData.customerPhone = customer.customerPhone.trim();
+  if (input.addressText?.trim()) projectData.addressText = input.addressText.trim();
+  if (input.city?.trim()) projectData.city = input.city.trim();
+  if (input.countryCode?.trim()) {
+    projectData.countryCode = input.countryCode.trim().toUpperCase();
+  }
+
+  await setDoc(projectRef, projectData);
+
+  try {
+    const batch = writeBatch(db);
+    batch.set(doc(db, paths.projectMember(projectId, ownerId)), {
+      userId: ownerId,
+      role: "owner",
+      addedAt: serverTimestamp(),
+    });
+    await batch.commit();
+  } catch {
+    /* project exists; member can be repaired later */
+  }
+
+  try {
+    await createProjectCreatedNotification({
+      userId: ownerId,
+      projectId,
+      projectName: name,
+    });
+  } catch {
+    /* best effort */
+  }
+
+  return projectId;
 }

@@ -33,11 +33,25 @@ export function UnreadCountProvider({ children }: { children: React.ReactNode })
     }
     setLoading(true);
     try {
-      const [unreadNotifications, pendingInvites] = await Promise.all([
-        notificationsService.getUnreadCount(uid),
+      const [list, pendingInvites] = await Promise.all([
+        notificationsService.listNotifications(uid, {
+          limitCount: notificationsService.USER_NOTIFICATION_QUERY_LIMIT,
+        }),
         invitesService.listPendingInvites(),
       ]);
-      const total = unreadNotifications + pendingInvites.length;
+      const invitesByProject = new Map<string, (typeof pendingInvites)[number]>();
+      for (const inv of pendingInvites) {
+        if (!inv?.projectId || invitesByProject.has(inv.projectId)) continue;
+        invitesByProject.set(inv.projectId, inv);
+      }
+      const uniqueInvites = [...invitesByProject.values()];
+      const pendingProjectIds = new Set(invitesByProject.keys());
+      const unreadNotifications = list.filter(
+        (n) =>
+          !notificationsService.hasMeaningfulReadAt(n.readAt) &&
+          !notificationsService.isCoveredByPendingProjectInvite(n, pendingProjectIds)
+      ).length;
+      const total = unreadNotifications + uniqueInvites.length;
       setCount(total > 99 ? 99 : total);
     } catch {
       setCount(0);
@@ -50,8 +64,18 @@ export function UnreadCountProvider({ children }: { children: React.ReactNode })
     refresh();
   }, [refresh]);
 
+  // Live sync with web: badge updates when office/root notification docs change.
   useEffect(() => {
-    const interval = setInterval(refresh, 60_000);
+    const uid = auth()?.currentUser?.uid ?? null;
+    if (!uid) return;
+    return notificationsService.subscribeNotificationInboxChanges(uid, () => {
+      void refresh();
+    });
+  }, [refresh, orgId]);
+
+  // Backup poll (live listeners cover mark-read; this catches invite / edge cases).
+  useEffect(() => {
+    const interval = setInterval(refresh, 120_000);
     return () => clearInterval(interval);
   }, [refresh]);
 

@@ -626,10 +626,12 @@ export function ProjectMembersScreen() {
         </ScrollView>
       )}
 
-      <TouchableOpacity style={styles.addMemberBtn} onPress={onAddMember}>
-        <Ionicons name="person-add" size={22} color="#fff" style={{ marginRight: 8 }} />
-        <Text style={styles.addMemberBtnText}>{t("projectMembers.addMember")}</Text>
-      </TouchableOpacity>
+      {(capabilities.capabilities.canInviteMembers || access.isOwner) && (
+        <TouchableOpacity style={styles.addMemberBtn} onPress={onAddMember}>
+          <Ionicons name="person-add" size={22} color="#fff" style={{ marginRight: 8 }} />
+          <Text style={styles.addMemberBtnText}>{t("projectMembers.addMember")}</Text>
+        </TouchableOpacity>
+      )}
 
       <Modal visible={showAddMember} transparent animationType="slide">
         <KeyboardAvoidingView style={[styles.addMemberOverlay, { paddingTop: insets.top, paddingBottom: insets.bottom + spacing.md }]} behavior={Platform.OS === "ios" ? "padding" : undefined}>

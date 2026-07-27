@@ -245,6 +245,79 @@ export type UploadWorkPhotoInput = {
   workSessionId?: string;
 };
 
+async function notifyManagersOfWorkPhoto(args: {
+  projectId: string;
+  attachmentId: string;
+  comment?: string | null;
+  photoType?: string | null;
+  uploadedByName?: string | null;
+  orgIdHint?: string | null;
+}): Promise<void> {
+  const creatorUid = auth.currentUser?.uid;
+  if (!creatorUid) return;
+
+  const projectSnap = await getDoc(doc(db, "projects", args.projectId));
+  const projectData = projectSnap.exists() ? (projectSnap.data() as Record<string, unknown>) : {};
+  const projectName =
+    typeof projectData.name === "string" && projectData.name.trim()
+      ? projectData.name.trim()
+      : null;
+  const ownerId = typeof projectData.ownerId === "string" ? projectData.ownerId.trim() : "";
+  const orgId =
+    (typeof args.orgIdHint === "string" && args.orgIdHint.trim()) ||
+    (typeof projectData.orgId === "string" && projectData.orgId.trim()) ||
+    (typeof projectData.workspaceId === "string" && projectData.workspaceId.trim()) ||
+    "";
+
+  const { createWorkPhotoAddedNotification } = await import("./notifications");
+  const notified = new Set<string>();
+
+  const notifyUid = async (targetUid: string) => {
+    if (!targetUid || targetUid === creatorUid || notified.has(targetUid)) return;
+    await createWorkPhotoAddedNotification({
+      userId: targetUid,
+      projectId: args.projectId,
+      projectName,
+      attachmentId: args.attachmentId,
+      comment: args.comment,
+      photoType: args.photoType,
+      orgId: orgId || null,
+      fromUserId: creatorUid,
+      fromUserName: args.uploadedByName,
+    });
+    notified.add(targetUid);
+  };
+
+  if (ownerId) await notifyUid(ownerId);
+
+  if (!orgId) return;
+
+  try {
+    const { getOrganization } = await import("./organizations");
+    const org = await getOrganization(orgId);
+    if (org?.ownerUid) await notifyUid(org.ownerUid);
+  } catch (e) {
+    console.warn("[attachments] notifyManagersOfWorkPhoto org owner lookup failed", e);
+  }
+
+  try {
+    const { listMembers } = await import("./businessMembers");
+    const members = await listMembers(orgId);
+    for (const m of members) {
+      const uid = (m.userId?.trim() || m.id?.trim()) ?? "";
+      if (
+        m.status === "active" &&
+        (m.role === "owner" || m.role === "admin" || m.role === "manager") &&
+        uid
+      ) {
+        await notifyUid(uid);
+      }
+    }
+  } catch (e) {
+    console.warn("[attachments] notifyManagersOfWorkPhoto listMembers failed", e);
+  }
+}
+
 /**
  * Upload a field work photo with extended metadata (backwards-compatible attachment doc).
  */
@@ -367,6 +440,19 @@ export async function uploadWorkPhoto(input: UploadWorkPhotoInput): Promise<Atta
     );
   } catch (error) {
     console.warn("[attachments] uploadWorkPhoto project event failed:", error);
+  }
+
+  try {
+    await notifyManagersOfWorkPhoto({
+      projectId,
+      attachmentId: refDoc.id,
+      comment: input.comment?.trim() || null,
+      photoType: input.photoType,
+      uploadedByName: input.uploadedByName?.trim() || null,
+      orgIdHint: orgId ?? null,
+    });
+  } catch (error) {
+    console.warn("[attachments] uploadWorkPhoto notify failed:", error);
   }
 
   return {

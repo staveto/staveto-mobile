@@ -147,7 +147,14 @@ export function ProjectInvitesScreen() {
       } catch (error: unknown) {
         const err = error as { code?: string; message?: string; details?: unknown };
         console.error("[ProjectInvitesScreen] Accept failed:", err?.code, err?.message, error);
-        showToast(t("common.error") + ": " + (err?.message ?? "Chyba"));
+        const msg = String(err?.message ?? "");
+        const friendly =
+          msg.includes("index") || msg.includes("FAILED_PRECONDITION")
+            ? t("projectInvites.acceptIndexError") ||
+              "Pozvánku sa nepodarilo prijať. Skúste to znova o chvíľu."
+            : t("projectInvites.acceptFailed") ||
+              "Pozvánku sa nepodarilo prijať. Skúste to znova.";
+        showToast(friendly);
       } finally {
         setActionProjectId(null);
       }
@@ -212,6 +219,8 @@ export function ProjectInvitesScreen() {
               style={[styles.acceptBtn, isBusy && styles.btnDisabled]}
               onPress={() => handleAccept(item)}
               disabled={isBusy}
+              accessibilityRole="button"
+              accessibilityLabel={t("projectInvites.accept") || "Prijať"}
             >
               {isBusy ? (
                 <ActivityIndicator size="small" color="#fff" />
@@ -226,8 +235,10 @@ export function ProjectInvitesScreen() {
               style={[styles.declineBtn, isBusy && styles.btnDisabled]}
               onPress={() => handleDecline(item)}
               disabled={isBusy}
+              accessibilityRole="button"
+              accessibilityLabel={t("projectInvites.decline") || "Odmietnuť"}
             >
-              <Ionicons name="close-circle-outline" size={20} color={colors.textMuted} />
+              <Ionicons name="close-circle-outline" size={20} color={colors.error} />
               <Text style={styles.declineBtnText}>{t("projectInvites.decline") || "Odmietnuť"}</Text>
             </TouchableOpacity>
           </View>
@@ -239,7 +250,7 @@ export function ProjectInvitesScreen() {
 
   if (loading && invites.length === 0) {
     return (
-      <View style={styles.center}>
+      <View style={[styles.screen, styles.center]}>
         <ActivityIndicator size="large" color={colors.primary} />
         <Text style={styles.loadingText}>{t("loading.text")}</Text>
       </View>
@@ -248,7 +259,7 @@ export function ProjectInvitesScreen() {
 
   if (invites.length === 0) {
     return (
-      <View style={styles.center}>
+      <View style={[styles.screen, styles.center]}>
         <Ionicons name="mail-open-outline" size={64} color={colors.textMuted} />
         <Text style={styles.emptyTitle}>{t("projectInvites.emptyTitle") || "Žiadne pozvánky"}</Text>
         <Text style={styles.emptySubtitle}>
@@ -263,27 +274,32 @@ export function ProjectInvitesScreen() {
   }
 
   return (
-    <FlatList
-      data={invites}
-      keyExtractor={(item) => `${item.projectId}-${item.memberId}`}
-      renderItem={renderItem}
-      ListHeaderComponent={
-        <View style={styles.pendingSection}>
-          <Text style={styles.sectionTitle}>{t("projectInvites.pendingSection")}</Text>
-          <Text style={styles.sectionHint}>{t("projectInvites.pendingHint")}</Text>
-        </View>
-      }
-      contentContainerStyle={styles.list}
-      refreshControl={
-        <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
-      }
-    />
+    <View style={styles.screen}>
+      <FlatList
+        data={invites}
+        keyExtractor={(item) => `${item.projectId}-${item.memberId}`}
+        renderItem={renderItem}
+        ListHeaderComponent={
+          <View style={styles.pendingSection}>
+            <Text style={styles.sectionTitle}>{t("projectInvites.pendingSection")}</Text>
+            <Text style={styles.sectionHint}>{t("projectInvites.pendingHint")}</Text>
+          </View>
+        }
+        contentContainerStyle={styles.list}
+        refreshControl={
+          <RefreshControl refreshing={refreshing} onRefresh={onRefresh} colors={[colors.primary]} />
+        }
+      />
+    </View>
   );
 }
 
 const styles = StyleSheet.create({
-  center: {
+  screen: {
     flex: 1,
+    backgroundColor: "#ffffff",
+  },
+  center: {
     justifyContent: "center",
     alignItems: "center",
     padding: spacing.lg,
@@ -312,12 +328,12 @@ const styles = StyleSheet.create({
     lineHeight: 18,
   },
   card: {
-    backgroundColor: colors.card,
+    backgroundColor: "#ffffff",
     borderRadius: radius,
     padding: spacing.lg,
     marginBottom: spacing.md,
     borderWidth: 1,
-    borderColor: colors.border,
+    borderColor: "#d7dee8",
   },
   cardHeader: {
     marginBottom: spacing.sm,
@@ -339,36 +355,39 @@ const styles = StyleSheet.create({
   },
   acceptBtn: {
     flex: 1,
+    minHeight: 48,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.xs,
     backgroundColor: colors.primary,
-    paddingVertical: spacing.sm,
+    paddingVertical: spacing.sm + 2,
     paddingHorizontal: spacing.md,
     borderRadius: radius,
   },
   acceptBtnText: {
     color: "#fff",
-    fontWeight: "600",
-    fontSize: 14,
+    fontWeight: "700",
+    fontSize: 15,
   },
   declineBtn: {
     flex: 1,
+    minHeight: 48,
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "center",
     gap: spacing.xs,
-    backgroundColor: colors.background,
-    paddingVertical: spacing.sm,
+    backgroundColor: "#fff5f5",
+    paddingVertical: spacing.sm + 2,
     paddingHorizontal: spacing.md,
     borderRadius: radius,
-    borderWidth: 1,
-    borderColor: colors.border,
+    borderWidth: 1.5,
+    borderColor: colors.error,
   },
   declineBtnText: {
-    color: colors.textMuted,
-    fontSize: 14,
+    color: colors.error,
+    fontWeight: "700",
+    fontSize: 15,
   },
   btnDisabled: {
     opacity: 0.6,

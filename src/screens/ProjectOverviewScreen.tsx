@@ -48,7 +48,6 @@ import {
   canManageTaskPlanningFromAccess,
   filterTasksForWorkerView,
 } from "../lib/taskPlanningPermissions";
-import { useCapabilities } from "../hooks/useCapabilities";
 import { useOrgAccess } from "../hooks/useOrgAccess";
 import { useProjectAccess, fetchProjectAccess, type ProjectAccess } from "../hooks/useProjectAccess";
 import type { SmartReadOptions } from "../services/firestoreSmartRead";
@@ -104,7 +103,6 @@ import { exportProjectToCsv } from "../services/projectExport";
 import { exportProjectAsProtocol } from "../services/projectProtocolExport";
 import * as timeTracking from "../services/timeTracking";
 import { postDebugIngest } from "../lib/debugIngest";
-import { showTeamFeatureSoftGate } from "../lib/teamFeatureSoftGate";
 import * as quickNotesService from "../services/quickNotes";
 import { updateTaskStatus } from "../services/tasks";
 import { archiveTask, reorderTask, moveTaskToPhase } from "../services/tasks";
@@ -243,7 +241,7 @@ export function ProjectOverviewScreen() {
   const insets = useSafeAreaInsets();
   const { t, locale } = useI18n();
   const { user, orgId } = useAuth();
-  const { role, canViewAllProjects } = useOrgAccess();
+  const { role, canViewAllProjects, canEditProject, canAccessBusiness } = useOrgAccess();
   /** Solo namespace for writes; never block saves when AuthContext orgId is briefly null. */
   const ownerIdForWrite = orgId ?? user?.id ?? null;
   const routeParams = (route.params as {
@@ -396,8 +394,6 @@ export function ProjectOverviewScreen() {
   const [datePickerDate, setDatePickerDate] = useState(new Date());
   const [projectType, setProjectType] = useState<string | undefined>(undefined);
   const [jobsTabVisible, setJobsTabVisible] = useState<boolean | undefined>(undefined);
-  const [projectWorkspaceType, setProjectWorkspaceType] = useState<string | undefined>(undefined);
-  const [projectOrgId, setProjectOrgId] = useState<string | undefined>(undefined);
   const [templateId, setTemplateId] = useState<string | undefined>(undefined);
   const [addressText, setAddressText] = useState<string | undefined>(undefined);
   const [projectCountryCode, setProjectCountryCode] = useState<string | undefined>(undefined);
@@ -499,7 +495,8 @@ export function ProjectOverviewScreen() {
       isMember: access.isMember || loadAccess.isMember,
       canReadTasks: access.canReadTasks || loadAccess.canReadTasks || tasks.length > 0,
       canReadPhases: access.canReadPhases || loadAccess.canReadPhases || phases.length > 0,
-      canWrite: access.canWrite || loadAccess.canWrite,
+      // Never elevate structure write via OR — workers must stay non-editors.
+      canWrite: access.canWrite && loadAccess.canWrite,
       canWriteTime: access.canWriteTime || loadAccess.canWriteTime,
     };
   }, [access, loadAccess, tasks.length, phases.length]);
@@ -507,12 +504,6 @@ export function ProjectOverviewScreen() {
   /** Native tab bar is visible inside HomeStack; custom dock would duplicate it. */
   const insideMainTabs = useIsInsideMainTabNavigator();
   const showAppBottomMenu = !insideMainTabs;
-  const capabilities = useCapabilities({
-    projectWorkspaceType,
-    projectOrgId,
-    legacyProject: !projectWorkspaceType && !projectOrgId,
-  });
-
   const canViewProjectTime = useMemo(() => {
     if (access.loading) return false;
     return (
@@ -537,16 +528,16 @@ export function ProjectOverviewScreen() {
   ]);
 
   /** Owner / editor — full task list; workers — unassigned + own (same as web Tasks tab). */
-  const canManagePlanning = useMemo(
-    () =>
-      canManageTaskPlanningFromAccess({
-        loading: access.loading,
-        isOwner: access.isOwner,
-        canWrite: access.canWrite,
-        sharedItems: access.sharedItems,
-      }),
-    [access.loading, access.isOwner, access.canWrite, access.sharedItems]
-  );
+  const canManagePlanning = useMemo(() => {
+    if (access.loading) return false;
+    if (!access.isOwner && !canEditProject) return false;
+    return canManageTaskPlanningFromAccess({
+      loading: access.loading,
+      isOwner: access.isOwner,
+      canWrite: access.canWrite,
+      sharedItems: access.sharedItems,
+    });
+  }, [access.loading, access.isOwner, access.canWrite, access.sharedItems, canEditProject]);
   const tasksForDisplay = useMemo(() => {
     const uid = user?.id ?? "";
     if (canManagePlanning || !uid) return tasks;
@@ -637,6 +628,7 @@ export function ProjectOverviewScreen() {
   const [uploadingDocumentAttachment, setUploadingDocumentAttachment] = useState(false);
   const [whatsappDiaryEnabled, setWhatsappDiaryEnabled] = useState(false);
   const [contractorsEnabled, setContractorsEnabled] = useState(false);
+  // Keep phases list collapsed by default so the project screen stays short.
   const [phasesSectionExpanded, setPhasesSectionExpanded] = useState(true);
   const [taskFilter, setTaskFilter] = useState<'service' | 'all'>('service');
   const [activityEvents, setActivityEvents] = useState<ProjectEvent[]>([]);
@@ -851,10 +843,6 @@ export function ProjectOverviewScreen() {
             ? (project as { jobsTabVisible: boolean }).jobsTabVisible
             : undefined
         );
-        const rawWorkspaceType = (project as { workspaceType?: unknown }).workspaceType;
-        const rawOrgId = (project as { orgId?: unknown }).orgId;
-        setProjectWorkspaceType(typeof rawWorkspaceType === "string" ? rawWorkspaceType : undefined);
-        setProjectOrgId(typeof rawOrgId === "string" ? rawOrgId : undefined);
         setTemplateId(project.templateId);
         setAddressText(project.addressText);
         setProjectCountryCode(project.countryCode);
@@ -868,8 +856,6 @@ export function ProjectOverviewScreen() {
         }
       } else {
         console.warn(`[ProjectOverview] Project ${projectId} not found or no access - continuing without project metadata`);
-        setProjectWorkspaceType(undefined);
-        setProjectOrgId(undefined);
         setJobsTabVisible(undefined);
         if (routeProjectIdRef.current === loadForProjectId) {
           setFetchedProjectName("");
@@ -1076,14 +1062,11 @@ export function ProjectOverviewScreen() {
         setPhases([]);
       }
 
-      if (tasksLoaded.length > 0 || phasesForState.length > 0) {
-        setPhasesSectionExpanded(true);
-        if (phasesForState.length > 0) {
-          const expanded = new Map<string, boolean>();
-          phasesForState.forEach((p) => expanded.set(p.id, true));
-          expandedPhasesRef.current = expanded;
-          setExpandedPhases(expanded);
-        }
+      if (phasesForState.length > 0) {
+        const expanded = new Map<string, boolean>();
+        phasesForState.forEach((p) => expanded.set(p.id, false));
+        expandedPhasesRef.current = expanded;
+        setExpandedPhases(expanded);
       }
       setExpenses(exp || []);
       setDiaryEntries(hasDiary ? diary : []);
@@ -1113,12 +1096,16 @@ export function ProjectOverviewScreen() {
         setServiceRulesCount(0);
       }
 
-      // Problems count (open + in_progress) for all project types
-      try {
-        const count = await problemsService.countOpenProblems(projectId);
-        setOpenProblemsCount(count);
-      } catch (e: any) {
-        console.warn("[ProjectOverview] Error loading problems count:", e);
+      // Problems count — only when user may see the problems section
+      if (isOwnerForLoad || liveAccess.isMember || liveAccess.canReportProblem) {
+        try {
+          const count = await problemsService.countOpenProblems(projectId);
+          setOpenProblemsCount(count);
+        } catch (e: any) {
+          console.warn("[ProjectOverview] Error loading problems count:", e);
+          setOpenProblemsCount(0);
+        }
+      } else {
         setOpenProblemsCount(0);
       }
       
@@ -1552,6 +1539,7 @@ export function ProjectOverviewScreen() {
     if (!paramExpandPhaseId || phasesForUi.length === 0) return;
     const phaseExists = phasesForUi.some((p) => p.id === paramExpandPhaseId);
     if (phaseExists) {
+      setPhasesSectionExpanded(true);
       setExpandedPhases((prev) => {
         const next = new Map(prev);
         next.set(paramExpandPhaseId, true);
@@ -1560,12 +1548,6 @@ export function ProjectOverviewScreen() {
       });
     }
   }, [paramExpandPhaseId, phasesForUi]);
-
-  useEffect(() => {
-    if (phases.length > 0 || tasks.length > 0) {
-      setPhasesSectionExpanded(true);
-    }
-  }, [phases.length, tasks.length]);
 
   useEffect(() => {
     if (!paramOpenExpenseId || !projectId) return;
@@ -1603,16 +1585,13 @@ export function ProjectOverviewScreen() {
   ]);
 
   const goBack = () => navigation.goBack();
+  /** Crew list is always open for people on the project; invite/manage stays gated on ProjectMembers. */
   const goToMembers = () => {
-    if (!capabilities.capabilities.canUseProjectMembers) {
-      showTeamFeatureSoftGate({
-        onRegisterCompany: () => {
-          (navigation as { navigate: (n: string, p?: object) => void }).navigate("BusinessStack");
-        },
-      });
-      return;
-    }
-    (navigation as { navigate: (n: string, p?: object) => void }).navigate("ProjectMembers", { projectId, projectName, projectType });
+    (navigation as { navigate: (n: string, p?: object) => void }).navigate("ProjectMembers", {
+      projectId,
+      projectName,
+      projectType,
+    });
   };
 
   const handleCalculateDistanceKm = useCallback(async () => {
@@ -1782,7 +1761,9 @@ export function ProjectOverviewScreen() {
       logTaskCreateSuccess("project_overview");
       console.log(`[ProjectOverview] Custom task created successfully`);
       trackPaywallEvent("task_created").then(() =>
-        checkAndShowPaywall(user?.billing, navigation, "task_created")
+        checkAndShowPaywall(user?.billing, navigation, "task_created", {
+          businessCovered: canAccessBusiness,
+        })
       );
     } catch (e: unknown) {
       console.error(`[ProjectOverview] Error creating task:`, e);
@@ -2328,7 +2309,7 @@ export function ProjectOverviewScreen() {
   };
 
   const handleEditPhase = (phase: ProjectPhaseDoc) => {
-    if (!isOwner) {
+    if (!canManagePlanning) {
       Alert.alert(t("common.error"), t("projectOverview.noPermission"));
       return;
     }
@@ -2339,6 +2320,10 @@ export function ProjectOverviewScreen() {
 
   const handleCreatePhase = async () => {
     if (!projectId || !newPhaseName.trim()) return;
+    if (!canManagePlanning) {
+      Alert.alert(t("common.error"), t("projectOverview.noPermission"));
+      return;
+    }
     
     setSubmitting(true);
     try {
@@ -2383,7 +2368,7 @@ export function ProjectOverviewScreen() {
   };
 
   const handleDeletePhase = async (phase: ProjectPhaseDoc) => {
-    if (!isOwner) {
+    if (!canManagePlanning) {
       Alert.alert(t("common.error"), t("projectOverview.noPermission"));
       return;
     }
@@ -4480,9 +4465,8 @@ export function ProjectOverviewScreen() {
     hasPhaseLinksOnTasks;
   const hasWorkPlanContent =
     phases.length > 0 || tasksForDisplay.length > 0 || hasPhaseLinksOnTasks || templateId === "ai-generated";
-  const canManagePhases =
-    canManagePlanning &&
-    (isBuildLikeStorageType(projectType) || phases.length > 0 || hasPhaseLinksOnTasks);
+  /** Owners / planning editors may create phases on any job type (incl. empty TRADE drafts). */
+  const canManagePhases = canManagePlanning;
 
   const showWorkPlanSection =
     projectType !== "MAINTENANCE" &&
@@ -4981,19 +4965,25 @@ export function ProjectOverviewScreen() {
             phaseOrder.length === 0 ? (
           <View style={styles.emptyContainer}>
             <Text style={styles.empty}>
-              {isBuildLikeStorageType(projectType)
+              {canManagePhases
                 ? t("projectOverview.noPhases")
-                : t("projectOverview.noTasksProject")}
+                : isBuildLikeStorageType(projectType)
+                  ? t("projectOverview.noPhases")
+                  : t("projectOverview.noTasksProject")}
             </Text>
             <Text style={styles.emptySubtext}>
-              {isBuildLikeStorageType(projectType)
-                ? t("projectOverview.addPhaseHint")
-                : t("projectOverview.noTasksHint")}
+              {canManagePhases
+                ? t("projectOverview.addPhaseAndTaskHint")
+                : isBuildLikeStorageType(projectType)
+                  ? t("projectOverview.addPhaseHint")
+                  : t("projectOverview.noTasksHint")}
             </Text>
             {canManagePhases && (projectType !== 'MANAGEMENT' || !templateId) && (
               <TouchableOpacity
                 style={styles.addTemplateButton}
                 onPress={() => setShowNewPhaseModal(true)}
+                accessibilityRole="button"
+                accessibilityLabel={t("projectOverview.createPhase")}
               >
                 <Ionicons name="add-circle" size={20} color="#fff" style={{ marginRight: 8 }} />
                 <Text style={styles.addTemplateButtonText}>{t("projectOverview.createPhase")}</Text>
@@ -5021,7 +5011,7 @@ export function ProjectOverviewScreen() {
               const hidePhaseChrome =
                 phaseKey === UNPHASED_TASKS_GROUP_ID && phasesForUi.length === 0;
 
-              const expanded = expandedPhases.get(phaseKey) ?? true;
+              const expanded = expandedPhases.get(phaseKey) ?? false;
               return (
                   <View key={phaseKey} style={hidePhaseChrome ? undefined : styles.phaseGroupCard}>
                     {!hidePhaseChrome ? (
@@ -5610,8 +5600,8 @@ export function ProjectOverviewScreen() {
           </View>
         )}
 
-        {/* Problems Section - All project types */}
-        {!access.loading && (
+        {/* Problems Section - members / reporters only */}
+        {!access.loading && (access.isOwner || access.isMember || access.canReportProblem) && (
           <View style={styles.expensesSection}>
           <TouchableOpacity 
             style={styles.expensesHeader}

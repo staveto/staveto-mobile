@@ -98,7 +98,13 @@ export function NotificationsScreen() {
         invitesService.listPendingInvites(),
       ]);
       setNotifications(list);
-      setPendingInvites(invites);
+      // One invite card per project even if CF returns duplicate member rows.
+      const invitesByProject = new Map<string, (typeof invites)[number]>();
+      for (const inv of invites) {
+        if (!inv?.projectId || invitesByProject.has(inv.projectId)) continue;
+        invitesByProject.set(inv.projectId, inv);
+      }
+      setPendingInvites([...invitesByProject.values()]);
       if (NOTIF_UX_DEBUG) {
         const unreadIds = list.filter((n) => !hasMeaningfulReadAt(n.readAt)).map((n) => n.id);
         notifUxLog("inbox_loaded", {
@@ -139,6 +145,12 @@ export function NotificationsScreen() {
   useFocusEffect(
     useCallback(() => {
       loadNotifications(false);
+      const uid = auth.currentUser?.uid ?? null;
+      if (!uid) return;
+      // Keep inbox in sync when the same account marks read on web.
+      return notificationsService.subscribeNotificationInboxChanges(uid, () => {
+        void loadNotifications(true);
+      });
     }, [loadNotifications])
   );
 
@@ -271,6 +283,8 @@ export function NotificationsScreen() {
       case "PROBLEM_REPORTED":
       case "FIELD_NOTE_SHARED":
         return "checkmark-circle-outline";
+      case "PHOTO_ADDED":
+        return "camera-outline";
       case "EXPENSE_ADDED":
         return "cash-outline";
       case "DIARY_ADDED":
@@ -311,6 +325,8 @@ export function NotificationsScreen() {
         return t("notifications.problemReported");
       case "FIELD_NOTE_SHARED":
         return t("notifications.fieldNoteShared");
+      case "PHOTO_ADDED":
+        return t("notifications.photoAdded");
       case "EXPENSE_ADDED":
         return t("notifications.newExpense");
       case "DIARY_ADDED":
@@ -496,7 +512,10 @@ export function NotificationsScreen() {
         if (parentNav && po) {
           (parentNav as any).navigate("ProjectOverview", po);
         }
-      } else if (notification.type === "FIELD_NOTE_SHARED" && notification.projectId) {
+      } else if (
+        (notification.type === "FIELD_NOTE_SHARED" || notification.type === "PHOTO_ADDED") &&
+        notification.projectId
+      ) {
         const parentNav = navigation.getParent();
         const po = projectOverviewParams();
         if (parentNav && po) {
@@ -632,14 +651,23 @@ export function NotificationsScreen() {
     return !!today && date.getTime() < today.getTime();
   };
 
-  const filteredNotifications = notifications.filter((n) => {
+  const pendingProjectIds = new Set(
+    pendingInvites.map((inv) => inv.projectId).filter((id): id is string => typeof id === "string" && id.length > 0)
+  );
+
+  // Pending invite cards already cover invite/assign rows for the same project.
+  const notificationsForList = notifications.filter(
+    (n) => !notificationsService.isCoveredByPendingProjectInvite(n, pendingProjectIds)
+  );
+
+  const filteredNotifications = notificationsForList.filter((n) => {
     if (filter === "unread") return !hasMeaningfulReadAt(n.readAt);
     if (filter === "today") return isTodayNotification(n);
     if (filter === "overdue") return isOverdueNotification(n);
     return true;
   });
 
-  const unreadNotificationsCount = notifications.filter((n) => !hasMeaningfulReadAt(n.readAt)).length;
+  const unreadNotificationsCount = notificationsForList.filter((n) => !hasMeaningfulReadAt(n.readAt)).length;
   const unreadCount = unreadNotificationsCount + pendingInvites.length;
   const todayCount = notifications.filter(isTodayNotification).length;
   const overdueCount = notifications.filter(isOverdueNotification).length;

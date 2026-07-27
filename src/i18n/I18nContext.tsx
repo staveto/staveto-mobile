@@ -19,8 +19,8 @@ function resolveLocale(code: string | undefined): Locale {
 }
 
 function getDefaultLocale(): Locale {
-  // Product decision: first launch starts in Slovak (SK copy first).
-  return "sk";
+  // First launch starts in English until the user picks another language.
+  return "en";
 }
 
 type I18nContextValue = {
@@ -50,7 +50,7 @@ export function I18nProvider({ children }: { children: React.ReactNode }) {
         hypothesisId: "H3",
         location: "I18nContext.tsx:AsyncStorage",
         message: "persisted_locale_read",
-        data: { rawStorage: s ?? "(null)", appliedLocale: applied ?? "(default_sk)" },
+        data: { rawStorage: s ?? "(null)", appliedLocale: applied ?? "(default_en)" },
       });
       // #endregion
       if (applied) {

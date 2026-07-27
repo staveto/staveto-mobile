@@ -29,8 +29,21 @@ export async function addPhasesToProject(
     throw new Error(`Projekt ${projectId} neexistuje.`);
   }
   
-  const projectData = projectSnap.data();
-  if (projectData.ownerId !== currentUser.uid) {
+  const projectData = projectSnap.data() as { ownerId?: string };
+  const isOwner = projectData.ownerId === currentUser.uid;
+  let isEditor = false;
+  if (!isOwner) {
+    try {
+      const memberSnap = await getDoc(doc(db, paths.projectMember(projectId, currentUser.uid)));
+      if (memberSnap.exists()) {
+        const level = String((memberSnap.data() as { permissionLevel?: string }).permissionLevel ?? "");
+        isEditor = level === "editor" || level === "admin" || level === "owner";
+      }
+    } catch {
+      isEditor = false;
+    }
+  }
+  if (!isOwner && !isEditor) {
     throw new Error('Nemáte oprávnenie upravovať tento projekt.');
   }
   

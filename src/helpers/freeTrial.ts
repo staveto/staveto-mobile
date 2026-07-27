@@ -34,10 +34,14 @@ export function isTrialActive(billing: BillingStatus | null | undefined): boolea
 }
 
 /**
- * Require Pro or valid trial before OCR/export/advanced actions.
+ * Require Pro, valid trial, or company-covered seat before OCR/export/advanced actions.
  * Returns true if user can proceed, false if paywall should be shown.
  */
-export function requireProOrTrialValid(billing: BillingStatus | null | undefined): boolean {
+export function requireProOrTrialValid(
+  billing: BillingStatus | null | undefined,
+  options?: { businessCovered?: boolean }
+): boolean {
+  if (options?.businessCovered) return true;
   if (!billing) return false;
   if (billing.isPro) return true;
   if (billing.status === "trial" && billing.remainingTrialDays > 0) return true;

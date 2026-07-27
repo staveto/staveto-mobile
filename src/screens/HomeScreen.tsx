@@ -1266,12 +1266,14 @@ export function HomeScreen() {
       (async () => {
         await trackPaywallEvent("app_opened");
         try {
-          await checkAndShowPaywall(user?.billing, navigation, "app_opened");
+          await checkAndShowPaywall(user?.billing, navigation, "app_opened", {
+            businessCovered: canAccessBusiness,
+          });
         } catch {
           // ignore
         }
       })();
-    }, [loadDashboard, navigation, user?.billing, isOnline])
+    }, [loadDashboard, navigation, user?.billing, isOnline, canAccessBusiness])
   );
 
   // Save last used project ID

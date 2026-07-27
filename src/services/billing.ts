@@ -70,11 +70,37 @@ function getApiKey(): string | null {
 function isAndroidBillingUnavailableSdkMessage(message: string): boolean {
   if (Platform.OS !== "android") return false;
   const t = String(message);
+  const lower = t.toLowerCase();
   return (
     t.includes("BILLING_UNAVAILABLE") ||
     t.includes("Billing is not available in this device") ||
-    (t.includes("StoreProblemError") && t.toLowerCase().includes("billing"))
+    lower.includes("problem with the store") ||
+    lower.includes("storeproblemerror") ||
+    (t.includes("StoreProblemError") && lower.includes("billing"))
   );
+}
+
+/** Expected on emulator / devices without Play Billing — do not console.error (LogBox). */
+function isStoreUnavailableError(err: unknown): boolean {
+  const msg = err instanceof Error ? err.message : String(err ?? "");
+  const name = err instanceof Error ? err.name : "";
+  const code = String((err as { code?: string })?.code ?? "");
+  return (
+    isAndroidBillingUnavailableSdkMessage(msg) ||
+    isAndroidBillingUnavailableSdkMessage(name) ||
+    isAndroidBillingUnavailableSdkMessage(code) ||
+    code === "StoreProblemError" ||
+    name === "StoreProblemError"
+  );
+}
+
+function logBillingDev(err: unknown, label: string): void {
+  if (!__DEV__) return;
+  if (isStoreUnavailableError(err)) {
+    console.warn(`[billing] ${label} (store unavailable — normal on emulator):`, err);
+    return;
+  }
+  console.error(`[billing] ${label}:`, err);
 }
 
 function installRevenueCatLogHandler(): void {
@@ -131,7 +157,7 @@ export async function configurePurchases(userId?: string | null): Promise<void> 
         await Purchases.logIn(userId);
         if (__DEV__) console.log("[billing] RevenueCat logIn:", userId);
       } catch (e) {
-        if (__DEV__) console.error("[billing] logIn error:", e);
+        logBillingDev(e, "logIn error");
       }
     }
     return;
@@ -154,7 +180,7 @@ export async function configurePurchases(userId?: string | null): Promise<void> 
     purchasesConfigured = true;
     if (__DEV__) console.log("[billing] RevenueCat configured");
   } catch (e) {
-    if (__DEV__) console.error("[billing] configurePurchases error:", e);
+    logBillingDev(e, "configurePurchases error");
     throw e;
   }
 }
@@ -166,7 +192,7 @@ export async function getCustomerInfoSafe(): Promise<{ entitlements: { active: R
     const info = await (Purchases as any).getCustomerInfo();
     return info ?? null;
   } catch (e) {
-    if (__DEV__) console.error("[billing] getCustomerInfo error:", e);
+    logBillingDev(e, "getCustomerInfo error");
     return null;
   }
 }
@@ -197,7 +223,7 @@ async function getEntitlementFromRevenueCat(): Promise<Entitlement | null> {
     }
     return null;
   } catch (e) {
-    if (__DEV__) console.error("[billing] getEntitlementFromRevenueCat error:", e);
+    logBillingDev(e, "getEntitlementFromRevenueCat error");
     return null;
   }
 }
@@ -241,7 +267,7 @@ export async function getOfferings(): Promise<{
       all: Record<string, { availablePackages: Array<unknown> }>;
     };
   } catch (e) {
-    if (__DEV__) console.error("[billing] getOfferings error:", e);
+    logBillingDev(e, "getOfferings error");
     return null;
   }
 }
@@ -270,7 +296,7 @@ export async function purchaseMonthly(
     const ent = customerInfo.entitlements.active[REVENUECAT_ENTITLEMENT_ID];
     return { success: !!ent };
   } catch (e: unknown) {
-    if (__DEV__) console.error("[billing] purchaseMonthly error:", e);
+    logBillingDev(e, "purchaseMonthly error");
     throw e;
   }
 }
@@ -285,7 +311,7 @@ export async function restorePurchases(): Promise<{ success: boolean }> {
     const ent = customerInfo.entitlements.active[REVENUECAT_ENTITLEMENT_ID];
     return { success: !!ent };
   } catch (e: unknown) {
-    if (__DEV__) console.error("[billing] restorePurchases error:", e);
+    logBillingDev(e, "restorePurchases error");
     throw e;
   }
 }

@@ -97,12 +97,21 @@ function isBusinessContextActive(input: CapabilityInput): boolean {
   const activeBusinessOrgId = normalize(input.activeBusinessOrgId);
   const organizationStatus = normalize(input.organizationStatus);
   const membershipStatus = normalize(input.membershipStatus);
-  const businessEnabled = input.organizationBusinessEnabled === true;
+  if (!activeBusinessOrgId || membershipStatus !== "active") return false;
+  // Match useOrgAccess / isUsableBusinessOrg: company membership unlocks team features.
+  // Do not require businessEnabled alone — web onboarding / trial orgs often lag that flag.
+  if (
+    organizationStatus === "suspended" ||
+    organizationStatus === "cancelled" ||
+    organizationStatus === "past_due"
+  ) {
+    return false;
+  }
   return (
-    !!activeBusinessOrgId &&
-    organizationStatus === "active" &&
-    businessEnabled &&
-    membershipStatus === "active"
+    organizationStatus === "active" ||
+    organizationStatus === "trialing" ||
+    organizationStatus === "pending_payment" ||
+    input.organizationBusinessEnabled === true
   );
 }
 

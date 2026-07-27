@@ -136,7 +136,12 @@ export function ProjectsScreen() {
   const { t, locale } = useI18n();
   const { orgId, user } = useAuth();
   const { activeBusinessOrgId } = useActiveOrg();
-  const { canViewAllProjects, restrictsToAssignedProjectsOnly, canCreateProject } = useOrgAccess();
+  const {
+    canViewAllProjects,
+    restrictsToAssignedProjectsOnly,
+    canCreateProject,
+    canAccessBusiness,
+  } = useOrgAccess();
   const authUid = user?.id ?? orgId ?? "";
   const prevAuthUidRef = useRef<string | null>(null);
   const [projects, setProjects] = useState<Project[]>([]);
@@ -420,9 +425,11 @@ export function ProjectsScreen() {
       });
       const { trackPaywallEvent, checkAndShowPaywall } = await import("../services/paywallTrigger");
       await trackPaywallEvent("project_created");
-      await checkAndShowPaywall(user?.billing, navigation, "project_created");
+      await checkAndShowPaywall(user?.billing, navigation, "project_created", {
+        businessCovered: canAccessBusiness,
+      });
     },
-    [activeBusinessOrgId, load, navigation, orgId, t, user?.billing]
+    [activeBusinessOrgId, canAccessBusiness, load, navigation, orgId, t, user?.billing]
   );
 
   const openProjectMenu = (item: Project) => {
@@ -1129,14 +1136,22 @@ export function ProjectsScreen() {
         >
           <View style={[styles.modal, styles.modalHero, { height: heroModalHeight, paddingTop: spacing.sm }]}>
             <View style={styles.createModalHeader}>
-              <Text style={[styles.modalTitle, { flex: 1, textAlign: "left", marginBottom: 0 }]}>{t("projects.modalTitle")}</Text>
+              <Text
+                style={[
+                  styles.modalTitle,
+                  { flex: 1, textAlign: "left", marginBottom: 0, fontSize: 20, fontWeight: "800", color: "#0F2A4D" },
+                ]}
+              >
+                {t("projects.modalTitle")}
+              </Text>
               <TouchableOpacity
                 onPress={closeNewModal}
                 hitSlop={{ top: 12, bottom: 12, left: 12, right: 12 }}
                 accessibilityRole="button"
                 accessibilityLabel={t("projects.cancel")}
+                style={styles.createModalClose}
               >
-                <Ionicons name="close" size={26} color={colors.text} />
+                <Ionicons name="close" size={22} color="#64748B" />
               </TouchableOpacity>
             </View>
             {!orgId ? (
@@ -1515,13 +1530,15 @@ const styles = StyleSheet.create({
     flexDirection: "column",
   },
   modalHero: {
+    backgroundColor: "#FFFFFF",
+    borderColor: "#D0D7E2",
     minHeight: 520,
     maxHeight: "94%",
-    borderRadius: 18,
+    borderRadius: 22,
     paddingHorizontal: spacing.lg,
     paddingTop: spacing.md,
     paddingBottom: spacing.md,
-    shadowColor: "#000",
+    shadowColor: "#0F2A4D",
     shadowOffset: { width: 0, height: 8 },
     shadowOpacity: 0.14,
     shadowRadius: 20,
@@ -1539,9 +1556,17 @@ const styles = StyleSheet.create({
     flexDirection: "row",
     alignItems: "center",
     justifyContent: "space-between",
-    paddingHorizontal: spacing.md,
-    marginBottom: spacing.xs,
+    paddingHorizontal: 0,
+    marginBottom: spacing.sm,
     gap: spacing.sm,
+  },
+  createModalClose: {
+    width: 40,
+    height: 40,
+    borderRadius: 12,
+    backgroundColor: "#F1F5F9",
+    alignItems: "center",
+    justifyContent: "center",
   },
   modalLabel: { fontSize: 14, color: colors.textMuted, marginBottom: spacing.sm },
   createHeader: {

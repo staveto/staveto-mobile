@@ -21,6 +21,7 @@ import AsyncStorage from "@react-native-async-storage/async-storage";
 import { useNavigation } from "@react-navigation/native";
 import { Ionicons } from "@expo/vector-icons";
 import { useAuth } from "../context/AuthContext";
+import { useOrgAccess } from "../hooks/useOrgAccess";
 import { useI18n } from "../i18n/I18nContext";
 import { getBaseURL, api } from "../api/client";
 import { IOS_DIAGNOSTIC, getDiagnosticEnvRaw } from "../lib/iosDiagnostic";
@@ -109,6 +110,7 @@ export function AccountScreen() {
   const navigation = useNavigation();
   const { t, locale, setLocale, localeNames } = useI18n();
   const { user, orgId, token, logout, refreshUser, resetIntroOnboarding } = useAuth();
+  const { canAccessBusiness } = useOrgAccess();
   const [showAway, setShowAway] = useState(false);
   const [doNotDisturb, setDoNotDisturb] = useState(false);
   const [showLanguageModal, setShowLanguageModal] = useState(false);
@@ -568,9 +570,23 @@ export function AccountScreen() {
         />
       </View>
 
-      {/* Plán / Billing banner */}
+      {/* Plán / Billing banner — company members are covered by the org plan */}
       <SectionTitle title={t("account.plan")} />
-      {user?.billing && (
+      {canAccessBusiness ? (
+        <View style={[styles.card, styles.billingBanner]}>
+          <View style={styles.billingBannerContent}>
+            <Ionicons name="checkmark-circle" size={24} color={colors.primary} />
+            <View style={styles.billingBannerText}>
+              <Text style={styles.billingBannerTitle}>
+                {t("subscription.coveredByCompany")}
+              </Text>
+              <Text style={styles.billingBannerSub}>
+                {t("subscription.coveredByCompanyHint")}
+              </Text>
+            </View>
+          </View>
+        </View>
+      ) : user?.billing ? (
         <View style={[styles.card, styles.billingBanner]}>
           <View style={styles.billingBannerContent}>
             <Ionicons
@@ -602,14 +618,16 @@ export function AccountScreen() {
             </Text>
           </TouchableOpacity>
         </View>
-      )}
-      <View style={styles.card}>
-        <Row
-          icon="card-outline"
-          label={t("account.subscription")}
-          onPress={() => nav.navigate("Subscription")}
-        />
-      </View>
+      ) : null}
+      {!canAccessBusiness ? (
+        <View style={styles.card}>
+          <Row
+            icon="card-outline"
+            label={t("account.subscription")}
+            onPress={() => nav.navigate("Subscription")}
+          />
+        </View>
+      ) : null}
 
       {/* Notifikácie */}
       <SectionTitle title={t("account.settings")} />

@@ -89,6 +89,11 @@ export function useOrgAccess() {
       ? true
       : isOwner || isAdmin || isManager || permissions.canCreateProject;
 
+    /** Structure edits (phases/tasks/settings). Workers default OFF — matches web role matrix. */
+    const canEditProject = !orgGateOpen
+      ? true
+      : isOwner || isAdmin || isManager || permissions.canEditProject;
+
     const canViewAllProjects = isOwner || isAdmin || isManager || permissions.canViewAllProjects;
 
     const canViewAssignedProjects =
@@ -150,6 +155,7 @@ export function useOrgAccess() {
       canManageTeam,
       canManageBilling,
       canCreateProject,
+      canEditProject,
       canViewAllProjects,
       canViewAssignedProjects,
       restrictsToAssignedProjectsOnly,

@@ -5,6 +5,12 @@ import { db, auth } from "../firebase";
 import { useAuth } from "../context/AuthContext";
 import { healProjectAccessForCurrentUser } from "../services/projects";
 import { getAssignedMemberIdsFromProject, isUserAssignedOnProject } from "../lib/projectAssignment";
+import {
+  getEffectivePermissions,
+  parseCustomPermissions,
+  type BusinessPermissions,
+} from "../lib/businessRolePermissions";
+import type { OrgRole } from "../services/organizations";
 
 export type ProjectAccess = {
   loading: boolean;
@@ -145,17 +151,95 @@ function mergeProjectAccess(base: ProjectAccess, extra: ProjectAccess): ProjectA
   };
 }
 
-/** Match Firestore `canWriteAsEditor` + opt-out `sharedItems.timeTracking` for crew on business jobs. */
+type OrgAccessGate = {
+  /** When false, deny phase/task/structure edits (worker default). null = no org context. */
+  canEditStructure: boolean | null;
+  field: Pick<
+    BusinessPermissions,
+    "canAddDailyReport" | "canAddPhotos" | "canAddExpense"
+  > | null;
+};
+
+function normalizeOrgRole(raw: unknown): OrgRole {
+  const r = String(raw ?? "").toLowerCase();
+  if (r === "owner" || r === "admin" || r === "manager" || r === "worker") return r;
+  if (r === "member") return "viewer";
+  return "viewer";
+}
+
+function orgGateFromMembershipData(data: Record<string, unknown> | undefined): OrgAccessGate {
+  if (!data) return { canEditStructure: null, field: null };
+  const role = normalizeOrgRole(data.role);
+  const perms = getEffectivePermissions(role, parseCustomPermissions(data.permissions));
+  const canEditStructure =
+    role === "owner" || role === "admin" || role === "manager" || perms.canEditProject;
+  return {
+    canEditStructure,
+    field: {
+      canAddDailyReport: perms.canAddDailyReport,
+      canAddPhotos: perms.canAddPhotos,
+      canAddExpense: perms.canAddExpense,
+    },
+  };
+}
+
+/** Assigned / org-linked crew without structure-edit rights: read + field work, no phase/task admin. */
+function accessAsFieldCrew(field?: OrgAccessGate["field"]): ProjectAccess {
+  const diary = field?.canAddDailyReport !== false;
+  const photos = field?.canAddPhotos !== false;
+  return {
+    loading: false,
+    isOwner: false,
+    isMember: true,
+    permissionLevel: "viewer",
+    sharedItems: {
+      ...ALL_TRUE,
+      expenses: field?.canAddExpense === true,
+    },
+    sharedPhaseIds: [],
+    canReadTasks: true,
+    canReadPhases: true,
+    canReadExpenses: field?.canAddExpense === true,
+    canReadDiary: true,
+    canReadDocuments: true,
+    canWrite: false,
+    canWriteTime: true,
+    canWriteDiary: diary,
+    canWritePhotos: photos || diary,
+    canReportProblem: true,
+  };
+}
+
+function applyOrgStructureGate(access: ProjectAccess, gate: OrgAccessGate): ProjectAccess {
+  if (access.isOwner || gate.canEditStructure !== false) return access;
+  return {
+    ...access,
+    permissionLevel: "viewer",
+    canWrite: false,
+    canWriteDiary: gate.field ? gate.field.canAddDailyReport : access.canWriteDiary,
+    canWritePhotos: gate.field
+      ? gate.field.canAddPhotos || gate.field.canAddDailyReport
+      : access.canWritePhotos,
+    canReadExpenses: gate.field ? gate.field.canAddExpense : access.canReadExpenses,
+    sharedItems: {
+      ...access.sharedItems,
+      expenses: gate.field ? gate.field.canAddExpense : access.sharedItems.expenses,
+    },
+  };
+}
+
+/** Match Firestore crew read + time/diary; structure write stays gated by org canEditProject. */
 export function finalizeProjectAccess(
   access: ProjectAccess,
   uid: string,
   projectData: Record<string, unknown>,
-  ownerId?: string | null
+  ownerId?: string | null,
+  gate: OrgAccessGate = { canEditStructure: null, field: null }
 ): ProjectAccess {
   const assigned = isUserAssignedOnProject(projectData, uid);
   const isOwner = access.isOwner || (!!ownerId && ownerId === uid);
   const editorLike = access.permissionLevel === "editor" || access.canWrite;
-  const crewReader = assigned || (access.isMember && editorLike);
+  const crewReader = assigned || (access.isMember && editorLike) || access.isMember;
   const timeNotBlocked = access.sharedItems.timeTracking !== false;
   const canWriteTime =
     isOwner ||
@@ -178,18 +262,26 @@ export function finalizeProjectAccess(
   const canWritePhotos =
     isOwner || access.canWrite || canWriteDiary || access.canWritePhotos || assigned;
 
-  return {
-    ...access,
-    isOwner,
-    isMember,
-    canReadTasks: access.canReadTasks || crewReader,
-    canReadPhases: access.canReadPhases || crewReader,
-    canWrite: isOwner || access.canWrite || (assigned && editorLike) || editorLike,
-    canWriteTime,
-    canWriteDiary,
-    canWritePhotos,
-    canReportProblem,
-  };
+  // Do not re-elevate structure write for assigned crew when org forbids canEditProject.
+  const structureAllowed = isOwner || gate.canEditStructure !== false;
+  const canWrite =
+    structureAllowed && (isOwner || access.canWrite || (assigned && editorLike) || editorLike);
+
+  return applyOrgStructureGate(
+    {
+      ...access,
+      isOwner,
+      isMember,
+      canReadTasks: access.canReadTasks || crewReader,
+      canReadPhases: access.canReadPhases || crewReader,
+      canWrite,
+      canWriteTime,
+      canWriteDiary,
+      canWritePhotos,
+      canReportProblem,
+    },
+    gate
+  );
 }
 
 async function readMembersDocAccess(projectId: string, uid: string): Promise<ProjectAccess | null> {
@@ -217,15 +309,18 @@ async function readMembersDocAccess(projectId: string, uid: string): Promise<Pro
 }
 
 function accessFromOrgProjectMembership(
-  uid: string,
   projectData: Record<string, unknown>,
-  orgMemberActive: boolean
+  orgMemberActive: boolean,
+  gate: OrgAccessGate
 ): ProjectAccess | null {
   const orgId = typeof projectData.orgId === "string" ? projectData.orgId.trim() : "";
   const workspaceType = projectData.workspaceType;
   const isTeamLike =
     workspaceType === "team" || workspaceType === "business" || workspaceType == null;
   if (!orgId || !isTeamLike || !orgMemberActive) return null;
+  if (gate.canEditStructure === false) {
+    return accessAsFieldCrew(gate.field);
+  }
   return {
     loading: false,
     isOwner: false,
@@ -246,33 +341,38 @@ function accessFromOrgProjectMembership(
   };
 }
 
+async function resolveOrgAccessGate(
+  projectData: Record<string, unknown>,
+  uid: string
+): Promise<OrgAccessGate> {
+  const orgId = typeof projectData.orgId === "string" ? projectData.orgId.trim() : "";
+  if (!orgId) return { canEditStructure: null, field: null };
+
+  const orgMemRef = doc(db, "organizations", orgId, "members", uid);
+  let orgMemSnap = await getDocSmart(orgMemRef);
+  const authEmail = auth.currentUser?.email?.trim().toLowerCase() ?? "";
+  if (!orgMemSnap.exists() && authEmail) {
+    orgMemSnap = await getDocSmart(doc(db, "organizations", orgId, "members", authEmail));
+  }
+  if (!orgMemSnap.exists()) return { canEditStructure: null, field: null };
+  const oStatus = String(orgMemSnap.data()?.status ?? "").toLowerCase();
+  const orgActive = oStatus === "active" || oStatus === "pending" || !oStatus;
+  if (!orgActive) return { canEditStructure: null, field: null };
+  return orgGateFromMembershipData(orgMemSnap.data() as Record<string, unknown>);
+}
+
 async function enrichProjectAccess(
   projectId: string,
   uid: string,
   projectData: Record<string, unknown>,
-  base: ProjectAccess
+  base: ProjectAccess,
+  gate: OrgAccessGate
 ): Promise<ProjectAccess> {
   let resolved = base;
 
-  const fromAssigned = accessFromAssignedMemberIds(uid, projectData);
-  if (fromAssigned) resolved = mergeProjectAccess(resolved, fromAssigned);
-
-  const fromMembersDoc = await readMembersDocAccess(projectId, uid);
-  if (fromMembersDoc) resolved = mergeProjectAccess(resolved, fromMembersDoc);
-
   const orgId = typeof projectData.orgId === "string" ? projectData.orgId.trim() : "";
-  if (orgId) {
-    const orgMemRef = doc(db, "organizations", orgId, "members", uid);
-    let orgMemSnap = await getDocSmart(orgMemRef);
-    const authEmail = auth.currentUser?.email?.trim().toLowerCase() ?? "";
-    if (!orgMemSnap.exists() && authEmail) {
-      orgMemSnap = await getDocSmart(doc(db, "organizations", orgId, "members", authEmail));
-    }
-    const oStatus = String(orgMemSnap.data()?.status ?? "").toLowerCase();
-    const orgActive =
-      orgMemSnap.exists() &&
-      (oStatus === "active" || oStatus === "pending" || !oStatus);
-    const fromOrg = accessFromOrgProjectMembership(uid, projectData, orgActive);
+  if (orgId && gate.canEditStructure !== null) {
+    const fromOrg = accessFromOrgProjectMembership(projectData, true, gate);
     if (fromOrg) resolved = mergeProjectAccess(resolved, fromOrg);
   }
 
@@ -298,7 +398,7 @@ async function enrichProjectAccess(
     });
   }
 
-  return finalizeProjectAccess(resolved, uid, projectData);
+  return resolved;
 }
 
 function accessFromMembersByUidDoc(data: Record<string, unknown>): ProjectAccess | null {
@@ -342,10 +442,11 @@ async function resolveNonOwnerProjectAccess(
   projectId: string,
   uid: string,
   projectData: Record<string, unknown>
-): Promise<ProjectAccess> {
+): Promise<{ access: ProjectAccess; gate: OrgAccessGate }> {
+  const gate = await resolveOrgAccessGate(projectData, uid);
   let resolved: ProjectAccess = { ...NO_ACCESS, loading: false };
 
-  const fromAssigned = accessFromAssignedMemberIds(uid, projectData);
+  const fromAssigned = accessFromAssignedMemberIds(uid, projectData, gate);
   if (fromAssigned) resolved = mergeProjectAccess(resolved, fromAssigned);
 
   const fromMembersDoc = await readMembersDocAccess(projectId, uid);
@@ -358,12 +459,20 @@ async function resolveNonOwnerProjectAccess(
     if (fromByUid) resolved = mergeProjectAccess(resolved, fromByUid);
   }
 
-  return enrichProjectAccess(projectId, uid, projectData, resolved);
+  const enriched = await enrichProjectAccess(projectId, uid, projectData, resolved, gate);
+  return { access: enriched, gate };
 }
 
 /** Business assign via project.assignedMemberIds (web/mobile crew assign). */
-function accessFromAssignedMemberIds(uid: string, projectData: Record<string, unknown>): ProjectAccess | null {
+function accessFromAssignedMemberIds(
+  uid: string,
+  projectData: Record<string, unknown>,
+  gate: OrgAccessGate
+): ProjectAccess | null {
   if (!isUserAssignedOnProject(projectData, uid)) return null;
+  if (gate.canEditStructure === false) {
+    return accessAsFieldCrew(gate.field);
+  }
 
   return {
     loading: false,
@@ -447,20 +556,20 @@ export function useProjectAccess(projectId: string, projectOwnerId?: string | nu
 
       const projectData = (projectSnap.data() ?? {}) as Record<string, unknown>;
       const ownerIdForFinalize = (projectSnap.data()?.ownerId as string) ?? projectOwnerId ?? null;
-      let resolved = await resolveNonOwnerProjectAccess(projectId, uid, projectData);
-      let finalized = finalizeProjectAccess(resolved, uid, projectData, ownerIdForFinalize);
+      let { access: resolved, gate } = await resolveNonOwnerProjectAccess(projectId, uid, projectData);
+      let finalized = finalizeProjectAccess(resolved, uid, projectData, ownerIdForFinalize, gate);
 
       if (!finalized.canReadTasks && !finalized.canReadPhases) {
         await healProjectAccessForCurrentUser(projectId);
         const serverSnap = await getDocSmart(projectRef, { forceServer: true });
         const serverData = (serverSnap.data() ?? {}) as Record<string, unknown>;
-        resolved = await resolveNonOwnerProjectAccess(projectId, uid, serverData);
-        finalized = finalizeProjectAccess(resolved, uid, serverData, ownerIdForFinalize);
+        ({ access: resolved, gate } = await resolveNonOwnerProjectAccess(projectId, uid, serverData));
+        finalized = finalizeProjectAccess(resolved, uid, serverData, ownerIdForFinalize, gate);
       } else if (!finalized.canReportProblem) {
         const serverSnap = await getDocSmart(projectRef, { forceServer: true });
         const serverData = (serverSnap.data() ?? {}) as Record<string, unknown>;
-        resolved = await resolveNonOwnerProjectAccess(projectId, uid, serverData);
-        finalized = finalizeProjectAccess(resolved, uid, serverData, ownerIdForFinalize);
+        ({ access: resolved, gate } = await resolveNonOwnerProjectAccess(projectId, uid, serverData));
+        finalized = finalizeProjectAccess(resolved, uid, serverData, ownerIdForFinalize, gate);
       }
 
       setAccess(finalized);
@@ -600,8 +709,8 @@ export async function fetchProjectAccess(
     }
 
     const projectData = (projectSnap.data() ?? {}) as Record<string, unknown>;
-    const resolved = await resolveNonOwnerProjectAccess(projectId, uid, projectData);
-    return finalizeProjectAccess(resolved, uid, projectData, ownerId);
+    const { access: resolved, gate } = await resolveNonOwnerProjectAccess(projectId, uid, projectData);
+    return finalizeProjectAccess(resolved, uid, projectData, ownerId, gate);
   } catch (error) {
     console.warn("[fetchProjectAccess] Error:", error);
     return { ...NO_ACCESS, loading: false };
